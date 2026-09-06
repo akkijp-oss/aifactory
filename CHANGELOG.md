@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-06
+
+First tagged version. The repository history starts here; earlier internal history was not carried over because it contained private project records.
+
 ### Added
 - `lib/aifactory_paths.py`: one place that decides where operational data lives (`AIFACTORY_WORKSPACE`, default `workspace/`, git-ignored). `kb`, `run`, `intake`, `dispatch`, the console and the MCP server all use it (ADR-0016)
 - `examples/projects/kumitate/`: a shipped reference project definition (`project.yml` / `provision.sh` / `gates.sh`)
@@ -20,5 +24,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Removed
 - Owner-specific project definitions, tickets, run records, infrastructure inventory and the talk transcript (moved to the private workspace)
 
-## [0.0.0] - 2026-09-06
+### Fixed
+- `workflow/kit/routes.env` was excluded by the `*.env` ignore rule and missing from the first commit
+
+## [0.0.0] - 2026-09-06 (internal, not tagged)
 - Internal v0/v1: sandbox on Proxmox, kanban (SQLite + `kb`), workflow runner, glue (`intake` / `dispatch`), Web console, MCP server. Fifteen ADRs
