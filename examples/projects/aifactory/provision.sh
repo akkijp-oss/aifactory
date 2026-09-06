@@ -22,11 +22,15 @@ python3 -c 'import yaml, jsonschema' && echo "yaml/jsonschema ok"
 
 # ---------- 2. clone（公開リポジトリ。トークン不要）
 log "clone $REPO ($BRANCH)"
-if [[ -n "${GH_TOKEN:-}" ]]; then gh auth setup-git; fi
 [ -d "$APP_DIR/.git" ] || git clone -q --branch "$BRANCH" "https://github.com/$REPO.git" "$APP_DIR"
 cd "$APP_DIR"
 git checkout -q "$BRANCH"; git pull -q --ff-only
-git config --global -l | grep -q 'credential.https://github.com' || gh auth setup-git 2>/dev/null || true   # push 時は take で注入される GH_TOKEN を gh が使う
+# push / fetch の認証は gh を credential helper にして、take 時に注入される GH_TOKEN（環境変数）を使う。
+# `gh auth setup-git` はログイン済みホストが無いと何もしないので、同じ設定を直接書く（トークン本体は残らない）
+git config --global credential.https://github.com.helper ''
+git config --global --add credential.https://github.com.helper '!gh auth git-credential'
+git config --global credential.https://gist.github.com.helper ''
+git config --global --add credential.https://gist.github.com.helper '!gh auth git-credential'
 
 # ---------- 3. アプリ用 env
 log "app env"
