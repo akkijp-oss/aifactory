@@ -625,6 +625,37 @@ class Run:
         self.state["known_red_gates"] = known
         self.save()
 
+    GATE_FAIL = re.compile(r"^FAIL (\S+)")
+
+    def gate_log_excerpts(self, per_gate=3000, lines=40):
+        """実装役へ戻す依頼文に、赤いゲートのログ（work/gates/<名前>.log）の抜粋を足す（チケット 331）。
+
+        gates.sh の標準出力には判定と base での結果しか入らないので、これが無いと実装役は VM に入って
+        ~/gates/<名前>.log を自分で探すところから始めることになる。載せるのは gates.txt の判定行に残った FAIL だけ。
+        INFO（base でも赤い・known_red）は自分の変更が原因ではないので、直させないために入れない（ログ自体は残る）"""
+        try:
+            txt = self.vm_read("gates.txt") or ""
+            blocks = []
+            for line in txt.splitlines():
+                if line.startswith("=== "): break       # ここから先は base の結果とログ末尾（ログ中の FAIL を拾わない）
+                m = self.GATE_FAIL.match(line)
+                if not m: continue
+                g = m.group(1)
+                body = (self.vm_read(f"gates/{g}.log") or "").strip()
+                if not body: continue
+                head, sep, tail = body.partition("\n=== tail")
+                keep = head.splitlines()[:lines]
+                if len(head.splitlines()) > lines: keep.append("（中略）")
+                if sep:
+                    t = (sep.lstrip("\n") + tail).splitlines()
+                    if len(t) > lines: keep += ["（中略）"] + t[-lines:]
+                    else: keep += t
+                blocks.append(f"### {g}（全文は work/gates/{g}.log）\n```\n" + "\n".join(keep)[:per_gate] + "\n```")
+            return "\n\n".join(blocks)
+        except Exception as e:                          # ログの回収に失敗しても run は止めない（依頼文が痩せるだけ）
+            self.log(f"ゲートのログ抜粋を作れなかった: {e}")
+            return ""
+
     def transition(self, step, ok):
         if "on_pass" in step or "on_fail" in step: t = step.get("on_pass" if ok else "on_fail")
         else: t = step.get("next") if ok else "human"   # 合否の分岐が無い step が失敗したら人間へ（end に抜けない）
@@ -725,9 +756,11 @@ class Run:
                           if checked else
                           "**base での確認は今回できなかった**（gates.txt の `=== base check:` に `BASE-CHECK-SKIP` の理由がある）。"
                           "赤が base でも赤いと思うなら、直さずに理由を report.md に書くこと。")
+                excerpts = self.gate_log_excerpts()
                 retry_note = ("ゲートの結果（赤あり）。ログを読んで原因を直し、ゲートを全緑にしてコミットすること。\n"
                               + judged + "\n\n"
-                              f"```\n{info}\n```")
+                              f"```\n{info}\n```"
+                              + (f"\n\n## 赤いゲートのログ（抜粋）\n\n{excerpts}" if excerpts else ""))
             cur = nxt
         result = cur
         wip = self.preserve() if result == "human" else ""
