@@ -306,19 +306,37 @@ def parse_ls(text):
     return out
 
 
+def _task_key(t):
+    """チケット番号は数として並べる（10 が 9 の前に来ない）。番号でなければ後ろにまとめる"""
+    return (0, int(t), "") if str(t).isdigit() else (1, 0, str(t))
+
+
+def leases_by_vmid(lent):
+    """台帳を vmid ごとにまとめる → {"9213": ["221", "222"]}。vmid は str に揃える（台帳は数値、`sandbox ls` は文字列）"""
+    by = {}
+    for task, v in (lent or {}).items():
+        if not isinstance(v, dict) or v.get("vmid") in (None, ""): continue
+        by.setdefault(str(v["vmid"]), []).append(str(task))
+    return {vmid: sorted(tasks, key=_task_key) for vmid, tasks in by.items()}
+
+
 def sandbox_view():
     lent = {}
     if SANDBOX_STATE.exists():
         try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
         except Exception as e: lent = {"_error": str(e)}
+    # 貸出は「1 チケット = 1 件」、VM は vmid の異なり。同じ VM を 2 台と数えないために分けて持つ（チケット 237）
+    by_vmid = leases_by_vmid(lent)
+    shared = {vmid: tasks for vmid, tasks in by_vmid.items() if len(tasks) > 1}
     tpl = []
     for pj in pjs():
         py = project_yml(pj)
         y = load_yaml(py) if py.exists() else None
-        n = sum(1 for v in lent.values() if isinstance(v, dict) and v.get("pj") == pj)
+        mine = {t: v for t, v in lent.items() if isinstance(v, dict) and v.get("pj") == pj}
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
-                    "lent": n, "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
+                    "lent": len(leases_by_vmid(mine)), "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
+                    "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
     ls_jobs = [j for j in JobStore.list() if j.get("kind") == "sandbox-ls"]   # 新しい順
     last_ls = ls_jobs[0] if ls_jobs else None                                 # 直近（失敗・実行中も含む）。画面は取得中 / 成功 / 失敗 / 未取得を分けて出す
     last_ok_ls = next((j for j in ls_jobs if j.get("rc") == 0), None)          # 表に出せる最後の成功。失敗しても前回の表は残す
@@ -329,6 +347,7 @@ def sandbox_view():
     e = sandbox_env()
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
     return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
+            "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
             "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms}
 
 
@@ -466,7 +485,9 @@ def overview():
         try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
         except Exception: lent = {}
     return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:6], "runs_active": active[:6], "runs_not_started": {"n": len(not_started), "runs": not_started[:6]},
-            "lent": len([v for v in lent.values() if isinstance(v, dict)]), "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now()}
+            "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
+            "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
+            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now()}
 
 
 
