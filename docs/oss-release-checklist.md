@@ -17,8 +17,15 @@ cd website && .venv/bin/mkdocs build --strict -f mkdocs.yml
 ```
 CI（`.github/workflows/ci.yml`）も同じことを PR ごとに回す。
 
-## public に切り替える時に決めること
-- [ ] 履歴: 過去のコミットには私有 PJ の実行記録が含まれる。public にする前に「履歴を squash した初期コミットで出す」か「そのまま出す」かを決める（推奨は squash。`git filter-repo` より安全で安い）
-- [ ] 他人が clone して 1 周回せる公開サンプル PJ（`examples/projects/sample-app/` と、その対象になる小さな公開アプリ）。`kumitate` は私有リポジトリなので参照用に留まる
-- [ ] GitHub 側: リポジトリを public に、Pages（`docs.yml` を手動起動）、Discussions / Issues の設定、`v0.1.0` タグと Release ノート（`CHANGELOG.md`）
-- [ ] `gitleaks detect` か `trufflehog filesystem .` を 1 回
+## 済んでいること（2026-09-06）
+- [x] 履歴: 私有 PJ の記録を含む旧履歴は持ち越さず、初期コミットから始めた（旧履歴はメンテナのローカルにだけ退避）
+- [x] `gitleaks git`（全履歴）と `gitleaks dir workspace` で漏えい無しを確認
+- [x] `v0.1.0` タグと Release（`CHANGELOG.md`）
+- [x] リポジトリの説明・homepage・topics
+- [x] 運用データ `workspace/` は私有リポジトリに分けてバックアップ（枠組み側からは見えない）
+
+## public に切り替える時にやること
+- [ ] `gh repo edit akkijp/aifactory --visibility public --accept-visibility-change-consequences`
+- [ ] Settings → Pages → Source を GitHub Actions にし、Actions の `docs` を手動起動（サイトは `site_url` の場所に出る）
+- [ ] 他人が clone して 1 周回せる公開サンプル PJ（`examples/projects/sample-app/` と、その対象になる小さな公開アプリ）。需要が出たら作る。`kumitate` は私有リポジトリなので参照用に留まる
+- [ ] 公開後は `bin/oss-check.sh` を PR ごとに回す（CI には入っていない。固有名の一覧を CI に載せるのを避けるため）
