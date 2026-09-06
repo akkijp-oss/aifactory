@@ -124,6 +124,18 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_run_status_drives_the_ui(self):
+        """実行中かどうかの判定は API の status に寄せる（app.js が `!r.finished` で独自に決めない）。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        for fn in ("async function viewBoard", "async function viewRuns", "async function viewRun("):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn("status ===", body, f"{fn} が status を見ていない")
+            self.assertNotIn("!s.finished", body, f"{fn} が finished から実行中を決めている")
+        self.assertIn("T.run.notStarted", app); self.assertIn("T.run.noState", app)
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")

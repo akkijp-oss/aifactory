@@ -59,13 +59,16 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
+    "runsCount": "実行記録 {n} 件（うち開始前 {m} 件）", "ticketCount": "左の数字はチケットの件数です。",
     "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）",
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
-    "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。"
+    "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
+    "notStarted": "開始前（記録なし）",
+    "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
   },
   "sandbox": {
     "count": "{n} 台", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
