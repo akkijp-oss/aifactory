@@ -25,7 +25,8 @@ CI（`.github/workflows/ci.yml`）も同じことを PR ごとに回す。
 - [x] 運用データ `workspace/` は私有リポジトリに分けてバックアップ（枠組み側からは見えない）
 
 ## public に切り替える時にやること
-- [ ] `gh repo edit akkijp-oss/aifactory --visibility public --accept-visibility-change-consequences`
-- [ ] Settings → Pages → Source を GitHub Actions にし、Actions の `docs` を手動起動（サイトは `site_url` の場所に出る）
+- [x] public に切り替え（2026-09-06）
+- [x] GitHub Pages（Actions）でドキュメントサイトを公開: https://akkijp-oss.github.io/aifactory/ （更新は Actions の `docs` を手動起動）
+- [x] org のトップページ: `akkijp-oss/.github` の `profile/README.md`
 - [ ] 他人が clone して 1 周回せる公開サンプル PJ（`examples/projects/sample-app/` と、その対象になる小さな公開アプリ）。需要が出たら作る。`kumitate` は私有リポジトリなので参照用に留まる
 - [ ] 公開後は `bin/oss-check.sh` を PR ごとに回す（CI には入っていない。固有名の一覧を CI に載せるのを避けるため）
