@@ -77,6 +77,7 @@ function rst(r) { return `<span class="st ${esc(r)}">${esc(T.result[r] || r)}</s
 function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'running' ? '<span class="dot pulse"></span>' : ''}${esc(T.jobState[j.state] || j.state)}</span>`; }
 function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${esc(t.pr)}</a>` : `#${esc(t.pr)}`; }
 function runLink(run) { if (!run) return ''; const n = run.replace(/^workflow\/runs\//, ''); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
+function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
 function editing() { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}<span class="spacer"></span>${right || ''}</div>`;
 const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
@@ -212,7 +213,7 @@ async function viewTicket(id, flash) {
           <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindDesc[t.kind] || '') : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
           <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
         <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${since(r.started)}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(T.empty.ticketRuns)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
-        ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
+        ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
       </div>
       <div>
         <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>
@@ -229,7 +230,7 @@ async function viewRuns() {
   const list = d.runs.filter(r => showAll || (!r.dry && !r.attempt));
   render(head(esc(T.nav.runs), T.sub.runs, `<label class="help check"><input type="checkbox" data-act="runs-all" ${showAll ? 'checked' : ''}> ${esc(T.label.runsAll)}</label>`) + `
     <div class="panel"><table><tr><th>${esc(T.th.run)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.step)}</th><th>${esc(T.th.result)}</th><th>PR</th></tr>
-    ${list.map(r => `<tr class="link" data-href="#/run/${encodeURIComponent(r.name)}"><td class="mono">${esc(r.name)}</td><td>${esc(r.pj || '')}</td><td>${r.task ? `<a href="#/ticket/${esc(r.task)}">${esc(r.task)}</a>` : ''}</td><td>${esc(r.workflow || '')}</td><td>${fmtT(r.started)}</td>
+    ${list.map(r => `<tr class="link" data-href="#/run/${encodeURIComponent(r.name)}"><td>${runLink(r.name)}</td><td>${esc(r.pj || '')}</td><td>${r.task ? `<a href="#/ticket/${esc(r.task)}">${esc(r.task)}</a>` : ''}</td><td>${esc(r.workflow || '')}</td><td>${fmtT(r.started)}</td>
       <td>${r.finished ? fmtDur(r.elapsed_s) : r.status === 'running' ? `<span class="dot pulse"></span>${since(r.started)}` : ''}</td><td>${r.status === 'not_started' ? '' : (r.steps_done ?? '')}${r.status === 'running' && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
     ${!list.length ? `<tr><td colspan="9" class="help">${esc(T.empty.runs)}</td></tr>` : ''}</table></div>`);
   schedule(viewRuns, 10000);
@@ -357,7 +358,7 @@ async function viewJobs() {
   const d = await api('jobs');
   render(head(esc(T.nav.jobs), T.sub.jobs) + `
     <div class="panel"><table><tr><th>${esc(T.th.state)}</th><th>${esc(T.th.what)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.rc)}</th><th>${esc(T.th.ticket)}</th></tr>
-    ${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td><td>${fmtDur(sec(j.started, j.finished))}</td><td class="mono">${j.rc ?? ''}</td><td>${j.ticket ? `<a href="#/ticket/${j.ticket}">${j.ticket}</a>` : ''}</td></tr>`).join('')}
+    ${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td><td>${fmtDur(sec(j.started, j.finished))}</td><td class="mono">${j.rc ?? ''}</td><td>${j.ticket ? `<a href="#/ticket/${j.ticket}">${j.ticket}</a>` : ''}</td></tr>`).join('')}
     ${!d.jobs.length ? `<tr><td colspan="6" class="help">${esc(T.empty.jobs)}</td></tr>` : ''}</table></div>`);
   schedule(viewJobs, 3000);
 }
@@ -539,8 +540,11 @@ function showHelp() {
 }
 
 /* ---------- ルーター */
+/* 画面を離れるときのスクロール位置を覚え、戻ってきた 1 回だけ復元する（詳細から戻ると一覧の先頭に飛ぶのを防ぐ） */
+const scrollPos = {};
 async function route() {
-  const h = location.hash || '#/board'; lastRoute = h; clearInterval(timer);
+  const h = location.hash || '#/board'; if (lastRoute) scrollPos[lastRoute] = window.scrollY;
+  lastRoute = h; clearInterval(timer);
   document.querySelectorAll('.rail a[data-nav]').forEach(a => a.classList.toggle('active', h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'))));
   const [path, q] = h.slice(1).split('?'); const seg = path.split('/').filter(Boolean);
   try {
@@ -557,7 +561,7 @@ async function route() {
     else if (seg[0] === 'file') await viewFile(q);
     else render(`<div class="err">${esc(tt(T.err.noRoute, { h }))}</div>`);
   } catch (e) { render(`<div class="err">${esc(e.message)}</div>`); }
-  window.scrollTo(0, 0);
+  const y = scrollPos[h] || 0; delete scrollPos[h]; window.scrollTo(0, y);
 }
 /* 起動: 静的な文言（ナビ・切断の帯）を T から入れ、ナビに近道のヒントを付ける */
 document.querySelectorAll('[data-t]').forEach(el => { const v = el.dataset.t.split('.').reduce((o, k) => (o == null ? o : o[k]), T); if (v != null) el.textContent = v; });
