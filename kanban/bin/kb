@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
+
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+  kb list [--status S] [--pj P] [--all]
+  kb show <id>
+  kb start|review|done|reopen <id> [--note TEXT]
+  kb block <id> --note TEXT
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+  kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
+  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める
+  kb sync <id> [--run DIR]                       # runs/<run>/state.json を読み直して状態を合わせる（手で回した run や中断後）
+  kb history <id>
+  kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
+
+- pj    : $AIFACTORY_WORKSPACE/projects/<pj>/（無ければ examples/projects/<pj>/）がある PJ
+- kind  : workflow/kit/workflows/<kind>.yml がある種別（chore / bug / feature / hotfix / research / merge-pr）
+- status: todo → in_progress → review → done。人間待ちは blocked
+- チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
+- DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
+- 「ただのコード。エージェントは居ない」。LLM を使う判断（種別の分類など）は glue 側
+- 置き場は環境変数 AIFACTORY_WORKSPACE（全体）か KB_ROOT（kanban だけ）で差し替えられる
+- run 列には run 名（例 2026-09-06-kumitate-206）を入れる。旧記録の workflow/runs/<名前> も読める
+"""
+import argparse, datetime, json, os, pathlib, re, sqlite3, subprocess, sys
+
+HERE = pathlib.Path(__file__).resolve().parent.parent          # kanban/
+REPO = HERE.parent                                              # repo root
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
+ROOT = paths.KB_ROOT
+DB = ROOT / "kanban.db"
+TICKETS = ROOT / "tickets"
+BOARD = ROOT / "BOARD.md"
+RUNNER = REPO / "workflow" / "bin" / "run"
+
+STATUSES = ["todo", "in_progress", "review", "blocked", "done"]
+STATUS_LABEL = {"todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了"}
+MIN_ID = 100   # DNS 名 task-{id}.sb.internal に使うため 3 桁以上
+
+
+def die(msg, code=1):
+    print(f"[kb] error: {msg}", file=sys.stderr); sys.exit(code)
+
+
+def now():
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def pjs():
+    return paths.projects()
+
+
+def kinds():
+    d = REPO / "workflow" / "kit" / "workflows"
+    return sorted(p.stem for p in d.glob("*.yml"))
+
+
+def slugify(title):
+    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return s[:40].rstrip("-") or "ticket"
+
+
+# ---------- DB ----------
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tickets (
+    id      INTEGER PRIMARY KEY,
+    pj      TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    title   TEXT NOT NULL,
+    status  TEXT NOT NULL DEFAULT 'todo',
+    file    TEXT NOT NULL,
+    pr      INTEGER,
+    run     TEXT,
+    note    TEXT,
+    created TEXT NOT NULL,
+    updated TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    at     TEXT NOT NULL,
+    field  TEXT NOT NULL,
+    old    TEXT,
+    new    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+"""
+
+
+def db():
+    ROOT.mkdir(parents=True, exist_ok=True); TICKETS.mkdir(exist_ok=True)
+    c = sqlite3.connect(DB); c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON"); c.executescript(SCHEMA)
+    return c
+
+
+def get(c, tid):
+    r = c.execute("SELECT * FROM tickets WHERE id = ?", (tid,)).fetchone()
+    return r or die(f"チケット {tid} が無い")
+
+
+def record(c, tid, field, old, new):
+    if str(old) == str(new): return
+    c.execute("INSERT INTO history (ticket, at, field, old, new) VALUES (?,?,?,?,?)", (tid, now(), field, str(old) if old is not None else None, str(new) if new is not None else None))
+
+
+def update(c, tid, **fields):
+    r = get(c, tid)
+    for k, v in fields.items():
+        if v is None: continue
+        if k == "status" and v not in STATUSES: die(f"status は {STATUSES} のどれか")
+        if k == "kind" and v not in kinds(): die(f"kind は {kinds()} のどれか")
+        record(c, tid, k, r[k], v)
+        c.execute(f"UPDATE tickets SET {k} = ?, updated = ? WHERE id = ?", (v, now(), tid))
+        if k == "pr": sync_pr_line(ROOT / r["file"], v)
+    c.commit()
+    return get(c, tid)
+
+
+def sync_pr_line(path, pr):
+    # runner は本文の `pr: N` 行を読むので、DB と食い違わないように書き換える
+    if not path.exists(): return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    idx = next((i for i, l in enumerate(lines[:3]) if re.match(r"^pr:\s*#?\d+\s*$", l)), None)
+    if idx is not None: lines[idx] = f"pr: {pr}"
+    else: lines.insert(1, f"pr: {pr}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------- ticket file ----------
+def write_ticket(path, title, body, pr):
+    lines = [f"# {title}"]
+    if pr: lines.append(f"pr: {pr}")
+    lines.append("")
+    lines.append(body.rstrip() + "\n" if body.strip() else "")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def fmt(r):
+    pr = f"#{r['pr']}" if r["pr"] else "-"
+    return f"{r['id']:>4} {STATUS_LABEL[r['status']]:<6} {r['pj']:<10} {r['kind']:<9} {pr:<6} {r['title']}"
+
+
+# ---------- render ----------
+def render(c):
+    rows = c.execute("SELECT * FROM tickets ORDER BY id").fetchall()
+    out = ["# kanban ボード", "", f"`kb render` が生成（{now()}）。手で編集しない。正本は `kanban.db`、本文は `tickets/`。", ""]
+    counts = {s: sum(1 for r in rows if r["status"] == s) for s in STATUSES}
+    out.append("| " + " | ".join(STATUS_LABEL[s] for s in STATUSES) + " |")
+    out.append("|" + "---|" * len(STATUSES))
+    out.append("| " + " | ".join(str(counts[s]) for s in STATUSES) + " |")
+    out.append("")
+    for s in STATUSES:
+        rs = [r for r in rows if r["status"] == s]
+        if not rs: continue
+        out += [f"## {STATUS_LABEL[s]}（{s}）", "", "| id | PJ | 種別 | 題名 | PR | run | メモ | 更新 |", "|---|---|---|---|---|---|---|---|"]
+        for r in rs:
+            pr = f"#{r['pr']}" if r["pr"] else ""
+            run = f"`{r['run']}`" if r["run"] else ""
+            note = (r["note"] or "").replace("|", "/").replace("\n", " ")
+            out.append(f"| [{r['id']}]({r['file']}) | {r['pj']} | {r['kind']} | {r['title']} | {pr} | {run} | {note} | {r['updated'][:16]} |")
+        out.append("")
+    BOARD.write_text("\n".join(out), encoding="utf-8")
+
+
+# ---------- commands ----------
+def cmd_new(a):
+    if a.pj not in pjs(): die(f"pj は {pjs()} のどれか")
+    if a.kind not in kinds(): die(f"kind は {kinds()} のどれか")
+    if a.status not in STATUSES: die(f"status は {STATUSES} のどれか")
+    body = ""
+    if a.body == "-": body = sys.stdin.read()
+    elif a.body: body = pathlib.Path(a.body).read_text(encoding="utf-8")
+    c = db()
+    if a.id is not None:
+        tid = int(a.id)
+        if tid < MIN_ID: die(f"id は {MIN_ID} 以上（3 桁以上）")
+        if c.execute("SELECT 1 FROM tickets WHERE id = ?", (tid,)).fetchone(): die(f"id {tid} は既にある")
+    else:
+        m = c.execute("SELECT MAX(id) FROM tickets").fetchone()[0]
+        tid = max((m or 0) + 1, MIN_ID)
+    file = TICKETS / f"{tid}-{a.pj}-{slugify(a.title) if slugify(a.title) != 'ticket' else a.kind}.md"
+    if file.exists(): die(f"{file} が既にある")
+    write_ticket(file, a.title, body, a.pr)
+    t = now()
+    c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t))
+    record(c, tid, "status", None, a.status)
+    c.commit(); render(c)
+    print(fmt(get(c, tid))); print(f"     {file}")
+    return tid
+
+
+def cmd_list(a):
+    c = db(); q = "SELECT * FROM tickets WHERE 1=1"; p = []
+    if a.status: q += " AND status = ?"; p.append(a.status)
+    elif not a.all: q += " AND status != 'done'"
+    if a.pj: q += " AND pj = ?"; p.append(a.pj)
+    rows = c.execute(q + " ORDER BY id", p).fetchall()
+    for r in rows: print(fmt(r))
+    if not rows: print("(なし)")
+
+
+def cmd_show(a):
+    c = db(); r = get(c, a.id)
+    for k in r.keys(): print(f"{k:<8} {r[k] if r[k] is not None else ''}")
+    f = ROOT / r["file"]
+    print("-" * 60); print(f.read_text(encoding="utf-8") if f.exists() else f"(本文ファイル無し: {f})")
+
+
+def cmd_status(a, status):
+    c = db(); r = update(c, a.id, status=status, note=getattr(a, "note", None)); render(c); print(fmt(r))
+
+
+def cmd_set(a):
+    c = db(); r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind); render(c); print(fmt(r))
+
+
+def cmd_next(a):
+    c = db(); q = "SELECT * FROM tickets WHERE status = 'todo'"; p = []
+    if a.pj: q += " AND pj = ?"; p.append(a.pj)
+    r = c.execute(q + " ORDER BY id LIMIT 1", p).fetchone()
+    if not r: print("" if a.json else "(todo なし)"); return
+    if a.json: print(json.dumps({k: r[k] for k in r.keys()} | {"path": str(ROOT / r["file"])}, ensure_ascii=False))
+    else: print(fmt(r)); print(f"     {ROOT / r['file']}")
+
+
+def cmd_run(a):
+    c = db(); r = get(c, a.id)
+    wf = a.workflow or r["kind"]
+    if wf not in kinds(): die(f"workflow {wf} が無い（{kinds()}）")
+    pd = paths.project_dir(r["pj"])
+    if not (pd and (pd / "project.yml").exists()): die(f"{r['pj']} に project.yml が無い（runner が動かない。置き場: {' / '.join(str(d) for d in paths.PROJECT_DIRS)}）")
+    if r["status"] == "done" and not a.dry_run: die(f"{a.id} は done。やり直すなら kb reopen")
+    path = ROOT / r["file"]
+    if not path.exists(): die(f"本文が無い: {path}")
+    run_dir = f"{datetime.date.today().isoformat()}-{r['pj']}-{r['id']}" + ("-dry" if a.dry_run else "")
+    if not a.dry_run:
+        update(c, a.id, status="in_progress", run=run_dir, kind=None if a.workflow is None else a.workflow); render(c)
+    cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
+    print("[kb] " + " ".join(cmd), flush=True)
+    rc = subprocess.run(cmd).returncode
+    if a.dry_run: print(f"[kb] dry-run 終了 rc={rc}"); return rc
+    rc = apply_result(c, a.id, run_dir, rc)
+    print(f"[kb] {fmt(get(c, a.id))}")
+    return rc
+
+
+def apply_result(c, tid, run_dir, rc=0):
+    """runs/<run>/state.json を読んで状態を進める（kb run の末尾と kb sync が共用）"""
+    st = paths.run_path(run_dir) / "state.json"
+    s = json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
+    if "finished" not in s:
+        update(c, tid, status="in_progress", run=run_dir, note=f"runner 実行中（次の step: {s.get('next', '?')}）"); render(c); return rc
+    result, pr_url, wip = s.get("result"), s.get("pr_url") or "", s.get("wip_branch") or ""
+    m = re.search(r"/pull/(\d+)", pr_url); pr = int(m.group(1)) if m else None
+    # chore / bug / feature は pr step の後 `human`（= 人間がレビューしてマージ）で終わるので、PR があれば review
+    if "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
+    elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
+    elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
+    elif result == "human": status, note = "blocked", f"人間へ（wip: origin/{wip}）" if wip else "人間へ（PR 無し）"
+    else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
+    update(c, tid, status=status, pr=pr, run=run_dir, note=note); render(c)
+    return rc
+
+
+def cmd_sync(a):
+    c = db(); r = get(c, a.id)
+    run_dir = a.run or r["run"] or die(f"{a.id} に run が無い。--run で指定")
+    apply_result(c, a.id, run_dir); print(fmt(get(c, a.id)))
+
+
+def cmd_history(a):
+    c = db(); get(c, a.id)
+    for h in c.execute("SELECT * FROM history WHERE ticket = ? ORDER BY id", (a.id,)):
+        print(f"{h['at']}  {h['field']:<7} {h['old'] or '-'} → {h['new'] or '-'}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="kb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    p = sp.add_parser("new"); p.add_argument("pj"); p.add_argument("kind"); p.add_argument("title")
+    p.add_argument("--body"); p.add_argument("--pr", type=int); p.add_argument("--id", type=int); p.add_argument("--status", default="todo"); p.add_argument("--note")
+    p = sp.add_parser("list"); p.add_argument("--status"); p.add_argument("--pj"); p.add_argument("--all", action="store_true")
+    p = sp.add_parser("show"); p.add_argument("id", type=int)
+    for name in ("start", "review", "done", "reopen", "block"):
+        p = sp.add_parser(name); p.add_argument("id", type=int); p.add_argument("--note", required=(name == "block"))
+    p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
+    p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
+    p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run")
+    p = sp.add_parser("history"); p.add_argument("id", type=int)
+    sp.add_parser("render")
+    a = ap.parse_args()
+    if a.cmd == "new": cmd_new(a)
+    elif a.cmd == "list": cmd_list(a)
+    elif a.cmd == "show": cmd_show(a)
+    elif a.cmd in ("start", "review", "done", "reopen", "block"):
+        cmd_status(a, {"start": "in_progress", "review": "review", "done": "done", "reopen": "todo", "block": "blocked"}[a.cmd])
+    elif a.cmd == "set": cmd_set(a)
+    elif a.cmd == "next": cmd_next(a)
+    elif a.cmd == "run": sys.exit(cmd_run(a))
+    elif a.cmd == "sync": cmd_sync(a)
+    elif a.cmd == "history": cmd_history(a)
+    elif a.cmd == "render": c = db(); render(c); print(BOARD)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/akkijp/aifactory/workflow/kit/schema/project.schema.json",
+  "title": "aifactory project definition ($AIFACTORY_WORKSPACE/projects/<pj>/project.yml or examples/projects/<pj>/project.yml)",
+  "description": "PJ 固有の事実と方針。手順（workflow）は常備側にあり、ここには『どこに何があるか』『何を守るか』だけを書く。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "repo",
+    "base_branch",
+    "app_dir",
+    "gates"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "PJ slug。sandbox take <pj> と templates/<pj>/ に一致"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "base_branch": {
+      "type": "string",
+      "description": "通常の作業ブランチの元と PR の宛先"
+    },
+    "hotfix_base": {
+      "type": "string",
+      "description": "hotfix の宛先（省略時は base_branch）"
+    },
+    "app_dir": {
+      "type": "string",
+      "description": "VM 内のアプリのディレクトリ（リポジトリ直下と違うことがある）"
+    },
+    "url": {
+      "type": "string",
+      "description": "VM 内から見たアプリの URL（画面確認用）"
+    },
+    "gates": {
+      "type": "string",
+      "description": "ゲートスクリプト。templates/<pj>/ からの相対パス。VM 内で app_dir を cwd に実行され、全緑なら 0"
+    },
+    "stack": {
+      "type": "string",
+      "description": "1 行の技術スタック（依頼文の冒頭に出す）"
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "agent に毎回伝える事実（テストの走らせ方、既知の問題、生成物の置き場など）。1 項目 1 行"
+    },
+    "review_points": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "reviewer が必ず見る観点（PJ 固有）"
+    },
+    "forbidden": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "agent がやってはいけないこと（PJ 固有）。共通の禁止事項は kit/roles/ にある"
+    },
+    "workflow_overrides": {
+      "type": "object",
+      "description": "workflow 名 → 上書き（v1 は base_branch のみ）",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_branch": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "known_red_gates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "base ブランチで既に赤いゲート名（gates.sh の名前）。runner は FAIL を INFO に格下げし、agent に『直せ』と戻さない。直す PR がマージされたら消す"
+    }
+  }
+}

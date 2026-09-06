@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# gh-app-setup: sandbox 用 GitHub App を作る（BUILD.md Step 0b。ADR-0008）。
+#   1. マニフェスト（Contents RW / Pull requests RW / Metadata R、Webhook 無効）を埋めた HTML を作ってブラウザで開く
+#   2. 人間が GitHub 上で「Create GitHub App」を押す（オーナーは個人アカウント）
+#   3. 戻り先 127.0.0.1:8765 で一時コードを受け取り、API で App ID と秘密鍵に交換して ~/.config/sandbox/gh-app/ に保存
+#   4. install リンクを表示する（各オーナーで対象リポジトリを選ぶのも人間）
+# 使い方: sandbox/bin/gh-app-setup [app-name]   （既定 aifactory-sandbox。GitHub 全体で一意である必要がある）
+set -euo pipefail
+NAME="${1:-aifactory-sandbox}"
+PORT=8765
+D="$HOME/.config/sandbox/gh-app"
+W="$(mktemp -d)"
+STATE="$(openssl rand -hex 12)"
+mkdir -p "$D"; chmod 700 "$D"
+[[ -f "$D/app.env" ]] && { echo "[skip] 既に $D/app.env がある。作り直すなら先に消す"; cat "$D/app.env"; exit 0; }
+
+python3 - "$W" "$STATE" "$NAME" "$PORT" "${GH_APP_URL:-https://github.com/akkijp/aifactory}" <<'EOF'
+import json,sys,html
+W,state,name,port,app_url=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]
+manifest={
+  "name":name,
+  "url":app_url,   # App のホームページ URL（GH_APP_URL で差し替え可）
+  "description":"aifactory sandbox: VM 内のエージェントが対象リポジトリへ push / PR するための短期トークン払い出し用（Contents RW / Pull requests RW / Metadata R のみ）",
+  "redirect_url":f"http://127.0.0.1:{port}/callback",
+  "public":True,   # 個人所有の非公開 App は所有者にしか install できない（org に入れるには public が必須。2026-09-06 に踏んだ）
+  "hook_attributes":{"url":"https://example.invalid/unused","active":False},
+  "default_permissions":{"contents":"write","pull_requests":"write","metadata":"read","actions":"read","checks":"read"},
+  "default_events":[]
+}
+page=f'''<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{html.escape(name)} GitHub App 作成</title>
+<style>body{{font-family:-apple-system,sans-serif;max-width:720px;margin:40px auto;line-height:1.7}} pre{{background:#f4f4f4;padding:12px;overflow:auto}} button{{font-size:18px;padding:10px 24px}}</style></head>
+<body><h1>{html.escape(name)} を作る</h1>
+<p>ボタンを押すと GitHub の App 作成画面に移ります（オーナーは自分の個人アカウント）。内容を確認して <b>Create GitHub App</b> を押してください。作成後は Mac 上の受け口（127.0.0.1:{port}）に自動で戻ります。</p>
+<pre>{html.escape(json.dumps(manifest["default_permissions"],ensure_ascii=False,indent=2))}</pre>
+<form action="https://github.com/settings/apps/new?state={state}" method="post">
+<input type="hidden" name="manifest" value="{html.escape(json.dumps(manifest,ensure_ascii=False))}">
+<button type="submit">GitHub で App を作成する</button></form>
+<details><summary>マニフェスト全文</summary><pre>{html.escape(json.dumps(manifest,ensure_ascii=False,indent=2))}</pre></details>
+</body></html>'''
+open(f"{W}/create.html","w",encoding="utf-8").write(page)
+open(f"{W}/callback.py","w").write(f'''
+import http.server, urllib.parse, sys, pathlib
+STATE="{state}"; OUT=pathlib.Path("{W}/code.txt")
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        u=urllib.parse.urlparse(self.path); q=urllib.parse.parse_qs(u.query)
+        if u.path=="/callback" and "code" in q and q.get("state",[""])[0]==STATE:
+            OUT.write_text(q["code"][0]); body="<meta charset=utf-8><h2>受け取りました。このタブは閉じて構いません。</h2>"
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body.encode())
+            raise SystemExit(0)
+        self.send_response(404); self.end_headers()
+    def log_message(self,*a): pass
+http.server.HTTPServer(("127.0.0.1",{port}),H).serve_forever()
+''')
+EOF
+
+python3 "$W/callback.py" &
+CB=$!
+trap 'kill $CB 2>/dev/null || true' EXIT
+open "$W/create.html" 2>/dev/null || echo "ブラウザで開く: $W/create.html"
+echo "[wait] GitHub で Create GitHub App を押すのを待っています（最大 30 分）..."
+for _ in $(seq 1 360); do [[ -s "$W/code.txt" ]] && break; sleep 5; done
+[[ -s "$W/code.txt" ]] || { echo "[error] コードを受け取れなかった" >&2; exit 1; }
+
+# 一時コードは 1 回しか使えないので、応答はまずファイルに丸ごと保存してから解析する（jq は pem の改行で落ちることがある。python で読む）
+umask 077
+curl -sS -o "$D/conversion.json" -X POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/app-manifests/$(cat "$W/code.txt")/conversions"
+python3 - "$D" <<'PY' || exit 1
+import json,sys,os
+D=sys.argv[1]; j=json.load(open(f"{D}/conversion.json"))
+if "pem" not in j: print("[error] conversion failed:", j.get("message"), file=sys.stderr); sys.exit(1)
+open(f"{D}/private-key.pem","w").write(j["pem"]); os.chmod(f"{D}/private-key.pem",0o600)
+open(f"{D}/app.env","w").write(f"APP_ID={j['id']}\nAPP_SLUG={j['slug']}\nCLIENT_ID={j['client_id']}\nAPP_URL={j['html_url']}\n"); os.chmod(f"{D}/app.env",0o600)
+PY
+rm -f "$D/conversion.json"; rm -rf "$W"
+echo "[ok] saved: $D/app.env, $D/private-key.pem"
+cat "$D/app.env"
+echo
+echo "[next] 各オーナー（個人 / org）で対象リポジトリを選んで install:"
+echo "  https://github.com/apps/$(sed -n 's/^APP_SLUG=//p' "$D/app.env")/installations/new"
+echo "  確認: sandbox gh-app status"

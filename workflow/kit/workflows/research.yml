@@ -1,0 +1,18 @@
+# research: 調査だけ。コードは変えず、research.md を回収して終わる（PR 無し）
+name: research
+description: 調査。researcher が一次情報を集めて research.md にまとめる。planner が要点と次の一手を判断して summary.md を書く
+inputs: [ticket.md]
+steps:
+  - id: research
+    role: researcher
+    outputs: [research.md]
+    next: judge
+
+  - id: judge
+    role: planner
+    brief: |
+      research.md を読み、問いに対する答えと「次にやるべきこと（やらないという判断も含む）」を summary.md に書く。
+      コードや計画は書かない。人間が 2 分で読める長さにする。
+    inputs: [research.md]
+    outputs: [summary.md]
+    next: end

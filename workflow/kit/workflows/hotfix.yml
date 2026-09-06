@@ -1,0 +1,42 @@
+# hotfix: 本番障害の最小修正。計画は短く、レビューは厳しく。宛先は project.yml の hotfix_base（無ければ base_branch）
+name: hotfix
+description: 本番障害の最小修正。原因の特定 → 最小の変更 → ゲート → 厳しいレビュー → PR。範囲を広げない
+base_branch: hotfix_base
+inputs: [ticket.md]
+steps:
+  - id: plan
+    role: planner
+    brief: |
+      hotfix である。**最小の変更で症状を止める**ことを最優先にし、根本対処は「後続タスク」として計画の末尾に分けて書く。
+      変更範囲は 3 ファイル以内を目安にし、それを超えるなら STOP を検討する。
+    outputs: [plan.md]
+    next: implement
+
+  - id: implement
+    role: implementer
+    brief: |
+      plan.md の手順どおりに、計画の範囲内だけを変える。再現テストを先に書く。リファクタはしない。
+    inputs: [plan.md]
+    outputs: [git, report.md]
+    next: gates
+
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: review
+    on_fail: { goto: implement, max_loops: 2, else: human }
+
+  - id: review
+    role: reviewer
+    brief: |
+      hotfix なので「範囲の小ささ」と「本番影響」を最も厳しく見る。根本対処が混ざっていたら FAIL。
+    inputs: [plan.md, report.md, gates.txt]
+    outputs: [review.md]
+    on_pass: pr
+    on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: pr
+    code: pr-create.sh
+    inputs: [plan.md, report.md, review.md, gates.txt]
+    outputs: [pr_url]
+    next: human

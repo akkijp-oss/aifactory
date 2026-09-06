@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aifactory console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%274%27 fill=%27%230b5d5d%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="主メニュー">
+    <a class="brand" href="#/board"><span class="brand-mark" aria-hidden="true"></span>aifactory<small>console</small></a>
+    <a href="#/board" data-nav="board">ボード<b id="n-board"></b></a>
+    <a href="#/runs" data-nav="runs">実行記録<b id="n-runs"></b></a>
+    <a href="#/sandbox" data-nav="sandbox">sandbox<b id="n-sandbox"></b></a>
+    <a href="#/intake" data-nav="intake">取り込み</a>
+    <a href="#/jobs" data-nav="jobs">ジョブ<b id="n-jobs"></b></a>
+    <a href="#/logs" data-nav="logs">ログ</a>
+    <a href="#/config" data-nav="config">設定</a>
+    <div class="rail-foot">
+      <span id="clock">—</span>
+      <span id="conn" class="conn" title="サーバーとの接続">接続中</span>
+    </div>
+  </nav>
+  <main id="main" class="main" tabindex="-1"></main>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

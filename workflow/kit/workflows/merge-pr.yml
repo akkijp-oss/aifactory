@@ -1,0 +1,44 @@
+# merge-pr: 既存 PR のコンフリクトを解消し、ゲートとレビューを通してから base へマージする
+#   チケットの 2 行目に `pr: <番号>` を書く。runner はその PR の head を checkout し、base は PR の base になる
+name: merge-pr
+description: 既存 PR のコンフリクト解消 → ゲート → レビュー → PR ブランチへ push → base へマージ。マージまで機械が行う（メンテナの判断 2026-09-06。dogfooding）
+start: pr
+inputs: [ticket.md]
+steps:
+  - id: resolve
+    role: implementer
+    brief: |
+      この作業ブランチは **既存 PR の head** である。やることはコンフリクトの解消だけ。
+      1. `git merge origin/<base>`（base は依頼文の「作業ブランチ（元: ...）」）を実行し、コンフリクトを確認する
+      2. 両方の意図を残す形で解消する。PR 側の変更を消さない、develop 側の変更を消さない。迷ったら `git log -p` で両方のコミットの意図を読む
+      3. 解消したファイルに **関係する spec だけ** を走らせて緑を確認し、マージコミットを作る（`git commit` でマージを完了させる。メッセージは既定の "Merge branch 'origin/<base>'..." でよい）。
+         全体のテストは次の gates step が走らせるので、自分で全 rspec を回さない（2026-09-06 に 1 時間かかった）
+      4. PR の本来の変更内容そのものを直したり広げたりしない。コンフリクトと無関係な修正はしない
+      report.md には、コンフリクトしたファイルごとに「何と何が衝突し、どう残したか」を書く。
+    outputs: [git, report.md]
+    next: gates
+
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: review
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: review
+    role: reviewer
+    brief: |
+      見るのは **コンフリクト解消の正しさ** だけ。PR 本来の変更の是非は見ない（既にレビュー済みの前提）。
+      - 解消で PR 側または base 側の変更が消えていないか（`git diff origin/<base>...HEAD` と PR 元の差分を突き合わせる）
+      - コンフリクトマーカーの残り、二重定義、i18n キーの重複、テストの skip
+      - 解消と無関係な変更が混ざっていないか
+    inputs: [report.md, gates.txt]
+    outputs: [review.md]
+    on_pass: merge
+    on_fail: { goto: resolve, max_loops: 1, else: human }
+
+  - id: merge
+    code: pr-merge.sh
+    inputs: [report.md, review.md, gates.txt]
+    outputs: [pr_url]
+    on_pass: end
+    on_fail: human

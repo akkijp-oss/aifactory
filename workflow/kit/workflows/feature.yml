@@ -1,0 +1,48 @@
+# feature: 機能追加。調査 → 設計（計画）→ 実装 → ゲート → レビュー → PR
+name: feature
+description: 機能追加。researcher が一次情報を集め、planner が設計し、implementer が作り、reviewer が判定する
+inputs: [ticket.md]
+steps:
+  - id: research
+    role: researcher
+    brief: |
+      チケットの機能に関係する既存コード・既存の決定（docs / ADR / CLAUDE.md）・外部仕様を集める。
+      「既にある似た仕組み」と「守るべき既存の約束」を planner に申し送る。
+    outputs: [research.md]
+    next: design
+
+  - id: design
+    role: planner
+    brief: |
+      research.md を踏まえて設計する。UI があるなら導線（誰が・どこから・何をして・どうなる）を先に書く。
+      大きければ段階に分け、この PR で入れる段階だけを計画にする。
+    inputs: [research.md]
+    outputs: [plan.md]
+    next: implement
+
+  - id: implement
+    role: implementer
+    inputs: [plan.md, research.md]
+    outputs: [git, report.md]
+    next: gates
+
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: review
+    on_fail: { goto: implement, max_loops: 2, else: human }
+
+  - id: review
+    role: reviewer
+    brief: |
+      設計（plan.md）との整合と、既存の約束（research.md の申し送り）を破っていないかを重点的に見る。
+    inputs: [plan.md, research.md, report.md, gates.txt]
+    outputs: [review.md]
+    on_pass: pr
+    on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: pr
+    code: pr-create.sh
+    inputs: [plan.md, report.md, review.md, gates.txt]
+    outputs: [pr_url]
+    next: human

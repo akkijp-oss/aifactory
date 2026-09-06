@@ -1,0 +1,38 @@
+# bug: 不具合修正。再現テストを先に書き、直し、レビューして PR
+name: bug
+description: 不具合修正。計画 → 再現テスト → 修正 → ゲート → レビュー → PR
+inputs: [ticket.md]
+steps:
+  - id: plan
+    role: planner
+    brief: |
+      再現条件を最初に確定させる。再現テストをどこに（どのテストファイルに）書くかまで計画に含める。
+    outputs: [plan.md]
+    next: implement
+
+  - id: implement
+    role: implementer
+    brief: |
+      **先に再現テストを書いて赤を確認**してから直す。再現テストが書けない場合は理由を report.md に書き、代わりの検証を示す。
+    inputs: [plan.md]
+    outputs: [git, report.md]
+    next: gates
+
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: review
+    on_fail: { goto: implement, max_loops: 2, else: human }
+
+  - id: review
+    role: reviewer
+    inputs: [plan.md, report.md, gates.txt]
+    outputs: [review.md]
+    on_pass: pr
+    on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: pr
+    code: pr-create.sh
+    inputs: [plan.md, report.md, review.md, gates.txt]
+    outputs: [pr_url]
+    next: human

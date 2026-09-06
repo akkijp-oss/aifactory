@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- aifactory sandbox: 貸出中の VM の GH_TOKEN（GitHub App installation token, 1 時間有効）を 45 分ごとに払い出し直す（ADR-0008） -->
+  <key>Label</key><string>com.aifactory.sandbox.gh-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string><string>-lc</string>
+    <string>"$HOME/.local/bin/sandbox" gh-app refresh</string>
+  </array>
+  <key>StartInterval</key><integer>2700</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/tmp/aifactory-sandbox-gh-refresh.log</string>
+  <key>StandardErrorPath</key><string>/tmp/aifactory-sandbox-gh-refresh.log</string>
+</dict>
+</plist>

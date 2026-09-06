@@ -1,0 +1,100 @@
+# Roles and models
+
+`workflow/kit/roles/*.md` (role constitutions) and `workflow/kit/routes.env` (class → model).
+
+## Roles
+
+| Role | Class | Does | Does not | Output |
+|---|---|---|---|---|
+| **planner** | judgment | Reads the ticket and repository; decides reproduction, hypotheses, scope (per file), verification and risks. Writes **STOP** at the top if the request is unclear, contradictory or dangerous | Write code | `plan.md` |
+| **implementer** | coding | Implements according to the plan. For bugs, writes a failing test first and confirms red. Runs lint / types / relevant tests to green before committing | Step outside the scope (stops and explains in report.md). Push | git commits + `report.md` |
+| **researcher** | research | Splits the question into at most 3 items, gathers primary sources from the repository and the web, organises them with citations. GitHub via `gh` (CI history via `gh run list`) | Change code, commit. Write guesses as facts | `research.md` (in the research workflow the judge writes `summary.md`) |
+| **reviewer** | judgment | Reads diff, plan, report and gate results in the order "scope → correctness → safety → project-specific → gates" and decides PASS / FAIL. Concerns outside the scope go into notes for humans | Fix code | `review.md` |
+
+Every role is preceded by `_common.md` (shared rules).
+
+## Shared rules (`_common.md`)
+
+- Work on the work branch. No direct commits to `main` / `develop`, no branch switching
+- **Do not push.** Push and PR are done by code (the runner)
+- Commit yourself. Messages in Japanese, "what and why" on line 1
+- Do not `git add` untracked files. Never `git add -A`
+- Do not write secrets to files or logs
+- Do not change anything outside the scope. Report problems outside the scope instead of fixing them
+- When instructions and reality disagree, treat reality as truth and report the discrepancy
+- Do not fill gaps with guesses. When a judgement is needed, write the options and a recommendation and proceed on the safe side
+- Always write the required artifacts to the specified path under `~/work/<id>/` (missing means the step fails)
+
+## Output shapes
+
+=== "plan.md"
+
+    ```
+    # Plan: <title>
+    ## Reproduction and hypotheses (with confidence)
+    ## Scope (per file, including what is left alone)
+    ## Verification
+    ## Risks and decision rules
+    ```
+    `STOP` at the top with reasons and questions for the human if dangerous.
+
+=== "report.md"
+
+    ```
+    # Report: <title>
+    ## What changed
+    ## Tests run and results
+    ## Found outside the scope (not fixed)
+    ## Judgement calls
+    ```
+
+=== "research.md"
+
+    ```
+    # Research: <question>
+    ## Conclusion (3 lines, facts only)
+    ## Findings per item (with sources)
+    ## Unknown / to confirm
+    ## Notes for the planner
+    ```
+
+=== "review.md"
+
+    ```
+    # Review: <title>
+    ## Verdict: PASS / FAIL
+    ## Reasons
+    ## What to fix (on FAIL)
+    ## Notes for humans (concerns outside the scope)
+    ```
+
+## routes.env
+
+```
+MODEL_judgment=claude-fable-5-1
+MODEL_research=claude-sonnet-5
+MODEL_coding=claude-opus-5
+MODEL_default=claude-opus-5
+```
+
+| Class | Use | Default roles |
+|---|---|---|
+| judgment | Critical judgement | planner, reviewer, the judge (research workflow), intake |
+| research | Web research | researcher |
+| coding | Coding | implementer |
+
+"Judgement on Fable, web research on Sonnet, everything else on Opus" is the maintainer's decision (2026-09-06). Edit `routes.env` to use other models.
+
+## Overrides
+
+| Scope | Method |
+|---|---|
+| Everything | Edit `routes.env` |
+| One step | `model_class: judgment` etc. in the workflow yml |
+| One run | Environment variable `CLAUDE_MODEL=claude-opus-5 kb run 204` |
+
+## Adding a role
+
+1. Write `workflow/kit/roles/<role>.md` (class, duties, prohibitions, output shape)
+2. Add the role → default class mapping in the runner (`model_for` in `bin/run`)
+3. Use it as `role: <role>` in a workflow step

@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/akkijp/aifactory/workflow/kit/schema/workflow.schema.json",
+  "title": "aifactory workflow definition",
+  "description": "チケット種別ごとの手順。step の並びと分岐。担い手は role（agent）か code のどちらか。文章（役割の憲法・依頼文）は Markdown の別ファイルを参照する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description",
+    "steps"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "base_branch": {
+      "type": "string",
+      "description": "作業ブランチの元と PR の宛先。省略時は project.yml の base_branch。hotfix は project.yml の hotfix_base を使うなら 'hotfix_base' と書く"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "workflow 全体の入力 artifact 名。v1 は ticket 固定"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "start": {
+      "type": "string",
+      "enum": [
+        "base",
+        "pr"
+      ],
+      "default": "base",
+      "description": "作業ブランチの作り方。base = base_branch から新規ブランチ。pr = チケット 2 行目の `pr: <番号>` の PR head を checkout（base はその PR の base）"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "string",
+      "description": "VM の ~/work/<task>/ 配下の相対パス（例 plan.md, gates.txt）。特別値: git（作業ブランチのコミット）, pr_url",
+      "pattern": "^[A-Za-z0-9_./-]+$"
+    },
+    "transition": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "次の step id。'human' で人間に渡して終了、'end' で正常終了"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goto"
+          ],
+          "properties": {
+            "goto": {
+              "type": "string"
+            },
+            "max_loops": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1,
+              "description": "この遷移で戻れる回数の上限"
+            },
+            "else": {
+              "type": "string",
+              "default": "human",
+              "description": "上限を超えたときの行き先"
+            }
+          }
+        }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "planner",
+            "implementer",
+            "reviewer",
+            "researcher"
+          ],
+          "description": "agent step。憲法は kit/roles/<role>.md、モデルは kit/routes.env のクラスで決まる"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_./-]+$",
+          "description": "code step。kit/steps/ からの相対パス。Mac で実行され、VM へは sandbox ssh で入る"
+        },
+        "brief": {
+          "type": "string",
+          "description": "この workflow でのこの step の追加指示（Markdown）。役割の憲法の後ろに付く"
+        },
+        "model_class": {
+          "type": "string",
+          "enum": [
+            "judgment",
+            "research",
+            "coding"
+          ],
+          "description": "役割の既定クラスを上書きする"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "description": "VM の work から読んで依頼文に添える artifact"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "description": "step が作るべき artifact。agent step では依頼文に『ここに書け』と出る。無ければ失敗"
+        },
+        "next": {
+          "$ref": "#/$defs/transition",
+          "description": "結果に関係なく次へ（code step で合否が無いとき）"
+        },
+        "on_pass": {
+          "$ref": "#/$defs/transition"
+        },
+        "on_fail": {
+          "$ref": "#/$defs/transition"
+        },
+        "timeout_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "role"
+          ],
+          "not": {
+            "required": [
+              "code"
+            ]
+          }
+        },
+        {
+          "required": [
+            "code"
+          ],
+          "not": {
+            "required": [
+              "role"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

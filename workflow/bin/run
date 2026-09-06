@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""workflow/bin/run: workflow 定義（kit/workflows/<name>.yml）を読んで、sandbox VM の中で step を順に実行する runner（v1）。
+
+  workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+
+- pj        : $AIFACTORY_WORKSPACE/projects/<pj>/project.yml（無ければ examples/projects/<pj>/）がある PJ
+- task-id   : sandbox take に渡す ID（3 桁など）
+- workflow  : kit/workflows/ の名前（hotfix / bug / feature / chore / research）
+- ticket.md : チケット（1 行目が題名）
+- --dry-run : VM を触らず、定義の検証と各 step の依頼文の組み立てだけ行う（runs/ に出す）
+- 置き場（PJ 定義 / runs/）は lib/aifactory_paths.py が決める（AIFACTORY_WORKSPACE。既定は <repo>/workspace/）
+- --keep    : 終了後に release しない（中を見たいとき）
+- --resume  : 既に貸出中の VM で、state.json の次の step から続ける
+
+artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
+step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
+"""
+import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
+
+HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
+ROOT = HERE.parent                                              # repo root
+KIT = HERE / "kit"
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths
+
+def die(msg, code=1):
+    print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
+
+def load_yaml(p):
+    import yaml
+    with open(p, encoding="utf-8") as f: return yaml.safe_load(f)
+
+def validate(obj, schema_file, what):
+    import jsonschema
+    schema = json.load(open(schema_file, encoding="utf-8"))
+    try:
+        jsonschema.validate(obj, schema)
+    except jsonschema.ValidationError as e:
+        die(f"{what} が schema に合わない: {e.message} (at {'/'.join(map(str, e.absolute_path))})")
+
+def sh(cmd, check=True, capture=True, input_text=None, env=None):
+    # errors="replace": 子プロセスの出力に UTF-8 として壊れたバイトが混ざっても落ちない（2026-09-06 に merge step で UnicodeDecodeError で runner ごと死んだ）
+    r = subprocess.run(cmd, shell=isinstance(cmd, str), text=True, capture_output=capture, errors="replace",
+                       input=input_text, env={**os.environ, **(env or {})})
+    if check and r.returncode != 0:
+        raise RuntimeError(f"command failed ({r.returncode}): {cmd}\n{(r.stderr or '')[-2000:]}")
+    return r
+
+def stream(cmd, log_path, render=None, env=None):
+    """子プロセスの出力を 1 行ずつ log_path に流す（console が追い読みできる）。render(line) が与えられれば、その戻り値
+    （None なら書かない）を書く。戻り: (rc, 書いた全文)。step の途中経過を見えるようにするため（2026-09-06）"""
+    out = []
+    with open(log_path, "ab") as f:
+        p = subprocess.Popen(cmd, shell=isinstance(cmd, str), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             env={**os.environ, **(env or {})})
+        for raw in p.stdout:
+            line = raw.decode("utf-8", "replace")
+            text = render(line) if render else line
+            if text is None: continue
+            if not text.endswith("\n"): text += "\n"
+            f.write(text.encode("utf-8")); f.flush(); out.append(text)
+        rc = p.wait()
+    return rc, "".join(out)
+
+
+def _short(s, n=300):
+    s = str(s).replace("\n", "⏎")
+    return s if len(s) <= n else s[:n] + f"…(+{len(s) - n})"
+
+
+class EventRenderer:
+    """claude -p --output-format stream-json の 1 行（JSON）を、人が読める 1〜数行に起こす。JSON でない行はそのまま通す"""
+    def __init__(self, t0):
+        self.t0 = t0; self.raw = []; self.last_text = ""
+    def stamp(self):
+        t = int(time.time() - self.t0); return f"[+{t // 60:02d}:{t % 60:02d}]"
+    def __call__(self, line):
+        line = line.rstrip("\n")
+        if not line.strip(): return None
+        try: ev = json.loads(line)
+        except ValueError: return f"{self.stamp()} {line}"
+        self.raw.append(line)
+        t = ev.get("type"); st = self.stamp()
+        if t == "system":
+            if ev.get("subtype") == "init": return f"{st} init model={ev.get('model', '?')} tools={len(ev.get('tools', []))} cwd={ev.get('cwd', '')}"
+            return None
+        if t == "assistant":
+            outs = []
+            for b in (ev.get("message") or {}).get("content") or []:
+                if b.get("type") == "text" and b.get("text", "").strip(): self.last_text = b["text"].strip(); outs.append(f"{st} {self.last_text}")
+                elif b.get("type") == "tool_use":
+                    inp = b.get("input") or {}
+                    arg = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("path") or inp.get("query") or inp.get("description")
+                    outs.append(f"{st} ▶ {b.get('name')}: {_short(arg if arg is not None else json.dumps(inp, ensure_ascii=False))}")
+            return "\n".join(outs) if outs else None
+        if t == "user":
+            outs = []
+            for b in (ev.get("message") or {}).get("content") or []:
+                if b.get("type") != "tool_result": continue
+                c = b.get("content")
+                if isinstance(c, list): c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
+                lines = [l for l in str(c or "").splitlines() if l.strip()]
+                head = "\n".join("    " + _short(l, 200) for l in lines[:3]) + (f"\n    …(+{len(lines) - 3} 行)" if len(lines) > 3 else "")
+                outs.append(("  ↳ ERROR\n" if b.get("is_error") else "  ↳\n") + head if head else ("  ↳ ERROR (空)" if b.get("is_error") else "  ↳ (空)"))
+            return "\n".join(outs) if outs else None
+        if t == "result":
+            cost = ev.get("total_cost_usd"); dur = ev.get("duration_ms") or ev.get("duration_api_ms") or 0
+            head = f"{st} result: {ev.get('subtype', '?')} turns={ev.get('num_turns', '?')} duration={int(dur) // 1000}s" + (f" cost=${cost:.2f}" if isinstance(cost, (int, float)) else "")
+            body = (ev.get("result") or "").strip()
+            return head + ("\n" + body if body and body != self.last_text else "")   # 直前の assistant 文と同じなら繰り返さない
+        return None
+
+
+class Run:
+    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False):
+        self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
+        self.project_dir = paths.project_dir(pj) or die(f"PJ {pj} の定義が無い（{' / '.join(str(d / pj) for d in paths.PROJECT_DIRS)}）")
+        (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
+        self.project = load_yaml(self.project_dir / "project.yml")
+        validate(self.project, KIT / "schema" / "project.schema.json", f"{self.project_dir.name}/project.yml")
+        self.wf = load_yaml(KIT / "workflows" / f"{wf_name}.yml")
+        validate(self.wf, KIT / "schema" / "workflow.schema.json", f"kit/workflows/{wf_name}.yml")
+        self.steps = {s["id"]: s for s in self.wf["steps"]}
+        self.routes = dict(l.split("=", 1) for l in (KIT / "routes.env").read_text().splitlines()
+                           if l and not l.startswith("#") and "=" in l)
+        self.ticket = pathlib.Path(ticket).read_text(encoding="utf-8")
+        self.title = re.sub(r"^#\s*", "", self.ticket.splitlines()[0]).strip()[:70]
+        base = self.wf.get("base_branch") or self.project["base_branch"]
+        if base == "hotfix_base": base = self.project.get("hotfix_base") or self.project["base_branch"]
+        ov = (self.project.get("workflow_overrides") or {}).get(wf_name) or {}
+        self.base = ov.get("base_branch", base)
+        slug = re.sub(r"[^a-z0-9]+", "-", self.title.lower().encode("ascii", "ignore").decode())[:30].strip("-") or wf_name
+        self.branch = f"sandbox/{task}-{wf_name}-{slug}"
+        # start: pr … チケット 2 行目 `pr: <番号>` の PR head を作業ブランチにし、base はその PR の base
+        self.pr_number = None
+        if self.wf.get("start") == "pr":
+            m = re.search(r"^pr:\s*#?(\d+)\s*$", self.ticket, re.M)
+            m or die("start: pr の workflow はチケットに `pr: <番号>` の行が要る")
+            self.pr_number = m.group(1)
+            if not dry:
+                info = json.loads(sh(["gh", "pr", "view", self.pr_number, "-R", self.project["repo"], "--json", "headRefName,baseRefName,state"]).stdout)
+                info["state"] == "OPEN" or die(f"PR #{self.pr_number} が OPEN でない: {info['state']}")
+                self.branch, self.base = info["headRefName"], info["baseRefName"]
+            else:
+                self.branch = f"(pr #{self.pr_number} head)"
+        self.work = f"/home/dev/work/{task}"
+        self.run_dir = paths.RUNS / (f"{datetime.date.today().isoformat()}-{pj}-{task}" + ("-dry" if dry else ""))
+        if self.run_dir.exists() and not resume and not dry:
+            # 同じ日の再実行で前回の記録を上書きしない。前回分は -attemptN に退避（2026-09-06 に kumitate 203 の 1 回目を消してしまった）
+            n = 1
+            while (self.run_dir.parent / f"{self.run_dir.name}-attempt{n}").exists(): n += 1
+            self.run_dir.rename(self.run_dir.parent / f"{self.run_dir.name}-attempt{n}")
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.state_file = self.run_dir / "state.json"
+        self.state = json.loads(self.state_file.read_text()) if (resume and self.state_file.exists()) else {
+            "pj": pj, "task": task, "workflow": wf_name, "branch": self.branch, "base": self.base,
+            "started": datetime.datetime.now().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
+        if resume: self.branch = self.state["branch"]; self.base = self.state["base"]
+        (self.run_dir / "ticket.md").write_text(self.ticket, encoding="utf-8")
+
+    # ---------- VM helpers
+    def sb(self, cmd, input_text=None, check=True):
+        if self.dry: return ""
+        r = sh(["sandbox", "ssh", self.task, cmd], check=check, input_text=input_text)
+        return r.stdout
+    def vm_read(self, rel):
+        return self.sb(f"cat {self.work}/{shlex.quote(rel)} 2>/dev/null", check=False)
+    def vm_ip(self):
+        st = json.loads((pathlib.Path.home() / ".config/sandbox/state.json").read_text())
+        return st[self.task]["ip"]
+    def scp_to(self, local, remote):
+        if self.dry: return
+        key = pathlib.Path.home() / ".ssh/conf.d/aifactory/sb_ed25519"
+        sh(["scp", "-q", "-i", str(key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR", str(local), f"dev@{self.vm_ip()}:{remote}"])
+
+    # ---------- lifecycle
+    def take(self):
+        if self.dry or self.resume: return
+        self.log("take"); print(sh(["sandbox", "take", self.pj, self.task]).stdout.strip().splitlines()[-1])
+        self.sb(f"mkdir -p {self.work}")
+        if self.pr_number:
+            self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
+        else:
+            self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
+        self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
+    def release(self):
+        if self.dry: return
+        # artifact 回収
+        try:
+            key = pathlib.Path.home() / ".ssh/conf.d/aifactory/sb_ed25519"
+            sh(["scp", "-q", "-r", "-i", str(key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR", f"dev@{self.vm_ip()}:{self.work}", str(self.run_dir / "work")], check=False)
+        except Exception as e: print(f"[run] artifact 回収に失敗: {e}")
+        if self.keep: self.log("keep: release しない"); return
+        self.log("release"); sh(["sandbox", "release", self.task], check=False)
+
+    def log(self, msg):
+        t = int(time.time() - self.t0) if hasattr(self, "t0") else 0
+        print(f"[run {self.pj}/{self.task} {t}s] {msg}", flush=True)
+    def save(self):
+        self.state_file.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
+    def set_current(self, step_id, kind, log_name):
+        """今動いている step とそのログ名を state.json に置く（console が「実行中の step」を追い読みするため）"""
+        self.state["current"] = {"step": step_id, "kind": kind, "log": log_name, "since": datetime.datetime.now().isoformat(timespec="seconds")}
+        self.save()
+
+    def refresh_token(self):
+        """GitHub App の installation token は 1 時間で切れる。GitHub に触る前に払い出し直す（2026-09-06 に 84 分の run で失効して merge が失敗した）"""
+        if self.dry: return
+        r = sh(["sandbox", "reinject", self.task], check=False)
+        if r.returncode != 0: print(f"[run] token refresh failed: {(r.stderr or r.stdout)[-300:]}")
+
+    def preserve(self):
+        """失敗・human 行きのとき、作業ブランチの HEAD を退避ブランチへ push して release による消失を防ぐ"""
+        if self.dry: return ""
+        wip = f"sandbox/{self.task}-{self.wf_name}-wip"
+        self.refresh_token()
+        r = sh(["sandbox", "ssh", self.task, f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} && echo pushed"], check=False)
+        ok = "pushed" in (r.stdout or "")
+        self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (r.stderr or r.stdout)[-200:]}")
+        return wip if ok else ""
+
+    # ---------- steps
+    def model_for(self, step):
+        cls = step.get("model_class") or {"planner": "judgment", "reviewer": "judgment", "researcher": "research", "implementer": "coding"}[step["role"]]
+        return os.environ.get("CLAUDE_MODEL") or self.routes.get(f"MODEL_{cls}") or self.routes["MODEL_default"], cls
+
+    def build_prompt(self, step, retry_note=""):
+        p = self.project
+        parts = [f"# 依頼: {self.title}（workflow: {self.wf_name} / step: {step['id']} / role: {step['role']}）", ""]
+        parts += [(KIT / "roles" / "_common.md").read_text(encoding="utf-8"), ""]
+        parts += [(KIT / "roles" / f"{step['role']}.md").read_text(encoding="utf-8"), ""]
+        if step.get("brief"): parts += ["## この step の追加指示", "", step["brief"].strip(), ""]
+        parts += ["## プロジェクト", "", f"- 名前: {p.get('display_name', p['name'])}（{p['repo']}）", f"- スタック: {p.get('stack','')}",
+                  f"- アプリのディレクトリ（VM 内）: {p['app_dir']}（cwd はここ）", f"- 作業ブランチ: {self.branch}（元: {self.base}）"]
+        parts += [f"- {x}" for x in p.get("facts", [])]
+        if p.get("forbidden"): parts += ["", "### この PJ で禁止", ""] + [f"- {x}" for x in p["forbidden"]]
+        if step["role"] == "reviewer" and p.get("review_points"): parts += ["", "### この PJ で必ず見る観点", ""] + [f"- {x}" for x in p["review_points"]]
+        parts += ["", "## チケット", "", self.ticket.strip(), ""]
+        for a in step.get("inputs", []):
+            if a in ("git", "pr_url"): continue
+            body = self.vm_read(a) if not self.dry else f"（dry-run: {a} の内容）"
+            parts += [f"## 入力: {a}", "", "```", body.strip() if body.strip() else "（無し）", "```", ""]
+        if step["role"] in ("reviewer",):
+            diff = self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False) if not self.dry else "（dry-run: 差分）"
+            parts += ["## 差分（origin/%s...HEAD）" % self.base, "", "```", diff.strip(), "```", "",
+                      f"差分の中身は `git diff origin/{self.base}...HEAD` で読むこと。", ""]
+        if retry_note: parts += ["## 前回の結果（直すこと）", "", retry_note, ""]
+        outs = [a for a in step.get("outputs", []) if a not in ("git", "pr_url")]
+        parts += ["## 出力（必須）", ""]
+        parts += [f"- `{self.work}/{a}` に書く" for a in outs]
+        if "git" in step.get("outputs", []): parts += ["- 変更は作業ブランチにコミットする（push はしない）"]
+        parts += ["", "終わったら、何をしたかを 5 行以内で標準出力に報告して終了する。"]
+        return "\n".join(parts)
+
+    def run_agent(self, step, retry_note=""):
+        model, cls = self.model_for(step)
+        prompt = self.build_prompt(step, retry_note)
+        pf = self.run_dir / f"prompt-{step['id']}-{self.state['history'].__len__()}.md"
+        pf.write_text(prompt, encoding="utf-8")
+        self.log(f"agent {step['id']} ({step['role']} / {cls} → {model})")
+        if self.dry: return True, "(dry-run)"
+        self.scp_to(pf, "/home/dev/prompt.md")
+        # stream-json で 1 行 1 イベントを受け、人が読める形を agent-<step>-<n>.log に、生の JSON を .jsonl（git 追跡外）に流す。
+        # console が step の途中でも追い読みできる（2026-09-06）。--verbose は -p + stream-json の必須オプション
+        cmd = (f"cd $SANDBOX_APP_DIR && timeout {step.get('timeout_min', 60)}m claude -p \"$(cat /home/dev/prompt.md)\" --model {model} "
+               f"--dangerously-skip-permissions --output-format stream-json --verbose 2>&1 < /dev/null")
+        n = len(self.state["history"]); log_path = self.run_dir / f"agent-{step['id']}-{n}.log"
+        self.set_current(step["id"], "agent", log_path.name)
+        t = time.time(); r = EventRenderer(t)
+        rc, out = stream(["sandbox", "ssh", self.task, cmd], log_path, render=r)
+        (self.run_dir / f"agent-{step['id']}-{n}.jsonl").write_text("\n".join(r.raw) + ("\n" if r.raw else ""), encoding="utf-8")
+        print("\n".join(out.strip().splitlines()[-8:]))
+        self.log(f"agent done in {int(time.time()-t)}s (rc={rc})")
+        # 追跡済みの未コミット変更だけ拾う。未追跡は記録のみ
+        self.sb("cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m 'sandbox: uncommitted changes by agent')", check=False)
+        untracked = self.sb("cd $SANDBOX_APP_DIR && git status --porcelain | grep '^??' | head -20", check=False).strip()
+        if untracked: print(f"[run] 未追跡ファイル（push 対象外）:\n{untracked}")
+        # outputs の存在確認
+        missing = [a for a in step.get("outputs", []) if a not in ("git", "pr_url") and not self.sb(f"test -s {self.work}/{a} && echo ok", check=False).strip()]
+        if "git" in step.get("outputs", []) and not self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline origin/{self.base}..HEAD", check=False).strip():
+            missing.append("git(コミットなし)")
+        if missing: return False, f"出力が無い: {', '.join(missing)}"
+        if step["role"] == "reviewer":
+            head = self.vm_read("review.md").splitlines()[:1]
+            return (bool(head) and "PASS" in head[0]), self.vm_read("review.md")[:4000]
+        return True, ""
+
+    def run_code(self, step):
+        script = KIT / "steps" / step["code"]
+        self.log(f"code {step['id']} ({step['code']})")
+        if self.dry: return True, "(dry-run)"
+        self.refresh_token()
+        env = {"PJ": self.pj, "TASK": self.task, "RUN_DIR": str(self.run_dir), "PROJECT_DIR": str(self.project_dir),
+               "GATES": self.project["gates"], "WORK": self.work, "APP_DIR": self.project["app_dir"], "BASE": self.base,
+               "BRANCH": self.branch, "WORKFLOW": self.wf_name, "TITLE": self.title,
+               "PR_NUMBER": self.pr_number or "", "MERGE_METHOD": os.environ.get("MERGE_METHOD", "merge"),
+               "KNOWN_RED": " ".join(self.project.get("known_red_gates", []))}
+        log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
+        self.set_current(step["id"], "code", log_path.name)
+        rc, out = stream(["bash", str(script)], log_path, env=env)
+        print(out.strip()[-1500:])
+        return rc == 0, out[-4000:]
+
+    def transition(self, step, ok):
+        if "on_pass" in step or "on_fail" in step: t = step.get("on_pass" if ok else "on_fail")
+        else: t = step.get("next") if ok else "human"   # 合否の分岐が無い step が失敗したら人間へ（end に抜けない）
+        if t is None: return "end" if ok else "human"
+        if isinstance(t, str): return t
+        key = f"{step['id']}->{t['goto']}"; n = self.state["loops"].get(key, 0)
+        if n < t.get("max_loops", 1):
+            self.state["loops"][key] = n + 1; return t["goto"]
+        return t.get("else", "human")
+
+    def main(self):
+        self.t0 = time.time()
+        self.log(f"workflow {self.wf_name}: " + " → ".join(s["id"] for s in self.wf["steps"]) + f"  (branch {self.branch} → {self.base})")
+        self.take()
+        cur = self.state["next"]; retry_note = ""; result = "end"
+        while cur not in ("end", "human"):
+            step = self.steps.get(cur) or die(f"step {cur} が無い")
+            if "role" in step: ok, info = self.run_agent(step, retry_note)
+            else: ok, info = self.run_code(step)
+            nxt = self.transition(step, ok)
+            self.state["history"].append({"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().isoformat(timespec="seconds")})
+            self.state["next"] = nxt; self.state["current"] = None; self.save()
+            self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
+            # 戻すときは前回の結果を添える
+            retry_note = "" if ok else (info if "role" in step else f"```\n{info}\n```")
+            if not ok and nxt in self.steps and "role" in self.steps[nxt] and "code" in step:
+                retry_note = ("ゲートの結果（赤あり）。ログを読んで原因を直し、ゲートを全緑にしてコミットすること。\n"
+                              "**ただし、その赤が自分の変更と無関係で base ブランチでも既に赤い場合は直さない**（範囲外）。"
+                              "その場合は report.md に『base で既に赤: <ゲート名> <理由>』と書いてコミットし、コードは触らないこと。\n\n"
+                              f"```\n{info}\n```")
+            cur = nxt
+        result = cur
+        wip = self.preserve() if result == "human" else ""
+        pr = self.vm_read("pr_url").strip() if not self.dry else ""
+        self.state.update({"result": result, "pr_url": pr, "wip_branch": wip, "finished": datetime.datetime.now().isoformat(timespec="seconds"), "elapsed_s": int(time.time()-self.t0)})
+        self.save()
+        self.release()
+        self.log(f"result: {result}  PR: {pr or 'なし'}{'  wip: origin/' + wip if wip else ''}  run: {self.run_dir}")
+        return 0 if result == "end" or pr else 2
+
+if __name__ == "__main__":
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]; flags = set(a for a in sys.argv[1:] if a.startswith("--"))
+    if len(args) != 4: print(__doc__); sys.exit(1)
+    sys.exit(Run(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags).main())

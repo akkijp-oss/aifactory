@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+- `lib/aifactory_paths.py`: one place that decides where operational data lives (`AIFACTORY_WORKSPACE`, default `workspace/`, git-ignored). `kb`, `run`, `intake`, `dispatch`, the console and the MCP server all use it (ADR-0016)
+- `examples/projects/kumitate/`: a shipped reference project definition (`project.yml` / `provision.sh` / `gates.sh`)
+- `bin/migrate-workspace.sh`: one-shot migration from the old in-repo layout
+- Apache-2.0 license, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, GitHub issue / PR templates, CI (`.github/workflows/ci.yml`)
+- English `README.md` (Japanese in `README.ja.md`)
+
+### Changed
+- `sandbox/bin/sandbox`: `PVE_HOST` and `GW_SSH` no longer have built-in defaults; set them in `~/.config/sandbox/env`. New `SB_POOL_NET` / `SB_POOL_BASE`
+- `sandbox/proxmox/*.sh`: node name, subnet prefix and VMID bases come from `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE` (defaults unchanged)
+- The kanban `run` column stores the run directory name instead of `workflow/runs/<name>` (old values are still resolved)
+- `kanban.db`, `kanban/tickets/`, `workflow/runs/` and `glue/*.log` are no longer tracked in git
+
+### Removed
+- Owner-specific project definitions, tickets, run records, infrastructure inventory and the talk transcript (moved to the private workspace)
+
+## [0.0.0] - 2026-09-06
+- Internal v0/v1: sandbox on Proxmox, kanban (SQLite + `kb`), workflow runner, glue (`intake` / `dispatch`), Web console, MCP server. Fifteen ADRs

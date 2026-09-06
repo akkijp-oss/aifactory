@@ -1,0 +1,23 @@
+# chore: 雑務（docs 整理、依存更新、設定の追随）。計画とレビューを省き、ゲートだけで PR
+name: chore
+description: 雑務。implementer がチケットから直接着手し、ゲートが緑なら PR。判断が要る仕事には使わない
+inputs: [ticket.md]
+steps:
+  - id: implement
+    role: implementer
+    brief: |
+      chore なので計画は無い。チケットの完了条件をそのまま満たす。範囲外に広げない。
+    outputs: [git, report.md]
+    next: gates
+
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: pr
+    on_fail: { goto: implement, max_loops: 2, else: human }
+
+  - id: pr
+    code: pr-create.sh
+    inputs: [report.md, gates.txt]
+    outputs: [pr_url]
+    next: human

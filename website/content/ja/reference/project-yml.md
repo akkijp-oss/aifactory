@@ -1,0 +1,81 @@
+# project.yml
+
+`$AIFACTORY_WORKSPACE/projects/<pj>/project.yml`（無ければ `examples/projects/<pj>/project.yml`）。PJ の**事実と方針**だけを書いた定義書。手順（workflow）は書かない。形は `workflow/kit/schema/project.schema.json` で検証される（ADR-0009）。
+
+## 項目
+
+| 項目 | 型 | 必須 | 意味 | runner がどう使うか |
+|---|---|---|---|---|
+| `name` | string | ✅ | PJ slug。`sandbox take <pj>` と `projects/<pj>/` に一致 | 識別 |
+| `display_name` | string | | 表示名 | 依頼文の「名前」 |
+| `repo` | string | ✅ | `owner/name` | PR の宛先、merge-pr の `gh pr view` |
+| `base_branch` | string | ✅ | 通常の作業ブランチの元と PR の宛先 | ブランチ作成、`gh pr create --base` |
+| `hotfix_base` | string | | hotfix の宛先（省略時は `base_branch`） | workflow が `base_branch: hotfix_base` のとき |
+| `app_dir` | string | ✅ | VM 内のアプリのディレクトリ（リポジトリ直下と違うことがある） | agent の cwd、`gates.sh` の cwd |
+| `url` | string | | VM 内から見たアプリの URL | 画面確認（将来） |
+| `gates` | string | ✅ | ゲートスクリプト。`projects/<pj>/` からの相対パス | code step `gates.sh` が VM に scp して実行 |
+| `stack` | string | | 1 行の技術スタック | 依頼文の冒頭 |
+| `facts` | array | | agent に毎回伝える事実。1 項目 1 行 | 依頼文の「プロジェクト」節 |
+| `review_points` | array | | reviewer が必ず見る観点（PJ 固有） | reviewer の依頼文だけに追加 |
+| `forbidden` | array | | agent がやってはいけないこと（PJ 固有） | 全役割の依頼文に「この PJ で禁止」として追加 |
+| `workflow_overrides` | object | | workflow 名 → 上書き（v1 は `base_branch` のみ） | base の決定 |
+| `known_red_gates` | array | | base ブランチで既に赤いゲート名（`gates.sh` の名前） | runner が FAIL を INFO に格下げし、agent に「直せ」と戻さない |
+
+## 例（kumitate）
+
+同梱の `examples/projects/kumitate/project.yml` です。
+
+```yaml
+name: kumitate
+display_name: kumitate
+repo: akkijp/kumitate
+base_branch: develop
+hotfix_base: main
+app_dir: /home/dev/app/apps/kumitate
+url: http://localhost:3000
+gates: gates.sh
+stack: "pnpm 10 monorepo（turbo）/ Node 22 / Next.js（apps/web :3000）/ PostgreSQL 16 + pgvector / drizzle / vitest"
+facts:
+  - "リポジトリ直下は台帳と docs。アプリは apps/kumitate/（pnpm workspace: apps/{web,marketing,scheduler}、packages/{db,dsl,generate,app-sdk,feedback-widget}）"
+  - "依存は `pnpm install --frozen-lockfile`（apps/kumitate で）。pnpm は packageManager の版に固定"
+  - "DB は VM ローカルの PostgreSQL 16（role kumitate / DB kumitate、DATABASE_URL は apps/kumitate/.env）。migrate は `pnpm --filter @kumitate/db db:migrate`"
+  - "CI のゲート: `pnpm tokens:check` / typecheck（dsl, db, generate, web, marketing）/ lint（web, marketing）/ test（同 5 パッケージ）/ `pnpm --filter @kumitate/web test:dom`"
+  - "個別テストは `pnpm --filter @kumitate/web exec vitest run <file>`"
+  - "テストが生成する apps/kumitate/packages/db/.data/ 配下は追跡外。git add しない"
+  - "既知の問題（2026-09-06）: apps/web の calendar 表題テスト 2 件がフィクスチャ 2026-08 固定で時間依存"
+  - "`tokens/` はデザイントークンの単一情報源。変えたら `pnpm tokens:build` して差分をコミット"
+review_points:
+  - "apps/web のテストを skip / 削除して緑にしていないか"
+  - "tokens/ の変更に tokens:build の差分が伴っているか"
+  - "packages/db の schema 変更に migration が伴っているか（drizzle）"
+forbidden:
+  - "packages/db の migration を手で編集しない（drizzle-kit generate を使う）"
+  - "deploy.yml / .github/workflows を変えない"
+  - ".env の実値をコミットしない"
+```
+
+## 書き方の注意
+
+- YAML の平文にバッククォートや `: ` を含める項目は `"..."` で囲む（PyYAML が誤読する）
+- `facts` は「テストの走らせ方」「生成物の置き場」「既知の問題（日付つき）」が特に効く。長くなったら `README` や `CLAUDE.md` の該当箇所を指すだけにする
+- 「全 PJ で同じ注意」は書かない（`workflow/kit/roles/_common.md` へ）
+- `known_red_gates` は一時的。直す PR がマージされたら消す
+- 変更は次の run から効く
+
+## 相棒: gates.sh
+
+同じディレクトリの `gates.sh`。VM 内で `$SANDBOX_APP_DIR` を cwd に実行され、ゲートごとに 1 行、全緑なら 0。
+
+```
+PASS typecheck
+FAIL test (~/gates/test.log)
+INFO audit-gate red (known on base; not a gate)
+```
+
+| 行 | 意味 |
+|---|---|
+| `PASS <name>` | 緑 |
+| `FAIL <name> (<log>)` | 赤。ログの場所 |
+| `INFO <name> …` | 情報扱い（`known_red_gates` か、スクリプト側で情報にしたもの） |
+
+書き方は [PJ を追加する](../guides/add-project.md#gates-sh)。

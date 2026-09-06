@@ -1,0 +1,32 @@
+# 秘密情報
+*.env
+*.token
+.env*
+!.env.example
+*.pem
+
+# 運用データ（枠組みとは別に置く。lib/aifactory_paths.py / ADR-0016）
+# 既定は <repo>/workspace/。AIFACTORY_WORKSPACE で外にも置ける。
+# 中身: projects/（PJ 定義）kanban/（台帳）runs/（実行記録）logs/ docs/（私有メモ）
+workspace/
+
+# sandbox の貸出状態は ~/.config/sandbox/state.json（リポジトリ外）
+*.img
+*.qcow2
+*.tar.zst
+.DS_Store
+docs/source/media/
+
+# console が起動した CLI の記録（ローカルの運転ログ。正本は runs/ と kb history）
+console/jobs/
+
+# agent step の生イベント（stream-json）。大きいのでローカルのみ。人が読む形は同名の .log
+**/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# MkDocs のビルド生成物
+website/site/

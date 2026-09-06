@@ -1,0 +1,21 @@
+# ~/.ssh/conf.d/aifactory/config
+# sandbox VM / gateway へ直接 ssh するとき用。通常は `sandbox ssh <task-id>` を使う。
+Host sb-gw
+    HostName 10.77.0.2
+    User root
+    IdentityFile ~/.ssh/conf.d/aifactory/sb_ed25519
+    StrictHostKeyChecking accept-new
+
+Host *.sb.internal
+    User dev
+    IdentityFile ~/.ssh/conf.d/aifactory/sb_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+
+Host 10.77.*
+    User dev
+    IdentityFile ~/.ssh/conf.d/aifactory/sb_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR

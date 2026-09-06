@@ -1,0 +1,184 @@
+# aifactory ドキュメントサイト（MkDocs Material + mkdocs-static-i18n）
+# ローカル確認: website/.venv/bin/mkdocs serve -f website/mkdocs.yml
+# ビルド:       website/.venv/bin/mkdocs build -f website/mkdocs.yml --strict  → website/site/
+site_name: aifactory
+site_description: チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストを回し、人間は最後にレビューだけするソフトウェアファクトリー
+site_author: aifactory contributors
+site_url: https://akkijp.github.io/aifactory/
+repo_url: https://github.com/akkijp/aifactory
+repo_name: akkijp/aifactory
+edit_uri: edit/main/website/content/
+docs_dir: content
+site_dir: site
+copyright: aifactory contributors. Apache-2.0 ライセンス。着想は Dan Isler（IndieDevDan）の講演
+
+theme:
+  name: material
+  language: ja
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: ダークモードへ
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: ライトモードへ
+  font:
+    text: Noto Sans JP
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search:
+      lang:
+        - ja
+        - en
+  - i18n:
+      docs_structure: folder
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: ja
+          name: 日本語
+          default: true
+          build: true
+        - locale: en
+          name: English
+          build: true
+          site_name: aifactory
+          site_description: A software factory where a ticket goes in, agents plan and build inside an isolated VM, code runs the tests, and humans only review at the end.
+          copyright: Copyright aifactory contributors. Apache-2.0. Inspired by a talk by Dan Isler (IndieDevDan).
+          theme:
+            language: en
+          nav_translations:
+            ホーム: Home
+            はじめに: Getting started
+            前提と準備するもの: Requirements
+            Mac 側のセットアップ: Set up the Mac
+            sandbox の構築: Build the sandbox
+            はじめての 1 周: First run
+            使い方: Guides
+            チケットを作る: Create tickets
+            実行する: Run work
+            結果を読む: Read the results
+            Web コンソール: Web console
+            PJ を追加する: Add a project
+            workflow の選び方: Choose a workflow
+            日々の運用: Day-to-day operations
+            複数セッションで作業する: Working with multiple sessions
+            仕組み: Concepts
+            全体の構成: Architecture
+            チケットの一生: Ticket lifecycle
+            workflow エンジン: Workflow engine
+            LLM はどこで動くか: Where the LLM runs
+            sandbox の内側: Inside the sandbox
+            設定の出どころ: Configuration
+            状態と記録: State and records
+            安全と秘密情報: Security and secrets
+            リファレンス: Reference
+            kb（kanban CLI）: kb (kanban CLI)
+            intake / dispatch（glue）: intake / dispatch (glue)
+            run（workflow runner）: run (workflow runner)
+            sandbox CLI: sandbox CLI
+            project.yml: project.yml
+            workflow yml: workflow yml
+            役割とモデル: Roles and models
+            ディレクトリ構成: Directory layout
+            用語集: Glossary
+            設計判断（ADR）: Decisions (ADR)
+            FAQ: FAQ
+            トラブルシューティング: Troubleshooting
+            貢献と AI セッション向けの約束: Contributing and rules for AI sessions
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra:
+  generator: false
+
+nav:
+  - ホーム: index.md
+  - はじめに:
+      - getting-started/index.md
+      - 前提と準備するもの: getting-started/requirements.md
+      - Mac 側のセットアップ: getting-started/install-mac.md
+      - sandbox の構築: getting-started/build-sandbox.md
+      - はじめての 1 周: getting-started/first-run.md
+  - 使い方:
+      - guides/index.md
+      - チケットを作る: guides/tickets.md
+      - 実行する: guides/running.md
+      - 結果を読む: guides/results.md
+      - Web コンソール: guides/console.md
+      - PJ を追加する: guides/add-project.md
+      - workflow の選び方: guides/workflows.md
+      - 日々の運用: guides/operations.md
+      - 複数セッションで作業する: guides/multi-session.md
+  - 仕組み:
+      - concepts/index.md
+      - 全体の構成: concepts/architecture.md
+      - チケットの一生: concepts/ticket-lifecycle.md
+      - workflow エンジン: concepts/workflow-engine.md
+      - LLM はどこで動くか: concepts/where-llm-runs.md
+      - sandbox の内側: concepts/sandbox-internals.md
+      - 設定の出どころ: concepts/configuration.md
+      - 状態と記録: concepts/state-and-records.md
+      - 安全と秘密情報: concepts/security.md
+  - リファレンス:
+      - reference/index.md
+      - kb（kanban CLI）: reference/cli-kb.md
+      - intake / dispatch（glue）: reference/cli-glue.md
+      - run（workflow runner）: reference/cli-run.md
+      - sandbox CLI: reference/cli-sandbox.md
+      - project.yml: reference/project-yml.md
+      - workflow yml: reference/workflow-yml.md
+      - 役割とモデル: reference/roles-and-models.md
+      - ディレクトリ構成: reference/directory-layout.md
+      - 用語集: reference/glossary.md
+  - 設計判断（ADR）: decisions/index.md
+  - FAQ: faq.md
+  - トラブルシューティング: troubleshooting.md
+  - 貢献と AI セッション向けの約束: contributing.md

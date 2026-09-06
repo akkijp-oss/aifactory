@@ -1,0 +1,340 @@
+#!/usr/bin/env bash
+# sandbox: aifactory sandbox CLI（Mac 側）。区画間の契約はこの5操作 + ls。
+#   sandbox take <pj> <task-id>      空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）
+#   sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
+#   sandbox url <task-id>            http://task-<id>.sb.internal:3000
+#   sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
+#   sandbox release <task-id>        巻き戻して返却
+#   sandbox ls                       貸出状況
+# 運用補助（契約外）:
+#   sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
+#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示）
+#   sandbox token clear <pj|global> [claude|gh] トークンを消す
+#   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
+#   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
+# GitHub トークン: ~/.config/sandbox/gh-app/{app.env,private-key.pem} があれば take / reinject / gh-app refresh のたびに
+#   その PJ のリポジトリ（pj/<pj>.env の GH_REPO）だけに効く 1 時間有効の installation token を払い出して注入する（ADR-0008）。
+#   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
+# 設定: ~/.config/sandbox/env（全体既定）→ ~/.config/sandbox/pj/<pj>.env（PJ 別上書き）→ SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN（一回限りの上書き）
+#   シェルに export された CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は無視する
+# 状態: ~/.config/sandbox/state.json
+set -euo pipefail
+
+CONF_DIR="$HOME/.config/sandbox"
+ENV_FILE="$CONF_DIR/env"
+PJ_DIR="$CONF_DIR/pj"
+STATE="$CONF_DIR/state.json"
+[[ -f "$ENV_FILE" ]] || { echo "[error] $ENV_FILE がありません（sandbox/templates/env.example をコピー）" >&2; exit 1; }
+# 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
+# シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
+_ovr_claude="${SANDBOX_CLAUDE_TOKEN:-}"; _ovr_gh="${SANDBOX_GH_TOKEN:-}"
+unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN
+set -a; # shellcheck disable=SC1090
+source "$ENV_FILE"; set +a
+_src_claude="${CLAUDE_CODE_OAUTH_TOKEN:+global(env)}"; _src_gh="${GH_TOKEN:+global(env)}"
+# load_pj <pj>: PJ 別の上書きファイルを重ねる（無ければ何もしない）。pj が分かった時点で1回呼ぶ
+CUR_PJ=""
+load_pj() {
+  local pj=$1; CUR_PJ=$pj
+  if [[ -f "$PJ_DIR/$pj.env" ]]; then
+    local _c0="${CLAUDE_CODE_OAUTH_TOKEN:-}" _g0="${GH_TOKEN:-}"
+    set -a; # shellcheck disable=SC1090
+    source "$PJ_DIR/$pj.env"; set +a
+    [[ "${CLAUDE_CODE_OAUTH_TOKEN:-}" != "$_c0" ]] && _src_claude="pj/$pj.env"
+    [[ "${GH_TOKEN:-}" != "$_g0" ]] && _src_gh="pj/$pj.env"
+  fi
+  [[ -n "$_ovr_claude" ]] && { CLAUDE_CODE_OAUTH_TOKEN="$_ovr_claude"; _src_claude="SANDBOX_CLAUDE_TOKEN(一回限り)"; }
+  [[ -n "$_ovr_gh" ]] && { GH_TOKEN="$_ovr_gh"; _src_gh="SANDBOX_GH_TOKEN(一回限り)"; }
+  return 0
+}
+# PVE_HOST（Proxmox ホストの ssh エイリアス）と GW_SSH（ゲートウェイ LXC への ssh 先）は環境ごとに違うので既定値を持たない
+[[ -n "${PVE_HOST:-}" ]] || { echo "[error] PVE_HOST が未設定。~/.config/sandbox/env に Proxmox ホストの ssh エイリアスを書く（sandbox/templates/env.example 参照）" >&2; exit 1; }
+[[ -n "${GW_SSH:-}" ]] || { echo "[error] GW_SSH が未設定。~/.config/sandbox/env にゲートウェイ LXC の ssh 先（例: root@10.77.0.2）を書く（sandbox/templates/env.example 参照）" >&2; exit 1; }
+: "${SB_KEY:=$HOME/.ssh/conf.d/aifactory/sb_ed25519}"
+: "${SB_DOMAIN:=sb.internal}"
+: "${APP_PORT:=3000}"
+: "${SB_POOL_NET:=10.77.1}"   # プール VM が並ぶ /24 のプレフィックス（Proxmox 側 SB_NET.1 と揃える）
+: "${SB_POOL_BASE:=9200}"     # プール VM の VMID 起点（Proxmox 側 40-pool.sh の SB_POOL_BASE と揃える）
+: "${SB_JUMP:=}"     # 空なら tailnet 直結。Proxmox ホストの ssh エイリアス（例: pve1）を入れるとホスト経由（tailnet 未承認・不調時の代替）
+[[ -f "$STATE" ]] || echo '{}' > "$STATE"
+command -v jq >/dev/null || { echo "[error] jq が必要（brew install jq）" >&2; exit 1; }
+
+SSH_OPTS=(-i "$SB_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8)
+[[ -n "$SB_JUMP" ]] && SSH_OPTS+=(-J "$SB_JUMP")
+pve() { ssh -o BatchMode=yes "$PVE_HOST" "$@"; }
+gw()  { ssh "${SSH_OPTS[@]}" "$GW_SSH" "$@"; }
+vm()  { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "dev@$ip" "$@"; }
+
+die() { echo "[error] $*" >&2; exit 1; }
+state_get() { jq -r --arg id "$1" '.[$id] // empty | tostring' "$STATE"; }
+state_field() { jq -r --arg id "$1" --arg f "$2" '.[$id][$f] // empty' "$STATE"; }
+state_set() { local tmp; tmp=$(mktemp); jq --arg id "$1" --argjson v "$2" '.[$id]=$v' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
+state_del() { local tmp; tmp=$(mktemp); jq --arg id "$1" 'del(.[$id])' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
+
+wait_port() { # ip port tries
+  local i; for i in $(seq 1 "${3:-40}"); do
+    if [[ -n "$SB_JUMP" ]]; then ssh -o BatchMode=yes "$SB_JUMP" "timeout 2 bash -c '</dev/tcp/$1/$2'" 2>/dev/null && return 0
+    else nc -z -w 2 "$1" "$2" 2>/dev/null && return 0; fi
+    sleep 3
+  done; return 1
+}
+
+pool_ip() { echo "$SB_POOL_NET.$(( $1 - SB_POOL_BASE ))"; }   # プール VM の IP は VMID から一意に決まる（PJ 横断）
+pool_list() { # pj -> lines "vmid name ip status"
+  local pj=$1
+  pve "qm list" | awk -v p="sb-$pj-" '$2 ~ "^"p {print $1, $2, $3}' | while read -r vmid name status; do
+    echo "$vmid $name $(pool_ip "$vmid") $status"
+  done
+}
+
+# ---------- GitHub App（ADR-0008）: JWT → installation token
+GHAPP_DIR="$CONF_DIR/gh-app"
+ghapp_ready() { [[ -f "$GHAPP_DIR/app.env" && -f "$GHAPP_DIR/private-key.pem" ]]; }
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+ghapp_jwt() { # -> JWT（10 分）
+  local app_id; app_id="$(sed -n 's/^APP_ID=//p' "$GHAPP_DIR/app.env")"
+  local now; now=$(date +%s)
+  local h p sig
+  h=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+  p=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now-60)) $((now+540)) "$app_id" | b64url)
+  sig=$(printf '%s.%s' "$h" "$p" | openssl dgst -sha256 -sign "$GHAPP_DIR/private-key.pem" -binary | b64url)
+  printf '%s.%s.%s' "$h" "$p" "$sig"
+}
+ghapp_api() { # method path [json]
+  local m=$1 path=$2 body=${3:-}
+  curl -sS -X "$m" -H "Authorization: Bearer $(ghapp_jwt)" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+    ${body:+-d "$body"} "https://api.github.com$path"
+}
+# ghapp_token <owner/repo> -> ghs_...（1 時間有効。そのリポジトリだけ・contents/pull_requests write）
+ghapp_token() {
+  local repo=$1 owner=${1%%/*} name=${1##*/} inst
+  inst="$(ghapp_api GET "/repos/$repo/installation" | jq -r '.id // empty')"
+  [[ -n "$inst" ]] || { echo "[error] GitHub App が $repo に install されていない（sandbox gh-app status で install リンクを表示）" >&2; return 1; }
+  # 要求する権限 = 欲しい権限のうち App が持っているもの（App 側で権限を足して installation が承認すれば、自動でトークンに乗る）
+  #   contents/pull_requests write（push と PR）、metadata read、actions read（CI 履歴: gh run list）、checks read（gh pr checks）
+  local have want
+  have="$(ghapp_api GET /app | jq -c '.permissions // {}')"
+  want="$(jq -nc --argjson h "$have" '{contents:"write",pull_requests:"write",metadata:"read",actions:"read",checks:"read"} | with_entries(select($h[.key] != null))')"
+  local missing; missing="$(jq -nc --argjson h "$have" '["actions","checks"] | map(select($h[.] == null)) | join(",")' -r)"
+  [[ -n "$missing" ]] && echo "[gh] 注意: App に $missing 権限が無い（actions=CI 履歴に必要 / checks=gh pr checks に任意。sandbox gh-app status に変更 URL）" >&2
+  ghapp_api POST "/app/installations/$inst/access_tokens" "$(jq -nc --arg r "$name" --argjson p "$want" '{repositories:[$r],permissions:$p}')" | jq -r '.token // empty'
+}
+# resolve_gh_token <pj>: App があれば払い出し、無ければ静的 GH_TOKEN。結果を GH_TOKEN に入れる
+resolve_gh_token() {
+  local pj=$1 repo="${GH_REPO:-}"
+  [[ -n "$_ovr_gh" ]] && { GH_TOKEN="$_ovr_gh"; return 0; }
+  if ghapp_ready && [[ -n "$repo" ]]; then
+    local t; t="$(ghapp_token "$repo")" || return 1
+    [[ -n "$t" ]] || { echo "[error] installation token を取得できない（$repo）" >&2; return 1; }
+    GH_TOKEN="$t"; GH_TOKEN_SOURCE="app:$repo"
+  else
+    GH_TOKEN_SOURCE="${GH_TOKEN:+static}"
+  fi
+  return 0
+}
+
+inject_env() { # ip task pj
+  local ip=$1 task=$2 pj=$3
+  resolve_gh_token "$pj" || return 1
+  local exp=""; [[ "${GH_TOKEN_SOURCE:-}" == app:* ]] && exp="$(date -u -v+55M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+55 min' +%Y-%m-%dT%H:%M:%SZ)"
+  vm "$ip" 'umask 077; cat > /run/sandbox/env' <<EOF
+TASK_ID=$task
+SANDBOX_PJ=$pj
+SANDBOX_HOST=task-$task.$SB_DOMAIN
+CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+GH_TOKEN=${GH_TOKEN:-}
+GH_REPO=${GH_REPO:-}
+GH_TOKEN_EXPIRES_AT=$exp
+EOF
+  [[ -n "$exp" ]] && echo "[gh] installation token for ${GH_REPO} (expires $exp UTC; 延長は sandbox gh-app refresh)"
+  return 0
+}
+
+dns_set() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; echo '$2 task-$1' >> /etc/sandbox/hosts; systemctl reload dnsmasq"; }
+dns_del() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; systemctl reload dnsmasq"; }
+
+rollback() { # vmid ip
+  # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする
+  local i
+  for i in $(seq 1 12); do
+    if ! pve "qm config $1" | grep -q '^lock:' && pve "qm rollback $1 clean" >/dev/null 2>&1; then break; fi
+    (( i < 12 )) || die "vm $1: qm rollback が通らない（ロック: $(pve "qm config $1" | grep '^lock:' || echo none)）"
+    sleep 5
+  done
+  pve "qm status $1" | grep -q running || pve "qm start $1" >/dev/null
+  wait_port "$2" 22 || die "vm $1 ($2): ssh が上がらない"
+}
+
+cmd_take() {
+  local pj=${1:?pj} task=${2:?task-id}
+  load_pj "$pj"
+  [[ -z "$(state_get "$task")" ]] || die "task $task は貸出中（$(state_field "$task" name)）"
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj}）" >&2
+  local busy; busy="$(jq -r '.[].vmid' "$STATE" | tr '\n' ' ')"
+  local pick=""
+  while read -r vmid name ip status; do
+    [[ " $busy " == *" $vmid "* ]] && continue
+    pve "qm listsnapshot $vmid" | grep -q '`-> clean\|clean ' || { echo "[warn] $name: snapshot clean 無し、スキップ" >&2; continue; }
+    pick="$vmid $name $ip $status"; break
+  done < <(pool_list "$pj")
+  [[ -n "$pick" ]] || die "pj=$pj に空きなし（sandbox ls / proxmox/40-pool.sh $pj 1）"
+  read -r vmid name ip status <<< "$pick"
+  echo "[take] $name (vmid $vmid, $ip) → task-$task"
+  if [[ "$status" != running ]]; then rollback "$vmid" "$ip"; else wait_port "$ip" 22 || rollback "$vmid" "$ip"; fi
+  inject_env "$ip" "$task" "$pj"
+  dns_set "$task" "$ip"
+  state_set "$task" "$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
+    '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s}')"
+  echo "[ok] task-$task.$SB_DOMAIN  ssh: sandbox ssh $task  url: http://task-$task.$SB_DOMAIN:$APP_PORT"
+}
+
+cmd_ssh() {
+  local task=${1:?task-id}; shift || true
+  local ip; ip="$(state_field "$task" ip)"; [[ -n "$ip" ]] || die "task $task は未貸出"
+  load_pj "$(state_field "$task" pj)"
+  if (( $# == 0 )); then exec ssh -t "${SSH_OPTS[@]}" "dev@$ip" 'exec bash -l'; fi
+  local q; q=$(printf '%q ' "$@")
+  exec ssh "${SSH_OPTS[@]}" "dev@$ip" -- bash -lc "$q"
+}
+
+cmd_url() { local task=${1:?task-id}; [[ -n "$(state_get "$task")" ]] || die "task $task は未貸出"; load_pj "$(state_field "$task" pj)"; echo "http://task-$task.$SB_DOMAIN:$APP_PORT"; }
+
+cmd_reset() {
+  local task=${1:?task-id}
+  local vmid ip pj; vmid="$(state_field "$task" vmid)"; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"
+  [[ -n "$vmid" ]] || die "task $task は未貸出"
+  load_pj "$pj"
+  echo "[reset] $(state_field "$task" name) → clean"
+  rollback "$vmid" "$ip"
+  inject_env "$ip" "$task" "$pj"
+  echo "[ok] reset 完了（env 再注入済み）"
+}
+
+cmd_release() {
+  local task=${1:?task-id}
+  local vmid ip; vmid="$(state_field "$task" vmid)"; ip="$(state_field "$task" ip)"
+  [[ -n "$vmid" ]] || die "task $task は未貸出"
+  echo "[release] $(state_field "$task" name) ← task-$task"
+  rollback "$vmid" "$ip"
+  dns_del "$task"
+  state_del "$task"
+  echo "[ok] released"
+}
+
+mask() { local t=$1; [[ -z "$t" ]] && { echo "(未設定)"; return; }; echo "${t:0:8}…${t: -4} (${#t}文字)"; }
+
+# token set <pj|global> [claude|gh] : 対話入力（エコー無し）で保存。ファイルは 600
+cmd_token() {
+  local sub=${1:-}; shift || true
+  case "$sub" in
+    set|clear)
+      local scope=${1:?pj または global} kind=${2:-claude} file key
+      case "$kind" in claude) key=CLAUDE_CODE_OAUTH_TOKEN;; gh) key=GH_TOKEN;; *) die "kind は claude か gh";; esac
+      if [[ "$scope" == global ]]; then file="$ENV_FILE"; else mkdir -p "$PJ_DIR"; file="$PJ_DIR/$scope.env"; [[ -f "$file" ]] || { echo "# sandbox PJ 別設定: ${scope}（~/.config/sandbox/env を上書き）" > "$file"; chmod 600 "$file"; }; fi
+      local val=""
+      if [[ "$sub" == set ]]; then
+        if [[ -t 0 ]]; then read -rs -p "$key for $scope: " val; echo; else val="$(cat)"; fi
+        val="${val//[$'\r\n']/}"
+        [[ -n "$val" ]] || die "空のトークン"
+      fi
+      local tmp; tmp=$(mktemp); grep -v "^$key=" "$file" > "$tmp" || true
+      [[ -n "$val" ]] && printf '%s=%s\n' "$key" "$val" >> "$tmp"
+      mv "$tmp" "$file"; chmod 600 "$file"
+      echo "[ok] $key を $file に$([[ "$sub" == set ]] && echo 保存 || echo 削除)"
+      if [[ "$scope" != global ]]; then
+        local lent; lent="$(jq -r --arg p "$scope" 'to_entries[] | select(.value.pj==$p) | .key' "$STATE" | tr '\n' ' ')"
+        [[ -n "$lent" ]] && echo "[hint] 貸出中の task ($lent) に反映するには: sandbox reinject --all（VM 内の claude は再起動が必要）"
+      fi ;;
+    show)
+      local pj=${1:-} pjfile=""
+      if [[ -n "$pj" ]]; then load_pj "$pj"; pjfile="$PJ_DIR/$pj.env"; [[ -f "$pjfile" ]] || pjfile="$pjfile (無し)"; fi
+      echo "scope: ${pj:-global}   files: $ENV_FILE${pjfile:+ + $pjfile}"
+      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}"
+      if ghapp_ready && [[ -n "${GH_REPO:-}" ]]; then
+        echo "GH_TOKEN:                GitHub App が take 時に払い出す（${GH_REPO} 限定・1 時間）$([[ -n "${GH_TOKEN:-}" ]] && echo "  ※静的 GH_TOKEN も ${_src_gh} にあるが App が優先")"
+      else
+        echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")"
+      fi
+      echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}"
+      [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
+    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token show [pj]" ;;
+  esac
+}
+
+# reinject <task-id>|--all : 貸出中の VM の /run/sandbox/env を現在の設定で書き直す（巻き戻しなし）
+cmd_reinject() {
+  local arg=${1:?task-id または --all} ids
+  if [[ "$arg" == --all ]]; then ids="$(jq -r 'keys[]' "$STATE")"; else ids="$arg"; fi
+  [[ -n "$ids" ]] || { echo "貸出中の task なし"; return 0; }
+  local task
+  for task in $ids; do
+    local ip pj; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"
+    [[ -n "$ip" ]] || die "task $task は未貸出"
+    load_pj "$pj"
+    inject_env "$ip" "$task" "$pj"
+    echo "[ok] task-$task ($(state_field "$task" name)): env 再注入。claude を使っている場合は VM 内で再起動"
+  done
+}
+
+cmd_gh_app() {
+  local sub=${1:-status}; shift || true
+  case "$sub" in
+    status)
+      if ghapp_ready; then
+        local slug; slug="$(sed -n 's/^APP_SLUG=//p' "$GHAPP_DIR/app.env")"
+        echo "app: $(sed -n 's/^APP_ID=//p' "$GHAPP_DIR/app.env") ($slug)  key: $GHAPP_DIR/private-key.pem"
+        echo "install / 設定変更: https://github.com/apps/$slug/installations/new"
+        echo "権限の変更: https://github.com/settings/apps/$slug/permissions"
+        echo "--- app permissions（必要: contents=write pull_requests=write metadata=read actions=read / 任意: checks=read）"
+        ghapp_api GET /app | jq -r '.permissions | to_entries[] | "  \(.key)=\(.value)"'
+        ghapp_api GET /app | jq -e '.permissions.actions == "read"' >/dev/null 2>&1 || echo "  !! actions=read が無い（research が CI 履歴を読めない。上の URL で Actions: Read-only を足し、各 installation で承認）"
+        ghapp_api GET /app | jq -e '.permissions.checks == "read"' >/dev/null 2>&1 || echo "  (任意) checks=read が無い（gh pr checks は使えない。gh run list --branch <head> で代替できる）"
+        echo "--- installations"
+        ghapp_api GET /app/installations | jq -r '.[] | "  \(.account.login) (\(.repository_selection))  id=\(.id)"'
+        echo "--- PJ → repo → token 可否"
+        local f pj repo
+        for f in "$PJ_DIR"/*.env; do [[ -f "$f" ]] || continue; pj="$(basename "$f" .env)"; repo="$(sed -n 's/^GH_REPO=//p' "$f")"
+          [[ -n "$repo" ]] || { echo "  $pj: GH_REPO 未設定"; continue; }
+          if ghapp_api GET "/repos/$repo/installation" | jq -e .id >/dev/null 2>&1; then echo "  $pj: $repo  OK"; else echo "  $pj: $repo  未 install"; fi
+        done
+      else
+        echo "GitHub App 未設定（$GHAPP_DIR/app.env と private-key.pem が必要。BUILD.md Step 0b）"; return 1
+      fi ;;
+    token)
+      local pj=${1:?pj}; load_pj "$pj"; ghapp_ready || die "GitHub App 未設定"
+      [[ -n "${GH_REPO:-}" ]] || die "pj/$pj.env に GH_REPO が無い"
+      ghapp_token "$GH_REPO" ;;
+    refresh)
+      local ids; ids="$(jq -r 'keys[]' "$STATE")"; [[ -n "$ids" ]] || { echo "貸出中の task なし"; return 0; }
+      local task; for task in $ids; do
+        local ip pj; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"; load_pj "$pj"
+        inject_env "$ip" "$task" "$pj" && echo "[ok] task-$task ($(state_field "$task" name)): GH_TOKEN 更新"
+      done ;;
+    *) die "usage: sandbox gh-app status|token <pj>|refresh" ;;
+  esac
+}
+
+cmd_ls() {
+  printf '%-8s %-14s %-6s %-12s %-9s %s\n' TASK VM VMID IP STATUS SINCE
+  local all; all="$(pve "qm list" | awk '$2 ~ /^sb-/ && $2 !~ /^sb-(base|tpl)/ {print $1, $2, $3}')"
+  while read -r vmid name status; do
+    [[ -n "$vmid" ]] || continue
+    local ip; ip="$(pool_ip "$vmid")"
+    local task; task="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE")"
+    local since=""; [[ -n "$task" ]] && since="$(state_field "$task" since)"
+    printf '%-8s %-14s %-6s %-12s %-9s %s\n' "${task:--}" "$name" "$vmid" "$ip" "$status" "$since"
+  done <<< "$all"
+}
+
+case "${1:-}" in
+  take) shift; cmd_take "$@" ;;
+  ssh) shift; cmd_ssh "$@" ;;
+  url) shift; cmd_url "$@" ;;
+  reset) shift; cmd_reset "$@" ;;
+  release) shift; cmd_release "$@" ;;
+  ls) cmd_ls ;;
+  token) shift; cmd_token "$@" ;;
+  reinject) shift; cmd_reinject "$@" ;;
+  gh-app) shift; cmd_gh_app "$@" ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

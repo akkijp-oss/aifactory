@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- aifactory console: Mac ログイン中は常に http://127.0.0.1:8765/ で待つ。
+       @@PYTHON@@ / @@REPO@@ / @@PATH@@ / @@HOME@@ は console/bin/install.sh が埋める（launchd の PATH は最小なので、runner が使う python3 / claude / gh / jq の場所を明示する） -->
+  <key>Label</key><string>com.aifactory.console</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@PYTHON@@</string>
+    <string>@@REPO@@/console/bin/console</string>
+    <string>--port</string><string>@@PORT@@</string>
+  </array>
+  <key>WorkingDirectory</key><string>@@REPO@@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>@@PATH@@</string>
+    <key>HOME</key><string>@@HOME@@</string>
+    <key>LANG</key><string>ja_JP.UTF-8</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>@@HOME@@/Library/Logs/aifactory-console.log</string>
+  <key>StandardErrorPath</key><string>@@HOME@@/Library/Logs/aifactory-console.log</string>
+</dict>
+</plist>

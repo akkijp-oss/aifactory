@@ -1,0 +1,204 @@
+"""console のテスト。本番のデータは触らない（一時ディレクトリを AIFACTORY_WORKSPACE にして、その中に kb でチケットと dry-run の記録を作る）。
+
+  python3 -m unittest discover -s console/tests -v
+
+- HTTP: サーバーを別プロセスで起動して JSON API を叩く（GET / POST / 403 / 409 / dry-run ジョブ）
+- JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
+PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
+"""
+import importlib.machinery, importlib.util, json, os, pathlib, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+CONSOLE = REPO / "console" / "bin" / "console"
+KB = REPO / "kanban" / "bin" / "kb"
+PJ = "kumitate"   # examples/projects/kumitate
+
+
+def seed_workspace(ws):
+    """一時 workspace にチケット 1 件と、その dry-run の実行記録を作る"""
+    env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws)}
+    r = subprocess.run([sys.executable, str(KB), "new", PJ, "research", "調査: テスト用の種", "--body", "-"], input="x\n\n## 完了条件\n- y\n", text=True, capture_output=True, env=env)
+    assert r.returncode == 0, r.stderr
+    tid = int(r.stdout.split()[0])
+    r = subprocess.run([sys.executable, str(KB), "run", str(tid), "--dry-run"], text=True, capture_output=True, env=env)
+    assert r.returncode == 0, r.stderr + r.stdout
+    return tid
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0)); return s.getsockname()[1]
+
+
+def load_module(jobs_dir):
+    spec = importlib.util.spec_from_loader("console_mod", importlib.machinery.SourceFileLoader("console_mod", str(CONSOLE)))
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    m.core.JOBS = pathlib.Path(jobs_dir); m.core.JOBS.mkdir(parents=True, exist_ok=True)   # JobStore は lib/core.py の JOBS を見る
+    return m
+
+
+class Http:
+    def __init__(self, base): self.base = base
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path, timeout=10) as r: return r.status, json.loads(r.read())
+    def post(self, path, body=None, header=True):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body or {}).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", **({"X-Console": "1"} if header else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r: return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
+
+
+class ApiTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-console-test-"))
+        cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
+        cls.seed = seed_workspace(cls.ws)
+        cls.port = free_port()
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs")}
+        cls.proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(cls.port)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.http = Http(f"http://127.0.0.1:{cls.port}")
+        for _ in range(50):
+            try: cls.http.get("/api/overview"); break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate(); cls.proc.wait(timeout=10)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def todo_id(self):
+        """テスト用の todo チケットを複製 DB に作って使う（本番の todo に依存しない）"""
+        if not hasattr(type(self), "_todo"):
+            st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: console テスト用", "body": "x\n\n## 完了条件\n- y"})
+            assert st == 200 and d.get("id"), d
+            type(self)._todo = d["id"]
+        return type(self)._todo
+
+    def test_overview_and_lists(self):
+        st, o = self.http.get("/api/overview")
+        self.assertEqual(st, 200); self.assertTrue(o["db"]); self.assertEqual(set(o["counts"]), {"todo", "in_progress", "review", "blocked", "done"})
+        self.assertEqual(o["paths"]["workspace"], str(self.ws)); self.assertFalse(o["paths"]["legacy"])
+        _, t = self.http.get("/api/tickets"); self.assertGreater(len(t["tickets"]), 0); self.assertIn("bug", t["kinds"])
+        _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
+        for ep in ("/api/sandbox", "/api/config", "/api/logs", "/api/jobs"): self.assertEqual(self.http.get(ep)[0], 200)
+
+    def test_ticket_detail(self):
+        _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
+        st, d = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(st, 200); self.assertIsNotNone(d["body"]); self.assertTrue(d["history"]); self.assertIn("repo", d["ticket"])
+        with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get("/api/tickets/999999")
+        self.assertEqual(cm.exception.code, 404)
+
+    def test_run_detail(self):
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200); self.assertIn("state.json", [f["name"] for f in d["files"]]); self.assertIsNotNone(d["workflow"])
+
+    def test_file_roots(self):
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        _, d = self.http.get(f"/api/runs/{name}"); path = next(x["path"] for x in d["files"] if x["name"] == "state.json")
+        st, f = self.http.get(f"/api/file?path={urllib.parse.quote(path)}&tail=100"); self.assertEqual(st, 200); self.assertTrue(f["truncated"] or f["size"] <= 100)
+        for bad in ("../.ssh/id_rsa", "sandbox/bin/sandbox", str(self.ws / "kanban" / "kanban.db"), "/etc/passwd"):
+            with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get(f"/api/file?path={bad}")
+            self.assertEqual(cm.exception.code, 403, bad)
+
+    def test_post_requires_header(self):
+        st, d = self.http.post("/api/tickets/204/action", {"action": "start"}, header=False)
+        self.assertEqual(st, 403)
+
+    def test_status_actions(self):
+        tid = self.todo_id()
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "block"})[0], 400)          # メモ無しの人間待ちは拒否
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "start", "note": "test"}); self.assertEqual(st, 200, d)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "in_progress")
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "reopen"}); self.assertEqual(st, 200, d)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "chore"}); self.assertEqual(st, 200, d)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["kind"], "chore")
+        self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set"})[0], 400)            # 変える項目が無い
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "nope"})[0], 400)
+        hist = self.http.get(f"/api/tickets/{tid}")[1]["history"]
+        self.assertTrue(any(h["field"] == "kind" and h["new"] == "chore" for h in hist))
+
+    def test_new_ticket(self):
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: console テスト", "body": "本文\n\n## 完了条件\n- summary.md"})
+        self.assertEqual(st, 200, d); self.assertIsInstance(d["id"], int)
+        t = self.http.get(f"/api/tickets/{d['id']}")[1]; self.assertEqual(t["ticket"]["kind"], "research"); self.assertIn("完了条件", t["body"])
+        self.assertEqual(self.http.post("/api/tickets", {"pj": PJ, "kind": "research"})[0], 400)
+        self.assertEqual(self.http.post("/api/tickets", {"pj": "nope", "kind": "research", "title": "x"})[0], 400)
+
+    def test_release_validation(self):
+        self.assertEqual(self.http.post("/api/sandbox/release", {"task": "x; rm -rf /"})[0], 400)
+
+    def test_dry_run_job(self):
+        tid = self.todo_id()
+        st, d = self.http.post(f"/api/tickets/{tid}/run", {"dry_run": True}); self.assertEqual(st, 200, d)
+        jid = d["job"]["id"]; self.assertEqual(d["job"]["state"], "running")
+        for _ in range(300):
+            _, j = self.http.get(f"/api/jobs/{jid}")
+            if j["job"]["state"] != "running": break
+            time.sleep(0.2)
+        self.assertIn(j["job"]["state"], ("done", "failed")); self.assertIn("dry-run 終了", j["log"]["text"])
+        self.assertIn("[run ", j["log"]["text"])                       # runner まで到達した
+        _, j2 = self.http.get(f"/api/jobs/{jid}?offset={j['log']['size']}"); self.assertEqual(j2["log"]["text"], "")
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")   # dry-run は状態を進めない
+        self.assertTrue(any(x["label"].startswith("kb run") for x in self.http.get("/api/jobs")[1]["jobs"]))
+
+
+class JobStoreTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="aifactory-jobs-test-"); self.m = load_module(self.tmp); self.JS = self.m.JobStore
+    def tearDown(self):
+        for j in self.JS.running():
+            try: os.killpg(os.getpgid(j["pid"]), signal.SIGKILL)
+            except OSError: pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_conflict_under_lock(self):
+        same = lambda j: "dup" if j.get("ticket") == 1 else None
+        a = self.JS.start("kb-run", ["sleep", "5"], "a", ticket=1, conflict=same)
+        res = []
+        def go():
+            try: self.JS.start("kb-run", ["sleep", "5"], "b", ticket=1, conflict=same); res.append("started")
+            except self.m.Conflict as e: res.append(str(e))
+        ts = [threading.Thread(target=go) for _ in range(8)]; [t.start() for t in ts]; [t.join() for t in ts]
+        self.assertEqual(res, ["dup"] * 8)
+        other = lambda j: "dup" if j.get("ticket") == 2 else None          # API は要求されたチケットで判定する
+        self.JS.start("kb-run", ["true"], "c", ticket=2, conflict=other)  # 別チケットは通る
+        self.assertTrue(self.JS.stop(a["id"])[0])
+
+    def test_stop_marks_stopped(self):
+        a = self.JS.start("x", ["sleep", "5"], "a")
+        ok, _ = self.JS.stop(a["id"]); self.assertTrue(ok)
+        for _ in range(50):
+            if self.JS.get(a["id"])["rc"] is not None: break
+            time.sleep(0.1)
+        self.assertEqual(self.JS.get(a["id"])["state"], "stopped")
+        self.assertFalse(self.JS.stop(a["id"])[0])                        # 2 回目は「既に終わっている」
+
+    def test_done_and_failed(self):
+        a = self.JS.start("x", ["true"], "a"); b = self.JS.start("x", ["false"], "b")
+        for _ in range(50):
+            if self.JS.get(a["id"])["rc"] is not None and self.JS.get(b["id"])["rc"] is not None: break
+            time.sleep(0.1)
+        self.assertEqual(self.JS.get(a["id"])["state"], "done"); self.assertEqual(self.JS.get(b["id"])["state"], "failed")
+
+    def test_stdin_and_log(self):
+        a = self.JS.start("x", ["cat", "{stdin}"], "a", stdin_text="hello\n")
+        for _ in range(50):
+            if self.JS.get(a["id"])["rc"] is not None: break
+            time.sleep(0.1)
+        self.assertIn("hello", (pathlib.Path(self.tmp) / a["id"] / "log").read_text())
+
+    def test_reconcile_marks_lost(self):
+        dead = {"id": "20000101-000000-x", "kind": "x", "label": "x", "cmd": ["x"], "pid": 2**22 - 1, "started": "2000-01-01T00:00:00", "finished": None, "rc": None, "state": "running"}
+        self.JS.save(dead); self.JS.reconcile()
+        self.assertEqual(self.JS.get(dead["id"])["state"], "lost")
+
+
+if __name__ == "__main__":
+    unittest.main()

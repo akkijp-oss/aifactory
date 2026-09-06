@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "aifactory": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "exec \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/console/bin/mcp\""],
+      "timeout": 600000
+    }
+  }
+}

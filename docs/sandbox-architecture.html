@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aifactory sandbox 構成解説（Proxmox）</title>
+<style>
+  :root{
+    --bg:#f7f7f4; --fg:#1d1d1b; --muted:#5c5c57; --line:#d9d9d2; --card:#ffffff;
+    --accent:#1f5f8b; --ok:#2e7d32; --part:#b26a00; --ng:#b23a48; --na:#6b6b66;
+    --code:#f0f0ea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;line-height:1.75;font-size:15px}
+  main{max-width:1080px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  h2{font-size:21px;margin:48px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--accent)}
+  h3{font-size:17px;margin:28px 0 8px}
+  p{margin:8px 0}
+  .lead{color:var(--muted);margin-bottom:20px}
+  .meta{font-size:13px;color:var(--muted);border:1px solid var(--line);background:var(--card);padding:10px 14px;border-radius:6px}
+  .meta li{margin:2px 0}
+  table{border-collapse:collapse;width:100%;background:var(--card);margin:10px 0 16px;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;vertical-align:top;text-align:left}
+  th{background:#ecefe9}
+  code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  pre{background:#23262b;color:#e8e8e3;padding:12px 14px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.55}
+  pre code{background:none;color:inherit;padding:0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:12px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+  .card h4{margin:0 0 6px;font-size:15px;color:var(--accent)}
+  .note{border-left:4px solid var(--accent);background:#eaf1f7;padding:10px 14px;margin:14px 0;border-radius:0 6px 6px 0}
+  .warn{border-left:4px solid var(--part);background:#fbf3e4;padding:10px 14px;margin:14px 0;border-radius:0 6px 6px 0}
+  .tag{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
+  .ok{background:var(--ok)} .part{background:var(--part)} .ng{background:var(--ng)} .na{background:var(--na)}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:10px 0}
+  .steps li{counter-increment:s;position:relative;padding:8px 12px 8px 44px;margin:6px 0;background:var(--card);border:1px solid var(--line);border-radius:6px}
+  .steps li::before{content:counter(s);position:absolute;left:12px;top:9px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;text-align:center;line-height:22px;font-weight:700}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0}
+  .flow .box{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px}
+  .flow .arr{color:var(--muted);font-size:18px}
+  svg{max-width:100%;height:auto;display:block;margin:12px auto;background:var(--card);border:1px solid var(--line);border-radius:8px}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:12px;fill:var(--fg)}
+  svg .t{font-weight:700;font-size:13px}
+  svg .s{font-size:11px;fill:var(--muted)}
+  svg .box{fill:#fff;stroke:#8a8a83;stroke-width:1.2}
+  svg .host{fill:#f2f5f0;stroke:var(--accent);stroke-width:1.5}
+  svg .bar{fill:#e3ecf3;stroke:var(--accent);stroke-width:1.2}
+  svg .cloud{fill:#f4efe4;stroke:#b8a374;stroke-width:1.2}
+  svg .ln{stroke:#444;stroke-width:1.6;fill:none;marker-end:url(#ah)}
+  svg .ln2{stroke:#1f5f8b;stroke-width:1.6;fill:none;marker-end:url(#ah2);stroke-dasharray:5 4}
+  svg .ln3{stroke:#b26a00;stroke-width:1.6;fill:none;marker-end:url(#ah3)}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 18px;font-size:14px}
+  .toc ol{margin:4px 0;padding-left:20px}
+  small{color:var(--muted)}
+  .kv td:first-child{width:28%;font-weight:600;background:#f6f6f2}
+</style>
+</head>
+<body>
+<main>
+
+<h1>aifactory sandbox 構成解説（Proxmox）</h1>
+<p class="lead">ネットワークと論理構成、貸出の仕組み、データの流れ。末尾に、着想元の動画（IndieDevDan「FORGET Loop Engineering」）が求める sandbox 像に対して、いまの Proxmox sandbox が足りているかの対比を置く。</p>
+
+<div class="meta">
+  <ul style="margin:0;padding-left:18px">
+    <li>作成: 2026-09-06 / 対象リポジトリ: <code>akkijp/aifactory</code>（working tree、未コミット差分を含む）</li>
+    <li>実機確認: 2026-09-06 に <code>sandbox ls</code> と、Proxmox ホスト上での <code>qm list; pct list; ip -br a show sbnet; iptables -t nat -S</code> で確認した内容を反映</li>
+    <li>正本は <code>sandbox/README.md</code>（設計）/ <code>BUILD.md</code>（手順）/ <code>STATUS.md</code>（進捗）/ <code>docs/adr/</code>（判断）。食い違ったら実機とそれらを信じる</li>
+    <li>ホスト名・VMID・IP は説明用の例（ホストは <code>pve1</code>、PJ は <code>kumitate</code> と <code>&lt;pj-a&gt;</code> / <code>&lt;pj-b&gt;</code>）。実際の値は環境変数と <code>~/.config/sandbox/env</code> で決まる。安全面（信頼境界・秘密情報の寿命）は 6 章</li>
+  </ul>
+</div>
+
+<div class="toc" style="margin-top:16px">
+  <ol>
+    <li><a href="#s1">一言でいうと何か</a></li>
+    <li><a href="#s2">物理・論理構成（何がどこにあるか）</a></li>
+    <li><a href="#s3">ネットワーク（アドレス・経路・名前解決）</a></li>
+    <li><a href="#s4">仕組み（テンプレート・プール・スナップショット・5 操作）</a></li>
+    <li><a href="#s5">データの流れ（take → 作業 → release、トークン、ワークフロー 1 周）</a></li>
+    <li><a href="#s6">信頼境界と秘密情報の寿命（安全面）</a></li>
+    <li><a href="#s7">動画が求める sandbox 像との対比（足りているか）</a></li>
+    <li><a href="#s8">既知の制約と次の一手</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. 一言でいうと何か</h2>
+<p>「エージェント 1 体につき隔離された計算機 1 台」を、自前の Proxmox クラスタのノード 1 台（本文では <code>pve1</code>）上の VM として <b>常駐プール</b>で用意し、Mac の CLI（<code>sandbox</code>）の 5 操作 <code>take / ssh / url / reset / release</code> で貸し借りする仕組み。VM の中に Claude Code と対象リポジトリのアプリ一式が焼いてあり、タスクが終わったら RAM 込みスナップショット <code>clean</code> に巻き戻して次のタスクに回す。</p>
+
+<div class="grid">
+  <div class="card"><h4>どこで動く</h4>Proxmox ホスト <code>pve1</code>（数十コア / 200GB 級 RAM）の <code>local-lvm</code>。単一ノード。</div>
+  <div class="card"><h4>何台あるか</h4>ゲートウェイ LXC 1 台、テンプレート（base 1 + PJ ごと 1）、プール VM（PJ ごと 3 + 汎用 3。3 PJ なら 12 台）。全プール running。</div>
+  <div class="card"><h4>どう届く</h4>Mac → Tailscale → ゲートウェイ LXC <code>sb-gw</code>（subnet router）→ 専用網 <code>10.77.0.0/16</code>。名前は <code>task-&lt;id&gt;.sb.internal</code>。</div>
+  <div class="card"><h4>何が毎回消える</h4>VM 内の変更すべて（ファイル・DB・プロセス）と、tmpfs に置いたトークン。テンプレートに焼いたものだけ残る。</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. 物理・論理構成（何がどこにあるか）</h2>
+
+<h3>2.1 クラスタの中での位置</h3>
+<table>
+  <tr><th>ノード</th><th>役割</th><th>sandbox との関係</th></tr>
+  <tr><td><code>pve1</code></td><td>大型ノード（数十コア / 200GB 級 RAM）</td><td><b>sandbox v0 の全部がここ</b>（SDN、sb-gw、テンプレート、プール）</td></tr>
+  <tr><td>同クラスタの他の大型ノード</td><td>空</td><td>増設候補。linked clone はテンプレートと同じノードにしか作れないので、使うならテンプレート複製が要る（未決）</td></tr>
+  <tr><td>軽量ノード</td><td>ミニ PC</td><td>将来の制御系（kanban / ルーター）の置き場候補。sandbox 本体は載せない</td></tr>
+  <tr><td>CI runner を持つノード</td><td>—</td><td>既存の self-hosted runner があり、CI/CD 節は将来ここに繋ぐ想定（未接続）</td></tr>
+</table>
+
+<h3>2.2 pve1 の中身（VMID と役割）</h3>
+<table>
+  <tr><th>VMID</th><th>名前</th><th>種類</th><th>IP</th><th>状態</th><th>役割</th></tr>
+  <tr><td>9000</td><td><code>sb-gw</code></td><td>LXC（Debian 12、非特権、512MB）</td><td>eth0 LAN（DHCP）/ eth1 10.77.0.2 / tailscale0（tailnet アドレス）</td><td>running、onboot</td><td>Tailscale subnet router（10.77.0.0/16 を広告）+ dnsmasq（<code>*.sb.internal</code>）</td></tr>
+  <tr><td>9100</td><td><code>sb-base</code></td><td>VM テンプレート</td><td>（作業時 10.77.0.100）</td><td>template</td><td>全 PJ 共通の土台。Ubuntu 24.04 + PostgreSQL 16 / Redis / Chrome / mise / Node 22 / gh / Claude Code</td></tr>
+  <tr><td>911x</td><td><code>sb-tpl-{pj}</code></td><td>VM テンプレート（base の full clone）</td><td>作業時 10.77.0.(VMID−9000)</td><td>template</td><td>PJ 別。リポジトリ clone、依存、DB schema、systemd <code>sandbox-app</code>（:3000）まで焼いてある</td></tr>
+  <tr><td>9201〜9203</td><td><code>sb-generic-NN</code></td><td>VM（base の linked clone）</td><td>10.77.1.1〜3</td><td>running、snapshot clean</td><td>アプリ無しの汎用プール（PJ 未決時の暫定。残すかは未決）</td></tr>
+  <tr><td>9204〜</td><td><code>sb-{pj}-NN</code></td><td>VM（PJ テンプレートの linked clone、8GB / 4 vCPU）</td><td>10.77.1.(VMID−9200)</td><td>running、snapshot clean</td><td>貸出用。PJ ごとに 3 台</td></tr>
+</table>
+
+<p>PJ ごとの割当の例（3 PJ の場合）。<code>kumitate</code> は同梱サンプル（<code>examples/projects/kumitate/</code>）、<code>&lt;pj-a&gt;</code> / <code>&lt;pj-b&gt;</code> は自分の PJ 定義（<code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/</code>）に読み替える。</p>
+<table>
+  <tr><th>PJ</th><th>リポジトリ</th><th>スタック</th><th>テンプレート</th><th>プール VMID / IP</th></tr>
+  <tr><td>kumitate</td><td>akkijp/kumitate</td><td>pnpm + Next.js + Postgres 16（pgvector）</td><td>9110</td><td>9204〜9206 / 10.77.1.4〜6</td></tr>
+  <tr><td>&lt;pj-a&gt;</td><td>&lt;owner&gt;/&lt;pj-a&gt;</td><td>Rails 8 + MySQL 8 + Redis + Sidekiq</td><td>9111</td><td>9207〜9209 / 10.77.1.7〜9</td></tr>
+  <tr><td>&lt;pj-b&gt;</td><td>&lt;owner&gt;/&lt;pj-b&gt;</td><td>Node 22 + Cloudflare Workers（wrangler dev ローカル）</td><td>9112</td><td>9210〜9212 / 10.77.1.10〜12</td></tr>
+</table>
+<p><small>2 PJ のプール作成を同時に走らせると採番が入れ違うことがある（動作に支障なし。<code>OPERATIONS.md</code>）。</small></p>
+
+<h3>2.3 Mac 側にあるもの</h3>
+<table class="kv">
+  <tr><td><code>~/.local/bin/sandbox</code></td><td>CLI 本体（リポジトリ <code>sandbox/bin/sandbox</code> への symlink）。中身は ssh 越しの <code>qm</code> 操作と dnsmasq の hosts 編集</td></tr>
+  <tr><td><code>~/.config/sandbox/env</code></td><td>全体既定（接続先、鍵、<code>SB_JUMP</code> など）</td></tr>
+  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>PJ 別上書き。<code>CLAUDE_CODE_OAUTH_TOKEN</code>、<code>GH_REPO</code> など（600）</td></tr>
+  <tr><td><code>~/.config/sandbox/gh-app/</code></td><td>GitHub App <code>aifactory-sandbox</code> の App ID と秘密鍵（600）</td></tr>
+  <tr><td><code>~/.config/sandbox/state.json</code></td><td>貸出台帳（task-id → vmid / name / ip / pj / since）。<b>正本は Mac 側のこのファイルだけ</b></td></tr>
+  <tr><td><code>~/.ssh/conf.d/aifactory/sb_ed25519</code></td><td>VM / LXC 用 SSH 鍵。公開鍵は cloud-init でテンプレートに焼いてある</td></tr>
+  <tr><td><code>~/Library/LaunchAgents/com.aifactory.sandbox.gh-refresh.plist</code></td><td>45 分ごとに <code>sandbox gh-app refresh</code>（貸出中 VM の GitHub トークン更新）</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. ネットワーク（アドレス・経路・名前解決）</h2>
+
+<h3>3.1 トポロジー</h3>
+<svg viewBox="0 0 980 560" role="img" aria-label="sandbox ネットワーク構成図">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#444"/></marker>
+    <marker id="ah2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1f5f8b"/></marker>
+    <marker id="ah3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#b26a00"/></marker>
+  </defs>
+
+  <!-- Mac -->
+  <rect x="20" y="210" width="200" height="120" rx="8" class="box"/>
+  <text x="120" y="235" text-anchor="middle" class="t">Mac（メンテナ）</text>
+  <text x="120" y="256" text-anchor="middle" class="s">LAN / tailnet</text>
+  <text x="120" y="276" text-anchor="middle" class="s">sandbox CLI / cmux / ブラウザ</text>
+  <text x="120" y="296" text-anchor="middle" class="s">state.json / トークン / App 秘密鍵</text>
+  <text x="120" y="316" text-anchor="middle" class="s">launchd gh-refresh（45 分）</text>
+
+  <!-- tailnet -->
+  <ellipse cx="330" cy="150" rx="95" ry="48" class="cloud"/>
+  <text x="330" y="145" text-anchor="middle" class="t">Tailscale tailnet</text>
+  <text x="330" y="163" text-anchor="middle" class="s">split DNS: sb.internal → sb-gw</text>
+  <text x="330" y="179" text-anchor="middle" class="s">ACL grant: dst 10.77.0.0/16</text>
+
+  <!-- Internet -->
+  <ellipse cx="850" cy="60" rx="100" ry="38" class="cloud"/>
+  <text x="850" y="57" text-anchor="middle" class="t">Internet</text>
+  <text x="850" y="74" text-anchor="middle" class="s">GitHub / Anthropic / apt</text>
+
+  <!-- host -->
+  <rect x="470" y="120" width="490" height="420" rx="10" class="host"/>
+  <text x="485" y="142" class="t">Proxmox pve1（LAN アドレス）</text>
+
+  <!-- vmbr0 -->
+  <rect x="490" y="160" width="450" height="28" rx="4" class="bar"/>
+  <text x="715" y="179" text-anchor="middle">vmbr0（LAN ブリッジ）</text>
+
+  <!-- sb-gw -->
+  <rect x="490" y="215" width="220" height="118" rx="6" class="box"/>
+  <text x="600" y="235" text-anchor="middle" class="t">sb-gw LXC 9000</text>
+  <text x="600" y="253" text-anchor="middle" class="s">eth0 DHCP（LAN）</text>
+  <text x="600" y="269" text-anchor="middle" class="s">tailscale0（tailnet アドレス）</text>
+  <text x="600" y="285" text-anchor="middle" class="s">eth1 10.77.0.2</text>
+  <text x="600" y="303" text-anchor="middle" class="s">subnet router（10.77.0.0/16 広告）</text>
+  <text x="600" y="319" text-anchor="middle" class="s">dnsmasq: *.sb.internal ← /etc/sandbox/hosts</text>
+
+  <!-- SNAT note -->
+  <rect x="740" y="215" width="200" height="60" rx="6" class="box" style="stroke-dasharray:4 3"/>
+  <text x="840" y="237" text-anchor="middle" class="t">ホストの SNAT</text>
+  <text x="840" y="255" text-anchor="middle" class="s">10.77.0.0/16 → ホストの LAN アドレス</text>
+  <text x="840" y="269" text-anchor="middle" class="s">（iptables POSTROUTING）</text>
+
+  <!-- sbnet -->
+  <rect x="490" y="360" width="450" height="28" rx="4" class="bar"/>
+  <text x="715" y="379" text-anchor="middle">sbnet（SDN simple zone sb）10.77.0.1/16 = ホストがゲートウェイ</text>
+
+  <!-- templates -->
+  <rect x="490" y="415" width="210" height="108" rx="6" class="box"/>
+  <text x="595" y="435" text-anchor="middle" class="t">テンプレート（停止・template）</text>
+  <text x="595" y="455" text-anchor="middle" class="s">9100 sb-base（作業時 .0.100）</text>
+  <text x="595" y="471" text-anchor="middle" class="s">911x sb-tpl-{pj}</text>
+  <text x="595" y="487" text-anchor="middle" class="s">（作業時 10.77.0.(VMID−9000)）</text>
+  <text x="595" y="505" text-anchor="middle" class="s">full clone ↓ linked clone</text>
+
+  <!-- pool -->
+  <rect x="730" y="415" width="210" height="108" rx="6" class="box"/>
+  <text x="835" y="435" text-anchor="middle" class="t">プール VM（running）</text>
+  <text x="835" y="455" text-anchor="middle" class="s">9201〜（PJ ごと 3 + 汎用 3）</text>
+  <text x="835" y="471" text-anchor="middle" class="s">IP 10.77.1.(VMID−9200)</text>
+  <text x="835" y="487" text-anchor="middle" class="s">各 :22 ssh / :3000 アプリ</text>
+  <text x="835" y="505" text-anchor="middle" class="s">snapshot clean（RAM 込み）</text>
+
+  <!-- lines -->
+  <!-- Mac -> tailnet -> sb-gw -->
+  <path d="M220,250 C260,250 270,180 240,165" class="ln2"/>
+  <path d="M425,150 C460,150 470,240 490,262" class="ln2"/>
+  <text x="250" y="205" class="s" fill="#1f5f8b">① ssh dev@task-id / http://task-id:3000</text>
+  <!-- Mac -> vmbr0 (ssh root, qm) -->
+  <path d="M220,300 C380,300 420,174 490,174" class="ln"/>
+  <text x="300" y="322" class="s">② ssh root@pve1（qm clone / snapshot / rollback）</text>
+  <!-- sb-gw eth1 -> sbnet -->
+  <path d="M600,333 L600,360" class="ln"/>
+  <!-- sb-gw eth0 -> vmbr0 -->
+  <path d="M560,215 L560,188" class="ln"/>
+  <!-- pool -> sbnet -->
+  <path d="M835,415 L835,388" class="ln"/>
+  <path d="M595,415 L595,388" class="ln"/>
+  <!-- sbnet -> SNAT -> vmbr0 -> internet -->
+  <path d="M840,360 L840,275" class="ln3"/>
+  <path d="M840,215 L840,188" class="ln3"/>
+  <path d="M900,160 C900,130 880,110 860,98" class="ln3"/>
+  <text x="860" y="345" class="s" fill="#b26a00">③ 外向き（git push / Claude API）</text>
+  <!-- fallback -->
+  <text x="485" y="205" class="s">④ 代替経路: ssh -J pve1 dev@10.77.1.NN（SB_JUMP。ホストが sbnet の 10.77.0.1 を持つ）</text>
+</svg>
+
+<h3>3.2 アドレス設計（固定。変えるなら ADR）</h3>
+<table>
+  <tr><th>対象</th><th>規則</th><th>例</th><th>理由</th></tr>
+  <tr><td>専用網</td><td><code>10.77.0.0/16</code>（Proxmox SDN simple zone <code>sb</code>、vnet <code>sbnet</code>、gateway 10.77.0.1、SNAT on）</td><td></td><td>既存 LAN と IP 空間を分ける。各 VM が固有 IP を持つのでポート衝突が原理的に起きない（ADR-0002）</td></tr>
+  <tr><td>ゲートウェイ</td><td>10.77.0.1 = Proxmox ホスト（sbnet ブリッジ）、10.77.0.2 = <code>sb-gw</code> eth1</td><td></td><td>外向き NAT はホスト、tailnet からの入りと DNS は sb-gw、と役割を分ける（ADR-0004）</td></tr>
+  <tr><td>テンプレート作業 IP</td><td><code>10.77.0.(VMID−9000)</code></td><td>9110 → .110、9115 → .115</td><td>PJ テンプレートを並行して焼けるように（ADR-0007）</td></tr>
+  <tr><td>プール VM の IP</td><td><code>10.77.1.(VMID−9200)</code>、cloud-init で静的付与</td><td>9204 → 10.77.1.4</td><td>VMID は Proxmox が一意性を保証するので、台帳無しで衝突しない（ADR-0007）。上限 99 台</td></tr>
+  <tr><td>DNS 名</td><td>常設 <code>sb-{pj}-{NN}.sb.internal</code>、貸出中のみ <code>task-{id}.sb.internal</code></td><td><code>task-101.sb.internal</code></td><td>task-id がそのままホスト名になる。ブラウザも ssh も同じ名前</td></tr>
+  <tr><td>VM 内の nameserver</td><td>10.77.0.2（sb-gw）、search <code>sb.internal</code>。上流は 1.1.1.1 / 8.8.8.8</td><td></td><td>VM 同士も名前で届く</td></tr>
+</table>
+
+<h3>3.3 4 本の経路</h3>
+<table>
+  <tr><th>#</th><th>誰が → どこへ</th><th>通り道</th><th>用途</th></tr>
+  <tr><td>①</td><td>Mac → プール VM</td><td>Mac の tailscale → tailnet → <code>sb-gw</code>（tailscale0 → eth1）→ sbnet → VM。戻りは VM → 10.77.0.1（ホスト）ではなく、VM の経路表に sb-gw への戻り経路は無いので、<b>Tailscale が sb-gw で SNAT する</b>（subnet router の既定動作）</td><td><code>sandbox ssh</code>、ブラウザで <code>:3000</code>、cmux の surface。到達には route 承認に加えて tailnet の ACL grant に <code>10.77.0.0/16</code> が必要だった（<code>STATUS.md</code>）</td></tr>
+  <tr><td>②</td><td>Mac → Proxmox ホスト</td><td>LAN の ssh（ホストの ssh エイリアス、root）</td><td>CLI が <code>qm list / listsnapshot / rollback / start</code> を打つ。VM の生殺与奪はここだけ</td></tr>
+  <tr><td>③</td><td>VM → Internet</td><td>VM → 10.77.0.1 → ホストの iptables で SNAT（送信元 = ホストの LAN アドレス）→ vmbr0 → LAN → 外</td><td><code>git push</code>、Claude Code の API 通信、apt / npm。<b>制限なし</b>（allowlist 無し）</td></tr>
+  <tr><td>④</td><td>Mac → VM（代替）</td><td>ssh ProxyJump で Proxmox ホスト経由（ホストが sbnet 上の 10.77.0.1 を持つ）</td><td>tailnet 未承認・不調時。<code>SB_JUMP=pve1</code>。名前解決が効かないので URL は IP 直打ち</td></tr>
+</table>
+
+<h3>3.4 名前解決の流れ</h3>
+<div class="flow">
+  <div class="box">Mac が <code>task-101.sb.internal</code> を引く</div><span class="arr">→</span>
+  <div class="box">Tailscale の split DNS が <code>sb.internal</code> を sb-gw の tailnet アドレスへ</div><span class="arr">→</span>
+  <div class="box">sb-gw の dnsmasq（<code>local=/sb.internal/</code>）が <code>/etc/sandbox/hosts</code> を引く</div><span class="arr">→</span>
+  <div class="box">10.77.1.13 を返す</div>
+</div>
+<p><code>/etc/sandbox/hosts</code> は 2 種類の行を持つ。常設名はプール作成時（<code>40-pool.sh</code>）に、<code>task-*</code> 名は <code>sandbox take</code> / <code>release</code> のたびに CLI が ssh で書き換えて <code>systemctl reload dnsmasq</code> する。つまり <b>「どの VM がどの task か」は Mac の state.json と sb-gw の hosts の 2 箇所にあり、CLI が両方を同時に更新する</b>。</p>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. 仕組み（テンプレート・プール・スナップショット・5 操作）</h2>
+
+<h3>4.1 テンプレートの 2 層構造</h3>
+<div class="flow">
+  <div class="box">Ubuntu 24.04 cloud image</div><span class="arr">→</span>
+  <div class="box"><b>9100 sb-base</b><br><small>31-provision-base.sh: PostgreSQL / Redis / Chrome / mise / Node / gh / Claude Code / tmpfs フック</small></div><span class="arr">full clone →</span>
+  <div class="box"><b>911x sb-tpl-{pj}</b><br><small>projects/{pj}/provision.sh: clone / 依存 / DB schema / systemd sandbox-app / ゲート緑を確認 / 認証情報を消す</small></div><span class="arr">linked clone ×3 →</span>
+  <div class="box"><b>92xx sb-{pj}-NN</b><br><small>起動 → :3000 応答待ち → <code>qm snapshot clean --vmstate 1</code></small></div>
+</div>
+<ul>
+  <li><b>base に焼くもの</b>: OS ツール、DB / KVS、ブラウザ、言語版管理、Claude Code 本体、<code>/run/sandbox</code>（tmpfs）と <code>/etc/profile.d/sandbox.sh</code>（login shell で <code>/run/sandbox/env</code> を読む）。焼く直前に cloud-init clean と machine-id 初期化。</li>
+  <li><b>PJ 層に焼くもの</b>: <code>/home/dev/app</code> のリポジトリ（develop / main）、Ruby や pnpm の版、依存、DB schema（seed は PJ による）、<code>/etc/sandbox/app.env</code>（アプリ用の非秘密設定）、systemd ユニット、品質ゲート <code>gates.sh</code>。焼く前に <code>gh auth logout</code> と <code>~/.config/gh</code> 削除。</li>
+  <li><b>焼かないもの</b>: GitHub / Claude のトークン、本番 secrets、SSH 秘密鍵。テンプレートに残るのは Mac の SSH 公開鍵と git の credential helper 登録（トークン本体は含まない）だけ。</li>
+  <li>linked clone なのでプール VM のディスクはテンプレートとの差分だけ。テンプレートを更新したら、その PJ のプールは作り直し（<code>OPERATIONS.md</code>）。</li>
+</ul>
+
+<h3>4.2 VM の一生（take / reset / release）</h3>
+<svg viewBox="0 0 980 230" role="img" aria-label="VM の状態遷移">
+  <defs><marker id="ah4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#444"/></marker></defs>
+  <rect x="30" y="70" width="200" height="90" rx="8" class="box"/>
+  <text x="130" y="100" text-anchor="middle" class="t">空き（running、clean）</text>
+  <text x="130" y="122" text-anchor="middle" class="s">アプリ起動済み・env 無し</text>
+  <text x="130" y="140" text-anchor="middle" class="s">DNS: sb-{pj}-NN のみ</text>
+
+  <rect x="390" y="70" width="200" height="90" rx="8" class="box" style="stroke:#1f5f8b;stroke-width:2"/>
+  <text x="490" y="100" text-anchor="middle" class="t">貸出中（task-id 付き）</text>
+  <text x="490" y="122" text-anchor="middle" class="s">/run/sandbox/env にトークン</text>
+  <text x="490" y="140" text-anchor="middle" class="s">DNS: task-{id} が追加</text>
+
+  <rect x="750" y="70" width="200" height="90" rx="8" class="box"/>
+  <text x="850" y="100" text-anchor="middle" class="t">汚れた状態</text>
+  <text x="850" y="122" text-anchor="middle" class="s">ブランチ・DB 変更・</text>
+  <text x="850" y="140" text-anchor="middle" class="s">起動中の claude</text>
+
+  <path d="M230,105 L390,105" class="ln" style="marker-end:url(#ah4)"/>
+  <text x="310" y="95" text-anchor="middle" class="s">take &lt;pj&gt; &lt;id&gt;</text>
+  <text x="310" y="125" text-anchor="middle" class="s">空き選定 → env 注入 → DNS → state.json</text>
+
+  <path d="M590,105 L750,105" class="ln" style="marker-end:url(#ah4)"/>
+  <text x="670" y="95" text-anchor="middle" class="s">作業（ssh / claude / push）</text>
+
+  <path d="M850,160 C850,205 490,215 490,160" class="ln" style="marker-end:url(#ah4)"/>
+  <text x="670" y="212" text-anchor="middle" class="s">reset: rollback clean → env 再注入（貸出継続）</text>
+
+  <path d="M760,70 C700,20 200,20 130,70" class="ln" style="marker-end:url(#ah4)"/>
+  <text x="445" y="38" text-anchor="middle" class="s">release: rollback clean → DNS の task 行削除 → state.json から削除</text>
+</svg>
+<p>巻き戻しは <code>qm rollback &lt;vmid&gt; clean</code>。RAM 込みなので、巻き戻した瞬間からアプリが :3000 で応答し、cloud-init も走らない。直前の rollback のロックが残ることがあるので CLI は最大 12 回リトライする。</p>
+
+<h3>4.3 区画間の契約（workflow から見た sandbox）</h3>
+<table>
+  <tr><th>操作</th><th>やること（ホスト側の実体）</th><th>保証</th></tr>
+  <tr><td><code>take &lt;pj&gt; &lt;task-id&gt;</code></td><td><code>qm list</code> で <code>sb-{pj}-*</code> を列挙 → state.json で使用中を除外 → <code>clean</code> があるものを選ぶ → 停止していれば rollback → env 注入 → dnsmasq hosts → state.json</td><td>クリーンな VM が <code>task-&lt;id&gt;.sb.internal</code> で届く。空きが無ければ非 0</td></tr>
+  <tr><td><code>ssh &lt;task-id&gt; [cmd]</code></td><td>state.json の IP へ <code>dev</code> で ssh。cmd は <code>bash -lc</code> 経由（profile.d を通す）</td><td>トークンとアプリ用 env が環境変数に入った状態で入れる</td></tr>
+  <tr><td><code>url &lt;task-id&gt;</code></td><td>文字列を返すだけ</td><td><code>http://task-&lt;id&gt;.sb.internal:3000</code></td></tr>
+  <tr><td><code>reset &lt;task-id&gt;</code></td><td>rollback → env 再注入</td><td>貸出は継続。VM 内の変更は全部消える</td></tr>
+  <tr><td><code>release &lt;task-id&gt;</code></td><td>rollback → DNS の task 行削除 → state.json 削除</td><td>次の take に回せる</td></tr>
+  <tr><td><code>ls</code></td><td><code>qm list</code> と state.json を突き合わせ</td><td>貸出状況</td></tr>
+</table>
+<p>契約外の運用補助として <code>token set/show/clear</code>、<code>reinject</code>、<code>gh-app status/token/refresh</code> がある。エージェントに Proxmox を直接触らせない、というのが設計の芯（<code>sandbox/README.md</code> 目的 4）。</p>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. データの流れ</h2>
+
+<h3>5.1 take のとき: 設定とトークンが VM に届くまで</h3>
+<ol class="steps">
+  <li><b>設定の 3 層を重ねる</b>（後勝ち）: <code>~/.config/sandbox/env</code> → <code>pj/&lt;pj&gt;.env</code> → 実行時の <code>SANDBOX_CLAUDE_TOKEN</code> / <code>SANDBOX_GH_TOKEN</code>。シェルに export された <code>CLAUDE_CODE_OAUTH_TOKEN</code> / <code>GH_TOKEN</code> は <b>無視</b>する（PJ 設定を黙って上書きした事故があった。ADR-0006）</li>
+  <li><b>GitHub トークンを払い出す</b>（ADR-0008）: Mac の秘密鍵で JWT（RS256、10 分）を作る → <code>GET /repos/{GH_REPO}/installation</code> で installation id → <code>POST /app/installations/{id}/access_tokens</code>（対象リポジトリ 1 つ、contents / pull_requests write、metadata read）→ 1 時間有効の <code>ghs_…</code>。App 未設定なら静的 <code>GH_TOKEN</code> にフォールバック</li>
+  <li><b>VM の tmpfs に書く</b>: ssh で <code>/run/sandbox/env</code>（umask 077）に <code>TASK_ID / SANDBOX_PJ / SANDBOX_HOST / CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN / GH_REPO / GH_TOKEN_EXPIRES_AT</code></li>
+  <li><b>login shell が読む</b>: <code>/etc/profile.d/sandbox.sh</code> が <code>/run/sandbox/env</code> を export。<code>/etc/profile.d/sandbox-app.sh</code> が <code>/etc/sandbox/app.env</code>（テンプレート由来の非秘密設定）を export。<code>sandbox ssh</code> は常に <code>bash -l</code> で入るので両方が効く</li>
+  <li><b>DNS と台帳</b>: sb-gw の hosts に <code>10.77.1.NN task-&lt;id&gt;</code> を足して reload。Mac の state.json に記録</li>
+</ol>
+<div class="note">Claude のトークンは <code>claude setup-token</code> の長期トークン（リフレッシュ回転が無いので複数 VM で同時に使っても衝突しない。ADR-0005）。GitHub のトークンは 1 時間で切れるので、Mac の launchd が 45 分ごとに <code>gh-app refresh</code> で貸出中 VM 全部を書き直す。差し替えは <code>token set</code> → <code>reinject</code>（巻き戻し無しで tmpfs だけ書き直す。起動中の claude プロセスは再起動が要る）。</div>
+
+<h3>5.2 作業中: VM の中と外で流れるもの</h3>
+<table>
+  <tr><th>データ</th><th>出どころ</th><th>行き先</th><th>経路</th></tr>
+  <tr><td>プロンプト、会話、コード断片</td><td>VM 内の Claude Code</td><td>Anthropic API</td><td>③ SNAT で外へ。VM のトークンで認証</td></tr>
+  <tr><td>ブランチ、コミット、PR</td><td>VM 内の <code>git push</code> / <code>gh pr create</code></td><td>GitHub（対象リポジトリのみ）</td><td>③。credential helper が <code>GH_TOKEN</code> を渡す</td></tr>
+  <tr><td>lint / test の結果</td><td>VM 内で <code>gates.sh</code>（コード）</td><td>標準出力 → <code>sandbox ssh</code> の戻り → Mac</td><td>①。ログ本体は VM の <code>~/gates/*.log</code> に残る（release で消える）</td></tr>
+  <tr><td>画面（アプリ）</td><td>VM の :3000</td><td>Mac のブラウザ</td><td>①。Rails は <code>RAILS_DEVELOPMENT_HOSTS=.sb.internal</code> で許可</td></tr>
+  <tr><td>スクショ、任意のファイル</td><td>VM</td><td>Mac</td><td>①。<code>sandbox ssh &lt;id&gt; 'cat …' &gt; local</code> か scp。専用操作は無い</td></tr>
+  <tr><td>DB の中身、プロセス、一時ファイル</td><td>VM ローカル（PostgreSQL / MySQL は VM 内）</td><td>どこにも出ない</td><td>release / reset で消える</td></tr>
+</table>
+
+<h3>5.3 release のとき: 何が消えて何が残るか</h3>
+<div class="grid">
+  <div class="card"><h4>消える（rollback）</h4>作業ブランチと未 push のコミット、DB の変更、<code>/run/sandbox/env</code> のトークン、起動中の claude、<code>~/gates/*.log</code>、<code>/tmp</code>、sudo で入れたパッケージ、bash 履歴</div>
+  <div class="card"><h4>残る（テンプレート由来）</h4>リポジトリ clone と依存、DB schema と seed、systemd ユニット、Mac の SSH 公開鍵、git の credential helper 登録、<code>/etc/sandbox/app.env</code></div>
+  <div class="card"><h4>外に残る</h4>GitHub に push したブランチと PR、Mac の <code>$AIFACTORY_WORKSPACE/runs/</code>、Mac の state.json から削除された履歴（削除されるので残らない）、sb-gw の hosts から消えた task 行</div>
+</div>
+
+<h3>5.4 ワークフロー 1 周（<code>workflow/bin/spin-v0.sh</code>）</h3>
+<p>sandbox の上に載る最小の AI developer workflow。動画の「build agent → コードで lint → 赤なら差し戻し」を bash で書いたもの。Mac 側で動き、VM の中には ssh で入る。</p>
+<ol class="steps">
+  <li><code>sandbox take</code> → <code>gates.sh</code> と依頼文（<code>workflow/prompts/*.md</code>）を VM に scp</li>
+  <li>VM 内で <code>git checkout -B sandbox/&lt;id&gt;-&lt;slug&gt; origin/develop</code></li>
+  <li>VM 内で <code>claude -p "$(cat prompt.md)" --dangerously-skip-permissions</code>（隔離されているので権限確認をスキップ）</li>
+  <li>未コミットが残っていればコードがコミット → VM 内で <code>bash ~/gates.sh</code>（typecheck / test など。PASS / FAIL を 1 行ずつ）</li>
+  <li>FAIL があれば、ゲート結果と赤ログの末尾を <code>retry.md</code> に書いて claude にもう一度（最大 <code>MAX_LOOPS</code>=2 回）</li>
+  <li><code>git push</code> → <code>gh pr create --base develop</code>（赤が残れば draft）</li>
+  <li>所見（ゲート結果、差分、PR URL、take までの秒数、全体秒数）を Mac の <code>$AIFACTORY_WORKSPACE/runs/&lt;date&gt;-&lt;pj&gt;-&lt;id&gt;.md</code> に書く → <code>sandbox release</code></li>
+</ol>
+<div class="warn">2026-09-06 02:53 に kumitate（task 101）と別 PJ（task 102）で「CLAUDE.md を実態に合わせて整理する」依頼で 1 周を開始した跡がある（<code>$AIFACTORY_WORKSPACE/runs/</code>）。この資料の作成時点では両 task が貸出中のままで、claude のログファイルは 0 バイト、run ファイルは依頼文までしか書かれていない。1 周が最後まで通ったかは未確認。<code>STATUS.md</code> の Step 6 も「未着手」のまま。</div>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. 信頼境界と秘密情報の寿命（安全面）</h2>
+
+<h3>6.1 秘密情報がどこに、どれだけの時間あるか</h3>
+<table>
+  <tr><th>情報</th><th>置き場</th><th>VM に渡る形</th><th>寿命</th><th>漏れたときの影響範囲</th></tr>
+  <tr><td>Claude 長期トークン</td><td>Mac <code>pj/&lt;pj&gt;.env</code>（600）</td><td>tmpfs の環境変数</td><td>take から release / reset / 再起動まで</td><td>その PJ の Claude アカウント（Max プラン）で API を叩かれる。失効は <code>claude setup-token</code> の再発行</td></tr>
+  <tr><td>GitHub App 秘密鍵</td><td>Mac <code>gh-app/private-key.pem</code>（600）</td><td><b>渡らない</b></td><td>App を作り直すまで</td><td>install 先の全リポジトリに contents / PR write のトークンを作れる</td></tr>
+  <tr><td>GitHub installation token</td><td>生成のみ（Mac に保存しない）</td><td>tmpfs の環境変数</td><td>1 時間（45 分ごとに更新）</td><td>その 1 リポジトリだけ、1 時間だけ。Metadata read / Contents write / Pull requests write</td></tr>
+  <tr><td>Mac の <code>gh auth token</code>（scope repo）</td><td>Mac の gh</td><td>テンプレート焼き込み時だけ環境変数で。焼く前に logout</td><td>焼き込み中のみ</td><td>全リポジトリ読み書き。テンプレートには残っていないことを検証 clone で確認する手順</td></tr>
+  <tr><td>SSH 秘密鍵 <code>sb_ed25519</code></td><td>Mac</td><td>公開鍵のみ（テンプレート）</td><td>恒久</td><td>全 VM と sb-gw に入れる</td></tr>
+  <tr><td>Proxmox root への SSH</td><td>Mac の ssh 設定（ホスト用の鍵）</td><td>渡らない</td><td>恒久</td><td>クラスタ全体</td></tr>
+</table>
+
+<h3>6.2 誰が何に届くか</h3>
+<table>
+  <tr><th>主体</th><th>届くもの</th><th>届かないもの</th></tr>
+  <tr><td>VM 内のエージェント（dev、sudo NOPASSWD）</td><td>自 VM の全部、同じ sbnet の他 VM（:22 は鍵が無いので入れないが :3000 や DB ポートは開いていれば届く）、sb-gw の DNS、Internet 全部（SNAT、制限なし）</td><td>Proxmox ホストの API / ssh、Mac、tailnet の他の機器（sbnet から tailnet 側への経路は無い）</td></tr>
+  <tr><td>Mac の CLI</td><td>Proxmox root、sb-gw root、全 VM の dev</td><td></td></tr>
+  <tr><td>tailnet の他メンバー</td><td>ACL grant が <code>autogroup:member</code> なので、tailnet のメンバーなら 10.77.0.0/16 に届く。VM への ssh は鍵が要る。<b>:3000 のアプリは認証なしで見える</b></td><td></td></tr>
+</table>
+
+<h3>6.3 割り切っている点（設計上の既知事項）</h3>
+<ul>
+  <li>VM のホスト鍵検証は無効（<code>StrictHostKeyChecking no</code>）。巻き戻しとクローンで鍵が同じになるための割り切り。内部網限定</li>
+  <li>PostgreSQL はローカル trust、MySQL root は固定パスワード。VM の外からは届かない前提</li>
+  <li>エージェントは <code>--dangerously-skip-permissions</code> で動く。VM 隔離がその代わり。ただし<b>外向きは無制限</b>なので、リポジトリ内容や会話の外部送信を止める仕組みは無い（PJ のコードは受託先のもの）</li>
+  <li>同一 PJ の 3 台は同じテンプレートから来ているので、テンプレートに残した何かは 3 台全部に等しく残る。焼く前の後片付けが唯一の防御</li>
+  <li>sb-gw の eth0 は LAN に足があり、tailscale の入口でもある。ここが落ちると Mac から届かない（代替は ④ の ProxyJump）</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. 動画が求める sandbox 像との対比（足りているか）</h2>
+
+<p>着想元は Dan Isler（IndieDevDan）の動画「FORGET Loop Engineering. Agentic Engineering is about THIS」（34 分、英語。出典は <code>docs/source/README.md</code>。動画と文字起こしはリポジトリに含めない）。動画は「sandbox の作り方」は一切語らず、<b>ソフトウェアファクトリーの中で sandbox が果たすべき役割</b>だけを述べている。だから問いは 2 段に分かれる。</p>
+<ol>
+  <li><b>sandbox としての要件</b>: 動画が sandbox に求めていることを、いまの Proxmox sandbox は満たしているか</li>
+  <li><b>ファクトリーとしての要件</b>: 動画のファクトリー像のうち、sandbox 以外（kanban / workflow / glue）がどこまであるか</li>
+</ol>
+
+<h3>7.1 動画が sandbox に求めていること（文字起こしから抜いた要件）</h3>
+<table>
+  <tr><th>動画の記述（要旨）</th><th>いまの sandbox</th><th>判定</th></tr>
+  <tr><td>「worktree は始めるには良いが終着点ではない。<b>エージェントごとに自分の計算機</b>を与えると完全に隔離される」</td><td>VM 1 台 = エージェント 1 体。DB・プロセス・ポート・ファイルすべて VM 内で閉じる。worktree の共有問題（DB・ポート）は原理的に無い</td><td><span class="tag ok">満たす</span></td></tr>
+  <tr><td>「<b>自分が sandbox に飛び込んで</b>、作業・結果・Web ページ・テスト・アプリを見てレビューできる」</td><td><code>sandbox ssh</code> で中に入る、<code>sandbox url</code> でブラウザから :3000、cmux の surface が ssh になる。テスト結果は <code>gates.sh</code> の出力</td><td><span class="tag ok">満たす</span></td></tr>
+  <tr><td>「複数の sandbox を並列に立てる。hotfix なら 3〜10 体を<b>競争</b>させて最速を採る」</td><td>21 台常駐（PJ ごと 3 台）。同時貸出は CLI で自然にできる。ただし「競争させて最速を採り、残りを捨てる」オーケストレーションは無い（workflow 側の仕事）</td><td><span class="tag part">土台あり・制御は未</span></td></tr>
+  <tr><td>「ファクトリーが起動したら<b>まず sandbox をセットアップ</b>し、その後にワークフローを選ぶ」（= sandbox の準備はコードが行う）</td><td><code>take</code> は 1 コマンドで、コードから呼べる契約になっている。<code>spin-v0.sh</code> が実際にコードから呼んでいる</td><td><span class="tag ok">満たす</span></td></tr>
+  <tr><td>「作業が全部戻ってきたら<b>マージして出荷</b>」（成果物が sandbox の外に出る）</td><td>ブランチ push と PR 作成は通る（別 PJ で確認済み）。スクショ・ログ・任意ファイルの回収は <code>ssh cat</code> 頼みで専用操作が無い。<code>workflow/README.md</code> の要求「lint / test の結果とスクショを外に出せる」は Step 6 で検証待ち</td><td><span class="tag part">コードは出る。他は手作業</span></td></tr>
+  <tr><td>「sandbox は使い捨てで、<b>状態が次に漏れない</b>」（明示はしないが、隔離の前提として繰り返し出る）</td><td>RAM 込みスナップショット巻き戻し。DIRTY ファイルが消えることを確認済み。トークンは tmpfs で消える</td><td><span class="tag ok">満たす（動画より厳密）</span></td></tr>
+  <tr><td>「sandbox 内で <b>CI/CD を回し</b>、失敗なら build agent に戻す」</td><td>lint / typecheck / test は VM 内でコードとして回る（gates.sh）。CI/CD 本体（GitHub Actions）との接続は無し。台帳では既存の self-hosted runner に繋ぐ案のまま</td><td><span class="tag part">ローカルゲートのみ</span></td></tr>
+  <tr><td>「sandbox は今後<b>世界の計算機の大半</b>になる。デバイスは減り、sandbox は増える」（= 台数を増やせる設計）</td><td>単一ノードで 99 台（VMID / IP の上限）。ノード跨ぎは未決（テンプレート複製か VXLAN）。電源は物理ボタン</td><td><span class="tag part">単一ノード内は伸びる</span></td></tr>
+</table>
+
+<div class="note"><b>結論（sandbox としての要件）</b>: 動画が sandbox に求めていること（隔離・人が入れる・並列・使い捨て・コードから作れる）は、いまの Proxmox sandbox で満たしている。動画は sandbox の中身を語っていないので、認証トークンの注入、専用網と DNS、RAM 込み巻き戻し、GitHub App による短期トークンといった部分はこのプロジェクトが自前で設計した「動画に無い上積み」になる。足りていないのは sandbox 単体の機能ではなく、<b>sandbox から成果物（テスト結果・スクショ・ログ）を取り出す定型操作</b>と、<b>CI との接続</b>の 2 点。</div>
+
+<h3>7.2 動画のファクトリー像と、4 区画の現在地</h3>
+<table>
+  <tr><th>動画の要素</th><th>担当区画</th><th>現在地</th><th>判定</th></tr>
+  <tr><td>Kanban / チケットが入口。「ただのコード、エージェント不在」。着地した瞬間にファクトリー起動</td><td>kanban</td><td>役割定義のみ。task-id は人が 3 桁で手入力</td><td><span class="tag ng">未</span></td></tr>
+  <tr><td>ルーターがチケットを読み、chore / bug / feature / hotfix のどのワークフローかを決める</td><td>glue</td><td>役割定義のみ</td><td><span class="tag ng">未</span></td></tr>
+  <tr><td>scout agent → plan agent（探索と計画を分ける）</td><td>workflow</td><td>無し。spin-v0 は依頼文を人が書いて渡す</td><td><span class="tag ng">未</span></td></tr>
+  <tr><td>build agent → コードの lint / format / typecheck / test → 赤なら build agent に戻す（ループ）</td><td>workflow</td><td><code>spin-v0.sh</code> にある。ゲートはコード、赤なら結果を claude に戻す（最大 2 回）</td><td><span class="tag ok">最小形あり</span></td></tr>
+  <tr><td>「<b>同じセッション ID</b> に差し戻す」（Agent SDK、コードとエージェントの分離）</td><td>workflow</td><td>spin-v0 は毎ループ <code>claude -p</code> を新規に起動する。前回の文脈は retry.md の文章でしか渡らない。Agent SDK は未使用</td><td><span class="tag part">分離はできている。継続は未</span></td></tr>
+  <tr><td>test agent（テスト一式をエージェントに任せる）</td><td>workflow</td><td>無し（テストはコードのみ）。動画も「まずはコードで」と言っているので現時点では妥当</td><td><span class="tag na">保留で妥当</span></td></tr>
+  <tr><td>エンジニアは冒頭（plan）と末尾（review）だけ</td><td>workflow</td><td>spin-v0 はその形（依頼文を書く → PR をレビュー）</td><td><span class="tag ok">形はある</span></td></tr>
+  <tr><td>hotfix 専用エージェント + 人の承認 + 複数 sandbox で競争</td><td>workflow + glue</td><td>無し</td><td><span class="tag ng">未</span></td></tr>
+  <tr><td>ワークフローごとにモデルを使い分ける（chore は軽量、plan は最上位）</td><td>workflow</td><td>無し（VM 内の claude 既定モデル）</td><td><span class="tag ng">未</span></td></tr>
+  <tr><td>ステップ間の結果を置く場所（context engineering）</td><td>glue</td><td>Mac の <code>$AIFACTORY_WORKSPACE/runs/</code> に所見を書く程度。VM 内の <code>~/gates/*.log</code> は release で消える</td><td><span class="tag part">最小形</span></td></tr>
+  <tr><td>「まず自分で end-to-end を通し、Mermaid に書き起こしてからコードにする」</td><td>全体</td><td>Step 6（手動 1 周）が未完了のまま spin-v0（コード化）が先行している。動画の順番と逆</td><td><span class="tag part">順序が逆</span></td></tr>
+  <tr><td>アプリ層ではなく agentic layer（プロンプト・スキル・ワークフロー）に投資する</td><td>全体</td><td>このリポジトリの方針そのもの（README、ADR）</td><td><span class="tag ok">方針一致</span></td></tr>
+</table>
+
+<div class="note"><b>結論（ファクトリーとしての要件）</b>: 動画の像で「できている」のは sandbox と、その上の最小ループ（build → コードのゲート → 差し戻し）だけ。動画がファクトリーの核と呼ぶ<b>入口（kanban）と振り分け（ルーター）、ステップ間の状態置き場</b>は無い。これは設計どおり（「sandbox を最初に作る」という判断）で、sandbox が足りないのではなく、<b>他 3 区画が未着手</b>という状態。</div>
+
+<h3>7.3 動画に無いが、この sandbox が独自に決めたこと</h3>
+<ul>
+  <li>認証の扱い（Claude 長期トークンの tmpfs 注入、GitHub App の 1 時間トークン、PJ ごとのアカウント分離）。動画は認証に触れない</li>
+  <li>ネットワーク（専用網、subnet router 1 台だけ tailnet に入れる、split DNS）。動画は「自分の計算機」としか言わない</li>
+  <li>RAM 込みスナップショットで「起動済みアプリ」から始める。動画の sandbox は都度作る前提に読める</li>
+  <li>PJ ごとのテンプレート（複数 PJ 同居）。動画は単一プロダクト前提</li>
+  <li>「gate（合否に使う）」と「info（記録だけ）」の区別。動画の「pass / fail」を、CI が守っていないテストが混ざる現実に合わせて 2 段にした</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. 既知の制約と次の一手</h2>
+
+<h3>8.1 制約</h3>
+<table>
+  <tr><th>制約</th><th>影響</th><th>出典</th></tr>
+  <tr><td>単一ノード。電源投入は物理ボタン（リモート管理未設定）</td><td>落ちるとプール全滅、遠隔復旧不可</td><td><code>README.md</code> 前提リスク</td></tr>
+  <tr><td>プール上限 99 台（VMID 9201〜9299 / 10.77.1.1〜99）</td><td>足りなくなったら 10.77.2.x に広げる ADR が要る</td><td>ADR-0007</td></tr>
+  <tr><td>GitHub トークンは 1 時間。launchd が動いている前提</td><td>Mac がスリープ / ログアウトすると VM 内の push が 401 になる</td><td>ADR-0008</td></tr>
+  <tr><td>Claude 長期トークンの期限</td><td>切れると人間待ち。作成時点では未設定の PJ があった</td><td><code>STATUS.md</code> 人間待ち</td></tr>
+  <tr><td>VM 内の claude は env を読み直さない</td><td>トークン差し替え後は claude の再起動が要る</td><td>ADR-0006</td></tr>
+  <tr><td>外向き通信が無制限</td><td>受託先コードの外部送信を止める手段が無い</td><td>本資料 6.3</td></tr>
+  <tr><td>2 PJ のプール作成を同時に走らせると VMID が入れ違う</td><td>動作に支障なし。読みにくいだけ</td><td><code>OPERATIONS.md</code></td></tr>
+</table>
+
+<h3>8.2 次の一手（この資料の対比から）</h3>
+<ol>
+  <li><b>Step 6 を閉じる</b>: task 101 / 102 の 1 周がどこまで通ったかを確かめ、<code>STATUS.md</code> の「1 周の所見」に書く（take から claude 起動までの秒数、足りなかった操作、消えて困ったもの）。動画の助言②「まず自分で end-to-end」に相当</li>
+  <li><b>成果物の回収を契約に足すか決める</b>: ゲートのログとスクショを Mac に持ってくる定型操作（例: <code>sandbox pull &lt;id&gt; &lt;path&gt;</code>）。README の契約を変えるなら ADR</li>
+  <li><b>セッション継続</b>: spin-v0 の差し戻しを「同じセッション」に戻す（Agent SDK か <code>claude --resume</code>）。動画の助言③の核心</li>
+  <li><b>kanban と glue の最小形</b>: task-id の採番元と、ステップ間の結果の置き場。sandbox が「足りているか」は、上に載せてみないと最終的には分からない</li>
+</ol>
+
+<p style="margin-top:40px"><small>参照: <code>sandbox/README.md</code>、<code>sandbox/BUILD.md</code>、<code>sandbox/STATUS.md</code>、<code>sandbox/OPERATIONS.md</code>、<code>sandbox/bin/sandbox</code>、<code>sandbox/proxmox/*.sh</code>、<code>sandbox/templates/README.md</code>、<code>examples/projects/kumitate/</code>、<code>docs/adr/0001〜0008</code>、<code>docs/ledger.md</code>、<code>docs/source/README.md</code>、<code>workflow/bin/spin-v0.sh</code>、<code>$AIFACTORY_WORKSPACE/runs/</code>。</small></p>
+
+</main>
+</body>
+</html>

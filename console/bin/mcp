@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""console/bin/mcp: aifactory の MCP サーバー（stdio、Python 3 標準ライブラリのみ）。
+
+  console/bin/mcp            # stdin / stdout で JSON-RPC（MCP）。ログは stderr
+  claude mcp add --scope project aifactory -- "$PWD/console/bin/mcp"   # または同梱の .mcp.json（${CLAUDE_PROJECT_DIR} で解決）
+
+- 読む: 概況 / チケット / 実行記録とログ / sandbox / ジョブ / 設定
+- 動かす: 起票（intake / kb new）/ 状態遷移 / kb run / dispatch / sandbox ls・release / ジョブの停止と待機
+- 読み書きの正本は lib/core.py。Web コンソール（bin/console）と同じ関数を呼ぶので、どちらから動かしても同じジョブ記録（console/jobs/）に載る
+- MCP の実装は最小: initialize / ping / tools/list / tools/call / resources/list / resources/read。1 行 1 メッセージの JSON-RPC 2.0
+"""
+import json, pathlib, sys, traceback
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
+import core
+
+PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+INSTRUCTIONS = """aifactory（ソフトウェアファクトリー）の操作口。チケット（kanban）→ workflow runner → sandbox VM の流れを読み書きできる。
+- 状態を変える操作はすべて既存 CLI（kb / intake / dispatch / sandbox）を呼ぶ。人間や他セッションが同じ CLI を使っている前提で、勝手に VM を返却・run を止めない
+- 長い操作（ticket_run / intake / dispatch / sandbox_ls / sandbox_release）はジョブとして返る。job_wait で待ち、job_show で出力を読む。ticket_run は 5〜80 分かかる
+- 本番の run は VM を貸し出して PR まで進む。試すだけなら dry_run: true
+- 読める記録: overview → ticket_show → run_show → read_file（agent-*.log / code-*.log / work/*.md）の順に深く読める"""
+
+
+def j(obj):
+    return json.dumps(obj, ensure_ascii=False, indent=1)
+
+
+def s(v, k=None):   # 引数を安全に取り出す
+    return v
+
+
+def arg_int(a, k, required=True):
+    v = a.get(k)
+    if v in (None, ""):
+        if required: raise core.ApiError(f"{k} が要る")
+        return None
+    try: return int(v)
+    except (TypeError, ValueError): raise core.ApiError(f"{k} は整数")
+
+
+def t_overview(a): return core.overview()
+def t_ticket_list(a): return core.tickets_list(pj=a.get("pj"), status=a.get("status"), all_=bool(a.get("all")))
+def t_ticket_show(a): return core.ticket_detail(arg_int(a, "id"))
+def t_ticket_new(a): return core.ticket_new(a)
+def t_ticket_action(a): return core.ticket_action(arg_int(a, "id"), a)
+def t_ticket_run(a): return core.ticket_run(arg_int(a, "id"), a)
+def t_intake(a): return core.op_intake(a)
+def t_dispatch(a): return core.op_dispatch(a)
+def t_run_list(a):
+    runs = core.list_runs()
+    if not a.get("all"): runs = [r for r in runs if not r.get("dry") and not r.get("attempt")]
+    return {"runs": runs[: int(a.get("limit") or 50)]}
+def t_run_show(a):
+    d = core.run_detail(a.get("name") or "")
+    if not d: raise core.ApiError("run が無い", 404)
+    return d
+def t_read_file(a):
+    data, err = core.read_file(a.get("path") or "", tail=int(a["tail"]) if a.get("tail") else None, offset=int(a["offset"]) if a.get("offset") else None)
+    if not data: raise core.ApiError(err, 403)
+    return data
+def t_sandbox_status(a): return core.sandbox_view()
+def t_sandbox_ls(a): return core.op_sandbox_ls()
+def t_sandbox_release(a): return core.op_sandbox_release(a)
+def t_job_list(a): return {"jobs": core.JobStore.list()[: int(a.get("limit") or 30)]}
+def t_job_show(a):
+    d = core.job_view(a.get("id") or "", int(a.get("offset") or 0))
+    if a.get("tail") and d.get("log"): d["log"]["text"] = d["log"]["text"][-int(a["tail"]):]
+    return d
+def t_job_wait(a):
+    timeout = min(int(a.get("timeout_s") or 120), 570)   # .mcp.json の timeout（600 秒）より短く
+    jb = core.job_wait(a.get("id") or "", timeout)
+    d = core.job_view(jb["id"]); d["log"]["text"] = d["log"]["text"][-4000:]
+    return d
+def t_job_stop(a): return core.op_job_stop(a.get("id") or "")
+def t_logs(a): return core.logs_view()
+def t_config(a): return core.config_view()
+
+
+def schema(props, required=()):
+    return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
+
+STR = {"type": "string"}; INT = {"type": "integer"}; BOOL = {"type": "boolean"}
+TOOLS = [
+    ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数", schema({}), t_overview),
+    ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
+    ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ", schema({"id": INT}, ["id"]), t_ticket_show),
+    ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR}, ["pj", "kind", "title"]), t_ticket_new),
+    ("ticket_action", "チケットの状態を進める・項目を直す（kb）。action: start / review / done / reopen / block（note 必須）/ set（kind・pr・note・status・run）/ sync（run 記録から状態を取り直す）",
+     schema({"id": INT, "action": {"type": "string", "enum": ["start", "review", "done", "reopen", "block", "set", "sync"]}, "note": STR, "kind": STR, "pr": INT, "status": STR, "run": STR}, ["id", "action"]), t_ticket_action),
+    ("ticket_run", "チケットを runner で回す（kb run）。VM を貸し出し step を順に実行し PR まで進める。ジョブを返す。dry_run なら VM を触らず依頼文だけ組む",
+     schema({"id": INT, "dry_run": BOOL, "workflow": {**STR, "description": "種別と違う workflow で回すとき"}, "keep": {**BOOL, "description": "終了後 VM を返却しない"}, "resume": {**BOOL, "description": "貸出中の VM で続きから"}}, ["id"]), t_ticket_run),
+    ("intake", "自由文から起票する（glue/bin/intake。LLM 1 回で pj / kind / 題名 / 完了条件を決める）。ジョブを返す。pj / kind が分かっていれば渡す",
+     schema({"text": STR, "pj": STR, "kind": STR, "dry_run": {**BOOL, "description": "起票せず判定 JSON だけ"}}, ["text"]), t_intake),
+    ("dispatch", "todo を古い順に kb run する（glue/bin/dispatch。直列）。ジョブを返す", schema({"pj": STR, "once": {**BOOL, "description": "1 件だけ"}, "max": INT, "dry_run": BOOL}), t_dispatch),
+    ("run_list", "実行記録の一覧（$AIFACTORY_WORKSPACE/runs/）。既定は dry-run と退避分を除く", schema({"all": BOOL, "limit": INT}), t_run_list),
+    ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
+    ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数",
+     schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
+    ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧（project.yml / トークンの有無、プール使用数）、最後の sandbox ls", schema({}), t_sandbox_status),
+    ("sandbox_ls", "Proxmox に ssh して VM の実勢を取る（sandbox ls）。ジョブを返す（数秒）", schema({}), t_sandbox_ls),
+    ("sandbox_release", "貸出中の VM を snapshot clean に巻き戻して返却する。動いている run は止まる。ジョブを返す", schema({"task": {**STR, "description": "task-id（3 桁以上）"}}, ["task"]), t_sandbox_release),
+    ("job_list", "コンソール / MCP が起動した CLI ジョブの一覧", schema({"limit": INT}), t_job_list),
+    ("job_show", "ジョブ 1 件と出力。offset（バイト）で追い読み、tail で末尾だけ", schema({"id": STR, "offset": INT, "tail": INT}, ["id"]), t_job_show),
+    ("job_wait", "ジョブが終わるまで待つ（最大 timeout_s 秒、既定 120、上限 570）。終わらなければ running のまま返す。出力は末尾 4000 文字", schema({"id": STR, "timeout_s": INT}, ["id"]), t_job_wait),
+    ("job_stop", "ジョブを止める（プロセスグループに SIGTERM）。kb run の途中なら VM が貸出中のまま残ることがある", schema({"id": STR}, ["id"]), t_job_stop),
+    ("logs", "起票（intake.log）と配車（dispatch.log）のログ（$AIFACTORY_WORKSPACE/logs/）", schema({}), t_logs),
+    ("config", "workflow の流れ、モデルの経路（routes.env）、役割、PJ 一覧、git status", schema({}), t_config),
+]
+TOOL_MAP = {n: fn for n, _, _, fn in TOOLS}
+
+
+# ---------- resources（読み物）
+def resources_list():
+    out = [{"uri": "aifactory://board", "name": "kanban ボード", "mimeType": "text/markdown", "description": "kanban/BOARD.md（kb が生成）"},
+           {"uri": "aifactory://ledger", "name": "構想台帳", "mimeType": "text/markdown", "description": "docs/ledger.md（現在地・決定・未決・履歴）"}]
+    for t in core.rows("SELECT id, title, status FROM tickets ORDER BY id"):
+        out.append({"uri": f"aifactory://ticket/{t['id']}", "name": f"{t['id']} {t['title']}", "mimeType": "text/markdown", "description": f"チケット本文（{core.STATUS_LABEL.get(t['status'], t['status'])}）"})
+    return out
+
+
+def resource_read(uri):
+    if uri == "aifactory://board": p = core.KB_ROOT / "BOARD.md"
+    elif uri == "aifactory://ledger": p = core.REPO / "docs" / "ledger.md"
+    elif uri.startswith("aifactory://ticket/"):
+        d = core.ticket_detail(int(uri.rsplit("/", 1)[1])); return d["body"] or ""
+    else: raise core.ApiError(f"未知の resource {uri}", 404)
+    if not p.exists(): raise core.ApiError(f"{p.name} が無い", 404)
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
+# ---------- JSON-RPC
+def handle(msg):
+    """1 リクエストを処理して result を返す。例外は呼び元が error に変える"""
+    method, params = msg.get("method"), msg.get("params") or {}
+    if method == "initialize":
+        want = params.get("protocolVersion")
+        return {"protocolVersion": want if want in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
+                "capabilities": {"tools": {"listChanged": False}, "resources": {"listChanged": False, "subscribe": False}},
+                "serverInfo": {"name": "aifactory", "version": "0.1"}, "instructions": INSTRUCTIONS}
+    if method == "ping": return {}
+    if method == "tools/list":
+        return {"tools": [{"name": n, "description": d, "inputSchema": sc} for n, d, sc, _ in TOOLS]}
+    if method == "tools/call":
+        name = params.get("name"); args = params.get("arguments") or {}
+        fn = TOOL_MAP.get(name)
+        if not fn: raise core.ApiError(f"未知のツール {name}", 404)
+        try:
+            res = fn(args)
+            return {"content": [{"type": "text", "text": j(res) if not isinstance(res, str) else res}], "isError": False}
+        except (core.ApiError, core.Conflict) as e:
+            return {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True}
+    if method == "resources/list": return {"resources": resources_list()}
+    if method == "resources/read":
+        uri = params.get("uri") or ""
+        return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": resource_read(uri)}]}
+    if method in ("resources/templates/list",): return {"resourceTemplates": []}
+    if method in ("prompts/list",): return {"prompts": []}
+    raise KeyError(method)
+
+
+def main():
+    out = sys.stdout
+    for line in sys.stdin:
+        line = line.strip()
+        if not line: continue
+        try: msg = json.loads(line)
+        except ValueError:
+            out.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}) + "\n"); out.flush(); continue
+        if "id" not in msg: continue   # notification（initialized / cancelled 等）は応答しない
+        try:
+            resp = {"jsonrpc": "2.0", "id": msg["id"], "result": handle(msg)}
+        except KeyError as e:
+            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": f"method not found: {e.args[0]}"}}
+        except core.ApiError as e:
+            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32602, "message": str(e)}}
+        except Exception as e:
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32603, "message": f"{type(e).__name__}: {e}"}}
+        out.write(json.dumps(resp, ensure_ascii=False) + "\n"); out.flush()
+
+
+if __name__ == "__main__":
+    main()

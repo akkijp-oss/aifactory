@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""glue/bin/intake: 自由文の依頼を 1 枚のチケットにして kanban に起票する（ルーターの入口）。
+
+  glue/bin/intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
+
+- 入力は自由文（音声書き起こし・チャットの貼り付け・箇条書き、何でも）。先頭 5 行に `pj: x` / `kind: y` があれば
+  それを使う（決定的。LLM の判定より優先）。--pj / --kind はさらに優先
+- LLM（judgment クラス = workflow/kit/routes.env の MODEL_judgment）を 1 回だけ呼ぶ:
+  決まっていない PJ・種別の判定と、runner が読める形（題名 + 完了条件）への整形。
+  既に整った ticket.md を持っているなら intake を通さず `kb new --body` を直接使う
+- 結果は kanban/bin/kb new で起票し、id を出す。--dry-run は起票せず判定結果（JSON）を出すだけ
+- 記録は $AIFACTORY_WORKSPACE/logs/intake.log（1 行 1 件: 日時 / id / pj / kind / confidence / model）
+- LLM の出力は提案として扱う。pj / kind は kb new が実在チェックする。confidence が低いときは起票後に人間が kb set で直す
+
+これは動画で言う「ルーター。簡単な LLM 呼び出し 1 回か、決定的なコードで足りる」の実装。分類より先の判断（計画・実装）はしない。
+"""
+import argparse, datetime, json, os, pathlib, re, subprocess, sys, tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent.parent          # glue/
+REPO = HERE.parent
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
+KB = REPO / "kanban" / "bin" / "kb"
+LOG = paths.LOGS / "intake.log"
+
+
+def die(msg, code=1):
+    print(f"[intake] error: {msg}", file=sys.stderr); sys.exit(code)
+
+
+def load_yaml(p):
+    import yaml
+    with open(p, encoding="utf-8") as f: return yaml.safe_load(f)
+
+
+def routes():
+    return dict(l.split("=", 1) for l in (REPO / "workflow" / "kit" / "routes.env").read_text().splitlines()
+                if l and not l.startswith("#") and "=" in l)
+
+
+def projects():
+    out = []
+    for name in paths.projects():
+        d = paths.project_dir(name)
+        py = d / "project.yml"
+        if py.exists():
+            y = load_yaml(py); out.append((d.name, f"{y.get('display_name', d.name)} / {y.get('repo', '?')} / {y.get('stack', '')[:80]}"))
+        else:
+            out.append((d.name, "(project.yml 無し: 起票はできるが runner はまだ回せない)"))
+    return out
+
+
+def kinds():
+    out = []
+    for p in sorted((REPO / "workflow" / "kit" / "workflows").glob("*.yml")):
+        y = load_yaml(p); out.append((p.stem, y.get("description", "")))
+    return out
+
+
+def parse_header(text):
+    """先頭 5 行の `pj:` / `kind:` を決定的に拾う。本文からは取り除く"""
+    found = {}; keep = []
+    for i, line in enumerate(text.splitlines()):
+        m = re.match(r"^(pj|kind)\s*:\s*(\S+)\s*$", line.strip(), re.I) if i < 5 else None
+        if m: found[m.group(1).lower()] = m.group(2).lower()
+        else: keep.append(line)
+    return found, "\n".join(keep).strip()
+
+
+def ask_llm(text, pjs, kds, fixed, model):
+    pj_list = "\n".join(f"- {n}: {d}" for n, d in pjs)
+    kind_list = "\n".join(f"- {n}: {d}" for n, d in kds)
+    fixed_note = "".join(f"\n- {k} は「{v}」で確定している。変えない" for k, v in fixed.items())
+    prompt = f"""あなたは aifactory（ソフトウェアファクトリー）のルーターです。人間からの依頼文を読み、どの PJ のどの種別の作業かを判定し、
+自動化された workflow（plan → implement → gates → review → pr）に渡せるチケットへ整形してください。判断や実装はしません。分類と整形だけです。
+
+## PJ（pj の値はこの名前のどれか）
+{pj_list}
+
+## 種別（kind の値はこの名前のどれか）
+{kind_list}
+判定の目安: 本番障害の最小修正=hotfix / 不具合=bug / 機能追加・変更=feature / 判断の要らない雑務（docs・依存更新・設定）=chore / 調べるだけで変更しない=research / 既存 PR のマージ=merge-pr
+
+## 確定している項目{fixed_note if fixed_note else "（無し）"}
+
+## チケットの形（body）
+- 1 行目は書かない（title を別に出す）。本文は Markdown
+- 依頼の意図と背景を落とさず簡潔に。推測で補った箇所は「（推測）」と印を付ける
+- 末尾に `## 完了条件` を箇条書きで書く。機械や人がチェックできる形（テストが緑、PR がある、summary.md に X が書いてある、等）
+- merge-pr のときは body の冒頭に `pr: <番号>` の 1 行を置く（無ければ置かない）
+
+## 依頼文
+<<<
+{text}
+>>>
+
+## 出力
+次の JSON だけを ```json フェンスで 1 つ出してください。他の文章は不要です。
+{{"pj": "...", "kind": "...", "title": "50 字以内。先頭に docs:/fix:/feat:/test: などの接頭辞", "body": "...", "confidence": 0.0〜1.0, "reason": "1 行"}}
+"""
+    with tempfile.TemporaryDirectory() as td:  # cwd をリポジトリから外し、ツールを使わせない
+        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--tools", ""], cwd=td, text=True, capture_output=True, errors="replace")
+    if r.returncode != 0: die(f"claude -p が失敗 ({r.returncode}): {r.stderr[-800:]}")
+    m = re.search(r"```json\s*(\{.*?\})\s*```", r.stdout, re.S) or re.search(r"(\{.*\})", r.stdout, re.S)
+    if not m: die(f"JSON が取れない。出力:\n{r.stdout[-1500:]}")
+    try: return json.loads(m.group(1))
+    except json.JSONDecodeError as e: die(f"JSON が壊れている: {e}\n{m.group(1)[:1500]}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="intake", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("source", help="自由文のファイル。- で標準入力")
+    ap.add_argument("--pj"); ap.add_argument("--kind"); ap.add_argument("--model"); ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    raw = sys.stdin.read() if a.source == "-" else pathlib.Path(a.source).read_text(encoding="utf-8")
+    if not raw.strip(): die("入力が空")
+    header, text = parse_header(raw)
+    fixed = {k: v for k, v in {"pj": a.pj or header.get("pj"), "kind": a.kind or header.get("kind")}.items() if v}
+    pjs, kds = projects(), kinds()
+    for k, allowed in (("pj", [n for n, _ in pjs]), ("kind", [n for n, _ in kds])):
+        if k in fixed and fixed[k] not in allowed: die(f"{k}={fixed[k]} は {allowed} のどれでもない")
+    model = a.model or routes().get("MODEL_judgment") or routes()["MODEL_default"]
+    res = ask_llm(text, pjs, kds, fixed, model)   # 整形（title / 完了条件）は常に LLM。pj / kind は fixed が勝つ
+    res.update(fixed)
+    res.setdefault("confidence", None); res.setdefault("reason", "")
+    for k in ("pj", "kind", "title", "body"):
+        if not res.get(k): die(f"LLM の出力に {k} が無い: {json.dumps(res, ensure_ascii=False)[:500]}")
+    if a.dry_run:
+        print(json.dumps(res, ensure_ascii=False, indent=2)); return
+    body = res["body"].strip() + f"\n\n---\n（intake {datetime.datetime.now().isoformat(timespec='minutes')} / model {model} / confidence {res['confidence']} / {res['reason']}）\n"
+    pr = re.match(r"^pr:\s*#?(\d+)", body); cmd = [str(KB), "new", res["pj"], res["kind"], res["title"][:70], "--body", "-"]
+    if pr: cmd += ["--pr", pr.group(1)]; body = re.sub(r"^pr:.*\n", "", body, count=1)
+    r = subprocess.run(cmd, input=body, text=True, capture_output=True, errors="replace")
+    if r.returncode != 0: die(f"kb new が失敗: {r.stderr.strip()}")
+    print(r.stdout.rstrip())
+    tid = r.stdout.split()[0]
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "a", encoding="utf-8") as f:
+        f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{tid}\t{res['pj']}\t{res['kind']}\t{res['confidence']}\t{model}\t{res['reason']}\n")
+
+
+if __name__ == "__main__":
+    main()
