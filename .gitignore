@@ -3,6 +3,7 @@
 *.token
 .env*
 !.env.example
+!workflow/kit/routes.env   # モデルの経路表。秘密ではない（設定）
 *.pem
 
 # 運用データ（枠組みとは別に置く。lib/aifactory_paths.py / ADR-0016）
