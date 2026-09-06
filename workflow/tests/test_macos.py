@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -437,18 +438,27 @@ class PullBackendKeyTest(unittest.TestCase):
     def env_body(self):
         return pathlib.Path(self.tmp / 'guest' / 'runtime.env').read_text(encoding='utf-8')
 
+    def guest_env(self):
+        """guest が source して得る値（quote の仕方には依らない形で見る）"""
+        out = {}
+        for line in self.env_body().splitlines():
+            k, _, v = line[len('export '):].partition('=')
+            out[k] = next(iter(shlex.split(v)), '')
+        return out
+
     # ---------- 完了条件 2: 環境の鍵は guest に届かない
     def test_a_key_left_in_the_runner_environment_never_reaches_the_guest(self):
         run = self.make_run()
         run.refresh_token()
-        body = self.env_body()
-        self.assertNotIn('leaked', body)
-        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN_FABLE='fake-token-pool-a'", body)
+        self.assertNotIn('leaked', self.env_body())
+        env = self.guest_env()
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_FABLE'], 'fake-token-pool-a')
+        self.assertEqual(env['CLAUDE_KEY_NAME_FABLE'], 'pool-a')
         for f in ('OPUS', 'SONNET', 'HAIKU'):
-            self.assertIn(f"CLAUDE_CODE_OAUTH_TOKEN_{f}='fake-token-pool-a'", body)
-            self.assertIn(f"CLAUDE_KEY_NAME_{f}='pool-a'", body)
-        self.assertIn("CLAUDE_KEY_NAME_FABLE='pool-a'", body)
-        self.assertIn("GH_TOKEN='ghs_fake-token-gh'", body)
+            self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_' + f], 'fake-token-pool-a')
+            self.assertEqual(env['CLAUDE_KEY_NAME_' + f], 'pool-a')
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-token-pool-a')   # 無印も系統の鍵で埋める
+        self.assertEqual(env['GH_TOKEN'], 'ghs_fake-token-gh')
         self.assertEqual(run.state['keys'], {'fable': 'pool-a', 'other': 'pool-a'})
         need = [a for a in self.picks()[0] if a.startswith('--need=')]
         self.assertEqual(need, ['--need=fable,other'])
@@ -462,7 +472,7 @@ class PullBackendKeyTest(unittest.TestCase):
         self.assertIn('--pj', first); self.assertEqual(first[first.index('--pj') + 1], 'kumitate')
         self.assertNotIn('--current=fable=pool-a,other=pool-a', first)
         self.assertIn('--current=fable=pool-a,other=pool-a', second)
-        self.assertIn("CLAUDE_KEY_NAME_FABLE='pool-a'", self.env_body())
+        self.assertEqual(self.guest_env()['CLAUDE_KEY_NAME_FABLE'], 'pool-a')
 
     # ---------- 完了条件 3: 無効化すると次の工程から別の鍵
     def test_disabling_the_key_moves_the_next_step_to_another_one(self):
@@ -472,7 +482,7 @@ class PullBackendKeyTest(unittest.TestCase):
         self.set_pool('pool-b')                                   # pool-a を無効化した
         run.refresh_token()
         self.assertEqual(run.state['keys'], {'fable': 'pool-b', 'other': 'pool-b'})
-        self.assertIn("CLAUDE_KEY_NAME_OPUS='pool-b'", self.env_body())
+        self.assertEqual(self.guest_env()['CLAUDE_KEY_NAME_OPUS'], 'pool-b')
         self.assertNotIn('pool-a', self.env_body())
 
     # ---------- 完了条件 4: 鍵が無ければ書かずに止まる

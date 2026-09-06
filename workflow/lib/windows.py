@@ -36,7 +36,11 @@ def backend(Run):
                     "$env:CLAUDE_CODE_GIT_BASH_PATH='C:/Program Files/Git/bin/bash.exe'; "
                     f"if (Test-Path -LiteralPath {quote(self.env_file)}) {{ "
                     f"$credentials=([IO.File]::ReadAllText({quote(self.env_file)}) | ConvertFrom-Json); "
-                    "$env:GH_TOKEN=$credentials.GH_TOKEN; $env:CLAUDE_CODE_OAUTH_TOKEN=$credentials.CLAUDE_CODE_OAUTH_TOKEN }; " + cmd)
+                    # runtime.env の中身は credentials() が決める（GH_TOKEN と系統別の Claude の鍵と CLAUDE_KEY_NAME_*）。
+                    # 2 つ決め打ちで写していたので鍵プールの系統別の鍵が guest に届かず、全モデルが同じ 1 本で動いていた（391）。
+                    # 名前は credentials() が作る固定名だけだが、環境変数として妥当な名前に限ってから入れる
+                    "$credentials.PSObject.Properties | ForEach-Object { "
+                    "if ($_.Name -match '^[A-Za-z_][A-Za-z0-9_]*$') { Set-Item -Path ('env:' + $_.Name) -Value $_.Value } } }; " + cmd)
 
         def write_remote(self, remote, data):
             if self.dry: return

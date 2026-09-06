@@ -316,6 +316,9 @@ class Run:
     # backend は Run クラスしか受け取らないので、例外の種類はクラス属性で渡す（チケット 373）
     PoolBusy = PoolBusy
     PoolTimeout = PoolTimeout
+    # 鍵プールに要る用途の鍵が無いときの例外と、そのとき保全する wip の文言（pull backend が使う。チケット 391）
+    NoKey = NoKey
+    WIP_KEY_MESSAGE = WIP_KEY_MESSAGE
 
     def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
