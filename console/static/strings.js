@@ -36,7 +36,8 @@ const T = {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
     "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
-    "lentTo": "貸出先", "power": "稼働状態"
+    "lentTo": "貸出先", "power": "稼働状態",
+    "poolDefined": "定義", "poolActual": "実体", "free": "空き"
   },
 
   "label": {
@@ -114,8 +115,10 @@ const T = {
     "count": "{n} 台", "countShared": "{n} 件（VM は {m} 台）", "sharedBadge": "共有",
     "sharedWith": "チケット {tasks} と同じ VM です。",
     "sharedWarn": "VM {vm}（{vmid}）がチケット {tasks} に同時に貸出中です。同じ VM なので 2 台ではありません。実際の重複か表示のずれかを「一覧を取り直す」で確かめ、どのチケットの作業を残すか決まるまで返却しないでください。",
-    "leasesOnPool": "貸出 {n} 件", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
-    "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした"
+    "leasesOnPool": "貸出 {n} 件", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
+    "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした",
+    "actualAt": "実体は {t} 取得", "actualStale": "実体は {t} 取得（{n} 分前）", "actualNever": "実体はまだ取っていません",
+    "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
   "config": { "roles": "役割:" },
@@ -173,7 +176,9 @@ const T = {
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
     "lsAxes": "返却しても VM は止めないので、貸出が 0 台でも起動中の VM が並びます。",
     "lsFailed": "Proxmox に届かなかったか、ssh が切れました。ジョブの記録を見てから「一覧を取り直す」を押してください。",
-    "pjPool": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
+    "pjPool": "定義は設定の台数、実体は Proxmox にある VM の台数です。実体が定義より少ないと、定義の数だけ同時に走らせても貸出のときに空きなしで止まります。",
+    "pjPoolMore": "空きは実体から貸出を引いた数です。snapshot clean の無い VM は一覧からは分からないので、空きに数えたまま貸出で飛ばされることがあります。",
+    "pjPoolYml": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",

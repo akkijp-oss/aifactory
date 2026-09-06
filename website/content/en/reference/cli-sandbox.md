@@ -11,6 +11,7 @@ sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          roll back to snapshot clean (stays lent, env re-injected)
 sandbox release <task-id> [--force]  roll back and return (--force: drop from the ledger even if the rollback failed)
 sandbox ls                       list the pool VMs (who it is lent to / IP / power state)
+sandbox status [pj]              pool sizes (defined / actual / lent / free)
 ```
 
 | Operation | What it does | Fails when |
@@ -21,6 +22,7 @@ sandbox ls                       list the pool VMs (who it is lent to / IP / pow
 | `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean`; the rollback failed (exits non-zero, the VM stays lent) |
 | `release` | reset → remove DNS → delete from `state.json`. On rollback lock contention it waits and retries, 3 times 10 seconds apart by default (`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`), printing every failure to stderr | The rollback failed (exits non-zero and keeps the entry in `state.json`; the message tells you what to do next). `--force` deletes the entry even when the rollback failed, for a VM you fixed by hand |
 | `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it, so `running` rows appear even when nothing is lent | |
+| `status` | `PJ DEFINED ACTUAL LENT FREE`. DEFINED is the configured size (`SANDBOX_POOL_PER_PJ`, default 3), ACTUAL is how many VMs really exist on Proxmox, LENT is how many the ledger hands out, FREE is `ACTUAL - LENT` (floored at 0). Pass `pj` to print only that row | |
 
 Example `sandbox ls` output:
 
@@ -29,6 +31,22 @@ TASK     VM             VMID   IP           STATUS    SINCE
 204      sb-kumitate-01 9204   10.77.1.4    running   2026-09-06T12:00:07+09:00
 -        sb-kumitate-02 9205   10.77.1.5    running
 ```
+
+The *defined* size (a setting) and the *actual* size (how many VMs exist on Proxmox) are different numbers. Start as many runs as the defined size while the actual size is smaller, and the extra ones fail in `take` with *no free VM*. `sandbox status` keeps the two apart:
+
+```
+PJ             DEFINED  ACTUAL  LENT  FREE
+aifactory      3        2       2     0
+kumitate       3        3       0     3
+```
+
+A `take` that finds nothing free prints the breakdown and the next move:
+
+```
+[error] pj=aifactory に空きなし: 定義 3 台・実体 2 台・貸出 2 台（未構築 1 台 / clean 無し 0 台）。返却を待つ（sandbox ls）か、proxmox/40-pool.sh aifactory 1 で足してください
+```
+
+*clean 無し* counts VMs skipped because they have no `clean` snapshot. `sandbox ls` cannot see that, so those VMs still count as free in the console and in `sandbox status`.
 
 ## Operational helpers (outside the contract)
 

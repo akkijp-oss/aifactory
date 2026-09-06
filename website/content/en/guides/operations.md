@@ -43,7 +43,8 @@ When you add permissions to the App (such as Actions: Read), each installation m
 | Task | Command |
 |---|---|
 | Lending status | `sandbox ls` |
-| `take` fails with no free VM | Check `sandbox ls` → `release` what is not needed. If still short, grow the pool |
+| Compare the defined and actual pool sizes | `sandbox status [pj]` (`PJ DEFINED ACTUAL LENT FREE`). The console sandbox screen and the `sandbox_status` MCP tool show the same four numbers |
+| `take` fails with no free VM | Read the breakdown in the error (defined / actual / lent / not built / no clean snapshot) → `release` what is not needed; grow the pool if the actual size is short |
 | Grow the pool | `TPL_VMID=911x sandbox/proxmox/run.sh 40-pool.sh <pj> <count>` → `50-firewall.sh`. Watch `data%` in `lvs pve/data` |
 | Rebuild a dirty VM | `qm destroy <vmid>` → `40-pool.sh`. A VM without `clean` cannot `reset` |
 | Never touch lent VMs | Read `~/.config/sandbox/state.json` and skip them (`50-firewall.sh` accepts `LENT=`) |
