@@ -41,6 +41,15 @@ class SandboxTakeTest(unittest.TestCase):
                 'die() { echo "[error] $*" >&2; exit 1; }\n' % (self.dir, self.state))
         return head + body + fakes + tail
 
+    def ls_script(self):
+        """cmd_ls だけを Proxmox 抜きで走らせる（pve_vms / pool_ip を偽装）"""
+        text = SCRIPT.read_text()
+        body = text[text.index('cmd_ls() {'):text.index('case "${1:-}" in')]
+        return (self.script(fakes=FAKES + 'SB_PREFIX=sb-t\n'
+                            'pve_vms() { echo "9213 sb-t-pj-01 running"; }\n'
+                            'pool_ip() { echo 10.77.1.1; }\n')
+                + body + 'cmd_ls\n')
+
     def run_take(self, tasks, fakes=FAKES, env=None):
         script = self.script(fakes, tail='cmd_take "$@"\n')
         procs = [subprocess.Popen(['bash', '-c', script, 'sandbox', 'pj', t], text=True,
@@ -86,6 +95,17 @@ class SandboxTakeTest(unittest.TestCase):
         self.assertNotEqual(rc, 0, out)
         self.assertIn('貸出中', err)
         self.assertEqual(list(self.state_json()), ['101'])
+
+    def test_ls_shows_one_row_per_vm_when_two_tasks_share_it(self):
+        """同じ vmid を 2 チケットが持つ台帳でも ls は VM 1 台 = 1 行。TASK 列は「221,222」（237）"""
+        pathlib.Path(self.state).write_text(
+            '{"221":{"vmid":9213,"name":"sb-t-pj-01","ip":"10.77.1.1","pj":"pj","since":"2026-09-06T10:00:00+09:00"},'
+            ' "222":{"vmid":9213,"name":"sb-t-pj-01","ip":"10.77.1.1","pj":"pj","since":"2026-09-06T11:00:00+09:00"}}')
+        r = subprocess.run(['bash', '-c', self.ls_script()], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = [l.split() for l in r.stdout.splitlines() if l.strip() and not l.startswith('TASK')]
+        self.assertEqual(len(rows), 1, r.stdout)                 # 行が割れない（console の parse_ls は列数の合わない行を捨てる）
+        self.assertEqual(rows[0][:4], ['221,222', 'sb-t-pj-01', '9213', '10.77.1.1'])
 
     def test_release_deletes_under_lock(self):
         pathlib.Path(self.state).write_text(
