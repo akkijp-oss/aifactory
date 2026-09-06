@@ -8,7 +8,8 @@
 #   sandbox ls                       貸出状況
 # 運用補助（契約外）:
 #   sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
-#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示）
+#   sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
+#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 #   sandbox token clear <pj|global> [claude|gh] トークンを消す
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
@@ -35,6 +36,8 @@ else ENV_FILE="$CONF_DIR/env"; fi
 if [[ "$ENV_FILE" == "$CONF_DIR/env" ]]; then PJ_DIR="$CONF_DIR/pj"; STATE="$CONF_DIR/state.json"
 else PJ_DIR="${ENV_FILE%.env}.pj"; STATE="${ENV_FILE%.env}.state.json"; fi
 PJ_DIR="${SANDBOX_PJ_DIR:-$PJ_DIR}"; STATE="${SANDBOX_STATE:-$STATE}"
+# 制御系（ctl LXC）のプロセス用 env。console の systemd が EnvironmentFile で読む。token rotate だけが触る（ADR-0029）
+CTL_ENV="${SANDBOX_CTL_ENV:-$HOME/.config/aifactory/ctl.env}"
 [[ -f "$ENV_FILE" ]] || { echo "[error] $ENV_FILE がありません（sandbox/templates/env.example をコピー）" >&2; exit 1; }
 # 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
 # シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
@@ -372,6 +375,39 @@ cmd_release() {
 
 mask() { local t=$1; [[ -z "$t" ]] && { echo "(未設定)"; return; }; echo "${t:0:8}…${t: -4} (${#t}文字)"; }
 
+# _write_key <file> <key> <val>: env ファイルの該当行だけを書き換える（val が空なら削除）。
+#   ctl.env には CONSOLE_TOKEN や説明コメントが同居するので、丸ごと上書きせず該当行と発行日コメントだけ差し替える
+_write_key() {
+  local file=$1 key=$2 val=$3 tmp
+  tmp=$(mktemp); grep -v -e "^$key=" -e "^# $key issued: " "$file" > "$tmp" || true
+  [[ -n "$val" ]] && printf '# %s issued: %s\n%s=%s\n' "$key" "$(date +%F)" "$key" "$val" >> "$tmp"
+  mv "$tmp" "$file"; chmod 600 "$file"
+}
+
+# _issued <file> <key>: 保存時に書いた発行日（YYYY-MM-DD）。無ければ空
+_issued() { [[ -f "$1" ]] && sed -n "s/^# $2 issued: //p" "$1" | tail -1 || true; }
+
+# _issued_days <YYYY-MM-DD>: 発行からの日数。GNU / mac のどちらの date でも計算できなければ空を返す（表示を落とさない）
+_issued_days() {
+  local e; e="$(date -j -f %Y-%m-%d "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null)" || return 0
+  [[ -n "$e" ]] || return 0
+  echo $(( ( $(date +%s) - e ) / 86400 ))
+}
+
+# _issued_note <key> <src>: token show の行末に足す「発行から N 日」。src は _src_claude / _src_gh の値
+_issued_note() {
+  local key=$1 src=$2 file="" d n
+  case "$src" in
+    "global(env)") file="$ENV_FILE" ;;
+    pj/*) file="$PJ_DIR/${src#pj/}" ;;
+    *) return 0 ;;
+  esac
+  d="$(_issued "$file" "$key")"
+  [[ -n "$d" ]] || { echo "発行日不明（token set / rotate で保存し直すと記録される）"; return 0; }
+  n="$(_issued_days "$d")"
+  [[ -n "$n" ]] && echo "発行から $n 日（issued $d）" || echo "issued $d"
+}
+
 # token set <pj|global> [claude|gh] : 対話入力（エコー無し）で保存。ファイルは 600
 cmd_token() {
   local sub=${1:-}; shift || true
@@ -386,27 +422,74 @@ cmd_token() {
         val="${val//[$'\r\n']/}"
         [[ -n "$val" ]] || die "空のトークン"
       fi
-      local tmp; tmp=$(mktemp); grep -v "^$key=" "$file" > "$tmp" || true
-      [[ -n "$val" ]] && printf '%s=%s\n' "$key" "$val" >> "$tmp"
-      mv "$tmp" "$file"; chmod 600 "$file"
+      _write_key "$file" "$key" "$val"
       echo "[ok] $key を $file に$([[ "$sub" == set ]] && echo 保存 || echo 削除)"
       if [[ "$scope" != global ]]; then
         local lent; lent="$(jq -r --arg p "$scope" 'to_entries[] | select(.value.pj==$p) | .key' "$STATE" | tr '\n' ' ')"
         [[ -n "$lent" ]] && echo "[hint] 貸出中の task ($lent) に反映するには: sandbox reinject --all（VM 内の claude は再起動が必要）"
+        true
       fi ;;
+    rotate)
+      # 1 回の入力で global・鍵を持つ全 PJ・ctl.env を差し替える（ADR-0029）。
+      # 順序は「ファイル更新 → 一覧 → console restart → reinject」。後段が失敗しても、更新できた場所は一覧に残す
+      local kind=${1:-claude} key
+      case "$kind" in claude) key=CLAUDE_CODE_OAUTH_TOKEN;; gh) key=GH_TOKEN;; *) die "kind は claude か gh";; esac
+      local is_ctl=0; [[ -f "$CTL_ENV" ]] && is_ctl=1
+      (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
+      local val=""
+      if [[ -t 0 ]]; then read -rs -p "$key（global・全 PJ・ctl.env をまとめて更新）: " val; echo; else val="$(cat)"; fi
+      val="${val//[$'\r\n']/}"
+      [[ -n "$val" ]] || die "空のトークン"
+      local n=0 skip=0 f
+      _write_key "$ENV_FILE" "$key" "$val"; echo "[updated] $ENV_FILE (global)"; n=$((n+1))
+      for f in "$PJ_DIR"/*.env; do
+        [[ -f "$f" ]] || continue
+        if grep -q "^$key=" "$f"; then _write_key "$f" "$key" "$val"; echo "[updated] $f"; n=$((n+1))
+        else echo "[skip]    $f（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
+      done
+      local ctl_done=0
+      if (( is_ctl )); then
+        if grep -q "^$key=" "$CTL_ENV"; then _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV"; n=$((n+1)); ctl_done=1
+        else echo "[skip]    $CTL_ENV（$key の行が無い）"; skip=$((skip+1)); fi
+      else
+        echo "[skip]    $CTL_ENV（無し）"
+      fi
+      echo "$n 箇所更新 / $skip 箇所 skip   $key = $(mask "$val")"
+      if (( ctl_done )); then
+        # console は起動時に ctl.env を読むので、intake の claude -p に効かせるには restart が要る
+        # （aifactory-gh-refresh.timer は oneshot で毎回読み直すので不要）
+        local sudo=""; [[ $EUID -eq 0 ]] || sudo="sudo"
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files aifactory-console.service 2>/dev/null | grep -q aifactory-console; then
+          if [[ -z "$sudo" ]] || sudo -n true 2>/dev/null; then
+            if $sudo systemctl restart aifactory-console; then echo "[ok] aifactory-console を restart した"
+            else echo "[要手動] restart に失敗。次のコマンドを実行してください: sudo systemctl restart aifactory-console"; fi
+          else
+            echo "[要手動] 次のコマンドを実行してください: sudo systemctl restart aifactory-console"
+          fi
+        else
+          echo "[hint] systemd に aifactory-console が無い。console を動かしているなら手で再起動してください"
+        fi
+      fi
+      # 起動時に読んだ古い値が reinject に混ざらないよう、この実行の中でも新しい値に揃える
+      case "$kind" in claude) CLAUDE_CODE_OAUTH_TOKEN="$val";; gh) GH_TOKEN="$val";; esac
+      local ids; ids="$(jq -r 'keys[]' "$STATE")"
+      if [[ -n "$ids" ]]; then echo "--- 貸出中 VM に再注入"; cmd_reinject --all
+      else echo "貸出中の task なし（reinject 不要）"; fi ;;
     show)
       local pj=${1:-} pjfile=""
       if [[ -n "$pj" ]]; then load_pj "$pj"; pjfile="$PJ_DIR/$pj.env"; [[ -f "$pjfile" ]] || pjfile="$pjfile (無し)"; fi
+      if [[ -f "$CTL_ENV" ]]; then echo "host: 制御系（ctl.env あり）。トークンの差し替えは sandbox token rotate"
+      else echo "host: 手元（ctl.env なし）。Mac 運用は停止中 → 差し替えは制御系 LXC で実行してください"; fi
       echo "scope: ${pj:-global}   files: $ENV_FILE${pjfile:+ + $pjfile}"
-      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}"
+      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}  $(_issued_note CLAUDE_CODE_OAUTH_TOKEN "${_src_claude:-}")"
       if ghapp_ready && [[ -n "${GH_REPO:-}" ]]; then
         echo "GH_TOKEN:                GitHub App が take 時に払い出す（${GH_REPO} 限定・1 時間）$([[ -n "${GH_TOKEN:-}" ]] && echo "  ※静的 GH_TOKEN も ${_src_gh} にあるが App が優先")"
       else
-        echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")"
+        echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")  $(_issued_note GH_TOKEN "${_src_gh:-}")"
       fi
       echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
       [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
-    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token show [pj]" ;;
+    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token rotate [claude|gh] / sandbox token show [pj]" ;;
   esac
 }
 
@@ -486,5 +569,5 @@ case "${1:-}" in
   token) shift; cmd_token "$@" ;;
   reinject) shift; cmd_reinject "$@" ;;
   gh-app) shift; cmd_gh_app "$@" ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
