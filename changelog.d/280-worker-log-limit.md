@@ -1,0 +1,3 @@
+### Fixed
+- **worker: 1 操作のログが 16 MiB を超えても操作を `uncertain` にしない**。従来は上限に達した時点で `tart exec` への出力が切れ、ゲストのコマンドは走り続けているのに結果が `uncertain` になり、管理者が `resolve --confirmed-stopped` するまで worker が lease ごと塞がっていた（`computer_use` の run で screenshot を 16 回ほど呼ぶと必ず起きる）。上限に達したログは切り捨てて `[operation log truncated at 16 MiB; later output was discarded]` の 1 行を残し、結果は exit code に従って `succeeded` / `failed` になり、`truncated: true` が付く。あわせて、stream-json に載る画像の base64 を記録前に `[image N bytes]` へ置き換えるので、GUI 操作をしても上限に届きにくくなった。画像はゲスト側のファイルとして残る（ADR-0034）。
+- worker を更新するときは制御系（`workers/lib/pull.py`）も同時に更新する。古い制御系は `truncated` の付いた結果を受け付けない。
