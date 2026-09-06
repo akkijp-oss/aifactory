@@ -501,6 +501,52 @@ class ApiTest(unittest.TestCase):
         T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
         self.assertIn(T["btn"]["redo"], T["help"]["runDone"], "完了時の案内が、隣に出すボタンの名前と一致していない")
 
+    def test_ticket_detail_reads_body_before_the_forms(self):
+        """チケット詳細は「読む → 状況 → 操作 → 記録」の順（チケット 377）。
+
+        幅 1100px 以下では grid2 が 1 カラムになり DOM 順がそのまま表示順・読み上げ順になるので、
+        CSS の order ではなく DOM の並びで本文を先に置く。JS を動かす基盤が無いのでソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(")
+        body = app[i:app.index("\n}", i)]
+        self.assertIn('<div class="grid2">', body, "2 カラムをやめている（広い画面で本文の 1 行が長くなる）")
+        # 本文パネルが操作のどの塊よりも前にある（狭い画面と読み上げでは DOM 順が読む順）
+        at = lambda key: body.index(key)
+        for key in ("T.h.ops", "T.h.run", "T.h.move", "T.h.fix", "T.h.runs", "T.h.history"):
+            self.assertLess(at("T.h.body"), at(key), f"本文より前に {key} のパネルが並んでいる")
+        self.assertLess(at("T.h.body"), at("T.h.attachments"), "添付が本文より前にある")
+        self.assertLess(at("T.h.attachments"), at("T.h.ops"), "添付と本文の間に操作が割り込んでいる（353 / 378 の位置関係）")
+        self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
+        # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
+        self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
+        for key in ("T.board.liveStep", "T.board.liveNext"):
+            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない）")
+        self.assertRegex(body, r"nowPanel[^\n]*runLink\(live\.name\)", "実行状況から実行記録へ移る入口が無い")
+        # 実行・状態変更・項目編集は 1 枚の操作領域にまとまり、既存の操作は全部残る
+        ops = body[at("T.h.ops"):at("T.h.runs")]
+        for act in ("runBtn(T.btn.run", "moves.join(", 'data-act="set"', 'data-act="sync"', "runBtn(T.btn.dryRun"):
+            self.assertIn(act, ops, f"操作領域に {act} が無い（既存の操作を落としている）")
+        for act in ('data-act="run"', 'data-act="status"', 'data-act="attach"', 'data-act="detach"'):
+            self.assertIn(act, app, f"{act} の操作が消えている")
+        # 詳細設定は畳む。「実行する」と案内は畳まない（素の details なので Tab / Enter で届く）
+        self.assertIn("T.label.runOptions", ops, "実行の詳細設定を畳む summary が無い")
+        det = ops.index("<details")
+        self.assertLess(ops.index("runBtn(T.btn.run"), det, "「実行する」が折りたたみの中に入っている")
+        self.assertLess(ops.index("esc(runHint)"), det, "実行の案内が折りたたみの中に入っている")
+        for key in ("run-wf", "run-keep", "run-resume", "T.btn.dryRun"):
+            self.assertGreater(ops.index(key), det, f"{key} が折りたたみの外に残っている")
+        # 強いボタンは操作領域に 1 つだけ（実行も始まるのか、状態だけ変わるのかを色で見分ける）
+        self.assertNotRegex(ops[:ops.index("T.h.fix")], r"stBtn\('(start|review|done|block)'[^)]*primary",
+                            "状態を進めるボタンに primary が残っている（実行するボタンと見分けられない）")
+        moves = body[body.index("const moves = "):body.index("const runHint")]
+        self.assertNotIn("primary", moves, "moves に primary が残っている")
+        self.assertRegex(moves, r"done: \[\]", "完了ずみで状態の塊にも reopen が残っている（同じボタンが 2 個並ぶ）")
+        for key in ("T.help.moveOnly", "T.help.moveNone", "T.help.moveUndo"):
+            self.assertIn(key, ops, f"{key} が無い（状態変更の効果と次の一手を言っていない）")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.panel h3 \{", "操作領域の小見出しの指定が無い")
+
     def test_intake_keeps_draft_across_navigation(self):
         """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
 

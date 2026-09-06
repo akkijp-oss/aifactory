@@ -124,6 +124,14 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; margin-bottom: 14px; }
 .panel h2 { font-size: 14px; margin: 0 0 10px; }
 .panel h2 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+/* 操作領域（チケット詳細）は 1 枚のパネルの中を h3 で「実行 / 状態 / 項目」に分ける。h2 より一段小さく、上の塊との間を空ける（377） */
+.panel h3 { font-size: 13px; margin: 18px 0 8px; }
+.panel h3:first-of-type { margin-top: 0; }
+.panel h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+.panel.ops > h3 { border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.panel.ops > h3:first-of-type { border-top: 0; padding-top: 0; }
+details.runopts { margin: 10px 0 0; }
+details.runopts > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .board { grid-template-columns: repeat(2, 1fr); } .flow { grid-template-columns: 1fr 1fr; } .flow .gap { display: none; } }
 @media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } }
@@ -165,6 +173,7 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .panel.note { padding: 8px 14px; }
 .panel.next { border-left: 3px solid var(--accent); }
 .panel.next p { margin: 0 0 10px; }
+.panel.next .line { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
 .flash .st { animation: flash 1.2s ease-out; }
 @keyframes flash { 0% { box-shadow: 0 0 0 0 rgba(11,93,93,.55); } 100% { box-shadow: 0 0 0 12px rgba(11,93,93,0); } }
 select, input[type=text], input[type=number], textarea { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 9px; background: var(--panel); }
