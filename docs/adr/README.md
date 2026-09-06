@@ -50,3 +50,4 @@
 - [0036: 止まった run の再開は「新しい VM で、wip ブランチの続きから、指定の step」で行う](0036-resume-from-step-on-a-new-vm.md)
 - [0037: MCP のツールに annotations を付ける／`sandbox_status` は古ければ裏で `sandbox ls` を起こす](0037-mcp-tool-annotations-and-sandbox-status-refresh.md)
 - [0038: 貸出直後の準備は `project.yml` の `prepare` で行い、「base でも赤いゲート」は runner が base で回して確かめる](0038-prepare-hook-and-base-red-gate-check.md)
+- [0039: 赤いゲートのログは `work/gates/<名前>.log` に残し、実装役へ戻す依頼文の抜粋はそこから作る](0039-gate-logs-kept-in-work-gates.md)

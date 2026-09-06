@@ -50,6 +50,7 @@ In the "git" column, **workspace** means it lives in `$AIFACTORY_WORKSPACE` (def
 | Output of CLIs the console started | `console/jobs/<id>/log` (relocate with `CONSOLE_JOBS`) | The Web console | outside |
 | Code step output | `code-<step>-<n>.log` | Humans | workspace |
 | Artifacts (plan.md / report.md / review.md / summary.md / gates.txt) | `~/work/<id>/` in the VM → `work/` in the same directory on release | The next step, the reviewer, humans | workspace |
+| Excerpt of a red gate's log | `~/gates/<name>.log` in the VM → written to `~/work/<id>/gates/` by gates.sh → `work/gates/` in the same directory | The implementer (the excerpt goes into the prompt), the reviewer, humans | workspace |
 | VM lending | `~/.config/sandbox/state.json` (`sandbox ls`) | sandbox CLI, dispatch, runner, other sessions | outside |
 | Filing and dispatch logs | `workspace/logs/intake.log` / `workspace/logs/dispatch.log` | Humans | workspace |
 | Build progress and real-machine checks | `sandbox/STATUS.md` | The next session | repo |

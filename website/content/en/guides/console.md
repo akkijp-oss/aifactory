@@ -134,7 +134,7 @@ claude mcp reset-project-choices   # approve again
 
 1. `ticket_run(id)` returns a job (`kb run` takes 5 to 80 minutes).
 2. Watch it with `job_show(id, tail=2000)` or `run_show(name)` every few tens of seconds. `job_wait` waits 60 s by default and 300 s at most, and returns the job still running if it has not finished, so call it again. Other tools stay responsive while it waits (ADR-0028), but a client that ignores annotations serialises the calls on its side. If it looks stuck, use a shorter `timeout_s` or poll with `job_show`.
-3. When it is over, read `outcome` from `run_show(name)` and `sync_preview` from `ticket_show(id)`, then go deeper with `read_file(path)` into `agent-*.log` / `code-*.log` / `work/*.md`.
+3. When it is over, read `outcome` from `run_show(name)` and `sync_preview` from `ticket_show(id)`, then go deeper with `read_file(path)` into `agent-*.log` / `code-*.log` / `work/*.md`. If a gate was red, `work/gates/<gate>.log` holds what it printed (error lines and the tail), so you do not have to ssh into the VM to find out why.
 4. For free VMs, call `sandbox_status`. When the `sandbox ls` values are older than 600 s it starts a refresh job in the background and returns the old values with `ls_refreshing: true` and `ls_refresh_job` (the next call carries a fresh `pool_actual` / `free`; if it cannot start one, `ls_refresh_error` says why). The task, VM name, IP, lease start and power state of every lent VM are in `leases[]`, so you no longer have to read `state.json` over ssh.
 
 Resources: `aifactory://board` (the board), `aifactory://ledger` (the ledger) and `aifactory://ticket/<id>` (a ticket body).

@@ -54,7 +54,7 @@ flowchart TD
 
 | Symptom | Look at | Fix |
 |---|---|---|
-| Gates red | `code-gates-<n>.log`, `work/gates.txt`, `~/gates/<name>.log` in the VM | Already red on base: `known_red_gates`. Environment-dependent (missing GLB, macOS-only baseline images): make informational |
+| Gates red | `code-gates-<n>.log`, `work/gates.txt`, `work/gates/<name>.log` (an excerpt of `~/gates/<name>.log` in the VM, readable after the VM is returned) | Already red on base: `known_red_gates`. Environment-dependent (missing GLB, macOS-only baseline images): make informational |
 | `pr-create.sh` says "no commits" | `code-pr-<n>.log`, `work/report.md` | The report should say why the implementer did not commit |
 | push returns 403 | `code-pr-<n>.log` | GitHub App token expired (one hour) or not installed. The runner reissues before code steps; if it still fails, `sandbox gh-app status` |
 | merge says "conflict markers remain" | `code-merge-<n>.log` | Back to resolve. Past the limit, a human resolves |

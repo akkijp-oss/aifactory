@@ -56,6 +56,7 @@ The reviewer looks at scope, correctness, safety, project-specific points and ga
 | `report.md` | implementer | What changed, tests run and results, findings outside the scope, judgement calls |
 | `review.md` | reviewer | PASS / FAIL, reasons, what to fix, notes for humans |
 | `gates.txt` | gates.sh | PASS / FAIL / INFO per gate and where the log is |
+| `gates/<name>.log` | gates.sh | What a red gate actually printed (excerpt of error lines plus the last 300 lines, up to 200KB per gate). Readable after the VM is returned |
 | `summary.md` | judge (research workflow) | The answer and what to do next |
 
 ## Narrowing down a failure
@@ -73,7 +74,7 @@ flowchart TD
 
 | Symptom | Read | Common cause |
 |---|---|---|
-| Gates red, went to `human` | `code-gates-<n>.log`, `~/gates/<name>.log` in the VM (in `work/` after collection) | Already red on base (add to `known_red_gates`), environment-dependent tests, missing dependencies |
+| Gates red, went to `human` | `code-gates-<n>.log`, `work/gates/<name>.log` (an excerpt of `~/gates/<name>.log` in the VM) | Already red on base (add to `known_red_gates`), environment-dependent tests, missing dependencies |
 | Review FAIL | `work/review.md` | Changes outside the scope, tests weakened to pass, migration not backward compatible |
 | Agent wrote no artifact, step failed | Tail of `agent-<step>-<n>.log` | Expired token, `timeout_min` exceeded, output location in the prompt overlooked |
 | `pr-create.sh` says "no commits" | `code-pr-<n>.log` | The implementer did not commit. `report.md` should say why |
