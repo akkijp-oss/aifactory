@@ -32,17 +32,20 @@ MAX_UPLOAD = core.attachments.MAX_TOTAL + 1024 * 1024   # これを超える POS
 
 
 def utf8(s):
-    """ヘッダーから来た文字列を UTF-8 として読み直す。email はヘッダーを ascii + surrogateescape で持つので、
-       ブラウザーが生の UTF-8 で送るファイル名（日本語）はここで元に戻す"""
-    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace") if isinstance(s, str) else s
+    """バイトを 1 対 1 で持つ latin-1 の文字列（下の parse_multipart を見ること）を UTF-8 として読み直す。
+       ブラウザーはファイル名を生の UTF-8 バイトでヘッダーに書くので、日本語の名前はここで元に戻る"""
+    return s.encode("latin-1", "replace").decode("utf-8", "replace") if isinstance(s, str) else s
 
 
 def parse_multipart(ctype, body):
     """multipart/form-data を (欄の辞書, [(ファイル名, バイト列)]) に解く。標準ライブラリの email で読む（cgi は 3.13 で消えた）。
 
+    email に **バイトのまま**渡すとヘッダーを ascii + replace で潰され、日本語のファイル名が壊れる。
+    latin-1 で 1 対 1 に文字列化してから渡し、ヘッダーは utf8() で、中身は raw-unicode-escape（get_payload(decode=True)）で戻す。
+
     ここは形を解くだけ。名前の sanitize も大きさの上限も lib/aifactory_attachments.py（core 経由）に任せる"""
-    raw = b"Content-Type: " + ctype.encode("utf-8", "surrogateescape") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
-    msg = email.message_from_bytes(raw)
+    raw = "Content-Type: " + ctype + "\r\nMIME-Version: 1.0\r\n\r\n" + body.decode("latin-1")
+    msg = email.message_from_string(raw)
     if not msg.is_multipart(): raise ApiError("multipart/form-data として読めませんでした（境界が見つかりません）", 400)
     fields, files = {}, []
     for part in msg.get_payload():
