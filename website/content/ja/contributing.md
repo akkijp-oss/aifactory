@@ -1,6 +1,6 @@
 # 貢献と AI セッション向けの約束
 
-このリポジトリは Apache-2.0 で公開されています（[akkijp/aifactory](https://github.com/akkijp/aifactory)）。貢献は GitHub の pull request で受けます。人間（メンテナや貢献者）と複数の AI セッション（Claude Code）が交代で、ときに同時に作業する前提で書かれていて、人でも AI でも、作業の入り方は同じです。リポジトリ直下の `CONTRIBUTING.md`（貢献の手順）と `SECURITY.md`（脆弱性の報告先）が正本で、このページはその読み下しです。
+このリポジトリは Apache-2.0 で公開されています（[akkijp-oss/aifactory](https://github.com/akkijp-oss/aifactory)）。貢献は GitHub の pull request で受けます。人間（メンテナや貢献者）と複数の AI セッション（Claude Code）が交代で、ときに同時に作業する前提で書かれていて、人でも AI でも、作業の入り方は同じです。リポジトリ直下の `CONTRIBUTING.md`（貢献の手順）と `SECURITY.md`（脆弱性の報告先）が正本で、このページはその読み下しです。
 
 ## 現在地に立つ
 

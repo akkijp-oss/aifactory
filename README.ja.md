@@ -2,7 +2,7 @@
 
 自前で持てる**ソフトウェアファクトリー**。チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストと lint を回し、人間は最後にレビューだけする。
 
-[English README](README.md) · [ドキュメントサイト](https://akkijp.github.io/aifactory/) · [設計判断（ADR）](docs/adr/) · [変更履歴](CHANGELOG.md)
+[English README](README.md) · [ドキュメントサイト](https://akkijp-oss.github.io/aifactory/) · [設計判断（ADR）](docs/adr/) · [変更履歴](CHANGELOG.md)
 
 > 着想は Dan Isler（IndieDevDan）の講演 "FORGET Loop Engineering. Agentic Engineering is about THIS"。一言にすると「ループを作るのではなく **AI developer workflow** を設計せよ。エンジニアは冒頭のプランニングと末尾のレビューにだけ出て、間はエージェントとコードに任せろ」。
 
@@ -55,7 +55,7 @@ flowchart LR
 ## まず動かす（VM 不要）
 
 ```bash
-git clone https://github.com/akkijp/aifactory.git && cd aifactory
+git clone https://github.com/akkijp-oss/aifactory.git && cd aifactory
 pip install pyyaml jsonschema
 
 # 運用データは workspace/（git 追跡外）に置かれる。AIFACTORY_WORKSPACE で外にも置ける

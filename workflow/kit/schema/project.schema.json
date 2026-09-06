@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/akkijp/aifactory/workflow/kit/schema/project.schema.json",
+  "$id": "https://github.com/akkijp-oss/aifactory/workflow/kit/schema/project.schema.json",
   "title": "aifactory project definition ($AIFACTORY_WORKSPACE/projects/<pj>/project.yml or examples/projects/<pj>/project.yml)",
   "description": "PJ 固有の事実と方針。手順（workflow）は常備側にあり、ここには『どこに何があるか』『何を守るか』だけを書く。",
   "type": "object",

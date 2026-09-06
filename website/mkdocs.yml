@@ -4,9 +4,9 @@
 site_name: aifactory
 site_description: チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストを回し、人間は最後にレビューだけするソフトウェアファクトリー
 site_author: aifactory contributors
-site_url: https://akkijp.github.io/aifactory/
-repo_url: https://github.com/akkijp/aifactory
-repo_name: akkijp/aifactory
+site_url: https://akkijp-oss.github.io/aifactory/
+repo_url: https://github.com/akkijp-oss/aifactory
+repo_name: akkijp-oss/aifactory
 edit_uri: edit/main/website/content/
 docs_dir: content
 site_dir: site

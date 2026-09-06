@@ -14,7 +14,7 @@ STATE="$(openssl rand -hex 12)"
 mkdir -p "$D"; chmod 700 "$D"
 [[ -f "$D/app.env" ]] && { echo "[skip] 既に $D/app.env がある。作り直すなら先に消す"; cat "$D/app.env"; exit 0; }
 
-python3 - "$W" "$STATE" "$NAME" "$PORT" "${GH_APP_URL:-https://github.com/akkijp/aifactory}" <<'EOF'
+python3 - "$W" "$STATE" "$NAME" "$PORT" "${GH_APP_URL:-https://github.com/akkijp-oss/aifactory}" <<'EOF'
 import json,sys,html
 W,state,name,port,app_url=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]
 manifest={

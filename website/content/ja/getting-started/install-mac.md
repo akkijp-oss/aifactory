@@ -5,7 +5,7 @@
 ## 1. リポジトリを clone する
 
 ```bash
-git clone git@github.com:akkijp/aifactory.git
+git clone git@github.com:akkijp-oss/aifactory.git
 cd aifactory
 ```
 

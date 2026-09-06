@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/akkijp/aifactory/workflow/kit/schema/workflow.schema.json",
+  "$id": "https://github.com/akkijp-oss/aifactory/workflow/kit/schema/workflow.schema.json",
   "title": "aifactory workflow definition",
   "description": "チケット種別ごとの手順。step の並びと分岐。担い手は role（agent）か code のどちらか。文章（役割の憲法・依頼文）は Markdown の別ファイルを参照する。",
   "type": "object",

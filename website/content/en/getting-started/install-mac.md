@@ -5,7 +5,7 @@ What this page tells you: from cloning the repository to having the five Mac-sid
 ## 1. Clone the repository
 
 ```bash
-git clone git@github.com:akkijp/aifactory.git
+git clone git@github.com:akkijp-oss/aifactory.git
 cd aifactory
 ```
 

@@ -1,6 +1,6 @@
 # Contributing and rules for AI sessions
 
-This repository is published under Apache-2.0 ([akkijp/aifactory](https://github.com/akkijp/aifactory)). Contributions come in as GitHub pull requests. It is written on the assumption that humans (the maintainer and contributors) and several AI sessions (Claude Code) take turns, and sometimes work at the same time; humans and AIs enter the work the same way. `CONTRIBUTING.md` (how to contribute) and `SECURITY.md` (where to report vulnerabilities) at the repository root are the sources of truth; this page is a rendering of them.
+This repository is published under Apache-2.0 ([akkijp-oss/aifactory](https://github.com/akkijp-oss/aifactory)). Contributions come in as GitHub pull requests. It is written on the assumption that humans (the maintainer and contributors) and several AI sessions (Claude Code) take turns, and sometimes work at the same time; humans and AIs enter the work the same way. `CONTRIBUTING.md` (how to contribute) and `SECURITY.md` (where to report vulnerabilities) at the repository root are the sources of truth; this page is a rendering of them.
 
 ## Find your position
 

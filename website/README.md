@@ -1,6 +1,6 @@
 # website: aifactory ドキュメントサイト
 
-リポジトリを初めて見た人が、導入・使い方・仕組み・リファレンスを一通り読めるようにした静的サイト。日本語（既定）と英語。公開先は https://akkijp.github.io/aifactory/ 。
+リポジトリを初めて見た人が、導入・使い方・仕組み・リファレンスを一通り読めるようにした静的サイト。日本語（既定）と英語。公開先は https://akkijp-oss.github.io/aifactory/ 。
 
 - ジェネレータ: [MkDocs](https://www.mkdocs.org/) + [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) + [mkdocs-static-i18n](https://ultrabug.github.io/mkdocs-static-i18n/)
 - 内容の置き場: `content/ja/`（正）と `content/en/`（訳）。同じファイル名で対にする

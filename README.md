@@ -2,7 +2,7 @@
 
 A self-hosted **software factory**: a ticket goes in, an agent plans and implements inside an isolated VM, code runs the tests and lints, and a human only reviews at the end.
 
-[日本語 README](README.ja.md) · [Documentation site](https://akkijp.github.io/aifactory/) · [Design decisions (ADR)](docs/adr/) · [Changelog](CHANGELOG.md)
+[日本語 README](README.ja.md) · [Documentation site](https://akkijp-oss.github.io/aifactory/) · [Design decisions (ADR)](docs/adr/) · [Changelog](CHANGELOG.md)
 
 > Inspired by Dan Isler's (IndieDevDan) talk *"FORGET Loop Engineering. Agentic Engineering is about THIS"*: do not build loops, design an **AI developer workflow**. The engineer shows up for planning at the start and review at the end; everything in between is agents and code.
 
@@ -53,7 +53,7 @@ On top: a local **Web console** (`console/bin/console`, Python stdlib, 127.0.0.1
 ## Quick start (no VM needed)
 
 ```bash
-git clone https://github.com/akkijp/aifactory.git && cd aifactory
+git clone https://github.com/akkijp-oss/aifactory.git && cd aifactory
 pip install pyyaml jsonschema
 
 # operational data lives in workspace/ (git-ignored); AIFACTORY_WORKSPACE moves it elsewhere
