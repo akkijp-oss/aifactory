@@ -147,6 +147,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if m: return ticket_action(int(m.group(1)), b)
         m = re.match(r"^tickets/(\d+)/run$", ep)
         if m: return ticket_run(int(m.group(1)), b)
+        m = re.match(r"^runs/(.+)/action$", ep)
+        if m: return run_action(urllib.parse.unquote(m.group(1)), b)
         if ep == "tickets": return ticket_new(b)
         if ep == "intake": return op_intake(b)
         if ep == "dispatch": return op_dispatch(b)

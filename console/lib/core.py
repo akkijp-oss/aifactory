@@ -218,6 +218,7 @@ def run_summary(d):
             "branch": s.get("branch"), "base": s.get("base"), "started": ts_aware(s.get("started")), "finished": ts_aware(s.get("finished")),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
             "resume_step": s.get("resume_step"), "resumed_from": s.get("resumed_from"), "resume": resume_command(task, s),
+            "human": s.get("human"),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
             "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
             "mtime": ts_file(st if st.exists() else d)}
@@ -230,7 +231,7 @@ def v0_summary(f):
     return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None,
             "from_name": False, "state_error": None, "runner": None, "workflow": "spin-v0",
             "started": ts_aware(started), "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
-            "resume_step": None, "resumed_from": None, "resume": None,
+            "resume_step": None, "resumed_from": None, "resume": None, "human": None,
             "mtime": ts_file(f)}
 
 
@@ -308,7 +309,7 @@ def gate_fails(p):
 def run_outcome(d, s, state, wf, files):
     """「結果・止まった工程・理由の在り処」を、今ある記録（history / loops / gates.txt / ログの有無）だけから導く。
        runner は停止の理由を自由文で残さないので、導けないものは unknown（＝画面では「記録にありません」）にする"""
-    o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
+    o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None, "human": None,
          "gate_fails": [], "fail_count": 0, "loops_hit": False, "job": None, "error_summary": None, "pr_url": s.get("pr_url"),
          "resume": s.get("resume")}   # 続きから回すコマンド（human で止まり wip が残っている run だけ。333）
     if s.get("kind") == "v0": o["reason"] = "v0"; return o
@@ -329,6 +330,14 @@ def run_outcome(d, s, state, wf, files):
         # VM の空きを待ったが出なかった run（チケット 242）。直す所は無く、チケットは未着手に戻っている
         if state.get("failure") == "wait_timeout":
             o["reason"] = "wait_timeout"; o["stopped_step"] = "wait-vm"; o["waited_s"] = int(state.get("waited_s") or 0)
+        return o
+    # 人間が後始末（wip から PR を作ってマージ・打ち切り）をした run（チケット 335）。runner が確定した result より後の事実なので、
+    # 止まった工程の話より先に言う。kb が state.json に足した `human` だけが根拠で、ここでは何も推し量らない（ADR-0038）
+    human = state.get("human")
+    if isinstance(human, dict) and s.get("finished"):
+        o["reason"] = "human_abandoned" if human.get("result") == "abandoned" else "human_done"
+        o["human"] = human; o["pr_url"] = human.get("pr_url") or o["pr_url"]
+        o["resume"] = None                     # 片が付いた run に「続きから回す」は出さない
         return o
     if state.get("_error") or (not hist and s.get("finished")): return o
     if not hist: return o
@@ -858,6 +867,29 @@ def ticket_action(tid, b):
     else: raise ApiError(f"操作 {act} はありません。start / review / done / reopen / block / set / append / sync のどれかを指定してください")
     rc, out, err = kb(*args, stdin=stdin)
     if rc != 0: raise ApiError((err or out).strip() or f"kb {act} が失敗 rc={rc}")
+    return {"rc": rc, "stdout": out, "stderr": err}
+
+
+def run_action(name, b):
+    """実行記録に人間の後始末を書く（kb run-note。チケット 335）。runner が確定した result は変えず `human` を足すだけで、
+       「人間が PR#n で仕上げた」という言い方は画面側が導く（ADR-0025 / ADR-0038）。
+       close は決着を初めて記録する（既に記録がある run は kb が断る）。note は書いた説明を直す（決着の別はそのまま）"""
+    act = b.get("action") or "close"
+    d = RUNS / name
+    if not d.is_dir() or not d.resolve().is_relative_to(RUNS.resolve()): raise ApiError(f"実行記録 {name} は見つかりません", 404)
+    text = b.get("text")
+    if act == "close":
+        result = b.get("result") or "done"
+        if result not in ("done", "abandoned"): raise ApiError("result は done（人間が仕上げた）か abandoned（打ち切った）のどちらかです")
+        args = ["run-note", name, "--result", result]
+    elif act == "note":
+        if not text or not str(text).strip(): raise ApiError("書き残す説明がありません。text に本文を入れてください")
+        args = ["run-note", name, "--force"]      # 決着の別と PR は、渡さなければ前の記録のまま
+    else: raise ApiError(f"操作 {act} はありません。close / note のどちらかを指定してください")
+    if b.get("pr") not in (None, ""): args += ["--pr", b["pr"]]
+    if text not in (None, ""): args += ["--text", str(text)]
+    rc, out, err = kb(*args)
+    if rc != 0: raise ApiError((err or out).strip() or f"kb run-note が失敗 rc={rc}")
     return {"rc": rc, "stdout": out, "stderr": err}
 
 

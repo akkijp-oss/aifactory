@@ -56,6 +56,7 @@ def t_ticket_show(a):
 def t_ticket_new(a): return core.ticket_new(a)
 def t_ticket_action(a): return core.ticket_action(arg_int(a, "id"), a)
 def t_ticket_run(a): return core.ticket_run(arg_int(a, "id"), a)
+def t_run_action(a): return core.run_action(a.get("name") or "", a)
 def t_intake(a): return core.op_intake(a)
 def t_dispatch(a): return core.op_dispatch(a)
 def t_run_list(a):
@@ -125,7 +126,7 @@ TOOLS = [
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
     ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ。run があれば sync_preview（状態を合わせたときの前後）も付く", schema({"id": INT}, ["id"]), t_ticket_show),
     ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR}, ["pj", "kind", "title"]), t_ticket_new),
-    ("ticket_action", "チケットの状態を進める・項目を直す（kb）。action: start / review / done / reopen / block（note 必須）/ set（kind・pr・note・status・run。note は空文字列で消せる。キーを渡さなければ触らない）/ append（text 必須・section 任意。本文の末尾に追記し history に残る）/ sync（run 記録から状態を取り直す。既定は書かずに前後を返すだけ）",
+    ("ticket_action", "チケットの状態を進める・項目を直す（kb）。done と set の pr は、紐づく run が human で止まったままなら run 記録にも「人間が仕上げた」を転記する（run_action と同じ内容）。action: start / review / done / reopen / block（note 必須）/ set（kind・pr・note・status・run。note は空文字列で消せる。キーを渡さなければ触らない）/ append（text 必須・section 任意。本文の末尾に追記し history に残る）/ sync（run 記録から状態を取り直す。既定は書かずに前後を返すだけ）",
      schema({"id": INT, "action": {"type": "string", "enum": ["start", "review", "done", "reopen", "block", "set", "append", "sync"]}, "note": STR, "kind": STR, "pr": INT, "status": STR, "run": STR,
              "text": {**STR, "description": "append する本文（append では必須）"}, "section": {**STR, "description": "append に付ける見出し。例 PM 補足"},
              "dry_run": {**BOOL, "description": "sync 専用。既定 true = 書かずに前後を返す。false を明示したときだけ状態とメモを上書きする"}}, ["id", "action"]), t_ticket_action),
@@ -140,6 +141,10 @@ TOOLS = [
              "wait": {**INT, "description": "VM に空きが無いとき最大 n 分待つ（満杯の PJ を飛ばさない）"}}), t_dispatch),
     ("run_list", "実行記録の一覧（$AIFACTORY_WORKSPACE/runs/）。既定は dry-run と退避分を除く", schema({"all": BOOL, "limit": INT}), t_run_list),
     ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
+    ("run_action", "人間が run の後始末をしたことを実行記録に残す（kb run-note）。human で止まった run を人が wip ブランチから PR にしてマージした・打ち切ったときに使う。runner が書いた result は変えず human だけを足すので、run_show と console の run 画面が「人間が PR#n で仕上げた」と読めるようになる。action: close（決着を記録する。result は done / abandoned、既定 done。既に記録があれば断る）/ note（記録済みの説明を書き直す。text 必須）",
+     schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}, "action": {"type": "string", "enum": ["close", "note"]},
+             "result": {"type": "string", "enum": ["done", "abandoned"], "description": "close の決着。既定 done"},
+             "pr": {**INT, "description": "人間が作ってマージした PR の番号"}, "text": {**STR, "description": "後始末の説明（run 画面に出る）"}}, ["name"]), t_run_action),
     ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数",
      schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
     ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧、直近の sandbox ls（成否問わず）と、最後に成功した回の VM 一覧（貸出先 / VM 名 / IP / 稼働状態 / pj）。templates[] のプールは 4 つに分かれる: pool_defined（設定の定義台数）/ pool_actual（最後に成功した ls に出た実体台数。ls が無ければ null）/ lent（貸出中の台数）/ free（空き = 実体 - 貸出、0 で下げ止まり）。実体が定義より少ないと unbuilt 台が未構築で、hint に足し方が入る（定義の数だけ同時に走らせると take が空きなしで落ちる）。実体は ls_fetched 時点の値で、ls_age_s 秒前・600 秒超なら ls_stale が true。古ければ裏で sandbox ls のジョブを起こし、今回は古い値のまま ls_refreshing: true と ls_refresh_job（ジョブ id）を付けて返す（次の呼び出しで最新になる。起こせなければ ls_refresh_error）。leases[] は貸出台帳（state.json）の写しで、貸出 1 件 = 1 行（task / vmid / name / ip / pj / since / phase / url / vm_status）。台帳そのものが無いときは state_exists が false（「貸出なし」と読み違えないため）。同じ VM に複数の貸出があると貸出先は 221,222 のカンマ区切りで、shared に組が入る（台数は vm_count、件数は lease_count）。idle_stop は節電で止めた VM の記録（{hours: 何時間使われなければ停止候補にするか, keep: 候補のうち起動したまま残す台数（足切り。候補がこれを超えた分だけ古い順に止める）, last_run: 最後に判定した時刻, stopped: [{vmid, name, at, last_used}], candidates: [{vmid, name, last_used}]（候補だが足切りの内で起動したまま）}。一度も動いていなければ null）。ここに載っている stopped の VM は壊れているのではなく節電で、次の貸出（take）が自動で起動する", schema({}), t_sandbox_status),
@@ -168,6 +173,7 @@ ANNOTATIONS = {
     "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO),
     "ticket_new": ("チケットを起票", RW), "ticket_action": ("チケットを進める・直す", RW),
     "ticket_run": ("チケットを runner で回す", RW), "intake": ("自由文から起票", RW), "dispatch": ("todo を順に回す", RW),
+    "run_action": ("実行記録に人間の後始末を書く", RW),
     "sandbox_ls": ("VM の実勢を取り直す", RW),
     "computer_open": ("画面操作用の環境を予約", RW), "computer_action": ("画面を取る・操作する", RW),
     "sandbox_release": ("VM を巻き戻して返却", DESTRUCTIVE), "job_stop": ("ジョブを止める", DESTRUCTIVE),

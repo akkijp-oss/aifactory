@@ -357,6 +357,7 @@ function planBlock(wf) {
    導けなかったものは unknown として「記録にありません」と出す（ADR-0025） */
 const report = d => ((d.groups || {}).artifacts || []).find(a => a.kind === 'implementer');
 const fileBtn = (run, path, label, cls) => `<button class="${cls || ''}" data-act="run-file" data-run="${esc(run)}" data-path="${esc(path)}">${esc(label)}</button>`;
+const prNumber = u => ((/(?:\/pull\/|#)(\d+)/.exec(u || '')) || [])[1] || '';
 function outcomeLead(o, s) {
   if (o.reason === 'not_started') return s.state_error ? T.run.stateBroken : s.kind === 'v0' ? T.run.v0 : T.run.noState;
   if (o.reason === 'v0') return T.run.v0;
@@ -367,6 +368,9 @@ function outcomeLead(o, s) {
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
+  /* 人間が後始末（wip から PR 化・マージ・打ち切り）をした run（チケット 335）。判定は API（core.run_outcome）が済ませている */
+  if (o.reason === 'human_done') { const n = prNumber(o.pr_url); return n ? tt(T.outcome.human_done, { pr: n }) : T.outcome.human_done_nopr; }
+  if (o.reason === 'human_abandoned') return T.outcome.human_abandoned;
   return T.outcome[o.reason] || T.outcome.unknown;
 }
 function outcomePanel(name, d) {
@@ -377,6 +381,7 @@ function outcomePanel(name, d) {
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
   if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
   if (o.resume) lines.push(tt(T.outcome.resume, { cmd: o.resume }));   /* 続きから回す口（チケット 333） */
+  if (o.human && o.human.text) lines.push(tt(T.outcome.humanNote, { by: o.human.by || '', at: fmtT(o.human.at), text: o.human.text }));
   if (stopped && !o.detail_file) lines.push(T.outcome.noDetail);
   const rep = report(d);
   const acts = [job ? link(`#/job/${job.id}`, T.btn.openJob, true) : '',

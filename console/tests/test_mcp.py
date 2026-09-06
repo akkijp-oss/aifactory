@@ -67,8 +67,11 @@ class McpTest(unittest.TestCase):
     def test_02_tools_list(self):
         tools = self.c.call("tools/list")["result"]["tools"]
         names = {t["name"] for t in tools}
-        for n in ("overview", "ticket_list", "ticket_show", "ticket_new", "ticket_action", "ticket_run", "intake", "dispatch", "run_list", "run_show", "read_file", "sandbox_status", "job_wait", "job_stop", "computer_open", "computer_action", "computer_close"):
+        for n in ("overview", "ticket_list", "ticket_show", "ticket_new", "ticket_action", "ticket_run", "intake", "dispatch", "run_list", "run_show", "run_action", "read_file", "sandbox_status", "job_wait", "job_stop", "computer_open", "computer_action", "computer_close"):
             self.assertIn(n, names)
+        # 人間の後始末を書く口（チケット 335）。close / note の別と、決着（done / abandoned）が schema から読める
+        ra = next(t for t in tools if t["name"] == "run_action")["inputSchema"]["properties"]
+        self.assertEqual(ra["action"]["enum"], ["close", "note"]); self.assertEqual(ra["result"]["enum"], ["done", "abandoned"])
         for t in tools: self.assertEqual(t["inputSchema"]["type"], "object"); self.assertTrue(t["description"])
 
     def test_03_reads(self):
@@ -271,7 +274,7 @@ class McpTest(unittest.TestCase):
             self.assertTrue(t["annotations"].get("title"), n)
         for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file"):
             self.assertTrue(tools[n]["annotations"]["readOnlyHint"], f"{n} は読み取りのはず")
-        for n in ("ticket_run", "ticket_new", "ticket_action", "intake", "dispatch", "sandbox_ls", "sandbox_release", "job_stop"):
+        for n in ("ticket_run", "ticket_new", "ticket_action", "run_action", "intake", "dispatch", "sandbox_ls", "sandbox_release", "job_stop"):
             self.assertFalse(tools[n]["annotations"]["readOnlyHint"], f"{n} は状態を変える")
         for n in ("sandbox_release", "job_stop"):
             self.assertTrue(tools[n]["annotations"].get("destructiveHint"), f"{n} は取り返しがつかない")

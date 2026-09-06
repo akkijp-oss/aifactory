@@ -550,6 +550,61 @@ class ApiTest(unittest.TestCase):
         _, o = self.http.get(f"/api/runs/{other}")
         self.assertIsNone(o["outcome"]["resume"]); self.assertIsNone(o["summary"]["resume"])
 
+    def test_run_outcome_reads_the_human_closeout(self):
+        """human で止まった run を人間が wip から PR にしてマージすると（kb が state.json に human を足す）、
+           run 画面は「待っています」ではなく「人間が PR で仕上げた」と読める（チケット 335）"""
+        hist = [("research", True), ("design", True), ("implement", True), ("gates", True), ("review", False)]
+        wip = f"sandbox/{self.seed}-feature-wip"
+        base = dict(loops={"review->implement": 1}, wip_branch=wip, resume_step="implement",
+                    error="review で止まった（失敗、または戻せる回数を使い切った）: 指摘 1 件")
+        human = {"at": "2020-01-05T09:00:00+09:00", "by": "pm", "result": "done",
+                 "pr_url": "https://github.com/akkijp/kumitate/pull/300", "text": "wip から PR を作ってマージした"}
+        name = self._fixture_run(f"2020-01-05-{PJ}-{self.seed}", self._state(hist, human=human, **base), {"work/ticket.md": "# x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "human_done")
+        self.assertEqual(o["pr_url"], human["pr_url"]); self.assertEqual(o["human"], human)
+        self.assertIsNone(o["resume"], "片が付いた run に「続きから回す」を出している")
+        self.assertEqual(d["summary"]["human"], human); self.assertEqual(d["summary"]["result"], "human")   # runner の result は変わらない
+
+        # 打ち切った run は別の言い方（PR は無い）
+        ab = self._fixture_run(f"2020-01-05-{PJ}-{self.seed}-b", self._state(
+            hist, human={**human, "result": "abandoned", "pr_url": "", "text": "作り直す"}, **base), {"work/ticket.md": "# x\n"})
+        _, d2 = self.http.get(f"/api/runs/{ab}")
+        self.assertEqual(d2["outcome"]["reason"], "human_abandoned"); self.assertIsNone(d2["outcome"]["resume"])
+
+        # 後始末がまだの run は今までどおり「人間の判断を待っています」（loop_limit / waiting の判定を壊さない）
+        yet = self._fixture_run(f"2020-01-05-{PJ}-{self.seed}-c", self._state(hist, **base), {"work/ticket.md": "# x\n"})
+        _, d3 = self.http.get(f"/api/runs/{yet}")
+        self.assertEqual(d3["outcome"]["reason"], "loop_limit"); self.assertIsNone(d3["outcome"]["human"])
+        self.assertIsNotNone(d3["outcome"]["resume"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.human_done", app); self.assertIn("T.outcome.human_abandoned", app); self.assertIn("T.outcome.humanNote", app)
+
+    def test_run_action_records_the_human_closeout_through_kb(self):
+        """`POST /api/runs/<name>/action` は kb run-note を呼ぶだけ（コンソールが state.json を直接書かない）"""
+        hist = [("research", True), ("implement", True), ("review", False)]
+        name = self._fixture_run(f"2020-01-06-{PJ}-{self.seed}", self._state(
+            hist, wip_branch=f"sandbox/{self.seed}-feature-wip", resume_step="implement"), {"work/ticket.md": "# x\n"})
+        st, r = self.http.post(f"/api/runs/{name}/action", {"action": "close", "pr": 300, "text": "wip から PR を作ってマージした"})
+        self.assertEqual(st, 200, r); self.assertEqual(r["rc"], 0)
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "human_done")
+        self.assertEqual(d["outcome"]["human"]["text"], "wip から PR を作ってマージした")
+        self.assertIn("300", d["outcome"]["pr_url"])
+        # 2 度目の close は kb が断る。説明の書き直しは note で通る
+        st, e = self.http.post(f"/api/runs/{name}/action", {"action": "close", "pr": 301})
+        self.assertEqual(st, 400); self.assertIn("既に人間の記録がある", e["error"])
+        st, r2 = self.http.post(f"/api/runs/{name}/action", {"action": "note", "text": "リリース 1.2 に入れた"})
+        self.assertEqual(st, 200, r2)
+        _, d2 = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d2["outcome"]["human"]["text"], "リリース 1.2 に入れた")
+        self.assertEqual(d2["outcome"]["reason"], "human_done")                       # 決着の別は前のまま
+        st, e2 = self.http.post(f"/api/runs/{name}/action", {"action": "note"})
+        self.assertEqual(st, 400); self.assertIn("説明", e2["error"])
+        st, e3 = self.http.post("/api/runs/2020-01-06-nosuch-run/action", {"action": "close"})
+        self.assertEqual(st, 404)
+
     def test_run_outcome_loop_limit(self):
         """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
         hist = [("research", True), ("design", True), ("implement", True), ("gates", False),
