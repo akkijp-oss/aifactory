@@ -117,7 +117,7 @@ gates: gates.sh
 
 `command -v` が何を見つけるかは、この形で決まる。
 
-- ワーカーはゲスト操作を `tart exec <guest> /bin/bash -lc '<command>'` で実行する（`workers/cmd/aifactory-worker/main.go`）。**ログインシェル**なので `~/.profile` を読む。上流イメージは `~/.profile` を `~/.zprofile` へのsymlinkにしてあるので、`~/.zprofile` が足すPATH（`node@24`、`PNPM_HOME`、`openjdk@17` など）も効く。`~/.bash_profile` や `~/.bash_login` を作るとこのsymlinkが読まれなくなるので、provisionで作らない。
+- ワーカーはゲスト操作を `tart exec <guest> /bin/bash -lc '<command>'` で実行する（`workers/cmd/aifactory-worker/main.go`）。**ログインシェル**なので `~/.profile` を読む。上流イメージは `~/.profile` を `~/.zprofile` へのsymlinkにしてあるので、`~/.zprofile` が足すPATH（`node@24`、`PNPM_HOME`、`openjdk@17` など）も効く（上流のイメージ定義から。2026-09-10参照。この1文だけ実機で未確認なので、実機では `ls -l ~/.profile` と `command -v node` で確かめる）。`~/.bash_profile` や `~/.bash_login` を作るとこのsymlinkが読まれなくなるので、provisionで作らない。
 - runnerはその上で、コマンドの先頭に固定のPATHを足す（`workflow/lib/macos.py`）。
 
     ```
@@ -136,8 +136,8 @@ gates: gates.sh
 | git | Xcode Command Line Tools（Homebrew導入時に入る） | `/usr/bin/git` | 見える | 入れない |
 | python3 | 同上。層2で `brew install python` も入る | `/usr/bin/python3`、`/opt/homebrew/bin/python3` | 見える | 入れない |
 | gh | brewのformula `gh`（層1と層2） | `/opt/homebrew/bin/gh` | 見える | `command -v` で守れば可。実質no-op |
-| node | brewのformula `node@24`。**keg-only** で `/opt/homebrew/bin` にはリンクされない | `/opt/homebrew/opt/node@24/bin/node` | 見える（`~/.zprofile` のPATH経由） | 入れない |
-| npm | `node@24` 同梱。formulaが `npmrc` に `prefix = /opt/homebrew` を書くので、`npm install -g` した実行ファイルは `/opt/homebrew/bin` に出る | `/opt/homebrew/opt/node@24/bin/npm` | 見える（同上） | 入れない |
+| node | brewのformula `node@24`。**keg-only** で `/opt/homebrew/bin` にはリンクされない | `/opt/homebrew/opt/node@24/bin/node` | 見える（`~/.zprofile` のPATH経由。実機で要確認） | 入れない |
+| npm | `node@24` 同梱。formulaが `npmrc` に `prefix = /opt/homebrew` を書くので、`npm install -g` した実行ファイルは `/opt/homebrew/bin` に出る | `/opt/homebrew/opt/node@24/bin/npm` | 見える（同上。実機で要確認） | 入れない |
 | pnpm / yarn | `npm install --global yarn pnpm`（層1） | `/opt/homebrew/bin/pnpm`、`/opt/homebrew/bin/yarn` | 見える | **brewで入れない**（下記） |
 | Xcode | `xcodes` で導入し `xcode-select` で選択済み（Xcode入りの系統のみ） | `/Applications/Xcode_<版>.app` | 見える（`xcodebuild` は `/usr/bin` 経由） | 入れない |
 | claude | caskの `claude-code`（Xcode入りの系統）、または層2の公式スクリプト | `/opt/homebrew/bin/claude` か `$HOME/.local/bin/claude` | 見える | 無ければ入れる |

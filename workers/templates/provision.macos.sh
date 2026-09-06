@@ -19,15 +19,27 @@ log() { echo; echo "[provision] $*"; }
 # 到達しないことの確認は「宛先が存在しない」場合と区別できない。隔離が壊れていないかの最低限の見張りとして置く。
 # どちらか外れていたら作業を始めずに落とす。
 log "network isolation probe"
+# プローブ自体が動かないときに「到達しなかった」と取り違えないよう、先に nc の有無を見る。
+command -v nc >/dev/null || { echo "[error] nc が無く隔離プローブを実行できない"; exit 1; }
 curl -fsS --max-time 20 -o /dev/null https://api.github.com/ || { echo "[error] 公開 HTTPS に到達できない"; exit 1; }
 leaked=0
 # 各レンジの先頭ホスト（x.y.z.0/n → x.y.z.1）へ TCP 22 を試す。宛先の値はここに書かず CIDR から作る。
 for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
   target="${cidr%/*}"; target="${target%.*}.1"
-  if nc -z -G 3 -w 3 "$target" 22 2>/dev/null; then
-    echo "[error] 遮断されているはずの $cidr（$target:22）へ到達した"
-    leaked=1
-  fi
+  # macOS の nc は 到達=0 / 未到達=1。それ以外（引数を解さない等）はプローブの失敗として落とす。
+  rc=0
+  nc -z -G 3 -w 3 "$target" 22 >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0)
+      echo "[error] 遮断されているはずの $cidr（$target:22）へ到達した"
+      leaked=1
+      ;;
+    1) ;;
+    *)
+      echo "[error] 隔離プローブが実行できない（nc $target 22 が rc=$rc）"
+      exit 1
+      ;;
+  esac
 done
 [ "$leaked" -eq 0 ] || { echo "[error] ネットワーク隔離が効いていない"; exit 1; }
 echo "isolation ok"

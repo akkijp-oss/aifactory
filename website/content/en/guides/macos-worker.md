@@ -117,7 +117,7 @@ The name `latest` alone does not reproduce anything. Record the digest and the g
 
 What `command -v` finds follows from this.
 
-- The worker runs guest operations as `tart exec <guest> /bin/bash -lc '<command>'` (`workers/cmd/aifactory-worker/main.go`). That is a **login shell**, so it reads `~/.profile`. The upstream image makes `~/.profile` a symlink to `~/.zprofile`, so the PATH entries written there (`node@24`, `PNPM_HOME`, `openjdk@17`) apply too. Creating `~/.bash_profile` or `~/.bash_login` stops that symlink from being read, so provisioning must not create them.
+- The worker runs guest operations as `tart exec <guest> /bin/bash -lc '<command>'` (`workers/cmd/aifactory-worker/main.go`). That is a **login shell**, so it reads `~/.profile`. The upstream image makes `~/.profile` a symlink to `~/.zprofile`, so the PATH entries written there (`node@24`, `PNPM_HOME`, `openjdk@17`) apply too (from the upstream image definition, retrieved 2026-09-10; this one sentence is not verified on real hardware, so check it there with `ls -l ~/.profile` and `command -v node`). Creating `~/.bash_profile` or `~/.bash_login` stops that symlink from being read, so provisioning must not create them.
 - On top of that, the runner prefixes every command with a fixed PATH (`workflow/lib/macos.py`).
 
     ```
@@ -136,8 +136,8 @@ The table below is derived from the upstream image definitions (`templates/base.
 | git | Xcode Command Line Tools (installed with Homebrew) | `/usr/bin/git` | Yes | No |
 | python3 | The same, plus `brew install python` at layer 2 | `/usr/bin/python3`, `/opt/homebrew/bin/python3` | Yes | No |
 | gh | The brew formula `gh` (layers 1 and 2) | `/opt/homebrew/bin/gh` | Yes | Only when guarded by `command -v`; effectively a no-op |
-| node | The brew formula `node@24`, which is **keg-only** and not linked into `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/node` | Yes, via the PATH from `~/.zprofile` | No |
-| npm | Ships with `node@24`. The formula writes `prefix = /opt/homebrew` into `npmrc`, so anything from `npm install -g` lands in `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/npm` | Yes, as above | No |
+| node | The brew formula `node@24`, which is **keg-only** and not linked into `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/node` | Yes, via the PATH from `~/.zprofile` (verify on real hardware) | No |
+| npm | Ships with `node@24`. The formula writes `prefix = /opt/homebrew` into `npmrc`, so anything from `npm install -g` lands in `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/npm` | Yes, as above (verify on real hardware) | No |
 | pnpm / yarn | `npm install --global yarn pnpm` (layer 1) | `/opt/homebrew/bin/pnpm`, `/opt/homebrew/bin/yarn` | Yes | **Never through brew** (see below) |
 | Xcode | Installed with `xcodes` and already selected with `xcode-select` (Xcode line only) | `/Applications/Xcode_<version>.app` | Yes, `xcodebuild` through `/usr/bin` | No |
 | claude | The `claude-code` cask (Xcode line) or the official script at layer 2 | `/opt/homebrew/bin/claude` or `$HOME/.local/bin/claude` | Yes | Install only if missing |
