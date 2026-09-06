@@ -13,6 +13,7 @@
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
                                                  # --from は human で止まった run を新しい VM で STEP からやり直す（既定は記録の resume_step、続きは記録の wip ブランチ）。--resume とは併用できない
   kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
+  kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]   # 人間の後始末（wip から PR を作ってマージ／打ち切り）を run 記録に残す
   kb history <id>
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
 
@@ -109,7 +110,7 @@ def record(c, tid, field, old, new):
     c.execute("INSERT INTO history (ticket, at, field, old, new) VALUES (?,?,?,?,?)", (tid, now(), field, str(old) if old is not None else None, str(new) if new is not None else None))
 
 
-def update(c, tid, **fields):
+def update(c, tid, transcribe=True, **fields):
     r = get(c, tid)
     for k, v in fields.items():
         if v is None: continue
@@ -121,7 +122,11 @@ def update(c, tid, **fields):
         c.execute(f"UPDATE tickets SET {k} = ?, updated = ? WHERE id = ?", (v, now(), tid))
         if k == "pr": sync_pr_line(ROOT / r["file"], v)
     c.commit()
-    return get(c, tid)
+    r = get(c, tid)
+    # 人間が wip から PR を作ってマージした（= pr を入れた / done にした）ことは run 記録にも残す（335）。
+    # runner 由来の更新（apply_result）は transcribe=False で来るので、runner が付けた PR は「人間が仕上げた」にならない
+    if transcribe and (fields.get("pr") or fields.get("status") == "done"): transcribe_human(r)
+    return r
 
 
 def sync_pr_line(path, pr):
@@ -254,6 +259,24 @@ def run_workflow(run_dir):
     except Exception: return None
 
 
+def attempt_no(run_dir):
+    """runner が退避に使う番号（workflow/bin/run と同じ規則で数える）。runner が保証する値ではないのでメモの文言だけに使う"""
+    p = paths.run_path(run_dir); n = 1
+    while (p.parent / f"{p.name}-attempt{n}").exists(): n += 1
+    return n
+
+
+def rerun_note(r, run_dir, resuming, restarting, wf, from_step):
+    """同じチケットを回し直すとき、チケットのメモを「再走中」に替える（335）。替えないと前回 human で止まったときの
+       「人間へ（wip: …）…」が in_progress のまま残り、板が古い状態に見える。触らないときは None（初回の run は今までどおり）"""
+    retiring = paths.run_path(run_dir).exists()
+    if resuming or not (retiring or restarting): return None
+    note = f"再走中（attempt {attempt_no(run_dir)}・workflow {wf}）" if retiring else f"再走中（workflow {wf}）"
+    if restarting and r["run"]:
+        note += f"。前回: {r['run']}" + (f" の {from_step} から" if from_step else " の続きから")
+    return note
+
+
 def cmd_run(a):
     c = db(); r = get(c, a.id)
     pd = paths.project_dir(r["pj"])
@@ -272,7 +295,7 @@ def cmd_run(a):
     wf = a.workflow or (resuming and run_workflow(run_dir)) or (restarting and r["run"] and run_workflow(r["run"])) or r["kind"]
     if wf not in kinds(): die(f"workflow {wf} が無い（{kinds()}）")
     if not a.dry_run:
-        update(c, a.id, status="in_progress", run=run_dir)
+        update(c, a.id, status="in_progress", run=run_dir, note=rerun_note(r, run_dir, resuming, restarting, wf, a.from_step), transcribe=False)
         if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
         render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
@@ -299,6 +322,65 @@ def cmd_run(a):
     rc = apply_result(c, a.id, run_dir, rc)
     print(f"[kb] {fmt(get(c, a.id))}")
     return rc
+
+
+# ---------- 人間の後始末（run 記録への転記）
+def actor():
+    """記録に残す「誰が」。CI や別の口から呼ぶときは AIFACTORY_ACTOR で名乗れる"""
+    return os.environ.get("AIFACTORY_ACTOR") or os.environ.get("USER") or "human"
+
+
+def pr_url_for(pj, pr):
+    """PR 番号を記録に書く形にする。PJ 定義に repo があれば URL、無ければ `#N`（console はどちらからも番号を取る）"""
+    if not pr: return ""
+    pd = paths.project_dir(pj) if pj else None
+    f = (pd / "project.yml") if pd else None
+    if f and f.exists():
+        m = re.search(r"^repo:\s*[\"']?([\w.-]+/[\w.-]+)[\"']?\s*$", f.read_text(encoding="utf-8"), re.M)
+        if m: return f"https://github.com/{m.group(1)}/pull/{pr}"
+    return f"#{pr}"
+
+
+def human_note(run_dir, result=None, pr=None, text=None, force=False):
+    """人間が run の後始末（wip から PR を作ってマージ・打ち切り）をしたことを state.json に追記する（335）。
+
+    runner が確定した `result` は上書きせず `human: {at, by, result, pr_url, text}` を別に持つ。
+    「人間が PR#n で仕上げた」という言い方は console が導く（ADR-0025 / ADR-0038）。
+    実行中（finished が無い）の run は runner が同じファイルを書いているので断る。"""
+    st = paths.run_path(run_dir) / "state.json"
+    if not st.exists(): raise ValueError(f"実行記録が無い: {st}")
+    s = json.loads(st.read_text(encoding="utf-8"))
+    if "finished" not in s: raise ValueError(f"{run_dir} はまだ実行中（runner が state.json を書いている）。終わってから記録する")
+    old = s.get("human") or {}
+    if old and not force: raise ValueError(f"{run_dir} には既に人間の記録がある（{old.get('at')} / {old.get('by')}）。書き足すなら --force")
+    h = {"at": now(), "by": actor(), "result": result or old.get("result") or "done",
+         "pr_url": pr_url_for(s.get("pj"), pr) or old.get("pr_url") or "",
+         "text": (text if text is not None else old.get("text")) or ""}
+    if h["result"] not in ("done", "abandoned"): raise ValueError("--result は done か abandoned")
+    s["human"] = h
+    st.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    return h
+
+
+def transcribe_human(r):
+    """チケットに PR を入れた / done にしたとき、紐づく run が human で止まったままなら run 記録に転記する（335）。
+       転記できなくてもチケットの更新は成功させる（記録が無いだけで done できないのは困る）"""
+    if not r["run"]: return
+    st = paths.run_path(r["run"]) / "state.json"
+    if not st.exists(): return
+    try: s = json.loads(st.read_text(encoding="utf-8"))
+    except Exception as e: print(f"[kb] warn: {st} を読めず run に転記しなかった: {e}", file=sys.stderr); return
+    if s.get("result") != "human" or s.get("human") or "finished" not in s: return
+    try: h = human_note(r["run"], result="done", pr=r["pr"], text=f"チケット {r['id']} の後始末を kb から転記")
+    except Exception as e: print(f"[kb] warn: {r['run']} に転記できなかった: {e}", file=sys.stderr); return
+    print(f"[kb] {r['run']} に人間の後始末を転記（{h['result']} / {h['pr_url'] or 'PR 無し'}）")
+
+
+def cmd_run_note(a):
+    try: h = human_note(a.run, result=a.result, pr=a.pr, text=a.text, force=a.force)
+    except ValueError as e: die(str(e))
+    except OSError as e: die(f"{a.run} の state.json を書けない: {e}")
+    print(f"[kb] {a.run} human={h['result']} pr={h['pr_url'] or '-'} by={h['by']} at={h['at']}")
 
 
 def apply_result(c, tid, run_dir, rc=0, dry=False):
@@ -342,7 +424,7 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
                           "before": {"status": r["status"], "note": r["note"], "run": r["run"], "pr": r["pr"], "updated": r["updated"]},
                           "after": {"status": status, "note": note, "pr": pr, "run": run_dir}}, ensure_ascii=False))
         return rc
-    update(c, tid, status=status, pr=pr, run=run_dir, note=note); render(c)
+    update(c, tid, status=status, pr=pr, run=run_dir, note=note, transcribe=False); render(c)
     return rc
 
 
@@ -377,6 +459,11 @@ def main():
                    help="human で止まった run を新しい VM でこの step からやり直す（既定は記録の resume_step）")
     p.add_argument("--branch", dest="from_branch", metavar="B", help="--from のとき続きに使うブランチ（既定は記録の wip_branch）")
     p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run"); p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
+    p = sp.add_parser("run-note"); p.add_argument("run", help="run 名（例 2026-09-06-kumitate-206）")
+    p.add_argument("--result", choices=["done", "abandoned"], help="人間がどう決着させたか（既定 done）")
+    p.add_argument("--pr", type=int, help="人間が作ってマージした PR の番号")
+    p.add_argument("--text", help="後始末の説明（run 画面に出る）")
+    p.add_argument("--force", action="store_true", help="既に人間の記録がある run に書き足す")
     p = sp.add_parser("history"); p.add_argument("id", type=int)
     sp.add_parser("render")
     a = ap.parse_args()
@@ -390,6 +477,7 @@ def main():
     elif a.cmd == "next": cmd_next(a)
     elif a.cmd == "run": sys.exit(cmd_run(a))
     elif a.cmd == "sync": cmd_sync(a)
+    elif a.cmd == "run-note": cmd_run_note(a)
     elif a.cmd == "history": cmd_history(a)
     elif a.cmd == "render": c = db(); render(c); print(BOARD)
 
