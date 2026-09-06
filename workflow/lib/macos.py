@@ -373,7 +373,7 @@ def backend(Run):
                 # Never turn a nonzero exit without a FAIL line into success.
                 self.sb(f"cat > {shlex.quote(self.work + '/gates.txt')}", input_text=out)
                 return rc == 0 and not re.search(r"^FAIL(?:\s|$)", out, re.M), out[-4000:]
-            if name == "pr-automerge.sh": return self.run_automerge(step, log_path)
+            if name == "pr-automerge.sh": return self.run_automerge(log_path)
             if name != "pr-create.sh":
                 return False, f"Mac backend does not support code step {name}"
             self.refresh_token()
@@ -394,7 +394,7 @@ def backend(Run):
             self.sb(f"cat > {shlex.quote(self.work + '/pr_url')}", input_text=urls[-1] + "\n")
             return True, urls[-1]
 
-        def run_automerge(self, step, log_path):
+        def run_automerge(self, log_path):
             """automerge（ADR-0042）を guest の中で走らせる（チケット 386）。
 
             pull worker には制御系から入る `sandbox ssh` が無いので、kit/steps/pr-automerge.sh を guest の $WORK に
