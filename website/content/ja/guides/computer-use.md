@@ -61,6 +61,7 @@ workers/bin/computer close desktop-...
 | 記号 | `=` `-` `+` `,` `.` `/` `;` `'` `[` `]` `\` `` ` `` |
 
 - `WIN` と `CMD` はどちらもそのOSのメタキーを指す（Windowsは Windowsキー、Macは Command、Linuxは Super）。`CMD` を送ってもWindowsで失敗しない。
+- Linuxの`CMD`/`WIN`はSuperで、多くのアプリは文字入力を抑えない（`CMD`+`SHIFT`+`=`はショートカットではなく`+`が入る）。Linuxのショートカットは`CTRL`か`ALT`で送る。
 - `+` は物理キーが無いため、`=` の物理キーと `SHIFT` で送る。`SHIFT` と `=` を明示しても同じ。
 - 記号の位置は**US配列**を前提とする。ゲストのキーボード配列がJISなどの場合、記号は別の文字になる。
 - 一覧に無い名前は、受け付ける名前の一覧を添えたエラーになる（`unsupported key: <名前>; supported: ...`）。推測で送り直さず、一覧から選ぶ。

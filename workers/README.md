@@ -30,6 +30,8 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/aifactory-work
 # Intel Mac用は GOARCH=amd64
 cd ..
 python3 -m unittest discover -s workers/tests -v
+# X11の画面操作テスト（要 xvfb xauth xdotool xclip python3-tk python3-pil）。CIのlinux-workerと同じ回し方。
+AIFACTORY_X11_TEST=1 xvfb-run -a python3 -m unittest discover -s workers/tests -p test_linux_desktop.py -v
 ```
 
 Go 1.25以降をビルド端末だけに用意する。配布先で `aifactory-worker --version` による実行確認ができる。バイナリはリポジトリにコミットしない。

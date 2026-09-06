@@ -56,9 +56,15 @@ r.after(50,save);r.mainloop()
                 deadline=time.monotonic()+5
                 while output.read_text()!=text+symbols and time.monotonic()<deadline:time.sleep(.05)
                 self.assertEqual(output.read_text(),text+symbols)
-                # 文字を入れないキーは例外なく通り、本文を変えないこと。
+                # 修飾キー付きのキーは例外なく通ること。ESC/F5/CTRL+- は文字を入れないが、
+                # CMD+SHIFT+= は Linux では super+shift+equal で、Super は文字入力を抑止しないので '+' が入る（387）。
                 for keys in (['ESC'],['F5'],['CTRL','-'],['CMD','SHIFT','=']):module.native({'action':'key','keys':keys})
-                self.assertEqual(output.read_text(),text+symbols)
+                # 見張りの SPACE が届くまで待ってから比べる。固定の sleep に頼らず、余計な入力も検出できる。
+                module.native({'action':'key','keys':['SPACE']})
+                expected=text+symbols+'+ '
+                deadline=time.monotonic()+5
+                while output.read_text()!=expected and time.monotonic()<deadline:time.sleep(.05)
+                self.assertEqual(output.read_text(),expected)
                 module.native({'action':'key','keys':['CTRL','HOME']})
                 module.native({'action':'scroll','amount':-3})
                 self.assertTrue(module.native({'action':'screenshot'})['ok'])
