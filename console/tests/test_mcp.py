@@ -101,6 +101,13 @@ class McpTest(unittest.TestCase):
         self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["status"], "in_progress")
         err, r = self.c.tool("ticket_action", id=tid, action="reopen"); self.assertFalse(err)
         self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["status"], "todo")
+        err, r = self.c.tool("ticket_action", id=tid, action="append", text="mcp 補足", section="PM 補足"); self.assertFalse(err, r)
+        body = self.c.tool("ticket_show", id=tid)[1]["body"]
+        self.assertIn("## PM 補足", body); self.assertIn("mcp 補足", body)
+        err, msg = self.c.tool("ticket_action", id=tid, action="append"); self.assertTrue(err)                 # 本文無しの追記
+        err, r = self.c.tool("ticket_action", id=tid, action="set", note="消す前"); self.assertFalse(err, r)
+        err, r = self.c.tool("ticket_action", id=tid, action="set", note=""); self.assertFalse(err, r)
+        self.assertIn(self.c.tool("ticket_show", id=tid)[1]["ticket"]["note"], (None, ""))                     # 空文字列でメモを消せる
         err, msg = self.c.tool("sandbox_release", task="x"); self.assertTrue(err)
         err, r = self.c.tool("ticket_run", id=tid, dry_run=True); self.assertFalse(err, r); jid = r["job"]["id"]
         err, w = self.c.tool("job_wait", id=jid, timeout_s=120); self.assertFalse(err)

@@ -6,7 +6,8 @@
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
-  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]   # --note '' でメモを空に戻す
+  kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める
   kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
@@ -110,6 +111,8 @@ def update(c, tid, **fields):
     r = get(c, tid)
     for k, v in fields.items():
         if v is None: continue
+        # 「未指定（None）＝触らない」の判定より後で空を潰す。--note '' はメモを消す指示なので DB は NULL に揃える
+        if k == "note" and v == "": v = None
         if k == "status" and v not in STATUSES: die(f"status は {STATUSES} のどれか")
         if k == "kind" and v not in kinds(): die(f"kind は {kinds()} のどれか")
         record(c, tid, k, r[k], v)
@@ -218,6 +221,21 @@ def cmd_set(a):
     c = db(); r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind); render(c); print(fmt(r))
 
 
+def cmd_append(a):
+    """本文の末尾に追記する。本文はファイルが正なので、書き足したことだけを history に残す（差分は持たない）"""
+    text = a.text if a.text is not None else sys.stdin.read()
+    if not text.strip(): die("追記する本文が空")
+    c = db(); r = get(c, a.id)
+    f = ROOT / r["file"]
+    if not f.exists(): die(f"本文が無い: {f}")
+    cur = f.read_text(encoding="utf-8")
+    add = (f"\n## {a.section}\n\n" if a.section else "\n") + text.rstrip() + "\n"
+    f.write_text(cur.rstrip("\n") + "\n" + add, encoding="utf-8")
+    record(c, a.id, "body", None, f"append {len(text)}字" + (f" ({a.section})" if a.section else ""))
+    c.execute("UPDATE tickets SET updated = ? WHERE id = ?", (now(), a.id)); c.commit()
+    print(fmt(get(c, a.id))); print(f"     {f}")
+
+
 def cmd_next(a):
     c = db(); q = "SELECT * FROM tickets WHERE status = 'todo'"; p = []
     if a.pj: q += " AND pj = ?"; p.append(a.pj)
@@ -311,6 +329,7 @@ def main():
     for name in ("start", "review", "done", "reopen", "block"):
         p = sp.add_parser(name); p.add_argument("id", type=int); p.add_argument("--note", required=(name == "block"))
     p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
+    p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
     p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run"); p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
@@ -323,6 +342,7 @@ def main():
     elif a.cmd in ("start", "review", "done", "reopen", "block"):
         cmd_status(a, {"start": "in_progress", "review": "review", "done": "done", "reopen": "todo", "block": "blocked"}[a.cmd])
     elif a.cmd == "set": cmd_set(a)
+    elif a.cmd == "append": cmd_append(a)
     elif a.cmd == "next": cmd_next(a)
     elif a.cmd == "run": sys.exit(cmd_run(a))
     elif a.cmd == "sync": cmd_sync(a)
