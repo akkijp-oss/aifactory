@@ -116,6 +116,7 @@ VM 内で `$SANDBOX_APP_DIR`（無ければ `~/app`）に cd し、CI と同じ�
 | 罠 | 症状 | 対処 |
 |---|---|---|
 | `GH_TOKEN` を環境変数で渡したまま `gh auth login --with-token` | gh が「環境変数を使う」と言って拒否し、後続の clone が止まる | `gh auth login` を呼ばない。`gh auth setup-git` だけ行い、gh は環境変数のトークンをそのまま使う |
+| 公開リポジトリをトークン無しで焼く（`examples/projects/aifactory`） | `gh auth setup-git` はログイン済みホストが無いと何もせず、take 後の push が `could not read Username` で落ちる | `git config --global --add credential.https://github.com.helper '!gh auth git-credential'` を直接書く。take で注入される `GH_TOKEN` を gh が使う |
 | `/etc/sandbox/app.env` に `RAILS_ENV=development` | login shell で走らせた rspec / minitest が test でなく development 環境で動き、大量に落ちる（`Rails.env が test である` の spec が赤） | `RAILS_ENV` は systemd ユニットの `Environment=` にだけ書く。ゲートは `env RAILS_ENV=test` を明示 |
 | Rails PJ で、開発用の DB ロール名（読み取り専用ロールなど）を app.env に書く | test 環境がそのロールで接続しに行き、test DB に入れず全滅 | development の既定値と同じなら書かない |
 | AWS SDK を使う PJ が EC2 メタデータ（169.254.169.254）を引く | S3 を触るたびに数秒待たされる | `AWS_EC2_METADATA_DISABLED=true` を app.env に入れる |
