@@ -200,14 +200,21 @@ async function viewBoard() {
   const nLive = runsRun.length + runsNew.length + runsGone.length;
   const moreRuns = (o.runs_active_n || runsRun.length) - runsRun.length;        /* サーバーの上限からあふれた「実行中」の件数 */
   const live = (nLive ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: nLive, m: runsNew.length, a: runsGone.length }))}</div>` : '')
-    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(stepName(r.current.step)), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
+    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
     + runsGone.map(r => `<div><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj || '')} ${esc(r.task || '')}</a> · ${r.runner ? `${esc(tt(T.board.liveAbandoned, { t: fmtT(r.runner.finished) }))} <a href="#/job/${esc(r.runner.id)}">${esc(T.btn.openJob)}</a>` : `<span class="tag">${esc(T.result.abandoned)}</span>`}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '')
     + (moreRuns > 0 ? `<div><a href="#/runs">${esc(tt(T.board.moreRuns, { n: moreRuns }))}</a></div>` : '');   /* 上限からあふれた分は実行記録で見る */
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
-  const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
-    <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
+  /* チケット 1 枚に紐づく「動いている run」。runs_live は上限なし・新しい順なので、先頭が最新の attempt（実行記録画面の runOf と同じ考え方）。
+     記録から PJ が分からない run（pj が空）は帯と同じくチケット番号だけで拾う */
+  const liveOf = x => (o.runs_live || []).find(r => String(r.task) === String(x.id) && (!r.pj || r.pj === x.pj));
+  /* 工程行。current が無い run（開始前・工程の切れ目）は前の工程ではなく「次は」を出す */
+  const liveRow = r => `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { run: r.name }))}"><span class="dot pulse"></span>${r.step ? tt(T.board.liveStep, { step: esc(stepName(r.step)), t: esc(since(r.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</a>`;
+  /* カードの外枠は div。チケット詳細（題名）と実行記録（工程行）を兄弟の <a> にする（<a> の入れ子は無効な HTML。376）。
+     カード全面のクリックは題名リンクの ::after（style.css）で今までどおり保つ */
+  const card = x => { const r = liveOf(x); return `<div class="card"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><a class="t" href="#/ticket/${x.id}">${esc(x.title)}</a>${r ? liveRow(r) : ''}
+    <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</div>`; };
   const tickets = extra => `#/tickets?pj=${encodeURIComponent(pj)}${extra || ''}`;                /* ボードで選んだ PJ を一覧に引き継ぐ */
   const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty"><a href="${tickets('&amp;status=' + s)}">${esc(tt(T.board.more, { n: list.length - cap }))}</a></div>` : ''}</section>`;
   const canDispatch = by.todo.length > 0;
