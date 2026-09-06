@@ -8,7 +8,7 @@
   kb block <id> --note TEXT
   kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
-  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める
+  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
   kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
   kb history <id>
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
@@ -227,20 +227,31 @@ def cmd_next(a):
     else: print(fmt(r)); print(f"     {ROOT / r['file']}")
 
 
+def run_workflow(run_dir):
+    """runs/<run>/state.json に残る「その run をどの workflow で回したか」。--resume は kind ではなくこれで再開する"""
+    f = paths.run_path(run_dir) / "state.json"
+    try: return json.loads(f.read_text(encoding="utf-8")).get("workflow")
+    except Exception: return None
+
+
 def cmd_run(a):
     c = db(); r = get(c, a.id)
-    wf = a.workflow or r["kind"]
-    if wf not in kinds(): die(f"workflow {wf} が無い（{kinds()}）")
     pd = paths.project_dir(r["pj"])
     if not (pd and (pd / "project.yml").exists()): die(f"{r['pj']} に project.yml が無い（runner が動かない。置き場: {' / '.join(str(d) for d in paths.PROJECT_DIRS)}）")
     if r["status"] == "done" and not a.dry_run: die(f"{a.id} は done。やり直すなら kb reopen")
     path = ROOT / r["file"]
     if not path.exists(): die(f"本文が無い: {path}")
     run_dir = f"{datetime.date.today().isoformat()}-{r['pj']}-{r['id']}" + ("-dry" if a.dry_run else "")
-    if a.resume and not a.dry_run and r["run"]:
+    resuming = bool(a.resume and not a.dry_run and r["run"])
+    if resuming:
         run_dir = r["run"]
+    # kind は「何の仕事か」、workflow は「今回どう回すか」。--workflow は kind を書き換えない（チケット 249）
+    wf = a.workflow or (resuming and run_workflow(run_dir)) or r["kind"]
+    if wf not in kinds(): die(f"workflow {wf} が無い（{kinds()}）")
     if not a.dry_run:
-        update(c, a.id, status="in_progress", run=run_dir, kind=None if a.workflow is None else a.workflow); render(c)
+        update(c, a.id, status="in_progress", run=run_dir)
+        if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
+        render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
     print("[kb] " + " ".join(cmd), flush=True)
     env = os.environ.copy()
