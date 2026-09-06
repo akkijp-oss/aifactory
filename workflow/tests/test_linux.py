@@ -31,6 +31,15 @@ class LinuxBackendTest(unittest.TestCase):
             self.assertEqual(config['command'],'/usr/local/lib/aifactory-computer/aifactory-computer')
             self.assertEqual(config['args'][-1],r.work)
 
+    # ---------- code step の対応表（チケット 386）
+    def test_the_code_step_table_is_inherited_from_macos(self):
+        """linux-pull は macos と同じ POSIX の guest なので対応表も実装も共有する。
+        ここで上書きすると、macos に足した code step が linux でだけ起動前に拒否される"""
+        import macos
+        self.assertNotIn('CODE_STEPS', vars(linux.backend(object)))
+        self.assertEqual(linux.backend(object).CODE_STEPS, macos.backend(object).CODE_STEPS)
+        self.assertEqual(linux.backend(object).CODE_STEPS['pr-automerge.sh'], 'run')
+
     # ---------- 再開判定（ADR-0046。チケット 391）
     def test_take_records_the_needed_purposes_before_preparing(self):
         """linux-pull の take() は MacRun.take() を継承せず丸ごと上書きしているので、

@@ -86,6 +86,26 @@ class PrAutomergeTest(unittest.TestCase):
         self.assertNotIn("pr merge", self.gh_calls())
         self.assertFalse((self.work / "merged.json").exists())
 
+    # ---------- guest の中で走らせる経路（pull worker。チケット 386）
+    def test_sb_local_runs_without_the_sandbox_cli(self):
+        """pull worker には `sandbox ssh` が無いので、backend はこの script を guest に置いて guest の中で走らせる。
+        SB_LOCAL=1 のとき `sandbox` を 1 度も呼ばずに、緑の一式がマージまで通ることを固定する"""
+        (self.bin / "sandbox").unlink()                       # PATH から偽 sandbox を外す（本物も無い）
+        p = self.run_step(SB_LOCAL="1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("sandbox", p.stderr)
+        self.assertIn("pr merge 1 --merge", self.gh_calls())
+        self.assertEqual(self.last_line(p), "MERGED: abc1234 https://github.com/akkijp-oss/aifactory/pull/1")
+        self.assertTrue((self.work / "merged.json").exists())
+
+    def test_without_sb_local_the_sandbox_cli_is_still_used(self):
+        """Proxmox backend の経路（制御系から VM に入る）は変えない"""
+        loud = FAKE_SANDBOX.replace('case "$1" in', 'echo "sandbox $*" >> "$CALLS"\ncase "$1" in', 1)
+        f = self.bin / "sandbox"; f.write_text(loud); f.chmod(0o755)
+        p = self.run_step()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("sandbox ssh", self.gh_calls())
+
     # ---------- 全部緑
     def test_merges_and_records_when_every_condition_is_met(self):
         p = self.run_step()

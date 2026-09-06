@@ -210,17 +210,21 @@ class MacBackendTest(unittest.TestCase):
         MacRun({'steps':[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'}]})
         with self.assertRaises(ValueError):MacRun({'steps':[{'code':'pr-merge.sh'}]})
 
-    def test_automerge_step_is_skipped_when_project_has_no_auto_merge(self):
-        # ADR-0042 で全 workflow に automerge step が入った。auto_merge の無い PJ では runner が工程ごと飛ばすので、
-        # pull worker の未対応判定でも拒否しない（asura #381 が起動前に落ちた）。auto_merge がある PJ は従来どおり拒否する
+    def test_automerge_step_is_accepted_with_or_without_auto_merge(self):
+        # ADR-0042 で全 workflow に automerge step が入った。auto_merge の無い PJ では runner が工程ごと飛ばし、
+        # auto_merge のある PJ では guest の中で kit の script を走らせる（チケット 386）。どちらも起動前に拒否しない
+        # （asura #381 は auto_merge を書いた途端に起動前 ValueError で落ちていた）
         class Base:
             def __init__(self,wf,auto_merge=None):
                 self.wf=wf;self.project={'app_dir':'/Users/admin/app','worker':'mac1'}
                 self.task='381';self.resume=False;self.state={};self.auto_merge=auto_merge
         MacRun=macos.backend(Base)
         steps=[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'},{'code':'pr-automerge.sh'}]
-        MacRun(steps and {'steps':steps})
-        with self.assertRaises(ValueError):MacRun({'steps':steps},auto_merge={'method':'merge'})
+        MacRun({'steps':steps})
+        MacRun({'steps':steps},auto_merge={'method':'merge'})
+        # 表で unsupported と宣言した step と、表に無い step（足した人が対応表を更新していない）は今までどおり拒否する
+        with self.assertRaises(ValueError):MacRun({'steps':[{'code':'pr-merge.sh'}]})
+        with self.assertRaises(ValueError):MacRun({'steps':[{'code':'brand-new.sh'}]})
 
 
 class MacLeaseWaitTest(unittest.TestCase):
@@ -566,3 +570,109 @@ class PullBackendKeyTest(unittest.TestCase):
             run.take()
         self.assertEqual(run.state.get('needed_keys'), ['fable', 'other'])
 
+
+
+class PullBackendAutomergeTest(unittest.TestCase):
+    """auto_merge のある PJ の automerge 工程（チケット 386 / ADR-0042）。
+
+    pull worker には `sandbox ssh` が無いので、kit/steps/pr-automerge.sh を **guest の中に置いて guest の中で走らせる**
+    （SB_LOCAL=1）。Mac 実機も GitHub も使わない: guest-exec の代わりに bash を通し、
+    PATH の先頭には test_pr_automerge.py と同じ偽 gh だけを置く（`sandbox` は置かない = 経路が sandbox に依らないことの固定）。
+    """
+
+    def setUp(self):
+        from test_pr_automerge import FAKE_GH, GATES_GREEN
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.ws = pathlib.Path(tmp.name)
+        self.bin = self.ws / 'bin'; self.bin.mkdir()
+        gh = self.bin / 'gh'; gh.write_text(FAKE_GH, encoding='utf-8'); gh.chmod(0o755)
+        self.app = self.ws / 'app'; self.app.mkdir()
+        self.guest = self.ws / 'work' / '386'; self.guest.mkdir(parents=True)
+        self.calls = self.ws / 'calls.log'; self.calls.write_text('', encoding='utf-8')
+        (self.guest / 'pr_url').write_text('https://github.com/akkijp-oss/aifactory/pull/1\n', encoding='utf-8')
+        (self.guest / 'gates.txt').write_text(GATES_GREEN, encoding='utf-8')
+        (self.guest / 'review.md').write_text('# レビュー: PASS\n\n判定の理由。\n', encoding='utf-8')
+        self.env = {'PATH': f"{self.bin}:/usr/bin:/bin", 'HOME': str(self.ws), 'CALLS': str(self.calls),
+                    'GH_VIEW': 'OPEN false develop sandbox/386-bug-fix', 'GH_CHECKS': 'pass ci / test',
+                    'GH_MERGEABLE': 'MERGEABLE', 'GH_AFTER': 'MERGED https://github.com/akkijp-oss/aifactory/pull/1',
+                    'GH_SHA': 'abc1234', 'GH_MERGE_FAILS': '',
+                    'AUTOMERGE_POLL_S': '0', 'AUTOMERGE_ZERO_CHECKS_GRACE_S': '0', 'AUTOMERGE_MERGEABLE_POLL_S': '0'}
+        self.timeouts = []
+
+    def make_run(self, **auto):
+        run = object.__new__(MacWaitRun)
+        run.dry = False; run.keep = False; run.pj = 'aifactory'; run.task = '386'
+        run.base = 'develop'; run.branch = 'sandbox/386-bug-fix'
+        run.work = str(self.guest); run.env_file = run.work + '/runtime.env'
+        run.project = {'worker': 'mac1', 'app_dir': str(self.app), 'repo': 'akkijp-oss/aifactory'}
+        run.wf = {'steps': [{'id': 'review', 'role': 'reviewer'}, {'id': 'automerge', 'code': 'pr-automerge.sh'}]}
+        run.state = {'history': []}; run.save = lambda: None
+        self.logs = []; run.log = self.logs.append
+        run.run_dir = self.ws / 'runs' / '2026-09-11-aifactory-386'; run.run_dir.mkdir(parents=True)
+        run.set_current = lambda *a: None
+        run.refresh_token = lambda: None
+        run.auto_merge = {'method': 'merge', 'wait_min': 20, 'delete_branch': False, 'require_checks': True, **auto}
+        run.sb = self.guest_sb(run); run.run_remote = self.guest_run_remote(run)
+        return run
+
+    def bash(self, run, cmd, input_text=None):
+        return subprocess.run(['bash', '-c', run.command(cmd)], input=input_text, text=True,
+                              capture_output=True, env=self.env)
+
+    def guest_sb(self, run):
+        def sb(cmd, input_text=None, check=True):
+            r = self.bash(run, cmd, input_text)
+            if check and r.returncode: raise RuntimeError(f'guest command failed ({r.returncode}): {r.stderr[-500:]}')
+            return r.stdout
+        return sb
+
+    def guest_run_remote(self, run):
+        def run_remote(cmd, log_path, render=None, timeout=3600):
+            self.timeouts.append(timeout)
+            r = self.bash(run, cmd)
+            pathlib.Path(log_path).write_text(r.stdout + r.stderr, encoding='utf-8')
+            return r.returncode, r.stdout
+        return run_remote
+
+    def gh_calls(self):
+        return self.calls.read_text(encoding='utf-8')
+
+    def test_the_kit_script_runs_inside_the_guest_and_records_the_merge(self):
+        run = self.make_run()
+        ok, info = run.run_code({'id': 'automerge', 'code': 'pr-automerge.sh'})
+        self.assertTrue(ok, info)
+        # script は guest の $WORK に置かれ、guest の中で走る（sandbox ssh は PATH にすら無い）
+        self.assertTrue((self.guest / 'pr-automerge.sh').exists())
+        self.assertIn('pr merge 1 --merge', self.gh_calls())
+        self.assertIn('pr comment 1', self.gh_calls())
+        self.assertEqual([l for l in info.splitlines() if l.strip()][-1],
+                         'MERGED: abc1234 https://github.com/akkijp-oss/aifactory/pull/1')
+        merged = json.loads((self.guest / 'merged.json').read_text(encoding='utf-8'))
+        self.assertEqual((merged['sha'], merged['method'], merged['base']), ('abc1234', 'merge', 'develop'))
+        # runner の記録（ADR-0042）。Proxmox backend と違い run_code を通らないので backend 側で呼ぶ必要がある
+        self.assertEqual(run.state['merged']['sha'], 'abc1234')
+        self.assertEqual(run.state['merged']['pr_url'], 'https://github.com/akkijp-oss/aifactory/pull/1')
+        # guest-exec は CI 待ち（wait_min）より長く、run_remote の上限（3600 秒）は超えない
+        self.assertEqual(self.timeouts, [min(3600, 20 * 60 + 900)])
+
+    def test_the_project_setting_reaches_the_script_in_the_guest(self):
+        run = self.make_run(method='squash', delete_branch=True)
+        ok, info = run.run_code({'id': 'automerge', 'code': 'pr-automerge.sh'})
+        self.assertTrue(ok, info)
+        self.assertIn('pr merge 1 --squash', self.gh_calls())
+        self.assertEqual(json.loads((self.guest / 'merged.json').read_text(encoding='utf-8'))['method'], 'squash')
+        self.assertIn('run 2026-09-11-aifactory-386', self.gh_calls())      # RUN_NAME
+        self.assertIn('review PASS', self.gh_calls())                       # HAS_REVIEW（workflow に reviewer がいる）
+
+    def test_red_ci_leaves_the_pr_open_and_reports_the_reason(self):
+        run = self.make_run()
+        self.env['GH_CHECKS'] = 'fail ci / test'
+        ok, info = run.run_code({'id': 'automerge', 'code': 'pr-automerge.sh'})
+        self.assertFalse(ok)
+        self.assertEqual([l for l in info.splitlines() if l.strip()][-1], 'NOMERGE: CI 赤 (ci / test)')
+        self.assertNotIn('pr merge', self.gh_calls())
+        self.assertNotIn('merged', run.state)
+
+    def test_a_project_without_auto_merge_never_reaches_the_guest(self):
+        """runner が工程ごと飛ばす（bin/run）。飛ばす step 名は backend とテストが同じ定数を読む"""
+        self.assertIn('pr-automerge.sh', run_mod.Run.SKIPPABLE_CODE_STEPS)
