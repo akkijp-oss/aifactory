@@ -1,5 +1,7 @@
 # aifactory
 
+![aifactory — チケットが隔離されたエージェントの作業環境と自動テストを経て、人間のレビューへ届く小さなソフトウェア工場。](docs/assets/aifactory-hero.png)
+
 自前で持てる**ソフトウェアファクトリー**。チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストと lint を回し、人間は最後にレビューだけする。
 
 [English README](README.md) · [ドキュメントサイト](https://akkijp-oss.github.io/aifactory/) · [設計判断（ADR）](docs/adr/) · [変更履歴](CHANGELOG.md)
