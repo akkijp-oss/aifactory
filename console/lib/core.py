@@ -202,10 +202,10 @@ def run_groups(files, wf):
 
     def add(name, kind, step=None):
         f = by_name.get(name)
-        if not f or name in used: return
-        used.add(name); arts.append({**f, "step": step, "kind": kind})
+        if not f or name in used: return False
+        used.add(name); arts.append({**f, "step": step, "kind": kind}); return True
 
-    add("work/ticket.md", "ticket")
+    add("work/ticket.md", "ticket") or add("ticket.md", "ticket")   # VM から回収した写しが無ければ runner が置いた元を出す
     for stp in (wf or {}).get("steps") or []:
         for out in stp.get("outputs") or []:
             if out in ("git", "pr_url"): continue

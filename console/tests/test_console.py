@@ -260,10 +260,10 @@ class ApiTest(unittest.TestCase):
         _, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(d["outcome"]["reason"], "unknown"); self.assertIsNone(d["outcome"]["detail_file"])
 
-        name = self._fixture_run("2026-09-07-kumitate-995", None, {"work/ticket.md": "# x\n"})
+        name = self._fixture_run("2026-09-07-kumitate-995", None, {"ticket.md": "# x\n"})   # VM 貸出前は work/ が無い
         _, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(d["outcome"]["reason"], "not_started")
-        self.assertEqual([a["name"] for a in d["groups"]["artifacts"]], ["work/ticket.md"])   # workflow が無くても成果物は出る
+        self.assertEqual([(a["name"], a["kind"]) for a in d["groups"]["artifacts"]], [("ticket.md", "ticket")])
 
     def test_run_outcome_step_failed_points_at_the_step_log(self):
         """ゲート以外の工程で止まった run は、その工程のログを「理由を読む」の先にする"""

@@ -302,13 +302,15 @@ async function viewRun(name) {
   if (cur && !runPicked[name]) runFile[name] = cur.path;
   if (!runFile[name]) { const latest = [...d.files].filter(f => /\.(log|md|txt)$/.test(f.name) && f.name !== 'ticket.md').sort((a, b) => b.mtime.localeCompare(a.mtime))[0] || d.files.find(f => f.name === 'state.json') || d.files.find(f => f.name === 'ticket.md'); const pick = (!running && d.outcome && d.outcome.detail_file) || (report(d) || {}).path || (latest || {}).path || null; runFile[name] = s.kind === 'v0' ? d.files[0].path : pick; }
   const f = runFile[name]; const file = f ? await api(`file?path=${encodeURIComponent(f)}&tail=300000`) : null;
-  render(crumb('#/runs', T.nav.runs, name) + outcomePanel(name, d) + `
+  const trk = track(state, d.workflow);   // 工程が 1 つも無い run（開始前 / v0）では、この段ごと出さない。理由は「結果」が言う
+  render(crumb('#/runs', T.nav.runs, name) + `
     <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? rst(s.result) : running ? `<span class="st running"><span class="dot pulse"></span>${esc(T.jobState.running)}</span>` : notStarted ? `<span class="tag">${esc(T.run.notStarted)}</span>` : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">${esc(tt(T.ticket.crumb, { id: s.task }))}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
-    <div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${track(state, d.workflow) || `<div class="help">${esc(notStarted ? T.run.noState : T.run.v0)}</div>`}
+    ${outcomePanel(name, d)}
+    ${!trk && !(d.jobs && d.jobs.length) ? '' : `<div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${trk}
       <dl class="kv top">${notStarted ? '' : `<dt>${esc(T.th.started)}</dt><dd>${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${esc(tt(T.run.elapsed, { t: since(s.started) }))}）` : ''}</dd>`}
       ${s.pr_url ? `<dt>PR</dt><dd><a href="${esc(s.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(s.pr_url)}</a></dd>` : ''}${s.wip_branch ? `<dt>${esc(T.run.wip)}</dt><dd class="mono">origin/${esc(s.wip_branch)}</dd>` : ''}
       ${state && state.loops && Object.keys(state.loops).length ? `<dt>${esc(T.run.loops)}</dt><dd>${Object.entries(state.loops).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}</dd>` : ''}
-      ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>
+      ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>`}
     ${runFiles(name, d, f)}
     ${file ? `<div class="panel"><div class="logbar"><span class="mono" title="${esc(file.path)}">${esc((d.files.find(x => x.path === file.path) || {}).name || file.path.split('/').pop())}</span>${file.truncated ? `<span>${esc(T.run.truncated)}</span>` : ''}<span class="spacer"></span>${running ? `<span><span class="dot pulse"></span>${cur && file.path === cur.path ? esc(tt(T.run.following, { step: state.current.step, kind: state.current.kind })) + ' ' : ''}${esc(T.run.refresh)}</span>` : ''}</div>
       ${/\.md$/.test(file.path) && !/prompt-/.test(file.path) ? md(file.text) : `<pre class="log" id="runlog">${esc(file.text)}</pre>`}</div>` : ''}`);
