@@ -320,6 +320,11 @@ def run_outcome(d, s, state, wf, files):
         if isinstance(on_fail, dict) and on_fail.get("goto"):
             o["loops_hit"] = (state.get("loops") or {}).get(f"{step}->{on_fail['goto']}", 0) >= on_fail.get("max_loops", 1)
         o["reason"] = "loop_limit" if o["loops_hit"] else "step_failed"
+        # 時間上限で切られた工程（チケット 329）。「工程が失敗した」とは直し方が違う（上限を上げるか、チケットを小さくする）ので分ける。
+        # コミット済みの分は wip ブランチに残っているので、次の実行は続きから進められる
+        if last.get("failure") == "timeout":
+            o["reason"] = "step_timeout"; o["timeout_min"] = last.get("timeout_min")
+            o["error_summary"] = last_line(state.get("error"))
         by_name = {f["name"]: f for f in files}
         if "gates.txt" in (sd.get("outputs") or []) and "work/gates.txt" in by_name:
             o["gate_fails"] = gate_fails(d / "work" / "gates.txt")

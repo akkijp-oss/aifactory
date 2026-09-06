@@ -358,12 +358,13 @@ function outcomeLead(o, s) {
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
+  if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
   return T.outcome[o.reason] || T.outcome.unknown;
 }
 function outcomePanel(name, d) {
   const o = d.outcome || { reason: 'unknown' }, s = d.summary, tk = d.ticket;
-  const stopped = ['loop_limit', 'step_failed', 'unknown'].includes(o.reason);
+  const stopped = ['loop_limit', 'step_failed', 'step_timeout', 'unknown'].includes(o.reason);
   const gone = o.reason === 'runner_gone', job = o.job || null;
   const lines = [outcomeLead(o, s)];
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
