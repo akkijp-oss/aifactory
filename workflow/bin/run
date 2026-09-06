@@ -729,7 +729,12 @@ class Run:
         pool の uses は「割り当てた回数」で実使用と違ったので（2026-09-10）、起動の回数は runner が数える。失敗しても run は止めない"""
         m = self.POOL_KEY_RE.search(key_line or "")
         if not m or self.dry: return
-        r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        # sandbox が PATH に無い環境（CI・テスト）では sh() が OSError を投げる（check=False でも握らない）。
+        # 報告できないだけで run を止める理由は無いので、ここで握って log に落とす（391）
+        try:
+            r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        except OSError as e:
+            self.log(f"keys used {m.group(1)}: 報告できなかった（{type(e).__name__}）"); return
         if r.returncode: self.log(f"keys used {m.group(1)}: 報告できなかった（rc={r.returncode}）")
 
     def agent_command(self, prompt_path, model, timeout_min):
