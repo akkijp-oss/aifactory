@@ -536,6 +536,27 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
         self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
 
+    def test_tickets_list_rows_have_real_links(self):
+        """チケットの一覧の行も本物の `<a>` にする（チケット 375）。
+
+        #224 で実行記録・ジョブ・ログの表は直したが、`tkRender` の行だけが素の `<td>` のまま残っていた。
+        検索した後に Tab で結果へ届かず、Enter でも開けず、読み上げでは cell にしか見えない。
+        JS を動かす基盤が無いので、test_list_rows_have_real_links と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(app, r"function ticketLink\([^\n]*<a href=\"#/ticket/",
+                         "チケット番号を <a> にする ticketLink が無い")
+        self.assertRegex(app, r"function ticketLink\([^\n]*aria-label=",
+                         "ticketLink に読み上げ名（aria-label）が無い。番号だけでは何のリンクか分からない")
+        i = app.index("function tkRender"); body = app[i:app.index("\n}", i)]
+        self.assertIn("ticketLink(", body, "チケットの一覧が番号をリンクにしていない（ticketLink）")
+        self.assertIn('tr class="link" data-href', body, "一覧の行クリック（tr.link data-href）が消えている")
+        self.assertIn("T.empty.tickets", body, "0 件のときの案内が消えている")
+        self.assertIn("closest('a, button')", app,
+                      "行クリックの委譲がリンクを除外していない（リンクと行クリックが二重に発火する）")
+        self.assertRegex(css, r":focus-visible[^{]*\{[^}]*outline", "フォーカスの表示（:focus-visible の outline）が無い")
+
     def test_logs_are_derived_into_rows(self):
         """起票・配車のログを、項目名つきの表にできる形（entries）にして返す（チケット 230、ADR-0027）。
 

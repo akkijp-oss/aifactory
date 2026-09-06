@@ -126,7 +126,8 @@ function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'runnin
 function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${esc(t.pr)}</a>` : `#${esc(t.pr)}`; }
 const runName = run => String(run || '').replace(/^workflow\/runs\//, '');
 function runLink(run) { if (!run) return ''; const n = runName(run); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
-function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
+function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }
+function ticketLink(x) { return `<a href="#/ticket/${esc(x.id)}" class="mono" aria-label="${esc(tt(T.tickets.link, { id: x.id, title: x.title }))}">${esc(x.id)}</a>`; }  /* 番号だけでは読み上げ名が弱いので、題名を aria-label に添える（見えている番号を含むので label-in-name も満たす） */  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
 function editing() { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}<span class="spacer"></span>${right || ''}</div>`;
 const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
@@ -269,7 +270,7 @@ function tkMatch(x) {
 function tkRender() {
   const box = $('tk-list'); if (!box) return;
   const list = tkAll.filter(tkMatch);
-  const row = x => `<tr class="link" data-href="#/ticket/${x.id}"><td class="mono">${x.id}</td><td>${esc(x.pj)}</td><td>${esc(x.kind)}</td><td>${esc(x.title)}</td><td>${st(x.status)}</td><td>${prLink(x)}</td><td>${fmtT(x.updated)}</td></tr>`;
+  const row = x => `<tr class="link" data-href="#/ticket/${x.id}"><td class="mono">${ticketLink(x)}</td><td>${esc(x.pj)}</td><td>${esc(x.kind)}</td><td>${esc(x.title)}</td><td>${st(x.status)}</td><td>${prLink(x)}</td><td>${fmtT(x.updated)}</td></tr>`;
   box.innerHTML = `<div class="help">${esc(tt(T.tickets.count, { n: list.length, m: tkAll.length }))}</div>`
     + (list.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.label.kind)}</th><th>${esc(T.th.title)}</th><th>${esc(T.th.state)}</th><th>PR</th><th>${esc(T.th.updated)}</th></tr>${list.map(row).join('')}</table>`
       : `<div class="empty">${esc(T.empty.tickets)}</div>`);

@@ -99,7 +99,7 @@ const T = {
     "repoBehind": "取り込んでいないコミット {n} 件", "repoDirty": "未コミットの変更 {n} 件",
     "repoHow": "PJ 定義はこの作業ツリーから読むので、直したときは sandbox/OPERATIONS.md の「PJ 定義の変更手順」で origin に反映してください。"
   },
-  "tickets": { "count": "{n} 件（全 {m} 件）" },
+  "tickets": { "count": "{n} 件（全 {m} 件）", "link": "チケット {id}: {title}" },
   "logs": {
     "count": "{n} 件（全 {m} 件）", "capped": "新しい {n} 件だけ表示しています。", "confidence": "確度 {v}",
     "endDetail": "終了コード {code}・所要 {t}", "dryRun": "dry-run",
