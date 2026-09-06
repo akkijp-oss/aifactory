@@ -405,7 +405,7 @@ class ApiTest(unittest.TestCase):
         _, r = self.http.get("/api/runs")
         row = next(x for x in r["runs"] if x["name"] == "2026-09-07-kumitate-999")
         self.assertEqual(row["status"], "not_started"); self.assertIsNone(row["finished"]); self.assertIsNone(row["result"])
-        self.assertTrue(all(x["status"] in ("running", "finished", "not_started") for x in r["runs"]), r["runs"])
+        self.assertTrue(all(x["status"] in ("running", "finished", "not_started", "abandoned") for x in r["runs"]), r["runs"])
         self.assertEqual([x["status"] for x in r["runs"] if x["kind"] == "v0"] or ["finished"], ["finished"])
         _, o = self.http.get("/api/overview")
         self.assertNotIn("2026-09-07-kumitate-999", [x["name"] for x in o["runs_active"]])
@@ -438,8 +438,72 @@ class ApiTest(unittest.TestCase):
         st, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(st, 200); self.assertEqual(d["summary"]["result"], "failed")
         self.assertIn("空きなし", d["state"]["error"])
+        # 結果パネルが「記録にありません」と言わず、準備段階で止まったことと要約を出す（チケット 236）
+        o2 = d["outcome"]
+        self.assertEqual(o2["reason"], "failed_before_start"); self.assertEqual(o2["stopped_step"], "take")
+        self.assertIn("空きなし", o2["error_summary"])
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.run.error", app)                                             # 詳細に失敗の理由が出る
+        self.assertIn("T.outcome.failed_before_start", app)
+
+    def test_run_whose_job_ended_is_abandoned(self):
+        """起動したジョブが終わっているのに finished が書かれていない run は「実行中」ではなく「中断」（チケット 236）。
+
+        待っていれば進む、と読ませないための判定。ジョブが動いている間と、
+        ジョブの終了より後に state.json が書かれている間（別の runner が続きを回している）は running のまま。
+        """
+        name = "2026-09-07-kumitate-993"
+        self._fixture_run(name, self._state([], finished=None, elapsed_s=None, result=None, next="take",
+                                            current={"step": "take", "kind": "code", "since": "2020-01-02T00:21:37"}),
+                          {"ticket.md": "# 調査: runner が居なくなった run\n"})
+        sf = self.ws / "runs" / name / "state.json"
+        jid = self._put_job("20200102-002137-kb-run", run_hint=name, ticket=self.seed, label=f"kb run {self.seed}",
+                            started="2020-01-02T00:21:37", finished="2020-01-02T00:21:50", rc=1, state="failed")
+        old = time.mktime(time.strptime("2020-01-02T00:21:40", "%Y-%m-%dT%H:%M:%S"))
+        os.utime(sf, (old, old))                                                      # state.json はジョブより先に書き終えている
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == name)
+        self.assertEqual(row["status"], "abandoned"); self.assertEqual(row["runner"]["id"], jid)
+        _, o = self.http.get("/api/overview")
+        self.assertNotIn(name, [x["name"] for x in o["runs_active"]])
+        self.assertIn(name, [x["name"] for x in o["runs_abandoned"]["runs"]]); self.assertGreaterEqual(o["runs_abandoned"]["n"], 1)
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200); self.assertEqual(d["summary"]["status"], "abandoned")
+        self.assertEqual(d["outcome"]["reason"], "runner_gone"); self.assertEqual(d["outcome"]["job"]["id"], jid)
+        self.assertEqual(d["outcome"]["job"]["rc"], 1); self.assertIn("lease", d)
+        # 別の runner が続きを書いていれば実行中のまま（勝手に中断にしない）
+        new = time.mktime(time.strptime("2020-01-02T00:30:00", "%Y-%m-%dT%H:%M:%S"))
+        os.utime(sf, (new, new))
+        _, r = self.http.get("/api/runs")
+        self.assertEqual(next(x for x in r["runs"] if x["name"] == name)["status"], "running")
+        os.utime(sf, (old, old))
+        self._put_job(jid, run_hint=name, ticket=self.seed, label=f"kb run {self.seed}",
+                      started="2020-01-02T00:21:37", finished=None, rc=None, state="running")
+        _, r = self.http.get("/api/runs")
+        self.assertEqual(next(x for x in r["runs"] if x["name"] == name)["status"], "running")
+        shutil.rmtree(self.tmp / "jobs" / jid)
+        shutil.rmtree(self.ws / "runs" / name)
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        for fn in ("async function viewBoard", "async function viewRuns", "async function viewRun("):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn("abandoned", body, f"{fn} が中断した run を実行中と分けていない")
+        self.assertIn("T.outcome.runner_gone", app); self.assertIn("T.run.runnerGone", app)
+
+    def test_run_summary_fills_pj_and_task_from_the_run_name(self):
+        """記録が欠けていても、run 名から PJ とチケット番号を補ってヘッダーの導線を出す（チケット 236）。
+
+        state.json が壊れている run は「開始前」に寄せ、v0 の記録と混ぜず、読めなかったことを添える。
+        """
+        bare = self._fixture_run("2026-09-07-kumitate-992", None, {"ticket.md": "# 調査: 記録の無い run\n"})
+        broken = self._fixture_run("2026-09-07-kumitate-991", None, {"state.json": "{", "ticket.md": "# 調査: 壊れた記録\n"})
+        _, r = self.http.get("/api/runs")
+        b = next(x for x in r["runs"] if x["name"] == bare)
+        self.assertEqual((b["pj"], str(b["task"]), b["from_name"]), (PJ, "992", True)); self.assertIsNone(b["state_error"])
+        k = next(x for x in r["runs"] if x["name"] == broken)
+        self.assertEqual((k["pj"], str(k["task"])), (PJ, "991")); self.assertEqual(k["status"], "not_started")
+        self.assertTrue(k["state_error"]); self.assertNotEqual(k["kind"], "v0")
+        self.assertIn("T.run.stateBroken", (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8"))
+        for nm in (bare, broken): shutil.rmtree(self.ws / "runs" / nm)
 
     def test_file_roots(self):
         _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")

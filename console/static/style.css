@@ -102,7 +102,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .st.done { background: var(--done-bg); color: var(--done); }
 .st.running { background: var(--in_progress-bg); color: var(--in_progress); }
 .st.failed { background: var(--blocked-bg); color: var(--blocked); }
-.st.stopped, .st.lost, .st.ended { background: var(--ground); color: var(--lost); }
+.st.stopped, .st.lost, .st.ended, .st.abandoned { background: var(--ground); color: var(--lost); }
 .st.human { background: var(--blocked-bg); color: var(--blocked); }
 .st.end { background: var(--done-bg); color: var(--done); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--in_progress); vertical-align: middle; margin-right: 6px; }
