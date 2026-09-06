@@ -32,7 +32,8 @@ $kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--note TEXT]   # 起票
 $kb list [--status S] [--pj P] [--all]                                  # 一覧（既定は done 以外）
 $kb show <id>                                                           # メタ + 本文
 $kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（glue のルーターが読む）
-$kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]             # workflow/bin/run を呼び、結果で状態を進める
+$kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]] # workflow/bin/run を呼び、結果で状態を進める
+                                                                        # --wait は VM の空きを待つ（分。既定 60）。上限超過は todo に戻す
 $kb sync <id> [--run NAME] [--dry-run]                                  # runs/<NAME>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
 $kb start|review|done|reopen <id> [--note TEXT]                         # 手で状態を進める
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
