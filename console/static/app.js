@@ -214,7 +214,7 @@ async function viewTickets(q) {
   const opt = (list, blank, sel, label) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option value="${esc(x)}" ${x === sel ? 'selected' : ''}>${esc(label ? label[x] || x : x)}</option>`).join('');
   render(head(esc(T.nav.tickets), T.sub.tickets, link('#/board', T.btn.openBoard)) + `
     <div class="row filters">
-      <label class="field">${esc(T.label.q)}<input type="text" id="tk-q" data-act="tickets-q" class="w220" placeholder="${esc(T.label.qPlaceholder)}" value="${esc(tkFilter.q)}"></label>
+      <label class="field">${esc(T.label.q)}<input type="text" id="tk-q" class="w220" placeholder="${esc(T.label.qPlaceholder)}" value="${esc(tkFilter.q)}"></label>
       <label class="field">${esc(T.label.pj)}<select data-act="tickets-pj">${opt(d.pjs, T.label.allPj, tkFilter.pj)}</select></label>
       <label class="field">${esc(T.label.status)}<select data-act="tickets-status">${opt(STATUSES, T.label.allStatus, tkFilter.status, T.status)}</select></label>
     </div>
@@ -569,9 +569,12 @@ document.addEventListener('click', async e => {
   e.preventDefault();
   try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
-document.addEventListener('input', e => {
-  const el = e.target.closest('[data-act="tickets-q"]'); if (!el) return;
-  clearTimeout(tkDebounce); tkDebounce = setTimeout(() => { tkFilter.q = el.value; tkSync(); tkRender(); }, 150);
+document.addEventListener('input', e => {                                                  /* 検索欄は click の委譲に渡さない（data-act は actions に手のある名前だけ） */
+  const el = e.target.closest('#tk-q'); if (!el) return;
+  clearTimeout(tkDebounce); tkDebounce = setTimeout(() => {
+    if (!location.hash.startsWith('#/tickets')) return;                                    /* 打った直後に画面を離れたら、遅れて URL を書き戻さない */
+    tkFilter.q = el.value; tkSync(); tkRender();
+  }, 150);
 });
 document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
 function go(h) { location.hash = h; }

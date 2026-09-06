@@ -147,6 +147,21 @@ class ApiTest(unittest.TestCase):
         self.assertIn("T.tickets.count", render, "件数（何件中の何件か）を出していない")
         self.assertIn("T.empty.tickets", render, "0 件のときの案内が無い")
 
+    def test_every_data_act_has_a_handler(self):
+        """`data-act` は必ず `actions` に手がある名前だけにする。
+
+        click の委譲（`document.addEventListener('click', ...)`）は SELECT と checkbox 以外の
+        `[data-act]` をすべて `actions[...]` に回すので、手の無い名前を書くと押した瞬間に
+        TypeError → 赤いトースト、さらに `disabled` の切り替えでフォーカスが外れる。
+        JS を動かす基盤が無いので、ソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        block = app[app.index("const actions = {"):app.index("\n};", app.index("const actions = {"))]
+        handlers = set(re.findall(r"^  '?([\w-]+)'?:", block, re.M))
+        used = set(re.findall(r'data-act="([\w-]+)"', app))
+        self.assertTrue(handlers, "actions の手を読み取れていない（テストの前提が壊れている）")
+        self.assertEqual(used - handlers, set(), "actions に手の無い data-act がある（押すとエラーのトーストが出る）")
+
     def test_intake_keeps_draft_across_navigation(self):
         """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
 
