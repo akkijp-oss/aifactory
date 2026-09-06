@@ -8,6 +8,7 @@
 - 動かす: 起票（intake / kb new）/ 状態遷移 / kb run / dispatch / sandbox ls・release / ジョブの停止と待機
 - 読み書きの正本は lib/core.py。Web コンソール（bin/console）と同じ関数を呼ぶので、どちらから動かしても同じジョブ記録（console/jobs/）に載る
 - MCP の実装は最小: initialize / ping / tools/list / tools/call / resources/list / resources/read。1 行 1 メッセージの JSON-RPC 2.0
+- 起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読む。ssh の非ログイン環境でも console API と同じ secrets で動く
 - 待つだけの job_wait だけは別スレッドで処理し、待っている間も他の呼び出しに即応する。それ以外は到着順に直列（ADR-0028）
 """
 import json, pathlib, sys, threading, traceback
@@ -244,4 +245,5 @@ def main():
 
 
 if __name__ == "__main__":
+    core.load_ctl_env()   # 起動時に ~/.config/aifactory/ctl.env を読む（secrets の一元化。ssh 越しでも console API と同じ環境。チケット 249）
     main()

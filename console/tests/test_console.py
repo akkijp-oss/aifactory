@@ -1212,5 +1212,30 @@ class DispatchLineTest(unittest.TestCase):
         self.assertEqual((e["event"], e["tid"], e["dry_run"], e["reason"]), ("start", 207, True, ""))
 
 
+class LoadCtlEnvTest(unittest.TestCase):
+    """ctl.env の読み込み（bin/mcp が ssh 越しでも secrets を持てるように。チケット 249）"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-ctlenv-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.core = load_module(self.tmp / "jobs").core
+        self.envf = self.tmp / "ctl.env"
+        self.envf.write_text('# コメント\n\nCONSOLE_TOKEN=x\nGH_TOKEN=\nQUOTED="q v"\nKEEP=fromfile\n', encoding="utf-8")
+        for k in ("CONSOLE_TOKEN", "GH_TOKEN", "QUOTED", "KEEP"):
+            os.environ.pop(k, None)
+            self.addCleanup(os.environ.pop, k, None)
+
+    def test_fills_only_unset_keys_and_skips_empty_values(self):
+        os.environ["KEEP"] = "fromenv"
+        added = self.core.load_ctl_env(self.envf)
+        self.assertEqual(os.environ["CONSOLE_TOKEN"], "x")
+        self.assertEqual(os.environ["QUOTED"], "q v")          # 引用符は剥がす
+        self.assertEqual(os.environ["KEEP"], "fromenv")        # 既にある値は上書きしない
+        self.assertNotIn("GH_TOKEN", os.environ)               # 空値は入れない（App からの払い出しに任せる）
+        self.assertEqual(sorted(added), ["CONSOLE_TOKEN", "QUOTED"])
+
+    def test_missing_file_is_not_an_error(self):
+        self.assertEqual(self.core.load_ctl_env(self.tmp / "no-such.env"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

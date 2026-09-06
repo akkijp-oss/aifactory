@@ -51,6 +51,20 @@ def scrub(text):
     """秘密が混ざりうる行を落とす（子プロセスの stderr をそのまま state.json に保存するため）"""
     return "\n".join(l for l in text.splitlines() if not SECRET_LINE.search(l))
 
+def ensure_gh_token(pj, repo=""):
+    """制御系で `gh` を使う前に GH_TOKEN を用意する。空なら GitHub App（ADR-0008）から PJ のリポジトリ限定の
+    1 時間トークンを払い出して自分の env に入れる（子プロセスの gh も継承する）。
+    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）"""
+    if os.environ.get("GH_TOKEN"): return None
+    r = sh(["sandbox", "gh-app", "token", pj], check=False)
+    token = ([l.strip() for l in (r.stdout or "").splitlines() if l.strip()] or [""])[-1]
+    if r.returncode != 0 or not token:
+        return (scrub(r.stderr or "").strip() or f"rc={r.returncode}")[-500:]
+    os.environ["GH_TOKEN"] = token
+    print(f"[run] GH_TOKEN: GitHub App から払い出し（{repo or pj}）", flush=True)
+    return None
+
+
 def stream(cmd, log_path, render=None, env=None):
     """子プロセスの出力を 1 行ずつ log_path に流す（console が追い読みできる）。render(line) が与えられれば、その戻り値
     （None なら書かない）を書く。戻り: (rc, 書いた全文)。step の途中経過を見えるようにするため（2026-09-06）"""
@@ -152,7 +166,12 @@ class Run:
             m or die("start: pr の workflow はチケットに `pr: <番号>` の行が要る")
             self.pr_number = m.group(1)
             if not dry:
-                info = json.loads(sh(["gh", "pr", "view", self.pr_number, "-R", self.project["repo"], "--json", "headRefName,baseRefName,state"]).stdout)
+                app_err = ensure_gh_token(pj, self.project["repo"])
+                r = sh(["gh", "pr", "view", self.pr_number, "-R", self.project["repo"], "--json", "headRefName,baseRefName,state"], check=False)
+                if r.returncode != 0:
+                    why = (scrub(r.stderr or "").strip() or f"rc={r.returncode}")[-500:]
+                    die(f"gh pr view が失敗: {why}" + (f" / GH_TOKEN が無く、`sandbox gh-app token {pj}` も失敗: {app_err}" if app_err else ""))
+                info = json.loads(r.stdout)
                 info["state"] == "OPEN" or die(f"PR #{self.pr_number} が OPEN でない: {info['state']}")
                 self.branch, self.base = info["headRefName"], info["baseRefName"]
             else:

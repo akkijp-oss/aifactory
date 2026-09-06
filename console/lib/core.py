@@ -91,6 +91,27 @@ def child_env():
     return env
 
 
+CTL_ENV = pathlib.Path(os.environ.get("AIFACTORY_CTL_ENV") or (pathlib.Path.home() / ".config" / "aifactory" / "ctl.env"))
+
+
+def load_ctl_env(path=None):
+    """制御系の secrets（~/.config/aifactory/ctl.env）を環境に補う。systemd の console は EnvironmentFile で読むが、
+    ssh 越しに起動する bin/mcp は誰も読まないので同じ結果にならなかった（チケット 249）。
+    既に非空の環境変数は上書きしない（手動起動・テストでの指定を殺さないため）。値は出力しない。戻り: 補った key の名前"""
+    p = pathlib.Path(path) if path else CTL_ENV
+    if not p.exists(): return []
+    added = []
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line: continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2: v = v[1:-1]
+        if not k or not v or os.environ.get(k): continue
+        os.environ[k] = v; added.append(k)
+    return added
+
+
 # ---------- kanban（読み取り専用）
 def db():
     if not DB.exists(): return None
