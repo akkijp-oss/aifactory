@@ -39,6 +39,7 @@ class McpClient:
         return res["isError"], (json.loads(text) if not res["isError"] else text)
     def close(self):
         self.p.stdin.close(); self.p.wait(timeout=10)
+        self.p.stdout.close(); self.p.stderr.close()   # 1 テストで何本も立てるので、読み終わったパイプは閉じる
 
 
 class McpTest(unittest.TestCase):
