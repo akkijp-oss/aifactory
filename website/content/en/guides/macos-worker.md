@@ -109,13 +109,15 @@ Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
 
 | Record | What to inspect |
 |---|---|
-| `state.json` | Step history, PR URL, backend, worker, lease, `artifacts_received`, and `released` |
+| `state.json` | Step history, PR URL, backend, worker, lease, `artifacts_received`, `released`, and `wip_branch` |
 | `agent-*.log` / `code-*.log` | Execution, gate and review verdicts, evidence such as guest OS |
 | `worker-operations.log` | Operation IDs to inspect with the administrator CLI's `show` command |
 | `work/` | Plan, report, review, gate results, PR URL, and other workflow files |
 | `artifacts.json` | SHA-256 hashes of collected files |
 
 After PR creation, `result: human` means human review is pending. It alone does not indicate failure; inspect the history and PR. Normal cleanup removes the guest from Tart's list and clears the control plane lease. `--keep` retains both after artifact collection.
+
+A run that reaches `human` before a PR exists (gate retries exhausted, a failed step) force-pushes the work branch HEAD to `sandbox/<ticket>-<workflow>-wip` before artifact collection and records that branch name in `wip_branch` in `state.json`, so a person can pick the work up from there. If the push fails, `wip_branch` stays empty and the diff is left in the run directory as `wip.patch`, which `git am` applies. Artifact collection and guest deletion continue whether or not the preservation succeeds.
 
 Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes; credential file `runtime.env` is excluded. Directories, symlinks, and anything beyond the 4 MiB total are skipped rather than collected, and their names and reasons are recorded in `artifacts_skipped` in `state.json`. Skipped entries do not stop the run, and the VM is still released. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
 

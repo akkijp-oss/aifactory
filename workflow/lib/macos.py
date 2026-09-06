@@ -217,10 +217,14 @@ def backend(Run):
 
         def preserve(self):
             if self.dry: return ""
-            # Preserve on the control plane, without overwriting any remote branch.
-            patch = self.sb(f"cd $SANDBOX_APP_DIR && git diff --binary origin/{shlex.quote(self.base)}", check=False)
-            if patch: (self.run_dir / "wip.patch").write_text(patch)
-            return ""
+            # 保全そのものは Proxmox backend と同じ（作業ブランチの HEAD を wip ブランチへ、駄目なら wip.patch）。
+            # ただし失敗しても例外を外に出さない: MacRun.main の except に抜けると release（成果物回収・
+            # ゲスト削除）まで届かず、実装も lease も取り残される（チケット 282）
+            try:
+                return super().preserve()
+            except Exception as e:
+                self.log(f"{self.backend_label} preserve failed: {str(e)[-200:]}")
+                return ""
 
         def run_code(self, step):
             if self.dry: return True, "(dry-run)"
