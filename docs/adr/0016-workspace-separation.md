@@ -25,3 +25,7 @@
 - 良い: 公開できる。`git status` に運用データが出ない。workspace を別リポジトリ（私有）にして履歴を持たせることもできる
 - 悪い: `sandbox/templates/<pj>` を指していた文書・スクリプト・手癖を全部直す必要がある。`kb` の `run` 列の意味が変わる（解決関数で吸収）
 - 未決: workspace を私有 git リポジトリにするか（現状は追跡外ディレクトリのまま）。公開サンプル PJ を「他人が clone できる」小さな公開リポジトリにするか（kumitate は私有）
+
+## 追記（2026-09-06 夜）
+- workspace は私有 git リポジトリにした（メンテナは `<you>/aifactory-workspace`）。公開サンプル PJ は aifactory 自身（`examples/projects/aifactory/`）で解決
+- 置き場の指定に `~/.config/aifactory/workspace`（1 行のパス）を足した。優先順は環境変数 → 設定ファイル → 既定。シェルを経由しない起動（GUI から開いた Claude Code の MCP、launchd）でも同じ場所に届くようにするため

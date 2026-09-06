@@ -47,7 +47,7 @@ flowchart LR
 | `workspace/projects/<pj>/project.yml` | runner (layer 4), dispatch (presence only), intake (project list), the console | The project's facts and policy. Falls back to `examples/projects/<pj>/` | Medium |
 | `workspace/projects/<pj>/gates.sh` | kit/steps/gates.sh (in the VM) | The project's quality gates | Medium |
 | `workspace/projects/<pj>/provision.sh` | proxmox/32-pj-template.sh | Template baking | Low, on template updates |
-| Environment variable `AIFACTORY_WORKSPACE` | kb, intake, dispatch, runner, the console | Where the workspace is (default `<repo>/workspace/`). `KB_ROOT` / `CONSOLE_JOBS` relocate only the ledger and the job records | Almost never |
+| Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` (one line, a path) | kb, intake, dispatch, runner, the console | Where the workspace is (default `<repo>/workspace/`). The variable wins, then the file. The file also works for processes that do not go through a shell (an MCP server started by a GUI-launched Claude Code, launchd). `KB_ROOT` / `CONSOLE_JOBS` relocate only the ledger and the job records | Almost never |
 | `~/.config/sandbox/env` | sandbox CLI, proxmox/run.sh | Proxmox host (`PVE_HOST`), gateway (`GW_SSH`), key, domain, ProxyJump, pool IPs / VMIDs (`SB_POOL_NET` / `SB_POOL_BASE`). **Outside the repository** | Almost never |
 | `~/.config/sandbox/pj/<pj>.env` | sandbox CLI (take / reinject) | Per-project `CLAUDE_CODE_OAUTH_TOKEN` and `GH_REPO`. **Outside the repository** | On token renewal |
 | `~/.config/sandbox/gh-app/` | sandbox CLI | GitHub App id and private key. **Outside the repository** | Almost never |
@@ -81,7 +81,7 @@ flowchart LR
 | Pool size | `sandbox/proxmox/40-pool.sh`, `POOL_PER_PJ` in `glue/bin/dispatch` | That project's parallelism |
 | Claude token renewal | `sandbox token set <pj>` (`sandbox reinject <id>` while lent) | That project |
 | Proxmox host or address space | `~/.config/sandbox/env` (`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`); on the Proxmox side `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`. The naming rules in `sandbox/README.md` + an ADR | Everything |
-| Where operational data lives | Environment variable `AIFACTORY_WORKSPACE` | Everything |
+| Where operational data lives | Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` | Everything |
 
 !!! warning "Easy to put in the wrong place"
     - "If you want to write something project-specific into a workflow yml, that is wrong." Project-specific content goes in `facts` / `forbidden` / `review_points` of `project.yml`

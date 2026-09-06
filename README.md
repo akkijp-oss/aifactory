@@ -58,7 +58,7 @@ On top: a local **Web console** (`console/bin/console`, Python stdlib, 127.0.0.1
 git clone https://github.com/akkijp-oss/aifactory.git && cd aifactory
 pip install pyyaml jsonschema
 
-# operational data lives in workspace/ (git-ignored); AIFACTORY_WORKSPACE moves it elsewhere
+# operational data lives in workspace/ (git-ignored); AIFACTORY_WORKSPACE or ~/.config/aifactory/workspace moves it elsewhere
 kanban/bin/kb new kumitate chore "try the runner" --body - <<'EOF'
 Explain the repository layout in a short markdown file.
 

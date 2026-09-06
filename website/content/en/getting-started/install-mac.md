@@ -133,3 +133,21 @@ sandbox ls
 ```
 
 If sb-gw is unreachable, see Step 2 of [Build the sandbox](build-sandbox.md) or [Troubleshooting](../troubleshooting.md).
+
+## 7. Reproduce the setup on another Mac
+
+The rule that keeps your machine in the same shape as any other user's: two clones, and secrets are never synced.
+
+```
+~/Documents/GitHub/
+├── <org>/aifactory              # the public framework (a clone of this repository)
+└── <you>/aifactory-workspace    # operational data (a private repository: project definitions, tickets, run records, private notes)
+```
+
+1. Clone both. If you have no workspace yet, start with empty `projects kanban runs logs docs` directories
+2. Point at the workspace: `echo ~/Documents/GitHub/<you>/aifactory-workspace > ~/.config/aifactory/workspace` (or `export AIFACTORY_WORKSPACE=…` in your shell; the variable wins when both exist)
+3. In the framework clone: `pip install pyyaml jsonschema`, `bin/install-hooks.sh` (with gitleaks on PATH), `console/bin/install.sh --launchd`, `sandbox/bin/install.sh`
+4. Enter secrets by hand: `~/.config/sandbox/env` (from `env.example`), `~/.config/sandbox/pj/<pj>.env` (`sandbox token set`), the GitHub App under `~/.config/sandbox/gh-app/`, the ssh key under `~/.ssh/conf.d/aifactory/`. None of these go into any repository
+5. Done when `kanban/bin/kb list` and http://127.0.0.1:8765/ show the workspace contents
+
+The workspace is its own private git repository: when tickets and run records accumulate, commit and push there too (they never show up in the framework clone's `git status`).

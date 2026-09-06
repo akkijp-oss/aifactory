@@ -2,7 +2,8 @@
 
 kb / run / intake / dispatch / console は全部ここを読む。置き場の判断はここに 1 つ。
 
-- AIFACTORY_WORKSPACE: 運用データの根。既定は <repo>/workspace/（git 追跡外）
+- 運用データの根（優先順）: 環境変数 AIFACTORY_WORKSPACE → 設定ファイル ~/.config/aifactory/workspace（1 行のパス）→ 既定 <repo>/workspace/（git 追跡外）
+  設定ファイルはシェルを経由しない起動（GUI から開いた Claude Code の MCP、launchd）でも効く
     workspace/
     ├── projects/<pj>/{project.yml,provision.sh,gates.sh}   PJ 定義（無ければ examples/projects/<pj>/ を探す）
     ├── kanban/{kanban.db,tickets/,BOARD.md}                チケット台帳
@@ -19,7 +20,22 @@ import os, pathlib
 REPO = pathlib.Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples" / "projects"
 
-_env = os.environ.get("AIFACTORY_WORKSPACE")
+CONFIG_FILE = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or (pathlib.Path.home() / ".config")) / "aifactory" / "workspace"
+
+
+def _configured_workspace():
+    """AIFACTORY_WORKSPACE → ~/.config/aifactory/workspace の 1 行 → None（既定）"""
+    v = os.environ.get("AIFACTORY_WORKSPACE")
+    if v: return v, "env"
+    try:
+        line = next((l.strip() for l in CONFIG_FILE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")), "")
+        if line: return line, str(CONFIG_FILE)
+    except OSError:
+        pass
+    return None, "default"
+
+
+_env, WORKSPACE_SOURCE = _configured_workspace()
 LEGACY = not _env and (REPO / "kanban" / "kanban.db").exists()
 WORKSPACE = pathlib.Path(_env).expanduser() if _env else REPO / "workspace"
 
@@ -61,7 +77,7 @@ def run_path(run):
 
 
 def describe():
-    return {"workspace": str(WORKSPACE), "legacy": LEGACY, "project_dirs": [str(p) for p in PROJECT_DIRS],
+    return {"workspace": str(WORKSPACE), "workspace_source": WORKSPACE_SOURCE, "legacy": LEGACY, "project_dirs": [str(p) for p in PROJECT_DIRS],
             "kb_root": str(KB_ROOT), "runs": str(RUNS), "logs": str(LOGS), "jobs": str(JOBS)}
 
 

@@ -133,3 +133,21 @@ sandbox ls
 ```
 
 sb-gw に届かなければ [sandbox の構築](build-sandbox.md) の Step 2、または [トラブルシューティング](../troubleshooting.md) へ。
+
+## 7. 別の Mac に同じ形を作る
+
+手元を「利用者と同じ形」に保つための約束です。clone は 2 本、秘密情報は同期しません。
+
+```
+~/Documents/GitHub/
+├── <org>/aifactory              # 公開の枠組み（この リポジトリの clone）
+└── <you>/aifactory-workspace    # 運用データ（private リポジトリ。PJ 定義・チケット・実行記録・私有メモ）
+```
+
+1. 2 本を clone する。workspace 側が無ければ `mkdir -p projects kanban runs logs docs` の空ディレクトリで始めてよい
+2. 置き場を教える: `echo ~/Documents/GitHub/<you>/aifactory-workspace > ~/.config/aifactory/workspace`（シェルに `export AIFACTORY_WORKSPACE=…` でも可。両方あれば環境変数が優先）
+3. 枠組み側で `pip install pyyaml jsonschema`、`bin/install-hooks.sh`（gitleaks を PATH に）、`console/bin/install.sh --launchd`、`sandbox/bin/install.sh`
+4. 秘密情報は手で入れる: `~/.config/sandbox/env`（`env.example` から）、`~/.config/sandbox/pj/<pj>.env`（`sandbox token set`）、GitHub App の `~/.config/sandbox/gh-app/`、ssh 鍵 `~/.ssh/conf.d/aifactory/`。これらはどのリポジトリにも入れない
+5. `kanban/bin/kb list` と http://127.0.0.1:8765/ が workspace の中身を出せば完了
+
+workspace は私有の git リポジトリなので、チケットや実行記録が増えたら workspace 側でもコミットして push する（枠組み側の `git status` には出ない）。

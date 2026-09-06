@@ -60,7 +60,7 @@ flowchart LR
 git clone https://github.com/akkijp-oss/aifactory.git && cd aifactory
 pip install pyyaml jsonschema
 
-# 運用データは workspace/（git 追跡外）に置かれる。AIFACTORY_WORKSPACE で外にも置ける
+# 運用データは workspace/（git 追跡外）に置かれる。AIFACTORY_WORKSPACE か ~/.config/aifactory/workspace で外にも置ける
 kanban/bin/kb new kumitate chore "runner を試す" --body - <<'EOF'
 リポジトリの構成を短い markdown にまとめる。
 

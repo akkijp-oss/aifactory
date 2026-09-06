@@ -47,7 +47,7 @@ flowchart LR
 | `workspace/projects/<pj>/project.yml` | runner（4 層目）、dispatch（有無だけ）、intake（PJ 一覧）、コンソール | PJ の事実と方針。無ければ `examples/projects/<pj>/` | 中 |
 | `workspace/projects/<pj>/gates.sh` | kit/steps/gates.sh（VM 内で） | PJ の品質ゲート | 中 |
 | `workspace/projects/<pj>/provision.sh` | proxmox/32-pj-template.sh | テンプレートの焼き込み | 低。テンプレ更新時 |
-| 環境変数 `AIFACTORY_WORKSPACE` | kb、intake、dispatch、runner、コンソール | workspace の場所（既定 `<repo>/workspace/`）。`KB_ROOT` / `CONSOLE_JOBS` で台帳とジョブ記録だけ別に置ける | ほぼ無し |
+| 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace`（1 行のパス） | kb、intake、dispatch、runner、コンソール | workspace の場所（既定 `<repo>/workspace/`）。環境変数が優先、次に設定ファイル。設定ファイルはシェルを経由しない起動（GUI から開いた Claude Code の MCP、launchd）でも効く。`KB_ROOT` / `CONSOLE_JOBS` で台帳とジョブ記録だけ別に置ける | ほぼ無し |
 | `~/.config/sandbox/env` | sandbox CLI、proxmox/run.sh | Proxmox ホスト（`PVE_HOST`）、ゲートウェイ（`GW_SSH`）、鍵、ドメイン、ProxyJump、プールの IP / VMID（`SB_POOL_NET` / `SB_POOL_BASE`）。**リポジトリ外** | ほぼ無し |
 | `~/.config/sandbox/pj/<pj>.env` | sandbox CLI（take / reinject） | PJ ごとの `CLAUDE_CODE_OAUTH_TOKEN` と `GH_REPO`。**リポジトリ外** | トークン更新時 |
 | `~/.config/sandbox/gh-app/` | sandbox CLI | GitHub App の ID と秘密鍵。**リポジトリ外** | ほぼ無し |
@@ -81,7 +81,7 @@ flowchart LR
 | プール台数 | `sandbox/proxmox/40-pool.sh`、`glue/bin/dispatch` の `POOL_PER_PJ` | その PJ の並列数 |
 | Claude トークンの更新 | `sandbox token set <pj>`（貸出中は `sandbox reinject <id>`） | その PJ |
 | Proxmox ホストや IP 空間 | `~/.config/sandbox/env`（`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`）、Proxmox 側は `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`。`sandbox/README.md` の命名規則 + ADR | 全体 |
-| 作業データの置き場 | 環境変数 `AIFACTORY_WORKSPACE` | 全体 |
+| 作業データの置き場 | 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace` | 全体 |
 
 !!! warning "置き場を間違えやすいもの"
     - 「PJ 固有のことを workflow yml に書きたくなったら間違い」。PJ 固有は `project.yml` の facts / forbidden / review_points に
