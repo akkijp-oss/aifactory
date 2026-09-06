@@ -51,6 +51,56 @@ cd ~/aifactory && bin/ctl-update
 
 退避先にしか無い変更は、そこから拾って PR にする（この tree には戻さない）。落ち着いたら `rm -rf ~/aifactory.pre-clean-*`。
 
+## PJ 定義（`examples/projects/<pj>/`）の変更手順
+
+runner が読む PJ 定義（`project.yml` / `gates.sh` / `provision.sh`）は制御系の checkout（`~/aifactory`）の
+**作業ツリーから直接**読まれる。つまり制御系で `gates.sh` を直すと、次の gates から**その場で効く**。
+一方で制御系の checkout の remote は https なので `git push` は `fatal: could not read Username for 'https://github.com'`
+で失敗する。直したまま放っておくと、制御系の main が origin より ahead のまま本番が動く（337）。
+
+**基本は手元（Mac）で直して push する。** 制御系は配備するだけにする。
+
+```bash
+# 1. 手元の checkout で直す（PJ 定義はリポジトリの一部）
+vim examples/projects/<pj>/gates.sh
+git commit -m "..." && git push                 # PR → main にマージ
+
+# 2. 制御系で配備する
+ssh aifactory@ctl.<t>.sb.internal
+cd ~/aifactory && bin/ctl-update
+```
+
+急ぎで制御系の中で直してしまったときは、そこから **patch で持ち出して**手元から push し、制御系は origin に揃え直す。
+
+```bash
+# 制御系（未 push のコミットを取り出す）
+cd ~/aifactory && git format-patch origin/main --stdout > /tmp/ctl.patch
+# 手元（当てて PR にする）
+scp aifactory@ctl.<t>.sb.internal:/tmp/ctl.patch . && git am ctl.patch
+# 制御系（origin に揃える。取り出した後に消えて困るものが無いことを確かめてから）
+cd ~/aifactory && git status && git reset --hard origin/main && bin/ctl-update
+```
+
+食い違いは**コンソールのボード**が言う: `<path> が origin と食い違っています（push していないコミット N 件 …）`。
+判定は `git status --porcelain` と `git rev-list --left-right --count HEAD...@{upstream}` で、
+`console/lib/core.py` の `repo_status()` 1 か所（ADR-0015）。fetch はしないので、behind は最後に fetch した時点との差。
+
+制御系から直接 push できるようにするなら、deploy key（write 権限）を作って remote を ssh に付け替える。
+鍵の発行と付け替えはメンテナの作業で、VM やエージェントからはやらない。
+
+```bash
+# 制御系で鍵を作り、公開鍵を GitHub の Settings → Deploy keys に「Allow write access」で登録する
+ssh-keygen -t ed25519 -f ~/.ssh/aifactory_deploy -N ''
+cat ~/.ssh/aifactory_deploy.pub
+printf 'Host github.com\n  IdentityFile ~/.ssh/aifactory_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+cd ~/aifactory && git remote set-url origin git@github.com:<org>/aifactory.git && git push
+```
+
+付け替えても**制御系で直接コミットするのは緊急時だけ**にする。制御系の checkout は clean で運用する（ADR-0017）。
+
+リポジトリに載せない PJ 定義は `~/workspace/projects/<pj>/`（`AIFACTORY_WORKSPACE` の下。ADR-0016）に置く。
+そちらは git の外なので、この手順も食い違いの警告も関わらない（控えは自分で取る）。
+
 ## 日常の5操作
 
 ```bash
