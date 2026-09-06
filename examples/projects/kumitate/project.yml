@@ -7,6 +7,7 @@ hotfix_base: main
 app_dir: /home/dev/app/apps/kumitate
 url: http://localhost:3000
 gates: gates.sh
+prepare: prepare.sh
 stack: "pnpm 10 monorepo（turbo）/ Node 22 / Next.js（apps/web :3000）/ PostgreSQL 16 + pgvector / drizzle / vitest"
 facts:
   - "リポジトリ直下は台帳と docs。アプリは apps/kumitate/（pnpm workspace: apps/{web,marketing,scheduler}、packages/{db,dsl,generate,app-sdk,feedback-widget}）"
