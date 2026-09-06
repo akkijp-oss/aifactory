@@ -3,13 +3,16 @@
 `kanban/bin/kb` は、チケットの作成、状態の更新、履歴の確認、runner の呼び出しを行う CLI です。状態と履歴を SQLite に保存します。Python 3 の標準ライブラリだけで動作します。
 
 ```
-kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
 kb list [--status S] [--pj P] [--all]
 kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
 kb append <id> [--section S] [--text T]
+kb attach <id> <file>...
+kb attachments <id> [--json]
+kb detach <id> <name>
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
 kb sync <id> [--run DIR]
@@ -24,6 +27,7 @@ kb render
 |---|---|
 | DB（正本） | `$AIFACTORY_WORKSPACE/kanban/kanban.db`（既定 `<repo>/workspace/kanban/`。git 追跡外） |
 | 本文（正本） | 同 `kanban/tickets/<id>-<pj>-<slug>.md` |
+| 添付（正本） | 同 `kanban/attachments/<id>/<名前>`（ADR-0040） |
 | ボード（生成物） | 同 `kanban/BOARD.md` |
 | 置き場の差し替え | 環境変数 `AIFACTORY_WORKSPACE=<dir>` で workspace ごと、`KB_ROOT=<dir>` で DB・tickets・BOARD だけを別に置く（テスト用） |
 
@@ -96,6 +100,37 @@ kb append 204 --section "PM 補足" < memo.md      # --text がなければ標�
 挿入位置は末尾に固定しています。`## 完了条件` の手前に入れないのは、節を見分ける仕組みが `kb` になく、末尾なら変更が 1 か所で済むためです。後から書き足したものは見出しで見分けます。
 
 追記そのものは本文（ファイルが正本）に残ります。履歴には `body  - → append 24字 (PM 補足)` の形で、いつ・どれだけ足したかだけが残ります（`history` は `field` / `old` / `new` の 3 列で、差分は保持しません）。
+
+### attach / attachments / detach
+
+```bash
+kb attach 204 ~/Desktop/画面.png 仕様書.pdf    # コピーされる（元のファイルは残る）
+kb attachments 204                             # 名前・サイズ・種別・追加日時
+kb attachments 204 --json                      # [{"name","size","type","added"}]
+kb detach 204 画面.png
+kb new kumitate bug "不具合: 保存が効かない" --body - --attach 画面.png   # 起票と同時に
+```
+
+チケットに画像（スクリーンショット・デザイン案）やファイル（仕様書 PDF・CSV・設定ファイル）を添付します。`$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` にコピーされ、**本文には書きません**。正本は実体のファイルで、一覧は `kb show` の末尾・コンソールのチケット画面・MCP `ticket_show` が実体から導きます（ADR-0040）。
+
+- 名前は sanitize されます（パス区切り・`..`・制御文字を落とす）。同じ名前の添付があれば拡張子の前に `-2`, `-3` … を付け、上書きしません
+- 上限は **1 ファイル 20 MiB・1 チケット合計 100 MiB**。超えるとエラー（終了コード 1）です。複数指定したときは失敗したファイルで止まり、そこまでに入った分は残ります
+- 追加・削除は履歴に `attachment  - → add 画面.png (12.3 KiB)` / `attachment  画面.png → removed` の形で残ります
+- 添付が 0 件のチケットでは `kb show` の出力は今までと変わりません
+
+`kb run` すると、runner が添付を VM の `~/work/<id>/attachments/` に置き、各 step の依頼文に次の 1 行を足します。
+
+```
+- 添付: /home/dev/work/204/attachments/（画面.png, 仕様書.pdf。画像・PDF は Read で開いて見ること。本文と食い違うときは添付を優先し、その旨を報告に書く）
+```
+
+agent（Claude Code）は Read ツールで画像（PNG / JPG など）と PDF を開けるので、「この画面のここ」「この表のとおりに」を実物で渡せます。添付が無ければ依頼文には何も足しません。
+
+!!! warning "秘密情報を添付しない"
+    `attachments/` は workspace（git 追跡外）なので、`bin/oss-check.sh` の秘密情報の検査対象ではありません（検査するのは「git に追跡されていないこと」だけ）。トークン・鍵・`.env` の実値は添付しないでください。
+
+!!! note "今は Proxmox backend だけ"
+    添付を VM に運べるのは Proxmox backend だけです。pull backend（macOS / Windows / Linux ワーカー）は転送の口が別なので未対応で、依頼文にも案内は出ません。
 
 ### run
 

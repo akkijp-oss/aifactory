@@ -98,6 +98,26 @@ kanban/bin/kb new kumitate merge-pr "PR #298 を develop へマージ" --pr 298 
 - `--id N` で番号を指定できます（過去の記録を取り込むとき用）
 - `--note` でメモ、`--status` で初期状態（既定 todo）を付けられます
 
+## 画像やファイルを添付する
+
+「この画面のここを直して」「この表のとおりに」は、言葉より実物のほうが速く正確に伝わります。スクリーンショット・デザイン案・仕様書 PDF・CSV をチケットに添付できます。
+
+```bash
+kanban/bin/kb attach 204 ~/Desktop/画面.png 仕様書.pdf
+kanban/bin/kb attachments 204            # 名前・サイズ・種別・追加日時
+kanban/bin/kb detach 204 画面.png
+kanban/bin/kb new kumitate bug "不具合: 保存が効かない" --body ticket.md --attach 画面.png
+```
+
+添付は `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` にコピーされ、**本文には書き込まれません**（正本は実体のファイル。ADR-0040）。一覧は `kb show` の末尾、[Web コンソール](console.md)のチケット画面、MCP の `ticket_show` に出ます。
+
+`kb run` すると、添付は VM の `~/work/<id>/attachments/` に置かれ、各工程の依頼文に「添付があるので Read で開いて見ること。本文と食い違うときは添付を優先すること」の 1 行が入ります。エージェント（Claude Code）は画像と PDF を Read ツールで開けます。
+
+- 上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB
+- 同じ名前の添付があれば `-2`, `-3` … が付きます（上書きしません）
+- **トークン・鍵・`.env` の実値は添付しないでください。** `attachments/` は git 追跡外なので `bin/oss-check.sh` の秘密情報の検査対象ではありません
+- 添付を VM に運べるのは今のところ Proxmox backend だけです（macOS / Windows / Linux のワーカーは未対応）
+
 ## 良いチケットの書き方
 
 | 良い | 悪い |
@@ -114,7 +134,7 @@ kanban/bin/kb new kumitate merge-pr "PR #298 を develop へマージ" --pr 298 
 ```bash
 kanban/bin/kb list                 # done 以外
 kanban/bin/kb list --all --pj kumitate
-kanban/bin/kb show 204             # メタ + 本文
+kanban/bin/kb show 204             # メタ + 本文（+ 添付があれば一覧）
 ```
 
 `workspace/kanban/BOARD.md` は状態が変わるたびに再生成されます。ブラウザなら [Web コンソール](console.md) のボードが同じものを表示します。

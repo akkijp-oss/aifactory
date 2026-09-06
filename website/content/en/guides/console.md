@@ -120,7 +120,7 @@ claude mcp reset-project-choices   # approve again
 
 | Tool | What it does |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs; plus `sync_preview` when the ticket has a run) |
+| `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs, the `attachments` listing; plus `sync_preview` when the ticket has a run) |
 | `ticket_new` / `intake` | File a ticket (well-formed body / free text; intake is a job) |
 | `ticket_action` | start / review / done / reopen / block (`done` and `set` with `pr` also transcribe the same thing as `run_action` onto the linked run when it is still waiting on a human) / set (an empty `note` clears it) / append (append to the end of the body; `text` required, `section` optional) / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |

@@ -98,6 +98,26 @@ kanban/bin/kb new kumitate merge-pr "Merge PR #298 into develop" --pr 298 --body
 - `--id N` sets a specific number (for importing past records)
 - `--note` adds a note, `--status` sets the initial state (default todo)
 
+## Attaching images and files
+
+"Fix this part of this screen" and "exactly like this table" travel faster and more accurately as the real thing than as prose. Screenshots, design mockups, spec PDFs and CSVs can be attached to a ticket.
+
+```bash
+kanban/bin/kb attach 204 ~/Desktop/screen.png spec.pdf
+kanban/bin/kb attachments 204            # name, size, type, added
+kanban/bin/kb detach 204 screen.png
+kanban/bin/kb new kumitate bug "Bug: saving does nothing" --body ticket.md --attach screen.png
+```
+
+Attachments are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the body** (the files themselves are the source of truth; ADR-0040). The listing shows up at the end of `kb show`, on the ticket page of the [web console](console.md) and in MCP `ticket_show`.
+
+On `kb run`, the attachments are placed in `~/work/<id>/attachments/` on the VM and every step prompt gains one line telling the agent to open them with Read and to prefer the attachment over the body when the two disagree. The agent (Claude Code) can open images and PDFs with the Read tool.
+
+- Limits are 20 MiB per file and 100 MiB per ticket
+- A name that already exists gets `-2`, `-3` … (nothing is overwritten)
+- **Do not attach tokens, keys or real `.env` values.** `attachments/` is not tracked by git, so it is not scanned for secrets by `bin/oss-check.sh`
+- Only the Proxmox backend copies attachments to the VM for now (macOS, Windows and Linux workers are not covered)
+
 ## Writing a good ticket
 
 | Good | Bad |
@@ -114,7 +134,7 @@ Agents work under the rule "if you find a problem outside the scope, report it i
 ```bash
 kanban/bin/kb list                 # everything except done
 kanban/bin/kb list --all --pj kumitate
-kanban/bin/kb show 204             # metadata + body
+kanban/bin/kb show 204             # metadata + body (+ attachments, if any)
 ```
 
 `workspace/kanban/BOARD.md` is regenerated whenever state changes. In a browser, the board of the [Web console](console.md) shows the same thing.
