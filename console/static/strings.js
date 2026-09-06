@@ -44,7 +44,7 @@ const T = {
     "model": "モデル", "steps": "工程数", "turns": "ターン", "avgTurns": "平均ターン", "avgMin": "平均分", "input": "入力", "cacheWrite": "キャッシュ書込", "cacheRead": "キャッシュ読出", "output": "出力",
     "cost": "費用換算", "avgCost": "1 工程あたり", "thinking": "thinking", "tools": "ツール呼出", "date": "日付", "minutes": "分", "log": "ログ",
     "keys": "鍵", "keyFable": "Fable に使う", "keyOther": "Opus・Sonnet に使う", "keyEnabled": "有効", "keyTail": "トークンの末尾",
-    "issued": "登録日", "lastUsed": "最後に使った日時", "uses": "使用回数", "keyInUse": "使用中のチケット"
+    "issued": "登録日", "lastLaunched": "最後に起動した日時", "launches": "起動回数", "keyInUse": "使用中のチケット"
   },
 
   "label": {
@@ -75,7 +75,7 @@ const T = {
     "scope": "{sel} 工程（記録は全部で {all}）"
   },
 
-  "keys": { "count": "{n} 本", "never": "まだ使っていません" },
+  "keys": { "count": "{n} 本", "never": "まだ起動していません", "assigned": "割り当てた回数: {n}（チケットの実行に鍵を渡した回数。起動回数とは別です）" },
 
   "sub": {
     "stats": "agent の工程ごとに、ターン・トークン・thinking・時間・費用換算を実行記録から集めます。まず、どこで消費しているかを知るための画面です。",

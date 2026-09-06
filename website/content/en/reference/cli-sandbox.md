@@ -106,7 +106,8 @@ Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the contro
 | Command | What it does |
 |---|---|
 | `keys add <name> [--fable] [--other] [--note …]` | Register a key. The value is read from the terminal without echo, or from stdin. At least one purpose is required. The name must be unique and match `[A-Za-z0-9._-]{1,40}` |
-| `keys list [--json]` | Name, purposes, enabled, the last 4 characters of the token, issue date, last use, use count, and the tickets using it. The value is never printed |
+| `keys list [--json]` | Name, purposes, enabled, the last 4 characters of the token, issue date, assignment count (`ASSIGNED` = how many times take / reinject handed the key out), last launch, launch count (`LAUNCHES` = how many times the runner actually started `claude` with it; use this as the usage estimate), and the tickets using it. The value is never printed |
+| `keys used <name>` | Reporting hook the runner calls whenever it starts an agent (advances the launch count and time). Not meant to be typed by hand |
 | `keys set <name> [--fable=on\|off] [--other=on\|off] [--enable\|--disable] [--note …]` | Change the purposes, enabled, or the note. Disabling prints the `reinject` commands for the VMs that hold it |
 | `keys token <name>` | Replace only the value (name, purposes and counters stay). Apply it to lent VMs with `reinject` |
 | `keys rm <name> [--force]` | Remove a key. `--force` is required while a lent VM still holds it |
