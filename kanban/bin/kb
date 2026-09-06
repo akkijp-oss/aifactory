@@ -323,6 +323,11 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             status = "todo"
             note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
                     "空きが出たら kb run --wait / dispatch --wait で再開")
+        elif result == "failed" and s.get("failure") == "prepare":
+            # 貸出直後の準備で落ちた run（330）。VM は取れているので「取得できず」ではない。直す所は prepare.sh か VM の側
+            why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
+            status = "blocked"
+            note = f"貸出直後の準備（prepare）で止まった: {why}。prepare.sh か VM を直して kb reopen → kb run"
         elif result == "failed":
             # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]

@@ -73,6 +73,11 @@ class PoolTimeout(RuntimeError):
         super().__init__(msg); self.waited_s = waited_s
 
 
+class PrepareFailed(RuntimeError):
+    """project.yml の prepare（貸出直後の準備）が失敗した。環境が整っていない VM で agent を起こしても
+    「環境起因の赤」を直そうとして時間を焼くだけなので、工程を 1 つも始めずに終わる（チケット 330）"""
+
+
 SECRET_LINE = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY)\s*=|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-", re.I)
 
 def scrub(text):
@@ -339,8 +344,30 @@ class Run:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
         else:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
+        self.prepare()
         if self.from_step: self.carry_work()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
+
+    def prepare(self):
+        """project.yml の `prepare`（任意）を checkout の直後に 1 回だけ走らせる（チケット 330）。
+
+        VM は run のたびにテンプレート（provision.sh を焼いた時点）へ戻るので、そこから base が進んだ分だけ
+        環境がずれる（依存の追加、DB migration）。そのずれをここで埋めてから agent を起こす。埋められなければ
+        PrepareFailed を投げ、工程を 1 つも始めずに終わる（環境起因の赤を agent に直させない）。
+        `--from` や PR 起点の run でも走らせる（続きであっても VM は素のテンプレートなので、環境は揃え直す）。
+        pull backend（macOS / Windows / Linux）は take を独自に持ち、そちらは provision.sh が同じ役目を果たす。"""
+        name = self.project.get("prepare")
+        if not name: return
+        src = self.project_dir / name
+        src.is_file() or die(f"project.yml の prepare が指すスクリプトが無い: {src}")
+        self.log(f"prepare: {name}")
+        self.scp_to(src, f"{self.work}/prepare.sh")
+        # console と MCP が「今は準備中」と読めるようにする（pull backend の setup_project と同じ step 名・ログ名）
+        self.set_current("prepare", "code", "code-prepare.log")
+        rc, out = self.run_remote(f"cd $SANDBOX_APP_DIR && bash {self.work}/prepare.sh", self.run_dir / "code-prepare.log")
+        if rc != 0:
+            why = ([l.strip() for l in scrub(out).splitlines() if l.strip()] or ["(出力なし)"])[-1][:300]
+            raise PrepareFailed(f"prepare ({name}) が rc={rc} で失敗: {why}")
     def take_waiting(self):
         """--wait のとき、プールに空きが出るまで take を呼び直す。待っている間は state.json の current を wait-vm にして
         console（ボードの実行中欄・run 画面）と MCP に「VM の空き待ち（n 分）」と見せる。
@@ -571,8 +598,24 @@ class Run:
         log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
         self.set_current(step["id"], "code", log_path.name)
         rc, out = stream(["bash", str(script)], log_path, env=env)
+        if step["code"] == "gates.sh": self.note_base_red()
         print(out.strip()[-1500:])
         return rc == 0, out[-4000:]
+
+    def note_base_red(self):
+        """gates.sh が「base でも赤い」と実際に確かめたゲート名を run の記録に足す（チケット 330）。
+
+        project.yml は書き換えない。あれは人が書く設定ファイルで、機械が触ると run の途中で PJ 定義が変わってしまう。
+        console の sandbox 画面は project.yml の値とここに記録された値を合わせて見せる。
+        base で確かめた後に作業ブランチへ戻せていないときは `!restore-failed` が入る（その VM で agent を走らせない）"""
+        lines = [l.strip() for l in (self.vm_read("base-red.txt") or "").splitlines() if l.strip()]
+        self.base_check_broken = "!restore-failed" in lines
+        names = [l for l in lines if not l.startswith("!")]
+        if not names: return
+        known = list(self.state.get("known_red_gates") or [])
+        known += [n for n in names if n not in known]
+        self.state["known_red_gates"] = known
+        self.save()
 
     def transition(self, step, ok):
         if "on_pass" in step or "on_fail" in step: t = step.get("on_pass" if ok else "on_fail")
@@ -594,11 +637,14 @@ class Run:
     def fail_before_start(self, e, failure=None, waited_s=None):
         """take（VM の取得と準備）で落ちたときの終わり方。工程は 1 つも走っていないので、記録に理由を残して人間へ返す（チケット 238）。
         記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう。
-        failure（今は "wait_timeout" だけ）は「同じ failed でも扱いが違う終わり方」の目印。kb はこれを見てチケットを todo に戻す（242）"""
+        failure は「同じ failed でも扱いが違う終わり方」の目印。kb と console がこれを見て見せ方と次の一手を変える。
+        今あるのは "wait_timeout"（VM の空き待ちが上限。チケットは todo に戻す。242）と
+        "prepare"（貸出直後の準備が失敗。VM か prepare.sh を直してから回し直す。330）"""
         err = scrub(str(e))[-1500:]
         self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
                            "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
-        if failure: self.state.update({"failure": failure, "waited_s": int(waited_s or 0)})
+        if failure: self.state["failure"] = failure
+        if waited_s is not None: self.state["waited_s"] = int(waited_s)   # 待っていない終わり方に「0 秒待った」と書かない
         self.save()
         self.log(f"take failed: {([l for l in err.splitlines() if l.strip()] or ['(理由なし)'])[-1]}")
         # take が通った後（fetch など）で落ちると VM は貸出中のまま。sandbox backend では返す（take 自体が失敗したなら貸出は無い）。
@@ -621,15 +667,20 @@ class Run:
             self.take_waiting()
         except PoolTimeout as e:
             return self.fail_before_start(e, failure="wait_timeout", waited_s=e.waited_s)
+        except PrepareFailed as e:
+            # 準備で落ちた run。直す所は VM か prepare.sh 側にあるので、agent を起こさず人間へ返す（330）
+            return self.fail_before_start(e, failure="prepare")
         except Exception as e:
             return self.fail_before_start(e)
         cur = self.state["next"]; retry_note = self.first_retry_note(); result = "end"
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")
             self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
+            self.base_check_broken = False          # 同上（gates.sh が base を見た後にツリーを戻せなかった、の目印）
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)
-            nxt = self.transition(step, ok)
+            # 作業ツリーが base を見たまま戻っていない VM に agent を入れない。戻す回数を数えず、そのまま人間へ（330）
+            nxt = "human" if self.base_check_broken else self.transition(step, ok)
             entry = {"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             fail = self.last_fail if not ok else {}
             # 「時間上限で切られた」は「その step が失敗した」とは直し方が違う（上限を上げるか、チケットを小さくする）。
@@ -646,7 +697,9 @@ class Run:
                 # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）
                 self.state["resume_step"] = self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
-                if fail.get("failure") == "timeout":
+                if self.base_check_broken:
+                    self.state["error"] = f"{cur}: base で確かめた後に作業ブランチへ戻せなかった。VM の作業ツリーを人が確かめること"
+                elif fail.get("failure") == "timeout":
                     self.state["error"] = f"{cur}: 時間上限 {fail.get('timeout_min')} 分で中断（timeout）"
                 else:
                     why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]
@@ -655,8 +708,9 @@ class Run:
             retry_note = "" if ok else (info if "role" in step else f"```\n{info}\n```")
             if not ok and nxt in self.steps and "role" in self.steps[nxt] and step.get("code") == "gates.sh":
                 retry_note = ("ゲートの結果（赤あり）。ログを読んで原因を直し、ゲートを全緑にしてコミットすること。\n"
-                              "**ただし、その赤が自分の変更と無関係で base ブランチでも既に赤い場合は直さない**（範囲外）。"
-                              "その場合は report.md に『base で既に赤: <ゲート名> <理由>』と書いてコミットし、コードは触らないこと。\n\n"
+                              "**base でも赤いゲートは runner が base で実際に回して確かめ済みで、`INFO <名前> red (also red on base; not a gate)` "
+                              "に落としてある**（結果は gates.txt の `=== base check:` 以降にある）。"
+                              "そこに残っている `FAIL` は自分の変更が原因なので、推し測らずに直すこと。\n\n"
                               f"```\n{info}\n```")
             cur = nxt
         result = cur
