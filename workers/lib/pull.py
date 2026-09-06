@@ -194,7 +194,7 @@ class Store:
         operation = operation or str(uuid.uuid4())
         if not NAME.fullmatch(operation):
             raise Error("invalid operation ID")
-        if kind not in ("probe", "guest-exec", "guest-prepare", "guest-release"):
+        if kind not in ("probe", "guest-exec", "guest-prepare", "guest-release", "guest-start"):
             raise Error("unsupported operation")
         if not isinstance(payload, dict):
             raise Error("payload must be an object")
@@ -209,7 +209,7 @@ class Store:
             payload = {"timeout": 300, **payload}
             if type(payload["timeout"]) is not int or not 1 <= payload["timeout"] <= 3600:
                 raise Error("timeout must be between 1 and 3600 seconds")
-        if kind in ("guest-prepare", "guest-release"):
+        if kind in ("guest-prepare", "guest-release", "guest-start"):
             allowed = {"lease", "width", "height"} if kind == "guest-prepare" else {"lease"}
             if set(payload) - allowed or "lease" not in payload or not NAME.fullmatch(str(payload["lease"])):
                 raise Error("lifecycle requires a lease ID")
@@ -249,8 +249,12 @@ class Store:
                 raise Error("lease not acquired", 409)
             if kind != "probe" and json.loads(w["info"]).get("lifecycle") and not lease:
                 raise Error("lifecycle worker requires a lease", 409)
-            if kind in ("guest-prepare", "guest-release") and not json.loads(w["info"]).get("lifecycle"):
+            if kind in ("guest-prepare", "guest-release", "guest-start") and not json.loads(w["info"]).get("lifecycle"):
                 raise Error("worker has no lifecycle support", 409)
+            # guest-start を知らない古い worker に投げると落ち穂拾いの uncertain で worker ごと塞がるので、
+            # 能力の広告があるときだけ通す（チケット 478）
+            if kind == "guest-start" and not json.loads(w["info"]).get("guest_start"):
+                raise Error("worker has no guest-start support", 409)
             try:
                 db.execute("INSERT INTO operations(id,worker,kind,payload,created) VALUES (?,?,?,?,?)", (operation, worker, kind, body, time.time()))
             except sqlite3.IntegrityError:
