@@ -164,6 +164,9 @@ class ResumeFromStepTest(unittest.TestCase):
         r.release = lambda: None
         r.refresh_token = lambda: None
         r.scp_to = lambda local, remote: shutil.copy(str(local), str(remote))
+        # 貸出直後の準備（project.yml の prepare）はこの test の対象外。kumitate の prepare.sh は VM の中の
+        # pnpm と Postgres を前提にしていて、偽 VM では走らない。prepare 自体は test_prepare.py が見る
+        r.prepare = lambda: None
         self.env = env
         return r
 
