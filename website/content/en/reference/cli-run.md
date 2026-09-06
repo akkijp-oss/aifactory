@@ -39,6 +39,8 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 8. Collects `~/work/<id>/` into `workspace/runs/…/work/`. `sandbox release` unless `--keep`
 9. Writes `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s` to `state.json`. A run that stopped at `human` also gets `resume_step` (the step to redo), and a run started with `--from` gets `resumed_from` / `from_step` / `from_branch`
 
+In a run started with `--from`, the previous `review.md` goes into the first prompt as "what the last run produced (fix this)" **only when its first line is `# レビュー: FAIL`**. If the previous review passed (the run stopped at a step after the review), the last line of `error` in `state.json` goes in instead (ADR-0053).
+
 When `--wait` runs out, the record carries `failure: "wait_timeout"` and `waited_s` (the seconds waited) beside `result: failed`, and the exit code is 2. `kb` reads that marker and puts the ticket back to `todo` instead of `blocked`.
 
 ### Agent steps

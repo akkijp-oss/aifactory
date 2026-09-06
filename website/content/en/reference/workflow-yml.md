@@ -52,6 +52,10 @@ Either a string or an object.
 
 `max_loops` defaults to 1, `else` to `human`. Counts are kept in `loops` of `state.json` as `"<from>-><to>": n`.
 
+!!! note "A minor review finding buys one more loop"
+
+    On a FAIL from a `role: reviewer` step only, a `severity: minor` line in `review.md` sends the run back to `goto` **one more time** even when `max_loops` is already used up. The extra loop is granted once per transition (spending it is recorded in `severity_bonus` of `state.json` as `"<from>-><to>": 1`); `severity: major` and no severity at all go to `else` (`human` by default) as before. The `max_loops` values themselves are unchanged (ADR-0053).
+
 ## Examples
 
 === "bug.yml"
