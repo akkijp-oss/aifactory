@@ -105,19 +105,21 @@ def run_summary(d):
         try: s = json.loads(st.read_text(encoding="utf-8"))
         except Exception as e: s = {"_error": str(e)}
     hist = s.get("history") or []
-    return {"name": d.name, "kind": "v1", "pj": s.get("pj"), "task": s.get("task"), "workflow": s.get("workflow"),
+    # state.json が無い run（VM 貸出前に止まった残骸）は「開始前」。実行中と混ぜない（チケット 220）
+    status = "not_started" if not st.exists() else "finished" if s.get("finished") else "running"
+    return {"name": d.name, "kind": "v1", "status": status, "pj": s.get("pj"), "task": s.get("task"), "workflow": s.get("workflow"),
             "branch": s.get("branch"), "base": s.get("base"), "started": s.get("started"), "finished": s.get("finished"),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
             "next": s.get("next"), "current": s.get("current"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
             "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
-            "mtime": datetime.datetime.fromtimestamp(st.stat().st_mtime).isoformat(timespec="seconds") if st.exists() else None}
+            "mtime": datetime.datetime.fromtimestamp((st if st.exists() else d).stat().st_mtime).isoformat(timespec="seconds")}
 
 
 def v0_summary(f):
     head = f.read_text(encoding="utf-8", errors="replace").splitlines()[:8]
     m = re.match(r"^#\s*spin-v0:\s*(\S+)\s*/\s*task\s*(\S+)", head[0] if head else "")
     started = next((l.split(":", 1)[1].strip() for l in head if l.startswith("- 日時")), None)
-    return {"name": f.name, "kind": "v0", "pj": m.group(1) if m else None, "task": m.group(2) if m else None, "workflow": "spin-v0",
+    return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None, "workflow": "spin-v0",
             "started": started, "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
             "mtime": datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")}
 
@@ -335,12 +337,14 @@ def overview():
     counts = {s: 0 for s in STATUSES}
     for r in rows("SELECT status, COUNT(*) n FROM tickets GROUP BY status"): counts[r["status"]] = r["n"]
     running = JobStore.running()
-    active = [r for r in list_runs() if r["kind"] == "v1" and not r.get("finished") and not r.get("dry")]
+    runs = [r for r in list_runs() if r["kind"] == "v1" and not r.get("dry")]
+    active = [r for r in runs if r["status"] == "running"]
+    not_started = [r for r in runs if r["status"] == "not_started"]
     lent = {}
     if SANDBOX_STATE.exists():
         try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
         except Exception: lent = {}
-    return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:6], "runs_active": active[:6],
+    return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:6], "runs_active": active[:6], "runs_not_started": {"n": len(not_started), "runs": not_started[:6]},
             "lent": len([v for v in lent.values() if isinstance(v, dict)]), "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now()}
 
 
