@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - Console board: the pipeline strip counted every project while the columns below it counted only the selected one, so a project filter looked broken. The strip, the "in progress" run list and the columns now all come from the filtered ticket list, the scope is stated above the strip, and the columns follow the strip's order (todo, in progress, review, done, then "waiting for a human" to the side)
+- Console intake: typing a request and then stepping over to the logs or settings threw the draft away, with no warning before leaving. All nine fields of both panels (request text, project, kind, dry run, title, body, PR number) are now kept in `sessionStorage` as you type, so a detour, a reload and the browser's back button all bring them back; a *Discard the draft* button (with *Undo* in the toast) is the only way to clear them, and a successful submit clears only that panel
 - 種別・workflow・役割の一覧から `.` / `_` 始まりのファイル（macOS の `._bug.yml` など）を除いた。起票の種別の初期値を `bug` にし、種別の用途を画面に出す。台帳に workflow の無い種別が入っているときは注意を出す（console / kb / intake）
 
 ## [0.3.0] - 2026-09-08
