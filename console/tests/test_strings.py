@@ -8,11 +8,13 @@
 - ボタン（btn.* とダイアログの ok）は動詞で終わる（「実行する」）。「OK」「はい」「いいえ」は使わない。取り消しは「キャンセル」
 - 文（msg / err / empty / help / sub / next / banner とダイアログの本文）は「ですます」で「。」か「？」で終わる。言い切り（〜無い。/ 〜要る。）は弾く
 - app.js / index.html が参照する鍵（T.a.b / data-t="a.b"）が strings.js にあり、strings.js の鍵が全部どこかで使われている
+- kind.* が kit の種別を全部持ち、本文欄の雛形に「## 完了条件」の箇条書きがある（起票画面で用途と書き方が分かる）
 """
 import json, pathlib, re, unittest
 
 STATIC = pathlib.Path(__file__).resolve().parents[1] / "static"
-SENTENCE_GROUPS = ("msg", "err", "empty", "help", "sub", "next", "banner")
+WORKFLOWS = pathlib.Path(__file__).resolve().parents[2] / "workflow" / "kit" / "workflows"
+SENTENCE_GROUPS = ("msg", "err", "empty", "help", "sub", "next", "banner", "kind")
 DIALOG_LABEL_KEYS = ("title",)            # ダイアログの中で文でない鍵（ok はボタンとして検査）
 FORBIDDEN = {
     "下さい": "補助動詞はひらがな（ください）", "出来": "ひらがな（できる）", "頂": "補助動詞はひらがな（いただく）", "致し": "二重敬語の温床（します）",
@@ -99,6 +101,17 @@ class StringsTest(unittest.TestCase):
         code = "\n".join(re.sub(r"(?<![:'\"`])//.*$", "", l) for l in code.splitlines())   # 行コメント（https:// は残す）
         inline = re.findall(r"[ぁ-んァ-ン一-龥]{2,}", code)
         self.assertEqual(inline, [], f"app.js に日本語の直書き: {inline[:10]}")
+
+    def test_kind_covers_every_workflow(self):
+        """種別の用途は kind.* が正本。kit に種別が増えたらここが落ちて追記を促す"""
+        kinds = {f.stem for f in WORKFLOWS.glob("*.yml") if not f.name.startswith((".", "_"))}
+        self.assertGreater(len(kinds), 3, WORKFLOWS)
+        self.assertEqual(sorted(kinds - set(self.T["kind"])), [], "kind.* に説明の無い種別がある")
+
+    def test_body_placeholder_shows_the_shape(self):
+        v = self.T["label"]["bodyPlaceholder"]
+        self.assertIn("## 完了条件", v)
+        self.assertIn("- [ ]", v)
 
 
 if __name__ == "__main__":
