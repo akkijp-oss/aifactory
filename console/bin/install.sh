@@ -31,10 +31,11 @@ do_launchd() {
   done
   for d in "$BIN" /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do [[ ":$path:" != *":$d:"* ]] && path="$path:$d"; done
   mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
-  sed -e "s#@@PYTHON@@#$py#g" -e "s#@@REPO@@#$REPO#g" -e "s#@@PATH@@#$path#g" -e "s#@@HOME@@#$HOME#g" -e "s#@@PORT@@#$PORT#g" "$PLIST_SRC" > "$PLIST_DST"
+  local ws="${AIFACTORY_WORKSPACE:-$REPO/workspace}"   # 運用データの置き場（ADR-0016）。今のシェルの値を焼く
+  sed -e "s#@@PYTHON@@#$py#g" -e "s#@@REPO@@#$REPO#g" -e "s#@@PATH@@#$path#g" -e "s#@@HOME@@#$HOME#g" -e "s#@@PORT@@#$PORT#g" -e "s#@@WORKSPACE@@#$ws#g" "$PLIST_SRC" > "$PLIST_DST"
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
-  log "launchd: $PLIST_DST を登録（python3=$py, port=${PORT}）"
+  log "launchd: $PLIST_DST を登録（python3=$py, port=${PORT}, workspace=${ws}）"
   local i; for i in $(seq 1 20); do
     curl -sf "http://127.0.0.1:$PORT/api/overview" >/dev/null 2>&1 && { log "ok: http://127.0.0.1:$PORT/  ログ: ~/Library/Logs/aifactory-console.log"; return 0; }
     sleep 0.5

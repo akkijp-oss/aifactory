@@ -1,0 +1,29 @@
+# aifactory 自身の PJ 定義（dogfooding。workflow/kit/schema/project.schema.json）。手順は常備側、ここは事実と方針だけ
+# 公開リポジトリなので、誰でもこの定義で 1 周回せる（clone にトークン不要。push / PR には GitHub App か GH_TOKEN が要る）
+name: aifactory
+display_name: aifactory（ソフトウェアファクトリー自身）
+repo: akkijp-oss/aifactory
+base_branch: main
+app_dir: /home/dev/app
+url: http://localhost:3000
+gates: gates.sh
+stack: "Python 3 標準ライブラリ + pyyaml + jsonschema / bash / MkDocs Material（website/）。VM 内の :3000 はドキュメントサイト（mkdocs serve）"
+facts:
+  - "4 区画: sandbox/（VM）kanban/（bin/kb）workflow/（kit/ + bin/run）glue/（bin/intake, bin/dispatch）。その上に console/（bin/console, bin/mcp, lib/core.py）"
+  - "運用データは AIFACTORY_WORKSPACE（既定 workspace/、git 追跡外）。置き場の判断は lib/aifactory_paths.py だけ（ADR-0016）。VM 内では workspace/ は空でよい"
+  - "テスト: `python3 -m unittest discover -s console/tests` と `-s workflow/tests`。VM も claude も使わず、一時 workspace と examples/projects/kumitate で自立している"
+  - "ドキュメント: website/content/ja/ を直して en/ に訳す。`website/.venv/bin/mkdocs build --strict -f website/mkdocs.yml` が通ること"
+  - "設計判断を変えるときは docs/adr/ に新しい番号で 1 枚足す（既存 ADR は書き換えない）。番号は ls docs/adr/ で取り直す"
+  - "shell スクリプトは bash -n が通ること。Python は py_compile が通ること。CI（.github/workflows/ci.yml）も同じ組を回す"
+  - "秘密情報・ホスト名・私有 PJ 名をリポジトリに書かない。bin/oss-check.sh がゲートで検査する"
+  - "コミットメッセージは 1 行目に何を・なぜ（日本語で可）"
+review_points:
+  - "置き場（パス）の判断を lib/aifactory_paths.py 以外に書いていないか"
+  - "console/lib/core.py の判定を bin/console や bin/mcp に複製していないか（ADR-0015）"
+  - "文書（README / 区画 README / website ja+en）が挙動の変更に追随しているか"
+  - "秘密情報や環境固有の実値（ホスト名・LAN の IP）が混ざっていないか"
+forbidden:
+  - "既存の docs/adr/*.md を書き換えない（新しい番号で追加する）"
+  - "examples/projects/ 以外に PJ 固有の値を書かない。workspace/ の中身をコミットしない"
+  - "sandbox/proxmox/ のスクリプトを VM の中から実行しない（Proxmox ホスト用）"
+  - "LICENSE を変えない"

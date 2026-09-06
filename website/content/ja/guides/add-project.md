@@ -1,6 +1,6 @@
 # PJ を追加する
 
-このページで分かること: 新しいリポジトリを工場に入れるための 6 つの作業と、それぞれのファイルの書き方。所要はテンプレートの焼き込み（依存の重さ次第で 10〜40 分）を含めて 1〜2 時間です。手本は同梱の `examples/projects/kumitate/`（[akkijp/kumitate](https://github.com/akkijp/kumitate)、pnpm monorepo + Next.js + PostgreSQL）です。
+このページで分かること: 新しいリポジトリを工場に入れるための 6 つの作業と、それぞれのファイルの書き方。所要はテンプレートの焼き込み（依存の重さ次第で 10〜40 分）を含めて 1〜2 時間です。手本は同梱の 2 本です: `examples/projects/aifactory/`（このリポジトリ自身。公開なので誰でもそのまま焼いて 1 周回せる。アプリは :3000 の `mkdocs serve`）と `examples/projects/kumitate/`（[akkijp/kumitate](https://github.com/akkijp/kumitate)、pnpm monorepo + Next.js + PostgreSQL。大きめのアプリの参照例）。
 
 ## 作業の全体
 

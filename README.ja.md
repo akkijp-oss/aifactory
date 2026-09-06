@@ -70,7 +70,12 @@ console/bin/console --open          # http://127.0.0.1:8765/
 python3 -m unittest discover -s console/tests && python3 -m unittest discover -s workflow/tests
 ```
 
-`examples/projects/kumitate/` が同梱の参照用 PJ 定義（`project.yml` / `provision.sh` / `gates.sh`）。自分の PJ は `workspace/projects/<pj>/` に置く。書き方はドキュメントサイトの「プロジェクトを追加する」。
+`examples/projects/` に PJ 定義（`project.yml` / `provision.sh` / `gates.sh`）を 2 本同梱している。
+
+- `aifactory/`: このリポジトリ自身。公開リポジトリなので、誰でもテンプレートを焼いてチケットを 1 周回せる。メンテナは dogfooding に使う
+- `kumitate/`: 私有の pnpm / Next.js monorepo。大きめのアプリの現実的な参照例
+
+自分の PJ は `workspace/projects/<pj>/` に置く。書き方はドキュメントサイトの「プロジェクトを追加する」。
 
 ## sandbox を作る
 
@@ -105,7 +110,7 @@ aifactory/
 ├── workflow/    kit/（workflows / roles / steps / schema / routes.env）・bin/run・tests/
 ├── glue/        bin/intake・bin/dispatch
 ├── console/     bin/console（HTTP）・bin/mcp（stdio）・lib/core.py・static/・tests/・launchd/
-├── examples/    projects/<pj>/ 同梱の PJ 定義
+├── examples/    projects/{aifactory,kumitate}/ 同梱の PJ 定義
 ├── lib/         aifactory_paths.py: 置き場の判断はここ 1 つ（ADR-0016）
 ├── bin/         migrate-workspace.sh
 ├── docs/        adr/（設計判断）・ledger.md（構想台帳）・仕組みの解説 HTML

@@ -1,6 +1,6 @@
 # Add a project
 
-What this page tells you: the six pieces of work needed to bring a new repository into the factory, and how to write each file. Expect one to two hours including baking the template (10 to 40 minutes depending on the dependencies). The reference is the bundled `examples/projects/kumitate/` ([akkijp/kumitate](https://github.com/akkijp/kumitate), a pnpm monorepo with Next.js and PostgreSQL).
+What this page tells you: the six pieces of work needed to bring a new repository into the factory, and how to write each file. Expect one to two hours including baking the template (10 to 40 minutes depending on the dependencies). Two references ship with the repository: `examples/projects/aifactory/` (this repository itself; public, so anyone can bake it and run a ticket end to end; the app on :3000 is `mkdocs serve`) and `examples/projects/kumitate/` ([akkijp/kumitate](https://github.com/akkijp/kumitate), a pnpm monorepo with Next.js and PostgreSQL, a reference for a larger app).
 
 ## The whole job
 

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <!-- aifactory console: Mac ログイン中は常に http://127.0.0.1:8765/ で待つ。
-       @@PYTHON@@ / @@REPO@@ / @@PATH@@ / @@HOME@@ は console/bin/install.sh が埋める（launchd の PATH は最小なので、runner が使う python3 / claude / gh / jq の場所を明示する） -->
+       @@PYTHON@@ / @@REPO@@ / @@PATH@@ / @@HOME@@ / @@WORKSPACE@@ は console/bin/install.sh が埋める（launchd の PATH は最小なので、runner が使う python3 / claude / gh / jq の場所を明示する） -->
   <key>Label</key><string>com.aifactory.console</string>
   <key>ProgramArguments</key>
   <array>
@@ -17,6 +17,7 @@
     <key>PATH</key><string>@@PATH@@</string>
     <key>HOME</key><string>@@HOME@@</string>
     <key>LANG</key><string>ja_JP.UTF-8</string>
+    <key>AIFACTORY_WORKSPACE</key><string>@@WORKSPACE@@</string>
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>

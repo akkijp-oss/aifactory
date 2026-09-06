@@ -68,7 +68,12 @@ console/bin/console --open          # http://127.0.0.1:8765/
 python3 -m unittest discover -s console/tests && python3 -m unittest discover -s workflow/tests
 ```
 
-`examples/projects/kumitate/` is the shipped reference project definition (`project.yml`, `provision.sh`, `gates.sh`). Add your own under `workspace/projects/<pj>/`; see the *Add a project* guide on the documentation site.
+Two project definitions ship under `examples/projects/` (`project.yml`, `provision.sh`, `gates.sh`):
+
+- `aifactory/`: this repository itself. Public, so anyone can build the sandbox template and run a ticket end to end. The maintainers use it to dogfood the factory
+- `kumitate/`: a private pnpm / Next.js monorepo, kept as a realistic reference for a larger app
+
+Add your own under `workspace/projects/<pj>/`; see the *Add a project* guide on the documentation site.
 
 ## Building the sandbox
 
@@ -89,7 +94,7 @@ aifactory/
 ├── workflow/    kit/ (workflows, roles, steps, schema, routes.env), bin/run, tests/
 ├── glue/        bin/intake, bin/dispatch
 ├── console/     bin/console (HTTP), bin/mcp (stdio), lib/core.py, static/, tests/, launchd/
-├── examples/    projects/<pj>/ shipped project definitions
+├── examples/    projects/{aifactory,kumitate}/ shipped project definitions
 ├── lib/         aifactory_paths.py: the one place that decides where data lives (ADR-0016)
 ├── bin/         migrate-workspace.sh
 ├── docs/        adr/ (design decisions), ledger.md, how-it-works HTML pages

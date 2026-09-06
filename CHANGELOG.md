@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `examples/projects/aifactory/`: aifactory as its own sandbox project (public, tokenless clone, `mkdocs serve` on :3000 as the app, gates = CI set + `bin/oss-check.sh`). Anyone can run a ticket end to end with it; the maintainers use it for dogfooding
+- `console/bin/install.sh --launchd` bakes `AIFACTORY_WORKSPACE` into the plist, so a workspace outside the repository also works for the resident console
+
+### Fixed
+- `console/bin/install.sh`: a fullwidth parenthesis right after `$ws` was parsed as part of the variable name
+
 ## [0.1.0] - 2026-09-06
 
 First tagged version. The repository history starts here; earlier internal history was not carried over because it contained private project records.
