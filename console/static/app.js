@@ -369,6 +369,8 @@ function outcomeLead(o, s) {
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
+  /* runner が条件を確かめて自分でマージした run（チケット 358） */
+  if (o.reason === 'merged') { const n = prNumber(o.pr_url), b = (o.merged || {}).base || ''; return n ? tt(T.outcome.merged, { pr: n, base: b }) : tt(T.outcome.merged_nopr, { base: b }); }
   /* 人間が後始末（wip から PR 化・マージ・打ち切り）をした run（チケット 335）。判定は API（core.run_outcome）が済ませている */
   if (o.reason === 'human_done') { const n = prNumber(o.pr_url); return n ? tt(T.outcome.human_done, { pr: n }) : T.outcome.human_done_nopr; }
   if (o.reason === 'human_abandoned') return T.outcome.human_abandoned;
@@ -381,6 +383,7 @@ function outcomePanel(name, d) {
   const lines = [outcomeLead(o, s)];
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
   if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
+  if (o.automerge_error) lines.push(tt(T.outcome.automerge_skipped, { why: o.automerge_error }));   /* 自動マージまで行って条件を満たさなかった run（チケット 358） */
   if (o.resume) lines.push(tt(T.outcome.resume, { cmd: o.resume }));   /* 続きから回す口（チケット 333） */
   if (o.human && o.human.text) lines.push(tt(T.outcome.humanNote, { by: o.human.by || '', at: fmtT(o.human.at), text: o.human.text }));
   if (stopped && !o.detail_file) lines.push(T.outcome.noDetail);
