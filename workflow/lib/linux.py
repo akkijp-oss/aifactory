@@ -10,6 +10,9 @@ from macos import acquire_lease, backend as pull_backend, Client
 def backend(Run):
     class LinuxRun(pull_backend(Run)):
         backend_label = 'Linux workspace'
+        # code step の対応表は macos と同じものをそのまま継承する（command() が POSIX で gh も同じように入っている）。
+        # automerge も kit/steps/pr-automerge.sh を guest の中で走らせる macos の実装で動く（チケット 386）。
+        # ここで CODE_STEPS を上書きすると macos に足した step が linux で落ちるので、意図して定義しない
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
