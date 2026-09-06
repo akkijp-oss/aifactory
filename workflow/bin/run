@@ -48,6 +48,12 @@ def sh(cmd, check=True, capture=True, input_text=None, env=None):
         raise RuntimeError(f"command failed ({r.returncode}): {cmd}\n{(r.stderr or '')[-2000:]}")
     return r
 
+# `timeout <timeout_min>m claude …` が上限で切ったときの終了コード（GNU coreutils の timeout）。
+# これを普通の失敗と混ぜると、未コミットの実装が消えたうえに「lint で落ちた」と誤読される（チケット 329）
+AGENT_TIMEOUT_RC = 124
+DEFAULT_TIMEOUT_MIN = 60
+WIP_TIMEOUT_MESSAGE = "wip: step timeout"
+
 # sandbox take が「プールに空きが無い」と言うときの目印（sandbox/bin/sandbox の die 文言）。ここを変えるなら sandbox 側も一緒に直す
 POOL_BUSY = "に空きなし"
 
@@ -352,7 +358,11 @@ class Run:
         outs = [a for a in step.get("outputs", []) if a not in ("git", "pr_url")]
         parts += ["## 出力（必須）", ""]
         parts += [f"- `{self.work}/{a}` に書く" for a in outs]
-        if "git" in step.get("outputs", []): parts += ["- 変更は作業ブランチにコミットする（push はしない）"]
+        if "git" in step.get("outputs", []):
+            # 上限で切られる前提を agent に伝える。切られても commit 済みの分は wip ブランチに残る（チケット 329）
+            parts += ["- 変更は作業ブランチにコミットする（push はしない）",
+                      f"- この step の時間上限は {step.get('timeout_min', DEFAULT_TIMEOUT_MIN)} 分。30 分ごとに作業ブランチへコミットする"
+                      "（WIP でよい。メッセージ先頭に `wip:`）。上限で切られると未コミットの変更は次の attempt に渡らない"]
         parts += ["", "終わったら、何をしたかを 5 行以内で標準出力に報告して終了する。"]
         return "\n".join(parts).replace("~/work/<task>/", self.work + "/")
 
@@ -364,8 +374,13 @@ class Run:
         return (f"cd $SANDBOX_APP_DIR && timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
                 "--dangerously-skip-permissions --output-format stream-json --verbose" + computer + " 2>&1 < /dev/null")
 
+    def commit_tracked(self, message):
+        """追跡済みの未コミット変更だけをコミットする。未追跡は絶対に足さない（`git add -A` が生成物と DB を拾った罠）。
+        変更が無ければコミットは作らない（空のコミットを wip ブランチに残さない）"""
+        self.sb(f"cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m {shlex.quote(message)})", check=False)
+
     def save_agent_changes(self):
-        self.sb("cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m 'sandbox: uncommitted changes by agent')", check=False)
+        self.commit_tracked("sandbox: uncommitted changes by agent")
         return self.sb("cd $SANDBOX_APP_DIR && git status --porcelain | grep '^??' | head -20", check=False).strip()
 
     def output_exists(self, name):
@@ -385,15 +400,25 @@ class Run:
         self.scp_to(pf, prompt_path)
         # stream-json で 1 行 1 イベントを受け、人が読める形を agent-<step>-<n>.log に、生の JSON を .jsonl（git 追跡外）に流す。
         # console が step の途中でも追い読みできる（2026-09-06）。--verbose は -p + stream-json の必須オプション
-        cmd = self.agent_command(prompt_path, model, step.get("timeout_min", 60))
+        tmin = step.get("timeout_min", DEFAULT_TIMEOUT_MIN)
+        cmd = self.agent_command(prompt_path, model, tmin)
         n = len(self.state["history"]); log_path = self.run_dir / f"agent-{step['id']}-{n}.log"
         self.set_current(step["id"], "agent", log_path.name)
         t = time.time(); r = EventRenderer(t)
-        rc, out = self.run_remote(cmd, log_path, render=r, timeout=step.get('timeout_min', 60) * 60)
+        rc, out = self.run_remote(cmd, log_path, render=r, timeout=tmin * 60)
         (self.run_dir / f"agent-{step['id']}-{n}.jsonl").write_text("\n".join(r.raw) + ("\n" if r.raw else ""), encoding="utf-8")
         print("\n".join(out.strip().splitlines()[-8:]))
         self.log(f"agent done in {int(time.time()-t)}s (rc={rc})")
-        if rc != 0: return False, f"agent exited {rc}: {out[-3000:]}"
+        if rc == AGENT_TIMEOUT_RC:
+            # 上限で切られた（`timeout` の rc）。ここで保全しないと、未コミットの実装ごと release で消える（チケット 329）。
+            # preserve() が HEAD を wip ブランチへ push するので、コミットさえ作れば次の attempt が続きから進める
+            self.log(f"agent timeout: {step['id']} は時間上限 {tmin} 分で切られた。未コミットの変更を wip として保全する")
+            self.commit_tracked(WIP_TIMEOUT_MESSAGE)
+            self.last_fail = {"failure": "timeout", "timeout_min": tmin, "last_output": out[-3000:]}
+            return False, f"agent timeout {rc}: 時間上限 {tmin} 分で中断（timeout）\n{out[-3000:]}"
+        if rc != 0:
+            self.last_fail = {"last_output": out[-3000:]}
+            return False, f"agent exited {rc}: {out[-3000:]}"
         untracked = self.save_agent_changes()
         if untracked: print(f"[run] 未追跡ファイル（push 対象外）:\n{untracked}")
         # outputs の存在確認
@@ -510,17 +535,29 @@ class Run:
         cur = self.state["next"]; retry_note = ""; result = "end"
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")
+            self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)
             nxt = self.transition(step, ok)
-            self.state["history"].append({"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")})
-            self.state["next"] = nxt; self.state["current"] = None; self.save()
+            entry = {"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+            fail = self.last_fail if not ok else {}
+            # 「時間上限で切られた」は「その step が失敗した」とは直し方が違う（上限を上げるか、チケットを小さくする）。
+            # console と MCP がそれを区別できるよう history に目印を残す（チケット 329）
+            if fail.get("failure"): entry.update({"failure": fail["failure"], "timeout_min": fail.get("timeout_min")})
+            self.state["history"].append(entry)
+            self.state["next"] = nxt; self.state["current"] = None
+            # agent の stdout の末尾は error に混ぜず別フィールドに置く（error の最終行が lint の集計行になって誤読された。チケット 329）
+            if fail.get("last_output"): self.state["last_output"] = fail["last_output"]
+            self.save()
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
             if not ok and nxt == "human":
-                # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）
-                why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]
-                self.state["error"] = f"{cur} で止まった（失敗、または戻せる回数を使い切った）: {why}"
+                # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
+                if fail.get("failure") == "timeout":
+                    self.state["error"] = f"{cur}: 時間上限 {fail.get('timeout_min')} 分で中断（timeout）"
+                else:
+                    why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]
+                    self.state["error"] = f"{cur} で止まった（失敗、または戻せる回数を使い切った）: {why}"
                 self.save()
             retry_note = "" if ok else (info if "role" in step else f"```\n{info}\n```")
             if not ok and nxt in self.steps and "role" in self.steps[nxt] and step.get("code") == "gates.sh":
