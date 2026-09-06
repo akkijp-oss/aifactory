@@ -526,6 +526,18 @@ class ApiTest(unittest.TestCase):
         self.assertLess(at("T.h.body"), at("T.h.attachments"), "添付が本文より前にある")
         self.assertLess(at("T.h.attachments"), at("T.h.ops"), "添付と本文の間に操作が割り込んでいる（353 / 378 の位置関係）")
         self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
+        # 成果物（PR への導線）は実行状況の次・本文の前（チケット 414 / ADR-0064）
+        self.assertLess(at("T.h.now"), at("prPanel(d)"), "成果物が実行状況より前にある")
+        self.assertLess(at("prPanel(d)"), at("T.h.body"), "成果物が本文より後にある（題名と実行状況の近くに置く）")
+        pr = app[app.index("function prPanel("):app.index("\n}", app.index("function prPanel("))]
+        self.assertIn("T.h.artifacts", pr, "成果物パネルの見出しが T.h.artifacts でない")
+        self.assertIn("d.pr", pr, "成果物パネルが core の解決結果（d.pr）を読んでいない")
+        self.assertNotIn("prLink(", pr, "成果物パネルが番号から URL を組み立て直している（解決済みの URL をそのまま使う）")
+        for state in ("'none'", "'run'", "'same'", "'mismatch'"):
+            self.assertIn(state, pr, f"成果物パネルが {state} の合成状態を扱っていない")
+        row = app[app.index("function prRow("):app.index("\n}", app.index("function prRow("))]
+        self.assertIn('target="_blank" rel="noopener"', row, "PR へのリンクが別タブで開かない")
+        self.assertNotIn("data-act", row, "外部リンクに data-act が付いている（開くだけで内部の状態が変わる）")
         # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
         self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
         for key in ("stepText(live)", "T.board.liveSince"):
@@ -989,6 +1001,31 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(all(not k.startswith((".", "_")) for k in d["kinds"]), d["kinds"]); self.assertIn(d["ticket"]["kind"], d["kind_desc"])
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get("/api/tickets/999999")
         self.assertEqual(cm.exception.code, 404)
+
+    def test_ticket_detail_resolves_the_pr(self):
+        """チケット詳細（と MCP の ticket_show）が、解決済みの PR を 1 つ返す（チケット 414）。
+           種のチケットは dry-run しかしていないので、番号はどこにも無く state は none。
+           GitHub には問い合わせないので、ここで「PR が存在しない」とは言わない（ADR-0050）"""
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws)}
+        r = subprocess.run([sys.executable, str(KB), "new", PJ, "research", "調査: PR のまだ無いチケット", "--body", "-"],
+                           input="x\n\n## 完了条件\n- y\n", text=True, capture_output=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        _, d = self.http.get(f"/api/tickets/{int(r.stdout.split()[0])}")
+        self.assertEqual(d["pr"], {"ticket": None, "run": None, "state": "none"})
+        self.assertIn("pr", d["ticket"])                          # 既存の pr 列はそのまま残る（トップレベルの pr とは別物）
+
+    def test_ticket_detail_reads_the_pr_left_in_a_run(self):
+        """チケットに未転記でも、実行記録に残った PR へ 1 回のリンク操作で進める（チケット 414）"""
+        name = "2020-01-04-kumitate-%d" % self.seed
+        self.addCleanup(shutil.rmtree, self.ws / "runs" / name, True)   # 他の検査に PR 入りの run を持ち越さない
+        self._fixture_run(name, {
+            "pj": PJ, "task": self.seed, "workflow": "feature", "started": "2020-01-04T09:00:00",
+            "finished": "2020-01-04T10:00:00", "result": "pr", "pr_url": "https://github.com/akkijp/kumitate/pull/341",
+            "history": [{"step": "pr", "ok": True, "at": "2020-01-04T09:50:00"}]})
+        _, d = self.http.get(f"/api/tickets/{self.seed}")
+        self.assertEqual(d["pr"]["state"], "run")
+        self.assertEqual(d["pr"]["run"]["url"], "https://github.com/akkijp/kumitate/pull/341")
+        self.assertEqual(d["pr"]["run"]["run"], name)
 
     def test_ticket_detail_lists_attachments(self):
         """kb attach で入れた添付が、そのままチケット画面（と MCP の ticket_show）に出る（チケット 353）"""
@@ -2460,6 +2497,93 @@ class JobStoreTest(unittest.TestCase):
         dead = {"id": "20000101-000000-x", "kind": "x", "label": "x", "cmd": ["x"], "pid": 2**22 - 1, "started": "2000-01-01T00:00:00", "finished": None, "rc": None, "state": "running"}
         self.JS.save(dead); self.JS.reconcile()
         self.assertEqual(self.JS.get(dead["id"])["state"], "lost")
+
+
+class TicketPrTest(unittest.TestCase):
+    """チケットの pr 列と実行記録に残った PR の解決（チケット 414 / ADR-0064）。
+
+    画面は解決済みの値をそのまま出すだけなので、合成状態の分岐はここで守る。
+    console は GitHub に問い合わせない（ADR-0050）ので、番号が無い状態は none どまりで「PR が存在しない」とは言わない"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-pr-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, name, started, **kw):
+        return {"name": name, "started": started, "pr_url": None, "human": None, "merged": None, **kw}
+
+    def test_ticket_number_only(self):
+        got = self.core.ticket_pr({"pr": 300, "repo": "akkijp/kumitate"}, [])
+        self.assertEqual(got["state"], "ticket")
+        self.assertIsNone(got["run"])
+        self.assertEqual(got["ticket"], {"number": 300, "url": "https://github.com/akkijp/kumitate/pull/300"})
+
+    def test_ticket_number_without_repo_has_no_url(self):
+        """repo の無い PJ では番号だけ出す（推し量った repo に番号を結び付けない）"""
+        got = self.core.ticket_pr({"pr": 300, "repo": None}, [])
+        self.assertEqual(got["state"], "ticket")
+        self.assertEqual(got["ticket"], {"number": 300, "url": None})
+
+    def test_run_url_only(self):
+        """チケットに未転記でも、実行記録の PR へ進める。由来として run の名前を添える"""
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/301")]
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "run")
+        self.assertIsNone(got["ticket"])
+        self.assertEqual(got["run"]["number"], 301)
+        self.assertEqual(got["run"]["url"], "https://github.com/akkijp/kumitate/pull/301")
+        self.assertEqual(got["run"]["source"], "run")
+        self.assertEqual(got["run"]["run"], "2020-01-02-kumitate-9")
+
+    def test_same_number_on_both_sides(self):
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/302")]
+        got = self.core.ticket_pr({"pr": 302, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "same")
+        self.assertEqual((got["ticket"]["number"], got["run"]["number"]), (302, 302))
+
+    def test_mismatch_keeps_both_sides(self):
+        """転記が古いまま残っている場合。どちらかを消さず、両方を由来つきで出す"""
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/303")]
+        got = self.core.ticket_pr({"pr": 302, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "mismatch")
+        self.assertEqual(got["ticket"]["number"], 302)
+        self.assertEqual(got["run"]["number"], 303)
+
+    def test_nothing_registered(self):
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, [])
+        self.assertEqual(got, {"ticket": None, "run": None, "state": "none"})
+
+    def test_human_closeout_wins_over_the_raw_pr_url(self):
+        """人間の後始末（ADR-0039）→ 自動マージ（ADR-0042）→ pr ステップの生の値、の順"""
+        r = self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00",
+                      pr_url="https://github.com/akkijp/kumitate/pull/310",
+                      merged={"at": "2020-01-02T10:00:00", "pr_url": "https://github.com/akkijp/kumitate/pull/311"},
+                      human={"at": "2020-01-02T11:00:00", "pr_url": "https://github.com/akkijp/kumitate/pull/312"})
+        self.assertEqual(self.core.run_pr(r), {"url": "https://github.com/akkijp/kumitate/pull/312", "number": 312, "source": "human"})
+        del r["human"]
+        self.assertEqual(self.core.run_pr(r)["source"], "merged")
+        del r["merged"]
+        self.assertEqual(self.core.run_pr(r)["source"], "run")
+        r["pr_url"] = ""
+        self.assertIsNone(self.core.run_pr(r))
+
+    def test_run_pr_without_repo_keeps_the_number(self):
+        """kb の pr_url_for は repo が無いと #N を書く。開ける URL でないので url は落として番号だけ残す"""
+        r = self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="#320")
+        self.assertEqual(self.core.run_pr(r), {"url": None, "number": 320, "source": "run"})
+
+    def test_multiple_runs_take_the_newest_with_a_pr(self):
+        """list_runs() は started の降順。PR の無い新しい run は飛ばし、採った run の名前で由来が分かる"""
+        runs = [self._run("2020-01-05-kumitate-9", "2020-01-05T09:00:00+09:00"),
+                self._run("2020-01-03-kumitate-9", "2020-01-03T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/330"),
+                self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/329")]
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "run")
+        self.assertEqual(got["run"]["number"], 330)
+        self.assertEqual(got["run"]["run"], "2020-01-03-kumitate-9")
+        self.assertEqual(got["run"]["started"], "2020-01-03T09:00:00+09:00")
 
 
 class TimestampTest(unittest.TestCase):

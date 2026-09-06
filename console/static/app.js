@@ -344,6 +344,26 @@ async function viewTickets(q) {
 }
 
 /* ---------- チケット */
+/* 成果物: チケットの pr 列と実行記録に残った PR を core が 1 つに解決した結果（ticket_detail の d.pr、ADR-0064）を、そのまま出すだけ。
+   番号も URL もここで組み立て直さない（推し量った番号を別の repo に結び付けないため）。
+   外部リンクには data-act を付けない＝開いても内部の状態は変わらない。読むだけの表示なので「項目を直す」の PR 番号欄には触らない */
+function prRow(p, note) {
+  const link = p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(tt(T.btn.openPr, { pr: p.number }))}</a>`
+                     : `<b>${esc(tt(T.ticket.prNumber, { pr: p.number }))}</b>`;
+  return `<div class="line">${link} <span class="help">${esc(note)}${p.url ? '' : ' ' + esc(T.help.prNoUrl)}</span></div>`;
+}
+function prPanel(d) {
+  const p = d.pr; if (!p) return '';
+  const rn = p.run ? runName(p.run.run) : '';
+  const body = p.state === 'none' ? `<div class="help">${esc(T.help.prNone)}</div>`
+    : p.state === 'run' ? prRow(p.run, tt(T.help.prFromRun, { run: rn }))
+    : p.state === 'same' ? prRow(p.ticket, tt(T.help.prSame, { run: rn }))
+    : p.state === 'mismatch' ? prRow(p.ticket, T.help.prFromTicket) + prRow(p.run, tt(T.help.prRunOrigin, { run: rn }))
+        + `<div class="warn">${esc(tt(T.help.prMismatch, { run: rn }))}</div>`
+    : prRow(p.ticket, T.help.prFromTicket);
+  return `<div class="panel"><h2>${esc(T.h.artifacts)}</h2>${body}</div>`;
+}
+
 async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
   /* この回のサーバー値を控え、「項目を直す」の 3 欄は下書きがあればそれを優先して描く（自動更新に未保存の入力を消させない） */
@@ -384,6 +404,7 @@ async function viewTicket(id, flash) {
     <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
     ${t.note ? `<div class="panel note"><b>${esc(T.label.note)}</b> ${esc(t.note)}</div>` : ''}
     ${nowPanel}
+    ${prPanel(d)}
     <div class="grid2">
       <div>
         <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>

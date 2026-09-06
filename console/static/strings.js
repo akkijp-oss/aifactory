@@ -19,6 +19,7 @@ const T = {
     "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む", "intakeDry": "判定だけ見る",
     "preview": "表示を確かめる", "previewClose": "表示の確認を閉じる",
+    "openPr": "PR #{pr} を開く",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
@@ -112,7 +113,7 @@ const T = {
     "event": { "intake": "起票", "start": "開始", "end": "終了", "blocked": "人間待ちにした", "skip": "飛ばした", "idle": "未着手なし", "other": "その他" },
     "reason": { "worker_unavailable": "worker が空いていません", "pool_busy": "プール {n} 台すべて貸出中" }
   },
-  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
+  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}", "prNumber": "PR #{pr}" },
   "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
     "nextStep": "次は {step}（開始待ち）", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
@@ -244,6 +245,13 @@ const T = {
   },
 
   "help": {
+    "prNone": "このチケットには PR の番号がまだ登録されていません。GitHub に PR が無いとは限りません。",
+    "prNoUrl": "この PJ には repo が設定されていないので、PR へのリンクを作れません。",
+    "prFromTicket": "チケットに登録された番号です。",
+    "prFromRun": "チケットの番号欄は空です。実行記録 {run} に残った記録から出しています。",
+    "prRunOrigin": "実行記録 {run} に残った記録です。",
+    "prSame": "チケットの番号と、実行記録 {run} に残った記録が同じです。",
+    "prMismatch": "チケットの番号と実行記録 {run} の番号が違います。どちらを開くか確かめてください。",
     "configDetail": "workflow の名前と工程は本物のリンクで、Tab で届き Enter で開きます。",
     "configMainPath": "この並びは、すべての工程がうまくいったときに通る道です。",
     "configCondSteps": "ここに並ぶ工程は、ほかの工程がうまくいかなかったときだけ回ります。",
