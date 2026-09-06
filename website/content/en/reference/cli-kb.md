@@ -9,6 +9,7 @@ kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]
 kb sync <id> [--run DIR]
@@ -79,6 +80,21 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 ```
 
 Changing `--pr` also rewrites the `pr:` line in the body (the runner reads it from there). `--run` is the run directory name (relative to `workspace/runs/`). `--kind` is validated. Everything is recorded in the history and BOARD.md is regenerated.
+
+`kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given".
+
+### append
+
+```bash
+kb append 204 --section "PM 補足" --text "the `._*` files in 218 are AppleDouble"
+kb append 204 --section "PM 補足" < memo.md      # without --text, read from stdin
+```
+
+Appends to the **end** of the ticket body. With `--section`, a `## <heading>` line is written first. Empty text, or a ticket whose body file is missing, is an error (exit code 1).
+
+The insertion point is fixed at the end. It does not go before `## 完了条件` because `kb` has no way to recognise sections, and appending at the end keeps the change in one place. The heading is what tells you a passage was added later.
+
+The text itself lives in the body (the file is the source of truth). The history only records when and how much was added, as `body  - → append 24字 (PM 補足)` — `history` has three columns (`field` / `old` / `new`) and does not keep diffs.
 
 ### run
 
