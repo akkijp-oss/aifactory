@@ -106,7 +106,7 @@ sandbox/bin/gh-app-setup            # ブラウザが開く → 🧑 Create GitH
 sandbox gh-app status               # 🧑 表示された install リンクで各オーナーに install する
 ```
 
-`status` が全 PJ で `OK` になれば完了です。App に必要な権限は Contents（write）、Pull requests（write）、Metadata（read）、Actions（read）。Checks（read）は任意です。
+`status` が全 PJ で `OK` になれば完了です。App に必要な権限は Contents（write）、Pull requests（write）、Metadata（read）、Actions（read）、Workflows（write。無いと `.github/workflows/` を触る push を GitHub が拒否します）。Checks（read）は任意です。
 
 トークンは 1 時間で切れるので、45 分ごとに更新する launchd を登録します。
 

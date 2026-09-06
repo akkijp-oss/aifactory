@@ -218,6 +218,12 @@ class Run:
         r = sh(["sandbox", "ssh", self.task, f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} && echo pushed"], check=False)
         ok = "pushed" in (r.stdout or "")
         self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (r.stderr or r.stdout)[-200:]}")
+        if not ok:
+            # push できなくても作業を失わない: base からの差分をパッチとして run ディレクトリに残す（2026-09-06 に App の workflows 権限不足で push が拒否され、実装が巻き戻しで消えた）
+            patch = self.sb(f"cd $SANDBOX_APP_DIR && git format-patch --stdout origin/{self.base}..HEAD", check=False)
+            if patch.strip():
+                (self.run_dir / "wip.patch").write_text(patch, encoding="utf-8")
+                self.log(f"preserve: 代わりに {self.run_dir / 'wip.patch'} に差分を残した（git am で復元できる）")
         return wip if ok else ""
 
     # ---------- steps

@@ -9,6 +9,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - `console/bin/install.sh --launchd` bakes `AIFACTORY_WORKSPACE` into the plist, so a workspace outside the repository also works for the resident console
 
 ### Fixed
+- Runner: when the wip-branch push fails (for example the GitHub App lacks a permission), the diff is saved to `wip.patch` in the run directory instead of being lost with the VM rollback
+- GitHub App manifest now requests `workflows: write`; without it GitHub rejects pushes that touch `.github/workflows/`
 - `console/bin/install.sh`: a fullwidth parenthesis right after `$ws` was parsed as part of the variable name
 
 ## [0.1.0] - 2026-09-06

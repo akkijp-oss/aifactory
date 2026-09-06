@@ -106,7 +106,7 @@ sandbox/bin/gh-app-setup            # opens a browser → 🧑 press "Create Git
 sandbox gh-app status               # 🧑 install the App on each owner via the printed install link
 ```
 
-You are done when `status` shows `OK` for every project. The App needs Contents (write), Pull requests (write), Metadata (read) and Actions (read). Checks (read) is optional.
+You are done when `status` shows `OK` for every project. The App needs Contents (write), Pull requests (write), Metadata (read), Actions (read) and Workflows (write; without it GitHub rejects pushes that touch `.github/workflows/`). Checks (read) is optional.
 
 Tokens expire after an hour, so register a launchd job that refreshes them every 45 minutes.
 

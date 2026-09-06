@@ -285,7 +285,7 @@ cmd_gh_app() {
         echo "app: $(sed -n 's/^APP_ID=//p' "$GHAPP_DIR/app.env") ($slug)  key: $GHAPP_DIR/private-key.pem"
         echo "install / 設定変更: https://github.com/apps/$slug/installations/new"
         echo "権限の変更: https://github.com/settings/apps/$slug/permissions"
-        echo "--- app permissions（必要: contents=write pull_requests=write metadata=read actions=read / 任意: checks=read）"
+        echo "--- app permissions（必要: contents=write pull_requests=write metadata=read actions=read / 任意: checks=read、workflows=write（PJ が .github/workflows を触るなら必須。無いと push が拒否される））"
         ghapp_api GET /app | jq -r '.permissions | to_entries[] | "  \(.key)=\(.value)"'
         ghapp_api GET /app | jq -e '.permissions.actions == "read"' >/dev/null 2>&1 || echo "  !! actions=read が無い（research が CI 履歴を読めない。上の URL で Actions: Read-only を足し、各 installation で承認）"
         ghapp_api GET /app | jq -e '.permissions.checks == "read"' >/dev/null 2>&1 || echo "  (任意) checks=read が無い（gh pr checks は使えない。gh run list --branch <head> で代替できる）"

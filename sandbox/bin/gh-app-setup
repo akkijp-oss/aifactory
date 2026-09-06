@@ -24,7 +24,7 @@ manifest={
   "redirect_url":f"http://127.0.0.1:{port}/callback",
   "public":True,   # 個人所有の非公開 App は所有者にしか install できない（org に入れるには public が必須。2026-09-06 に踏んだ）
   "hook_attributes":{"url":"https://example.invalid/unused","active":False},
-  "default_permissions":{"contents":"write","pull_requests":"write","metadata":"read","actions":"read","checks":"read"},
+  "default_permissions":{"contents":"write","pull_requests":"write","metadata":"read","actions":"read","checks":"read","workflows":"write"},
   "default_events":[]
 }
 page=f'''<!DOCTYPE html>
