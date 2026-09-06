@@ -329,6 +329,32 @@ python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operatio
 
 `guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは5の2つめの道で投げ直す。どの工程から再開するか、再開できない条件は「失敗時の復旧」と [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
 
+## workflowのcode step対応
+
+`kit/workflows/*.yml` の `code:` 工程をpull backend（macOS / Windows / Linux）がどう扱うかは、`workflow/lib/macos.py` の `CODE_STEPS` を正本とする対応表で決まる。分類は `run`（このbackendが実装している）、`noop`（対応しないが素通りさせ、成功として次へ進む）、`unsupported`（起動前に拒否する）の3つ。表に無い名前は `unsupported` と同じに扱う。
+
+| code step | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `gates.sh` | `run` | `run` | `run`（PJの `.ps1` を呼ぶ） |
+| `sync-base` | `run` | `run` | `noop`（POSIXシェル前提のため飛ばす） |
+| `pr-create.sh` | `run` | `run` | `run` |
+| `pr-automerge.sh` | `run` | `run` | `unsupported` |
+| `pr-merge.sh`（`merge-pr` workflow） | `unsupported` | `unsupported` | `unsupported` |
+
+`auto_merge` を書いていないPJではrunnerがautomerge工程そのものを飛ばす（`Run.SKIPPABLE_CODE_STEPS`）ので、`unsupported` のbackendでも起動は拒否されない。`auto_merge` を書いたWindowsのPJは起動前に拒否される（`auto_merge` を外すか、macOS / Linuxのワーカーを使う）。
+
+pull workerには制御系からVMに入る `sandbox ssh` が無いので、`run` のcode stepはbackendが `kit/steps/<名前>.sh` をゲストの `$WORK` に置き、guest-exec 1本でゲストの中の `bash` に渡す。script側は `SB_LOCAL=1` でゲスト内実行に切り替える（[ADR-0058](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0058-pull-backend-code-steps-run-in-the-guest.md)）。automergeはCI待ちのポーリングもゲストの中で回るので、guest-execは `auto_merge.wait_min` 分 + 15分だけ張る。上限は3600秒で、`wait_min` が45分を超える設定では上限で切られ、そのときはマージせずPRを開いたまま人へ渡る。
+
+### code stepを足すときの手順
+
+新しいcode stepをworkflowに足す人は次の順で進める。3の更新を忘れると、そのbackendのPJは**runを1つも始められなくなる**（ADR-0042でautomerge工程を足したとき、`macos-pull` のPJが起動前に `ValueError: unsupported pull-worker code steps: …` で落ちた）。
+
+1. `workflow/kit/steps/<名前>.sh` を置く。ゲストへの1手（`sb()`）は `SB_LOCAL=1` でゲスト内実行に切り替えられる形にする。判定ロジックをbackendごとに分岐させない。
+2. `kit/workflows/*.yml` に工程を足す。
+3. `workflow/lib/macos.py` と `workflow/lib/windows.py` の `CODE_STEPS` に分類を足す。`run` にするなら `run_code` に経路を足す。LinuxはmacOSの表と実装をそのまま継承するので、`workflow/lib/linux.py` では上書きしない。
+4. `python3 -m unittest discover -s workflow/tests -p 'test_code_steps.py'` が緑になるまで直す。このテストは「workflowのcode stepが3つのbackendすべてで分類済みか」を見る（実装の有無ではなく分類の有無）。
+5. この節の対応表を更新する。
+
 ## 実機で確認した範囲と制約
 
 2026-09-07、M1 Mac mini・16 GB、ホストmacOS 26.5.2、Tart 2.32.1、Softnet 0.19.0、ゲストmacOS 26.6.2（25G83）で文書整備を実行した。これは確認時の組合せであり、最低要件や全バージョンの動作保証ではない。
@@ -340,6 +366,6 @@ python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operatio
 
 ゲストはホストのディレクトリ・クリップボード・音声を共有しない。Softnetでprivate IPv4・リンクローカル・tailnet宛てを遮断し、ゲストの `Ethernet` に公開DNSを設定してIPv6を無効にする。このサービス名と、設定に使えるゲストのsudo環境が前提である。
 
-`display` によるゲスト解像度の指定（[Mac・Windowsの画面操作](computer-use.md)）は実機のTartでまだ確認していない。現在のcode step対応は `gates.sh`、`pr-create.sh`、`sync-base`（PR直前のbase取り込み。runner内蔵でPOSIXのgitだけを使う）。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、超えた分は切り捨てる（操作は完走し、結果はexit codeで決まる）。画像のbase64は `[image N bytes]` に置き換えて記録する。記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
+`display` によるゲスト解像度の指定（[Mac・Windowsの画面操作](computer-use.md)）は実機のTartでまだ確認していない。code stepの対応表と、新しいcode stepを足すときの手順は「[workflowのcode step対応](#workflowcode-step)」にある。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、超えた分は切り捨てる（操作は完走し、結果はexit codeで決まる）。画像のbase64は `[image N bytes]` に置き換えて記録する。記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
 
 画面操作の追加手順は[Mac・Windowsの画面操作](computer-use.md)を参照。
