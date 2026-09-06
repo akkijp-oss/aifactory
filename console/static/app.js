@@ -141,17 +141,41 @@ const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? 
 const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
 const link = (href, label, primary) => `<a class="btn ${primary ? 'primary' : ''}" href="${href}">${esc(label)}</a>`;
 
-/* 最小限の Markdown（見出し・箇条書き・コードフェンス・インラインコード・リンク・罫線） */
+/* 最小限の Markdown（見出し・箇条書き・表・コードフェンス・インラインコード・リンク・罫線） */
 function md(text) {
   const lines = String(text || '').split('\n'); let out = [], inCode = false, inList = false, para = [];
-  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[^"'>])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  /* 裸URLの終わりは空白だけでは決まらない。日本語は「、」「。」で続くので、句読点と全角かっこは URL に入れない（チケット 385）。
+     日本語のパス（/管理画面/一覧）は URL に残す。外すのは句読点だけ。\u3000 は全角空白、\u0000 は下の伏字 */
+  const bare = new RegExp(`(^|[^"'>])(https?://[^\\s<)、。，．！？；：「」『』（）〔〕【】・…〜\u3000\u0000]+)`, 'g');
+  const inline = s => {
+    const codes = [];                                                           /* 行内コードは先に伏せる（中の URL をリンクにしない） */
+    return esc(s).replace(/`([^`]+)`/g, (m, c) => `\u0000${codes.push(c) - 1}\u0000`)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(bare, (m, pre, u) => { const t = (u.match(/[.,:!?\]]+$/) || [''])[0], url = t ? u.slice(0, -t.length) : u;
+                                      return `${pre}<a href="${url}" target="_blank" rel="noopener">${url}</a>${t}`; })
+      .replace(/\u0000(\d+)\u0000/g, (m, i) => `<code>${codes[i]}</code>`);
+  };
+  const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  const isSep = row => row.includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(row);
   const flushP = () => { if (para.length) { out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; } };
   const flushL = () => { if (inList) { out.push('</ul>'); inList = false; } };
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     if (raw.startsWith('```')) { flushP(); flushL(); if (inCode) { out.push('</code></pre>'); inCode = false; } else { out.push('<pre><code>'); inCode = true; } continue; }
     if (inCode) { out.push(esc(raw)); continue; }
+    /* 表は次の行（|---|---|）まで見ないと決まらないので、ここだけ先読みする。桁ぞろえ（:---:）は区切りとして認めるだけで解釈しない */
+    if (/^\s*\|/.test(raw) && isSep(lines[i + 1] || '')) {
+      flushP(); flushL();
+      const body = [];
+      let j = i + 2;
+      for (; j < lines.length && /^\s*\|/.test(lines[j]); j++) body.push(cells(lines[j]));
+      out.push(`<div class="scroll" tabindex="0" role="region" aria-label="${esc(T.label.table)}"><table>`
+        + `<thead><tr>${cells(raw).map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead>`
+        + (body.length ? `<tbody>${body.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody>` : '')
+        + `</table></div>`);                                                    /* 狭い幅では囲いごと横に流す（.scroll。Tab で届くよう tabindex を付ける） */
+      i = j - 1; continue;
+    }
     const h = raw.match(/^(#{1,3})\s+(.*)$/);
     if (h) { flushP(); flushL(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
     if (/^\s*---+\s*$/.test(raw)) { flushP(); flushL(); out.push('<hr>'); continue; }

@@ -65,7 +65,8 @@ const T = {
     "keyName": "名前（この画面と記録に出る呼び名。英数字と . _ - で 40 文字まで）", "keyNamePlaceholder": "例: max-akki、team-fable",
     "keyNote": "メモ（誰の契約か、どのプランか、など）", "keyNotePlaceholder": "例: akki の Max プラン",
     "keyToken": "トークン（claude setup-token で表示される、sk-ant-oat01- で始まる文字列。登録後は表示しません）",
-    "keyAllowFable": "Fable に使う（計画・設計・レビューの工程）", "keyAllowOther": "Opus・Sonnet・Haiku に使う（実装・調査の工程）"
+    "keyAllowFable": "Fable に使う（計画・設計・レビューの工程）", "keyAllowOther": "Opus・Sonnet・Haiku に使う（実装・調査の工程）",
+    "table": "表"
   },
 
   "stats": {

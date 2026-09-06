@@ -2340,6 +2340,21 @@ def js_line(src, name):
     return m.group(0)
 
 
+def js_block(src, name):
+    """app.js から複数行の関数定義を抜く（波かっこの対応が取れる位置まで）。1 行で書けない md() 用"""
+    m = re.search(rf"^function {name}\(", src, re.M)
+    assert m, f"app.js に {name} の定義が無い"
+    depth = 0
+    for j in range(src.index("{", m.start()), len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[m.start():j + 1]
+    raise AssertionError(f"{name} の波かっこが閉じていない")
+
+
 @unittest.skipUnless(shutil.which("node"), "node が無い")
 class BrowserTimeTest(unittest.TestCase):
     """経過時間の計算がブラウザーの時間帯に左右されないこと（チケット 235）。app.js の関数を node で直に動かす"""
@@ -2403,6 +2418,118 @@ class BrowserTimeTest(unittest.TestCase):
             self.assertEqual(r["spanNone"], self.T["time"]["unknown"])
             self.assertEqual(r["ahead"], self.T["time"]["ahead"])
             self.assertEqual(r["unreadable"], "2026-09-08 の夕方")
+
+
+@unittest.skipUnless(shutil.which("node"), "node が無い")
+class MarkdownRenderTest(unittest.TestCase):
+    """チケット本文と実行報告が通る md()（チケット 385）。裸URLの境界と Markdown 表。app.js を node で直に動かす"""
+
+    CASES = {
+        "bare": "確認環境: http://localhost:3094、管理画面、development、既存取込",
+        "explicit": "[管理画面](http://localhost:3094/admin) を開く",
+        "jaPath": "http://localhost:3094/管理画面/一覧 を開く",
+        "fence": "```\nhttp://localhost:3094、管理画面\n```",
+        "html": "<script>alert(1)</script>",
+        "jsLink": "[x](javascript:alert(1)) と javascript:alert(2)",
+        "table": ("## 1万社規模の計測\n\n| 計測 | 所要 | SQL 本数 |\n|---|---|---|\n"
+                  "| 一覧 | 1.2s | `3` 本 |\n| 明細 | 0.4s | 1 本 |\n\nあとがき"),
+        "checkbox": "- [ ] 未完",
+        "inlineCode": "`see http://a.example/x` と http://a.example/y",
+        "trailing": "詳しくは http://a.example/x. 次",
+        "hr": "---",
+        "paren": "(http://a.example/x)",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        static = pathlib.Path(__file__).resolve().parents[1] / "static"
+        app = (static / "app.js").read_text(encoding="utf-8")
+        strings = (static / "strings.js").read_text(encoding="utf-8")
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-md-test-"))
+        cls.addClassCleanup(shutil.rmtree, tmp, True)
+        src = tmp / "md.js"
+        src.write_text("\n".join([strings, js_line(app, "esc"), js_block(app, "md"),
+                                  f"const cases = {json.dumps(cls.CASES, ensure_ascii=False)};",
+                                  "const out = {}; for (const k of Object.keys(cases)) out[k] = md(cases[k]);",
+                                  "console.log(JSON.stringify(out));"]), encoding="utf-8")
+        p = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        assert p.returncode == 0, p.stderr
+        cls.html = json.loads(p.stdout)
+
+    def anchors(self, key):
+        """(href, リンク文字列) の並び"""
+        return re.findall(r'<a [^>]*href="([^"]*)"[^>]*>(.*?)</a>', self.html[key], re.S)
+
+    def test_a_bare_url_stops_at_japanese_punctuation(self):
+        """385 の症状そのもの: 裸URLの後ろの「、管理画面…」まで href に飲み込まない"""
+        h = self.html["bare"]
+        self.assertEqual(self.anchors("bare"), [("http://localhost:3094", "http://localhost:3094")])
+        self.assertIn("、管理画面、development、既存取込</p>", h)
+
+    def test_an_explicit_link_keeps_its_target(self):
+        self.assertEqual(self.anchors("explicit"), [("http://localhost:3094/admin", "管理画面")])
+        self.assertIn("を開く", self.html["explicit"])
+
+    def test_a_japanese_path_stays_in_the_url(self):
+        """句読点だけを外すのであって、日本語そのものを URL から外さない"""
+        self.assertEqual(self.anchors("jaPath"),
+                         [("http://localhost:3094/管理画面/一覧", "http://localhost:3094/管理画面/一覧")])
+        self.assertNotIn("を開く</a>", self.html["jaPath"])
+
+    def test_trailing_ascii_punctuation_is_not_part_of_the_url(self):
+        self.assertEqual(self.anchors("trailing"), [("http://a.example/x", "http://a.example/x")])
+        self.assertIn("</a>. 次", self.html["trailing"])
+
+    def test_a_url_in_parentheses_is_not_swallowed(self):
+        self.assertEqual(self.anchors("paren"), [("http://a.example/x", "http://a.example/x")])
+
+    def test_urls_inside_code_stay_plain(self):
+        fence = re.search(r"<pre><code>(.*?)</code></pre>", self.html["fence"], re.S).group(1)
+        self.assertNotIn("<a ", fence)
+        self.assertIn("http://localhost:3094、管理画面", fence)
+        self.assertIn("<code>see http://a.example/x</code>", self.html["inlineCode"])
+        self.assertEqual(self.anchors("inlineCode"), [("http://a.example/y", "http://a.example/y")])
+
+    def test_html_and_dangerous_urls_are_still_neutralised(self):
+        """完了条件 5: 本文の HTML と javascript: がそのまま出ない（既存の守りを回帰させない）"""
+        self.assertNotIn("<script", self.html["html"])
+        self.assertIn("&lt;script&gt;", self.html["html"])
+        self.assertNotIn('href="javascript:', self.html["jsLink"])
+        self.assertEqual(self.anchors("jsLink"), [])
+
+    def test_a_markdown_table_becomes_a_table(self):
+        """385 の症状そのもの: 報告の比較表が段落の文字列にならず、見出しとセルを持つ表になる"""
+        h = self.html["table"]
+        self.assertIn("<table>", h)
+        self.assertEqual(re.findall(r"<th>(.*?)</th>", h), ["計測", "所要", "SQL 本数"])
+        rows = re.findall(r"<tr>((?:<td>.*?</td>)+)</tr>", h)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(re.findall(r"<td>(.*?)</td>", rows[0]), ["一覧", "1.2s", "<code>3</code> 本"])
+        self.assertNotIn("|---|", h)
+        self.assertIn("<h2>1万社規模の計測</h2>", h)          # 見出しは今までどおり
+        self.assertIn("<p>あとがき</p>", h)                    # 表の後ろは段落に戻る
+
+    def test_a_narrow_screen_can_scroll_the_table(self):
+        """完了条件 3: 狭い幅でも 3 列の中身を確認できるよう、表は横スクロールの囲いに入れる"""
+        self.assertIn('class="scroll"', self.html["table"])
+        css = (pathlib.Path(__file__).resolve().parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertIn(".md table", css)
+        self.assertIn(".scroll { overflow-x: auto; }", css)
+
+    def test_a_lone_rule_is_still_a_rule(self):
+        """区切り行の判定は `|` のある行に限る（既存の <hr> と重ならない）"""
+        self.assertIn("<hr>", self.html["hr"])
+        self.assertNotIn("<table", self.html["hr"])
+
+    def test_a_checklist_line_is_left_as_it_is(self):
+        """`- [ ]` の表示対応は 385 の範囲外。今の見え方（素のテキスト）を変えないことだけ確かめる"""
+        self.assertIn("<li>[ ] 未完</li>", self.html["checkbox"])
+
+    def test_the_body_and_the_report_share_the_renderer(self):
+        """完了条件 4: チケット本文と「報告を読む」が同じ md() を通る"""
+        app = (pathlib.Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("md(d.body)", app)                       # チケット本文
+        self.assertIn("md(file.text)", app)                    # 実行記録の .md（報告を読む）
 
 
 class KitListingTest(unittest.TestCase):
