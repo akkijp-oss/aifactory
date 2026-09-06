@@ -1,0 +1,2 @@
+### Added
+- **Mac ゲストの表示解像度を PJ 定義 / worker 設定で指定できるようにした**。`project.yml` か `~/.config/aifactory-worker/config.json` に `display: {width, height}`（幅800〜2560・高さ600〜2560）を書くと、`guest-prepare` が停止中のクローンへ `tart set <guest> --display <W>x<H>` を実行してから起動する。優先順位は PJ 定義 > worker 設定 > 指定なし（従来どおり1024×768）で、4 CPU・8 GiB の割当は変えない。Mac の screenshot とクリック座標の上限も2560pxへ引き上げた（ゲストの `desktop-native` を入れ替えて基準VMを作り直すまでは1024px幅のまま返る）。`scale` は未対応（ADR-0057）。

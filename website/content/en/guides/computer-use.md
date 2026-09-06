@@ -34,7 +34,7 @@ Reconnect AIFactory MCP after deployment to refresh its tool list.
 {"session":"desktop-...","action":"scroll","amount":-3}
 ```
 
-PNG screenshots have a maximum width of 1024 pixels. The helper maps image coordinates to the physical desktop; the origin is the image's top-left corner. Windows captures the virtual desktop, while Mac captures the main display. `move` also accepts `x` and `y`. Click options are `button: left|right` and `count: 1|2`. Typing supports up to 8192 UTF-8 bytes. On Mac it replaces the guest clipboard and pastes the string; fields that prohibit pasting are unsupported. Key combinations contain up to four keys; key names are the same on all three operating systems and are case-insensitive. Scroll amounts range from -20 to 20 excluding zero; positive means up.
+PNG screenshots have a maximum width of 1024 pixels on Windows and Linux and 2560 pixels on Mac; a guest display at or below that width is returned at its real resolution. The helper maps image coordinates to the physical desktop; the origin is the image's top-left corner. Windows captures the virtual desktop, while Mac captures the main display. `move` also accepts `x` and `y`. Click options are `button: left|right` and `count: 1|2`. Typing supports up to 8192 UTF-8 bytes. On Mac it replaces the guest clipboard and pastes the string; fields that prohibit pasting are unsupported. Key combinations contain up to four keys; key names are the same on all three operating systems and are case-insensitive. Scroll amounts range from -20 to 20 excluding zero; positive means up.
 
 Direct-session screenshots are stored under `$AIFACTORY_WORKSPACE/computer/<session>/` on the control plane. Responses include the image, path, and hash. `actions.jsonl` records operation IDs and action types, without copying typed text into those audit rows. Screenshots and command output can still contain that text. Storage is not automatically pruned.
 
@@ -80,6 +80,35 @@ A key press only does something when the target window has focus and the applica
 3. Use `type` when you only need to enter characters. It inserts Unicode directly, so it is unaffected by symbols or the keyboard layout.
 4. Change the application's own shortcut settings to a combination that is available.
 5. Keys outside the list (`INSERT`, the numeric keypad, media keys, `F13` and above) cannot be sent. Use steps 1-4 instead, or change the procedure so the key is not needed.
+
+## Setting a display wide enough for 1400 pixels
+
+The dedicated Mac guest boots at the base image's 1024x768, so a 1400-pixel-wide layout cannot be captured by default. Adding `display` to the project definition or the worker configuration makes `guest-prepare` run `tart set <guest> --display <width>x<height>` on the stopped clone before starting it.
+
+```yaml
+# $AIFACTORY_WORKSPACE/projects/<pj>/project.yml
+backend: macos-pull
+worker: mac-worker-01
+display:
+  width: 1600
+  height: 1000
+```
+
+```json
+{
+  "display": {"width": 1600, "height": 1000}
+}
+```
+
+The JSON above goes into the worker configuration `~/.config/aifactory-worker/config.json` and applies to every project that uses that worker.
+
+- Precedence is project definition, then worker configuration, then nothing. A project without `display` keeps running at 1024x768.
+- Allowed sizes are 800-2560 wide and 600-2560 high, and both `width` and `height` are required. Values outside that range fail project validation, and a worker configured outside it refuses to start.
+- `scale` is unsupported. It waits for a hardware check of the matching `tart set` option and a separate ticket ([ADR-0057](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0057-guest-display-resolution.md)).
+- CPU and memory stay fixed at 4 CPUs and 8 GiB. Resolution does not change the allocation.
+- Until the guest's `desktop-native` is replaced with the 2560-pixel build and the base VM is rebuilt, screenshots are still scaled down to 1024 pixels wide even on a larger display. Repeat the build and re-verification in "Mac setup" below.
+- Larger images do not inflate step logs. Image base64 on stream-json is replaced with `[image N bytes]` before it is recorded, so the 16 MiB per-operation log limit stays out of reach regardless of resolution. The MCP `computer_action` stores images as files and records only their hashes in `actions.jsonl`.
+- Windows and Linux workers have no such setting; their screenshots stay at a maximum width of 1024 pixels.
 
 ## Windows setup
 
