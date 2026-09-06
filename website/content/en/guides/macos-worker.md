@@ -245,6 +245,37 @@ A run that reaches `human` before a PR exists (gate retries exhausted, a failed 
 
 Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes; credential file `runtime.env` is excluded. Directories, symlinks, and anything beyond the 4 MiB total are skipped rather than collected, and their names and reasons are recorded in `artifacts_skipped` in `state.json`. Skipped entries do not stop the run, and the VM is still released. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
 
+## Preserving work before the guest is stopped
+
+Just before it stops the guest, the worker tries to push the work branch inside the guest to the work-in-progress (wip) branch ([ADR-0067](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0067-worker-preserves-work-before-stopping-the-guest.md)). Stopping the guest destroys any committed but unpushed work inside it, and the control-plane preservation described under "Artifacts and completion" cannot get through while the worker is busy with an operation (`worker is busy`), so the side that does the stopping holds the last chance.
+
+It runs only when the guest is stopped in the middle of a `guest-exec`: a cancelled operation, the payload `timeout` expiring, the watchdog that fires after 60 seconds without the control plane, and a broken `tart exec`. It does not run on the `guest-prepare` / `guest-release` stop paths. Preservation gets at most 120 seconds, and the guest is stopped afterwards whether it succeeded or not (the stop is delayed by that much, and other runs waiting for the lease wait with it). The control plane carries the preservation command in the payload's `preserve` key, so a control plane too old to send `preserve` runs nothing and logs no line at all.
+
+The attempt is recorded in the operation log. Look the operation ID up in `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` and read it with `python3 workers/bin/control --db "$db" show '<operation-id>'`. It starts with `[preserve] pushing the work branch to the wip branch before stopping the guest`, followed by one line for the result.
+
+| Log line | Meaning |
+|---|---|
+| `[preserve] ok: preserved` | The push to the wip branch succeeded; the work is on that branch |
+| `[preserve] ok: skipped: <reason>` | Not worth pushing, so nothing was pushed. **This is not a failure.** The three reasons are `no work branch` (the work branch does not exist yet), `no commits to preserve` (identical to what it would overwrite), and `pushing would rewind the wip branch` (pushing would roll the previous run's wip back) |
+| `[preserve] ok` | The command succeeded but produced no output: the guest working directory did not exist yet, before the clone |
+| `[preserve] failed: <reason>` | It was attempted and failed. Typical reasons are an expired `GH_TOKEN` (they last an hour), the 120-second limit, and the wip branch moving between the check and the push |
+
+Neither the command itself (the payload) nor stdin appears in the log. The target is `sandbox/<ticket>-<workflow>-wip`, the same naming rule as `wip_branch` in `state.json`, which `kb run <id> --from` uses by default. This preservation does not update the run record, though, so for a run that ended with an empty `wip_branch`, name the branch explicitly: `kb run <id> --from <step> --branch sandbox/<ticket>-<workflow>-wip`. There is one wip branch per ticket and workflow, so running the same ticket repeatedly lets a later run's preservation overwrite an earlier one. **Only committed work can be saved**; uncommitted changes are lost — which is why implementer steps are required to commit every 30 minutes.
+
+### The two preservation paths
+
+| | Preservation in `bin/run` | Preservation in the worker (ADR-0067) |
+|---|---|---|
+| Who pushes | The control-plane runner | The worker on the Mac host |
+| When | When a run ends in `human`, before artifact collection; also when a control-plane failure hands the run back to a person (ADR-0066) | Immediately before the guest is stopped during a `guest-exec` (cancel, timeout, watchdog, or a broken `tart exec`) |
+| Assumes | The guest is running and operations can still be submitted to the worker | The guest is about to be stopped; the runner cannot get in because the worker is busy |
+| Check and push | Verifies the work branch ref with `git log`, then `--force` | Pushes only when what it would overwrite (the wip branch on origin, or `origin/<base>` when there is none) is an ancestor of the work branch and the work branch is ahead, with `--force-with-lease` carrying the sha it verified |
+| On failure | Leaves the diff in the run directory as `wip.patch`, which `git am` applies | Logs the reason and proceeds to stop the guest; it cannot leave a patch |
+
+The asymmetry is deliberate. The worker knows nothing about the layout inside the guest, the `GH_TOKEN`, or the wip naming rule, so the control plane builds the command and ships it in the payload. That command rides on **every** `guest-exec`, so it also runs when the guest is stopped on a work branch that carries no implementation yet (right after the clone it equals `origin/<base>`). An unconditional force push would then roll the wip branch preserved by a previous run back to base and destroy it, which is why only the worker side checks whether pushing is worth it first (the runner's preservation runs once at the end of a run and still uses `--force`). Both sides share the wip branch name and push the work branch rather than HEAD (`refs/heads/<work branch>:refs/heads/<wip>`).
+
+How to continue from a wip branch is covered in step 5 of "[Recovering from `uncertain`](#recovering-from-uncertain)". Everything here is what can be read from the implementation (`preserveWork` in `workers/cmd/aifactory-worker/main.go` and `preserve_command` in `workflow/lib/macos.py`); none of it has been verified on real hardware.
+
 ## Recovery
 
 | Symptom | Check or action |

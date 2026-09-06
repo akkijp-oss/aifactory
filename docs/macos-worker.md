@@ -245,6 +245,37 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 
 成果物はゲスト作業ディレクトリ直下の通常ファイル、合計4 MiBまで。入力転送は1ファイル350,000バイトまで。認証用 `runtime.env` は除外する。ディレクトリ・symlink・合計4 MiBを超える分は回収せず飛ばし、その名前と理由を `state.json` の `artifacts_skipped` に残す。回収対象外があってもrunは止めず、VMは返却する。大きなビルド成果物や `.xcresult` の回収は、この経路では扱えない。
 
+## ゲストを止める前の保全
+
+ワーカーはゲストを止める直前に、ゲスト内の作業ブランチを退避（wip）ブランチへpushしようとする（[ADR-0067](adr/0067-worker-preserves-work-before-stopping-the-guest.md)）。ゲストを止めるとゲスト内のコミット済み・未pushの実装は失われ、制御系側の保全（上の「成果物と終了確認」に書いたforce push）はワーカーが操作を抱えている間 `worker is busy` で届かないので、止める側が最後の機会を持つ。
+
+走るのは `guest-exec` の最中にゲストごと停止する回だけ。操作の `cancel`、payloadの `timeout` 切れ、制御系を60秒見失ったwatchdog、`tart exec` 自体が壊れた回がこれに当たる。`guest-prepare` / `guest-release` の停止では走らない。保全に使える時間は最大120秒で、成否にかかわらずゲスト停止は続行する（その分だけ停止が遅れ、leaseを待つ他のrunも待つ）。保全コマンドは制御系がpayloadの `preserve` で運ぶので、`preserve` を載せない古い制御系と組み合わせたときは走らず、ログにも行が出ない。
+
+跡は操作のログに残る。`$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` で操作IDを引き、`python3 workers/bin/control --db "$db" show '<operation-id>'` で読む。始まると `[preserve] pushing the work branch to the wip branch before stopping the guest` が出て、結果の1行が続く。
+
+| ログ | 意味 |
+|---|---|
+| `[preserve] ok: preserved` | wipブランチへpushできた。作業はそのブランチに残っている |
+| `[preserve] ok: skipped: <理由>` | 押す価値が無いので押さなかった。**異常ではない**。理由は `no work branch`（作業ブランチがまだ無い）、`no commits to preserve`（押す先と同じで足すものが無い）、`pushing would rewind the wip branch`（押すと前のrunのwipを巻き戻す）の3つ |
+| `[preserve] ok` | コマンドは成功したが出力が無かった。cloneの前でゲストの作業ディレクトリがまだ無い回 |
+| `[preserve] failed: <理由>` | 試したが駄目だった。`GH_TOKEN` の失効（1時間で切れる）、120秒切れ、確かめてから押すまでの間にwipが動いた、などが理由になる |
+
+コマンド本文（payload）とstdinはログに出ない。押す先は `sandbox/<チケット番号>-<workflow名>-wip` で、`kb run <id> --from` が既定で使う `state.json` の `wip_branch` と同じ規則。ただしこの保全はrunの記録を書き換えないので、`wip_branch` が空のまま終わったrunでは `kb run <id> --from <step> --branch sandbox/<チケット番号>-<workflow名>-wip` のようにブランチを明示する。wipはチケットとworkflowごとに1本なので、同じチケットを何度も走らせると後のrunの保全が前のものを上書きする。**救えるのはコミット済みの作業だけ**で、未コミットの変更は残らない（実装役に30分ごとのコミットを課しているのはこのため）。
+
+### 2つの保全の違い
+
+| | `bin/run` の保全 | ワーカーの保全（ADR-0067） |
+|---|---|---|
+| 誰が押すか | 制御系のrunner | Macホストのワーカー |
+| いつ | runが `human` で終わるとき（成果物回収の前）。制御系の失敗で人へ返る回も同じ（ADR-0066） | `guest-exec` の最中にゲストを止める回（cancel・timeout・watchdog・`tart exec` の故障）の直前 |
+| 前提 | ゲストが動いていて、ワーカーへ操作を投げられる | ゲストがこれから止められる。runnerは `worker is busy` で割り込めない |
+| 確かめ方とpush | `git log` で作業ブランチのrefを確かめてから `--force` | 上書きする相手（origin側のwip、無ければ `origin/<base>`）が作業ブランチの祖先で、かつ作業ブランチが先に進んでいるときだけ、確かめたshaを渡した `--force-with-lease` |
+| 失敗したとき | 差分を `wip.patch`（`git am` で当てられる）としてrunディレクトリに残す | 理由をログに残してゲスト停止へ進む。パッチは残せない |
+
+非対称なのは意図的である。ワーカーはゲスト内の配置も `GH_TOKEN` もwipの命名規則も知らないので、保全コマンドは制御系が組み立ててpayloadで運ぶ。そのコマンドは**全部の `guest-exec` に載る**ため、まだ実装が1つも乗っていない作業ブランチ（clone直後は `origin/<base>` と同じ）で止められた回にも走る。そこで無条件のforce pushをすると前のrunが保全したwipをbaseまで巻き戻して消すので、ワーカー側だけ押す前に「押す価値があるか」を確かめる（runner側の保全はrunの終わりに1回だけで、`--force` のままにしてある）。共通なのはwipブランチの名前と、HEADではなく作業ブランチ（`refs/heads/<作業ブランチ>:refs/heads/<wip>`）を押すところ。
+
+wipブランチから続きを回す手順は「[uncertainからの復旧](#uncertainからの復旧)」の5にある。ここに書いたのは実装（`workers/cmd/aifactory-worker/main.go` の `preserveWork` と `workflow/lib/macos.py` の `preserve_command`）から読める範囲で、実機での確認はしていない。
+
 ## 失敗時の復旧
 
 | 症状 | 確認・対処 |
