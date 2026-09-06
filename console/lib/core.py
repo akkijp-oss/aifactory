@@ -297,7 +297,7 @@ def apply_liveness(runs):
 
 
 # ---------- 実行記録の要約（ADR-0025: 停止の理由は表示側で導く。runner の state.json は変えない）
-GATE_FAIL = re.compile(r"^FAIL (\S+)")
+GATE_LINE = re.compile(r"^(PASS|FAIL|INFO) (\S+)\s*(.*)$")
 STEP_LOG = re.compile(r"^(agent|code)-(.+)-(\d+)\.log$")
 WORK_DOC = re.compile(r"^work/[^/]+\.(md|txt)$")
 
@@ -308,17 +308,23 @@ def last_line(text, n=120):
     return ls[-1][:n] if ls else None
 
 
-def gate_fails(p):
-    """work/gates.txt から赤いゲートの名前を拾う。kit/steps/gates.sh の書式 `FAIL <ゲート名>` に依る。
-       赤があると同じファイルの後ろに `=== <ゲート>.log (tail 60)` とログ末尾が続くので、そこから先は見ない（ログ中の FAIL を拾わないため）"""
+def gate_results(p):
+    """work/gates.txt からゲート 1 件 = 1 行の結果を拾う（kit/steps/gates.sh の書式 `PASS/FAIL/INFO <ゲート名> <補足>`）。
+       赤があると同じファイルの後ろに `=== <ゲート>.log (tail 60)` とログ末尾が続くので、そこから先は見ない（ログ中の FAIL を拾わないため）。
+       base でも赤かった赤は runner が INFO に格下げしてある。ここでは書いてある通りに返し、格下げの判断はしない（ADR-0038）"""
     out = []
     try: text = p.read_text(encoding="utf-8", errors="replace")
     except OSError: return out
     for line in text.splitlines():
         if line.startswith("=== "): break
-        m = GATE_FAIL.match(line)
-        if m: out.append(m.group(1))
+        m = GATE_LINE.match(line)
+        if m: out.append({"name": m.group(2), "status": m.group(1), "note": m.group(3).strip() or None})
     return out
+
+
+def gate_fails(p):
+    """work/gates.txt から赤いゲートの名前だけを拾う。判定の本体は gate_results（FAIL 以外は落とす）"""
+    return [g["name"] for g in gate_results(p) if g["status"] == "FAIL"]
 
 
 def run_outcome(d, s, state, wf, files):
@@ -412,6 +418,39 @@ def run_outcome(d, s, state, wf, files):
     return o
 
 
+def elapsed_between(a, b):
+    """ISO 8601 の 2 時刻の差（秒）。どちらかが欠けている・読めない・逆順の古い記録では null（推測で補正しない）"""
+    if not a or not b: return None
+    try: d = int((ts_dt(b) - ts_dt(a)).total_seconds())
+    except (TypeError, ValueError): return None
+    return d if d >= 0 else None
+
+
+def run_progress(d, s, state):
+    """「今どの工程で、何秒経ったか」を既存の記録（state.json の started / history[].at / current.since と work/gates.txt）
+       だけから導く（ADR-0025 / ADR-0036: 導出値は state.json に書かず表示側で組む）。
+
+       工程の経過秒は「前の工程が終わった時刻から自分が終わった時刻まで」。1 件目は state.started から測る。
+       --from で再開した run や VM の空き待ちを挟んだ run では、工程の外で過ぎた時間がこの差に混ざる。
+       runner はその境目を記録していないので、ここでは補正しない（導けないときは null）"""
+    state = state or {}
+    hist = [h for h in (state.get("history") or []) if isinstance(h, dict)]
+    cur = state.get("current") if isinstance(state.get("current"), dict) else None
+    end = state.get("finished") or now()
+    out = {"elapsed_s": elapsed_between(state.get("started"), end), "current": None, "history": [], "gates": []}
+    prev = state.get("started")
+    for h in hist:
+        out["history"].append({"step": h.get("step"), "ok": h.get("ok"), "next": h.get("next"), "at": h.get("at"),
+                               "elapsed_s": elapsed_between(prev, h.get("at"))})
+        prev = h.get("at") or prev
+    if cur and not state.get("finished"):
+        out["current"] = {"step": cur.get("step"), "kind": cur.get("kind"), "since": cur.get("since"),
+                          "elapsed_s": elapsed_between(cur.get("since"), now())}
+    g = d / "work" / "gates.txt"
+    if g.exists(): out["gates"] = gate_results(g)
+    return out
+
+
 def run_groups(files, wf):
     """ファイルを目的別に分ける。成果物の名前は決め打ちせず workflow 定義の outputs から引く（workflow が増えても崩れない）。
        kind は role 名（researcher / planner / …）か code step の id（gates）。分からないものは None で名前だけ出す"""
@@ -446,7 +485,8 @@ def run_detail(name):
     if d.is_file():
         s = v0_summary(d)
         return {"summary": s, "files": [{"path": rel(d), "name": d.name, "size": d.stat().st_size}], "state": None, "workflow": None,
-                "outcome": run_outcome(d, s, None, None, []), "groups": {"artifacts": [], "step_logs": [], "other": []}}
+                "outcome": run_outcome(d, s, None, None, []), "progress": {"elapsed_s": None, "current": None, "history": [], "gates": []},
+                "groups": {"artifacts": [], "step_logs": [], "other": []}}
     s = run_summary(d)
     state = {}
     if (d / "state.json").exists():
@@ -468,8 +508,10 @@ def run_detail(name):
     try: outcome = run_outcome(d, s, state, wf, files)
     except Exception as e: outcome = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
                                       "gate_fails": [], "fail_count": 0, "loops_hit": False, "pr_url": s.get("pr_url"), "_error": str(e)}
+    try: progress = run_progress(d, s, state)
+    except Exception as e: progress = {"elapsed_s": None, "current": None, "history": [], "gates": [], "_error": str(e)}
     return {"summary": s, "state": state, "files": files, "workflow": wf, "ticket": ticket, "jobs": jobs[:5],
-            "lease": run_lease(s.get("task")), "outcome": outcome, "groups": run_groups(files, wf)}
+            "lease": run_lease(s.get("task")), "outcome": outcome, "progress": progress, "groups": run_groups(files, wf)}
 
 
 def run_lease(task):
@@ -480,6 +522,75 @@ def run_lease(task):
     v = lent.get(str(task))
     # since は API が返す時刻なのでオフセットを補う（ADR-0026）
     return {"task": str(task), "pj": v.get("pj"), "name": v.get("name"), "since": ts_aware(v.get("since"))} if isinstance(v, dict) else None
+
+
+def run_state(d):
+    """ポーリング用に state.json だけを読み直す。runner の書き込み（workflow/bin/run の save）は tmp+rename ではないので、
+       書いている途中を掴むと壊れた JSON になる。読めなかったことを呼び手に伝え、次の周回に回してもらう（run_summary と同じ姿勢）"""
+    st = d / "state.json"
+    if not st.exists(): return None
+    try: return json.loads(st.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return None
+
+
+def run_mark(state):
+    """「工程が変わった」を見分ける印。history が 1 件増える / current の step が変わる / result が入る / 終わる、のどれか"""
+    state = state or {}
+    cur = state.get("current") if isinstance(state.get("current"), dict) else {}
+    hist = state.get("history") if isinstance(state.get("history"), list) else []
+    return (len(hist), cur.get("step"), cur.get("since"), state.get("result"), bool(state.get("finished")))
+
+
+def run_wait(name, until="step", timeout_s=60):
+    """run の工程が変わる（until="step"）か、run が終わる（until="result"）まで待つ（MCP から使う。最大 timeout_s 秒）。
+       返すのは記録から導いた要点だけで、ログ本文は含めない（ログは read_file で読む）。
+       timeout に達したら changed: false のまま今の状態を返す"""
+    if until not in ("step", "result"): raise ApiError("until は step か result")
+    d = RUNS / name
+    if not d.is_dir() or not d.resolve().is_relative_to(RUNS.resolve()): raise ApiError(f"実行記録 {name} は見つかりません", 404)
+    t0 = time.time()
+    s0 = run_state(d)
+    base = run_mark(s0)
+    # もう終わっている run はこれ以上進まない。待たずに今の状態を返す（changed は「待っている間に動いたか」なので false）
+    if (s0 or {}).get("finished"): return run_wait_view(d, name, until, until == "result", 0)
+    while True:
+        s = run_state(d)
+        done = bool((s or {}).get("finished")) or bool((s or {}).get("result"))
+        changed = done if until == "result" else (run_mark(s) != base)
+        if changed or time.time() - t0 >= timeout_s:
+            return run_wait_view(d, name, until, changed, int(time.time() - t0))
+        time.sleep(1)
+
+
+def run_wait_view(d, name, until, changed, waited_s):
+    """run_wait の戻り値。run_detail と同じ導出（run_summary / run_outcome / run_progress）を使い、
+       ファイル一覧・workflow 定義・ログ本文は載せない"""
+    s = run_summary(d)
+    state = {}
+    if (d / "state.json").exists():
+        try: state = ts_state(json.loads((d / "state.json").read_text(encoding="utf-8")))
+        except Exception as e: state = {"_error": str(e)}
+    apply_liveness([s])                                     # 一覧と同じ規則で「実行中」を見直す（チケット 236）
+    files = [{"path": rel(x), "name": str(x.relative_to(d)), "size": x.stat().st_size} for x in sorted(d.rglob("*")) if x.is_file()]
+    wf = None
+    if s.get("workflow"):
+        wp = REPO / "workflow" / "kit" / "workflows" / f"{s['workflow']}.yml"
+        if wp.exists(): wf = load_yaml(wp)
+    try: o = run_outcome(d, s, state, wf, files)
+    except Exception as e: o = {"reason": "unknown", "gate_fails": [], "pr_url": s.get("pr_url"), "_error": str(e)}
+    try: pg = run_progress(d, s, state)
+    except Exception as e: pg = {"elapsed_s": None, "current": None, "history": [], "gates": [], "_error": str(e)}
+    hist = pg["history"]
+    last = hist[-1] if hist else {}
+    cur = pg["current"]
+    return {"name": name, "until": until, "changed": changed, "waited_s": waited_s, "status": s.get("status"),
+            "step": (cur or {}).get("step") or last.get("step"), "ok": last.get("ok"), "next": state.get("next"),
+            # ゲートの赤は run_outcome が「失敗した工程で止まった run」にだけ載せる。走っている最中の run でも
+            # 直近の work/gates.txt から同じ答えが出るので、空なら progress の一覧（同じファイル）から引く
+            "result": state.get("result"), "pr_url": o.get("pr_url"),
+            "gate_fails": o.get("gate_fails") or [g["name"] for g in pg["gates"] if g["status"] == "FAIL"],
+            "gates": pg["gates"], "reason": o.get("reason"), "current": cur, "elapsed_s": pg["elapsed_s"],
+            "history": hist, "finished": state.get("finished")}
 
 
 def rel(p):

@@ -386,6 +386,99 @@ class McpTest(unittest.TestCase):
         self.assertEqual(d["lent"], {}); self.assertEqual(d["leases"], [])
         self.assertFalse(d["state_exists"])
 
+    # ---- run_wait / run_show の progress（チケット 340）
+    def fake_run(self, tag, state, gates=None):
+        """偽の run ディレクトリを 1 つ作り、名前と state.json のパスを返す"""
+        name = f"2026-09-10-{PJ}-{tag}"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        st = d / "state.json"
+        st.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        if gates is not None:
+            (d / "work").mkdir(exist_ok=True); (d / "work" / "gates.txt").write_text(gates, encoding="utf-8")
+        return name, st
+
+    RUNNING = {"pj": PJ, "task": 340, "workflow": "feature", "started": "2026-09-01T10:00:00+09:00",
+               "finished": None, "result": None, "pr_url": "", "next": "implement",
+               "current": {"step": "implement", "kind": "agent", "log": "agent-implement-1.log", "since": "2026-09-01T10:05:00+09:00"},
+               "history": [{"step": "plan", "ok": True, "next": "implement", "at": "2026-09-01T10:05:00+09:00"}]}
+
+    def test_17_run_wait_does_not_block_others(self):
+        """run_wait の待ちで他のツールを塞がない（job_wait と同じく別スレッドで待つ。ADR-0028）"""
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: run_wait 中の ticket_show", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r)
+        name, _ = self.fake_run("917", self.RUNNING)
+        t0 = time.time()
+        wait_id = self.c.send("tools/call", {"name": "run_wait", "arguments": {"name": name, "timeout_s": 8}})
+        show_id = self.c.send("tools/call", {"name": "ticket_show", "arguments": {"id": r["id"]}})
+
+        first = self.c.recv()                                                # ticket_show が先に返る
+        self.assertEqual(first["id"], show_id, f"run_wait に塞がれた: {first}")
+        self.assertLess(time.time() - t0, 4, "ticket_show が run_wait の待ちに引きずられている")
+        self.assertFalse(first["result"]["isError"])
+
+        second = self.c.recv()                                               # run_wait は timeout まで待って返る
+        self.assertEqual(second["id"], wait_id)
+        self.assertFalse(json.loads(second["result"]["content"][0]["text"])["changed"])
+
+    def test_18_run_wait_returns_when_a_step_finishes(self):
+        """history が 1 件増えたら timeout を待たずに返る。返るのは構造化した要点だけで、ログ本文は含まない"""
+        gates = "PASS lint\nFAIL unit (~/gates/unit.log)\n=== unit.log (tail 60)\nFAIL 混ぜてはいけないログ本文\n" + "x" * 5000 + "\n"
+        name, st = self.fake_run("918", self.RUNNING, gates=gates)
+        t0 = time.time()
+        wait_id = self.c.send("tools/call", {"name": "run_wait", "arguments": {"name": name, "timeout_s": 30}})
+        time.sleep(1.5)
+        st.write_text(json.dumps({**self.RUNNING, "next": "review", "pr_url": "https://example.invalid/pr/1",
+                                  "current": {"step": "review", "kind": "agent", "log": "agent-review-2.log", "since": "2026-09-01T10:20:00+09:00"},
+                                  "history": self.RUNNING["history"] + [{"step": "gates", "ok": False, "next": "implement", "at": "2026-09-01T10:20:00+09:00"}]},
+                                 ensure_ascii=False), encoding="utf-8")
+        r = self.c.recv(); self.assertEqual(r["id"], wait_id)
+        self.assertLess(time.time() - t0, 30, "run_wait が timeout まで待っている")
+        text = r["result"]["content"][0]["text"]; d = json.loads(text)
+        self.assertTrue(d["changed"]); self.assertEqual(d["status"], "running")
+        for k in ("step", "ok", "next", "gate_fails", "pr_url", "result"): self.assertIn(k, d)
+        self.assertEqual(d["step"], "review"); self.assertIs(d["ok"], False); self.assertEqual(d["next"], "review")
+        self.assertEqual(d["gate_fails"], ["unit"]); self.assertEqual(d["pr_url"], "https://example.invalid/pr/1")
+        self.assertIsNone(d["result"])
+        self.assertNotIn("log", d)                                           # ログ本文は返さない（read_file で読む）
+        self.assertLess(len(text), 4000, "run_wait の戻りが大きすぎる（ログ本文が混ざっていないか）")
+        self.assertNotIn("混ぜてはいけないログ本文", text)
+
+    def test_19_run_wait_returns_running_on_timeout(self):
+        """何も動かなければ timeout_s ぶん待って changed: false / running のまま返る"""
+        name, _ = self.fake_run("919", self.RUNNING)
+        t0 = time.time()
+        err, d = self.c.tool("run_wait", name=name, timeout_s=2); self.assertFalse(err, d)
+        self.assertGreaterEqual(time.time() - t0, 1.5); self.assertLess(time.time() - t0, 10)
+        self.assertFalse(d["changed"]); self.assertEqual(d["status"], "running"); self.assertEqual(d["step"], "implement")
+        err, msg = self.c.tool("run_wait", name="2026-01-01-nope-1", timeout_s=1); self.assertTrue(err); self.assertIn("見つかりません", msg)
+        err, msg = self.c.tool("run_wait", name=name, timeout_s=-1); self.assertTrue(err)
+        err, msg = self.c.tool("run_wait", name=name, until="nope", timeout_s=1); self.assertTrue(err)
+
+    def test_20_run_show_carries_progress(self):
+        """run_show の progress に工程ごとの経過秒・今の工程の経過秒・ゲートの PASS/FAIL/INFO 一覧が入る"""
+        gates = "PASS lint\nFAIL unit (~/gates/unit.log)\nINFO typecheck red (also red on base; not a gate)\n=== unit.log (tail 60)\nPASS 拾ってはいけない\n"
+        name, _ = self.fake_run("920", self.RUNNING, gates=gates)
+        err, d = self.c.tool("run_show", name=name); self.assertFalse(err, d)
+        pg = d["progress"]
+        self.assertEqual([h["elapsed_s"] for h in pg["history"]], [300])      # started 10:00 → plan 終了 10:05
+        self.assertEqual(pg["current"]["step"], "implement"); self.assertIsInstance(pg["current"]["elapsed_s"], int)
+        self.assertIsInstance(pg["elapsed_s"], int)
+        self.assertEqual([(g["name"], g["status"]) for g in pg["gates"]],
+                         [("lint", "PASS"), ("unit", "FAIL"), ("typecheck", "INFO")])   # `=== ` から先は読まない
+
+    def test_21_run_wait_limits_and_shape_documented(self):
+        """既定 60 秒・上限 300 秒と「ログ本文を返さない」ことが tools/list の説明文から読める"""
+        tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
+        self.assertIn("run_wait", tools)
+        desc = tools["run_wait"]["description"]
+        self.assertIn("既定 60", desc); self.assertIn("上限 300", desc); self.assertIn("ログ本文は含まない", desc)
+        self.assertEqual(tools["run_wait"]["inputSchema"]["properties"]["until"]["enum"], ["step", "result"])
+        self.assertTrue(tools["run_wait"]["annotations"]["readOnlyHint"], "run_wait は待つだけの読み取り")
+        self.assertIn("progress", tools["run_show"]["description"])
+        # 運転の型（ticket_run → run_wait → run_show / read_file）を instructions に書く
+        ins = self.c.call("initialize", {"protocolVersion": "2025-03-26"})["result"]["instructions"]
+        for k in ("ticket_run", "run_wait", "run_show", "read_file"): self.assertIn(k, ins)
+
 
 if __name__ == "__main__":
     unittest.main()
