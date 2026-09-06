@@ -705,5 +705,20 @@ class KitListingTest(unittest.TestCase):
         self.assertEqual(self.core.roles(self.kit), ["planner"])
 
 
+class DispatchLineTest(unittest.TestCase):
+    """dispatch.log の 1 行の分解（HTTP を経由せず parse_dispatch_line を直接。ADR-0026）"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-logline-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_dry_run_start_without_title(self):
+        """題名が空の dry-run（印だけが残る行）でも dry-run と分かる。印を題名として出さない"""
+        e = self.core.parse_dispatch_line("2026-09-07T10:00:05\tstart 207 kumitate feature (dry-run)")
+        self.assertEqual((e["event"], e["tid"], e["dry_run"], e["reason"]), ("start", 207, True, ""))
+
+
 if __name__ == "__main__":
     unittest.main()

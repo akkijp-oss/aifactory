@@ -674,7 +674,8 @@ def parse_dispatch_line(line):
             e.update(event="end", rc=as_int(g["rc"]), status=g["status"], elapsed_s=as_int(g["elapsed_s"]))
         elif name == "start":
             title = g.get("title") or ""
-            if title.endswith(DRY_RUN_MARK): title = title[: -len(DRY_RUN_MARK)]; e["dry_run"] = True
+            if title == DRY_RUN_MARK.strip(): title = ""; e["dry_run"] = True      # 題名が空の dry-run（印だけ残る）
+            elif title.endswith(DRY_RUN_MARK): title = title[: -len(DRY_RUN_MARK)]; e["dry_run"] = True
             e.update(event="start", reason=title)
         elif name == "blocked":
             e.update(event="blocked", status="blocked")
