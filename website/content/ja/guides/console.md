@@ -132,7 +132,8 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです） |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
-| `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log`・チケットの添付など）。画像は image として返るので、そのまま見えます（4 MiB まで。それより大きいものはコンソールから開いてください） |
+| `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log`・チケットの添付など）。画像は image として返るので、そのまま見えます（4 MiB まで。それより大きいものはコンソールから開いてください）。`run_show` には `progress` が付き、run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が読めます |
+| `run_wait` | run の工程が変わる（`until: step`、既定）か run が終わる（`until: result`）まで待ちます（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返します。ログ本文は含みません |
 | `run_action` | 人間が run の後始末（wip ブランチから PR を作ってマージ・打ち切り）をしたことを実行記録に書く（`kb run-note`）。`close` は決着（`done` / `abandoned`）と PR 番号を記録し、`note` は説明を書き直します |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task・VM 名・IP・貸出開始・稼働状態）/ 実機の状態確認（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
@@ -144,8 +145,8 @@ claude mcp reset-project-choices   # 承認をやり直す
 ### 運転の型
 
 1. `ticket_run(id)` を呼ぶとジョブが返ります（`kb run` は 5〜80 分かかります）
-2. 監視は `job_show(id, tail=2000)` か `run_show(name)` を数十秒おきに呼びます。`job_wait` は既定 60 秒・上限 300 秒待ち、終わらなければ実行中のまま返るので繰り返し呼びます。待っている間も他のツールはすぐ応答します（ADR-0028）が、annotations を読まないクライアントでは呼び手の側で直列になります。止まって見えたら `timeout_s` を短くするか `job_show` で回してください
-3. 終わったら `run_show(name)` の `outcome` と `ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読みます。ゲートが赤かった run は `work/gates/<ゲート名>.log` にその中身（エラー行の抜粋と末尾）が残っているので、VM へ ssh せずに理由を読めます
+2. 工程を追うのは `run_wait(name)` です。次の工程遷移まで待ち、変わった瞬間に `step` / `ok` / `next` / `gate_fails` / `pr_url` / `result` を構造化して返します。ログ本文は返さないので、ログを grep して「今どの工程か」を組み立てる必要はありません（agent 自身の出力に `result: success` のような文字列が混ざるため、ログ本文からの終了判定は誤りやすいです）。`timeout_s` に達したときは `changed: false` のまま返るので、繰り返し呼びます。ジョブの側を見るなら `job_show(id, tail=2000)` か `job_wait` です。`job_wait` / `run_wait` はどちらも既定 60 秒・上限 300 秒です（Claude Code は 120 秒でツール呼び出しをバックグラウンド化するので、それより長く待たせても呼び手に届く形になりません。ADR-0028 / ADR-0051）。待っている間も他のツールはすぐ応答しますが、annotations を読まないクライアントでは呼び手の側で直列になります。止まって見えたら `timeout_s` を短くしてください
+3. 終わったら `run_show(name)` の `outcome` と `progress`、`ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読みます。`progress.history[].elapsed_s` が工程ごとの経過秒、`progress.current.elapsed_s` が今の工程の経過秒、`progress.gates` が直近のゲートの PASS / FAIL / INFO 一覧です。経過秒は「前の工程が終わった時刻から」の差なので、`--from` で再開した run や VM の空き待ちを挟んだ run では工程の外で過ぎた時間が混ざります（記録に境目が無いので補正はしません。導けないときは `null`）。ゲートが赤かった run は `work/gates/<ゲート名>.log` にその中身（エラー行の抜粋と末尾）が残っているので、VM へ ssh せずに理由を読めます
 4. VM の空きは `sandbox_status` です。`sandbox ls` の値が 600 秒より古ければ裏で取り直しのジョブを起こし、今回は古い値のまま `ls_refreshing: true` と `ls_refresh_job` を付けて返します（次の呼び出しで `pool_actual` / `free` が最新になります。起こせないときは `ls_refresh_error`）。貸出中 VM の task・VM 名・IP・貸出開始・稼働状態は `leases[]` にそのまま出るので、`state.json` を ssh で読みに行く必要はありません
 
 resources として `aifactory://board`（ボード）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）も読めます。
