@@ -28,13 +28,13 @@ const T = {
     "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "intakeFree": "自由文から起票する", "intakeNew": "整った本文で起票する", "next": "次にすること", "output": "出力",
-    "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道"
+    "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道", "rawLog": "元のログを見る"
   },
 
   "th": {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
-    "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ"
+    "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ"
   },
 
   "label": {
@@ -47,7 +47,8 @@ const T = {
     "dispatchDry": "dry-run（VM を触らず、状態も進めません）", "intakeDry": "起票せず、判定だけ見る",
     "request": "依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）", "requestPlaceholder": "例: seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい",
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」）",
-    "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中"
+    "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中",
+    "tid": "チケット番号", "tidPlaceholder": "205 のように", "logSrc": "種類", "allLogSrc": "すべて"
   },
 
   "sub": {
@@ -57,7 +58,7 @@ const T = {
     "sandbox": "貸出状況は state.json、VM の実勢は sandbox ls（Proxmox に ssh、数秒）で取ります。",
     "intake": "自由文は intake（LLM 1 回）、整った本文は kb new で起票します。",
     "jobs": "このコンソールが起動した CLI です。記録は console/jobs/ に残ります。",
-    "logs": "起票（intake）と配車（dispatch）のログです。工程ごとの記録は実行記録、状態の履歴はチケットで見られます。",
+    "logs": "起票と配車の記録です。チケット番号や PJ で絞り込めます。番号を押すとチケットへ移れます。原文は下の「元のログを見る」で読めます。",
     "config": "読むだけの画面です。変えるときはファイルを編集してください。"
   },
 
@@ -68,6 +69,13 @@ const T = {
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
   "tickets": { "count": "{n} 件（全 {m} 件）" },
+  "logs": {
+    "count": "{n} 件（全 {m} 件）", "capped": "新しい {n} 件だけ表示しています。", "confidence": "確度 {v}",
+    "endDetail": "終了コード {code}・所要 {t}", "dryRun": "dry-run",
+    "source": { "intake": "起票", "dispatch": "配車" },
+    "event": { "intake": "起票", "start": "開始", "end": "終了", "blocked": "人間待ちにした", "skip": "飛ばした", "idle": "未着手なし", "other": "その他" },
+    "reason": { "worker_unavailable": "worker が空いていません", "pool_busy": "プール {n} 台すべて貸出中" }
+  },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
@@ -118,6 +126,7 @@ const T = {
     "lent": "貸出中の VM はありません。",
     "ls": "「一覧を取り直す」を押すと、Proxmox の VM 一覧をここに出します。",
     "log": "空です。",
+    "logs": "条件に合う記録はありません。チケット番号を短くするか、PJ と種類を「すべて」にしてください。",
     "logFile": "まだありません。起票や配車をすると作られます。"
   },
 

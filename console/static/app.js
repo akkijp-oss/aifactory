@@ -182,7 +182,7 @@ async function dispatchDialog() {
 /* ---------- チケットの一覧（ボードの完了列に出しきれない過去分も、ここで探す）
    読むだけの画面なので確認もトーストも無い。絞り込みは URL のクエリを正とし、
    詳細から「戻る」で条件がそのまま戻る。5 秒更新はしない（開いたとき 1 回だけ取る） */
-let tkAll = [], tkFilter = { q: '', pj: '', status: '' }, tkDebounce = null;
+let tkAll = [], tkFilter = { q: '', pj: '', status: '' }, qDebounce = null;
 function tkMatch(x) {
   const q = tkFilter.q.trim().toLowerCase();
   if (tkFilter.pj && x.pj !== tkFilter.pj) return false;
@@ -499,13 +499,80 @@ async function viewJob(id, first) {
   if (j.state === 'running') schedule(() => viewJob(id, false), 2000); else clearInterval(timer);
 }
 
-/* ---------- ログ・設定 */
-async function viewLogs() {
-  const d = await api('logs');
-  const block = (name, f) => `<div class="panel"><h2>${esc(name)}<small class="mono">logs/${esc(name)}.log</small></h2>${f ? `<pre class="log small">${esc(f.text) || esc(T.empty.log)}</pre>` : `<div class="help">${esc(T.empty.logFile)}</div>`}</div>`;
-  render(head(esc(T.nav.logs), T.sub.logs) + block('intake', d.intake) + block('dispatch', d.dispatch));
-  schedule(viewLogs, 10000);
+/* ---------- ログ（起票と配車の記録）
+   行の項目分けは core.py（logs_view の entries。ADR-0026）。画面は表を主にし、原文は下に畳んで残す。
+   絞り込みは URL のクエリを正とし、10 秒更新では表だけを描き直す（打っている途中でフォーカスが飛ばないように） */
+const LOG_SOURCES = ['intake', 'dispatch'];
+let lgAll = [], lgTotal = 0, lgRaw = {}, lgFilter = { q: '', pj: '', src: '' };
+function lgMatch(x) {
+  if (lgFilter.pj && x.pj !== lgFilter.pj) return false;
+  if (lgFilter.src && x.source !== lgFilter.src) return false;
+  const q = lgFilter.q.trim();
+  if (!q) return true;
+  return /^\d+$/.test(q) && x.tid != null && String(x.tid).startsWith(q);   /* 番号だけで両方のログを串刺しにする（前方一致） */
 }
+/* 結果の列: 起票は種別と確度、配車は状態の印（rc / status の生表記は出さない） */
+function lgResult(x) {
+  if (x.event === 'intake') return esc(x.kind) + (x.confidence == null ? '' : ` <span class="help">${esc(tt(T.logs.confidence, { v: x.confidence }))}</span>`);
+  return x.status ? st(x.status) : '';
+}
+/* 理由の列: 導けた行は日本語に、導けなかった行（その他）は原文を等幅でそのまま */
+function lgReason(x) {
+  if (x.event === 'end') return esc(tt(T.logs.endDetail, { code: x.rc, t: fmtDur(x.elapsed_s) }));
+  if (x.event === 'skip') return esc(tt(T.logs.reason[x.reason] || x.reason, { n: x.detail }));
+  if (x.event === 'other') return `<span class="mono">${esc(x.reason)}</span>`;
+  if (x.event === 'intake') return esc(x.reason) + (x.model ? ` <span class="help mono">${esc(x.model)}</span>` : '');
+  return esc(x.reason);
+}
+function lgRender() {
+  const box = $('lg-list'); if (!box) return;
+  const list = lgAll.filter(lgMatch);
+  const cells = x => `<td>${fmtT(x.at)}</td><td>${esc(T.logs.event[x.event] || x.event)}${x.dry_run ? ` <span class="tag">${esc(T.logs.dryRun)}</span>` : ''}</td>`
+    + `<td>${esc(x.pj)}</td><td class="mono">${x.tid == null ? '' : `<a href="#/ticket/${x.tid}" class="mono">${esc(x.tid)}</a>`}</td>`
+    + `<td>${lgResult(x)}</td><td>${lgReason(x)}</td>`;
+  const row = x => x.tid == null ? `<tr>${cells(x)}</tr>` : `<tr class="link" data-href="#/ticket/${x.tid}">${cells(x)}</tr>`;
+  box.innerHTML = `<div class="help">${esc(tt(T.logs.count, { n: list.length, m: lgAll.length }))}${lgTotal > lgAll.length ? ` ${esc(tt(T.logs.capped, { n: lgAll.length }))}` : ''}</div>`
+    + (list.length ? `<table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.process)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.result)}</th><th>${esc(T.th.reason)}</th></tr>${list.map(row).join('')}</table>`
+      : `<div class="empty">${esc(T.empty.logs)}</div>`);
+}
+function lgSync() {
+  const p = new URLSearchParams();
+  for (const k of ['q', 'pj', 'src']) if (lgFilter[k]) p.set(k, lgFilter[k]);
+  const h = '#/logs' + (p.toString() ? '?' + p : '');
+  history.replaceState(null, '', h); lastRoute = h;
+}
+async function lgLoad() {
+  const d = await api('logs');
+  lgAll = d.entries || []; lgTotal = d.total || 0;
+  lgRaw = { intake: d.intake, dispatch: d.dispatch };
+}
+/* 定期更新: 表と原文の中身だけ入れ替える（絞り込みの入力欄は作り直さない） */
+async function lgRefresh() {
+  await lgLoad(); lgRender();
+  for (const name of LOG_SOURCES) { const pre = $(`lg-raw-${name}`); if (pre && lgRaw[name]) pre.textContent = lgRaw[name].text || T.empty.log; }
+}
+async function viewLogs(q) {
+  clearInterval(timer);
+  const p = new URLSearchParams(q || '');
+  lgFilter = { q: p.get('q') || '', pj: p.get('pj') || '', src: p.get('src') || '' };
+  await lgLoad();
+  const pjs = [...new Set(lgAll.map(x => x.pj).filter(Boolean))].sort();
+  const opt = (list, blank, sel, label) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option value="${esc(x)}" ${x === sel ? 'selected' : ''}>${esc(label ? label[x] || x : x)}</option>`).join('');
+  const raw = name => `<div class="panel"><h2>${esc(T.logs.source[name])}<small class="mono">logs/${esc(name)}.log</small></h2>`
+    + `${lgRaw[name] ? `<pre class="log small" id="lg-raw-${name}">${esc(lgRaw[name].text) || esc(T.empty.log)}</pre>` : `<div class="help">${esc(T.empty.logFile)}</div>`}</div>`;
+  render(head(esc(T.nav.logs), T.sub.logs) + `
+    <div class="row filters">
+      <label class="field">${esc(T.label.tid)}<input type="text" id="lg-q" class="w220" inputmode="numeric" placeholder="${esc(T.label.tidPlaceholder)}" value="${esc(lgFilter.q)}"></label>
+      <label class="field">${esc(T.label.pj)}<select data-act="logs-pj">${opt(pjs, T.label.allPj, lgFilter.pj)}</select></label>
+      <label class="field">${esc(T.label.logSrc)}<select data-act="logs-src">${opt(LOG_SOURCES, T.label.allLogSrc, lgFilter.src, T.logs.source)}</select></label>
+    </div>
+    <div class="panel" id="lg-list"></div>
+    <details class="files"><summary>${esc(T.h.rawLog)}</summary>${LOG_SOURCES.map(raw).join('')}</details>`);
+  lgRender();
+  schedule(lgRefresh, 10000);
+}
+
+/* ---------- 設定 */
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
   render(head(esc(T.nav.config), T.sub.config) + `
@@ -525,6 +592,8 @@ const actions = {
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
+  'logs-pj': el => { lgFilter.pj = el.value; lgSync(); lgRender(); },
+  'logs-src': el => { lgFilter.src = el.value; lgSync(); lgRender(); },
   'runs-all': el => { localStorage.setItem('runs-all', el.checked ? '1' : '0'); viewRuns(); },
   'dispatch': () => dispatchDialog(),
   'help': () => showHelp(),
@@ -616,11 +685,17 @@ document.addEventListener('click', async e => {
   e.preventDefault();
   try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
-document.addEventListener('input', e => {                                                  /* 検索欄は click の委譲に渡さない（data-act は actions に手のある名前だけ） */
-  const el = e.target.closest('#tk-q'); if (!el) return;
-  clearTimeout(tkDebounce); tkDebounce = setTimeout(() => {
-    if (!location.hash.startsWith('#/tickets')) return;                                    /* 打った直後に画面を離れたら、遅れて URL を書き戻さない */
-    tkFilter.q = el.value; tkSync(); tkRender();
+/* 検索欄は click の委譲に渡さない（data-act は actions に手のある名前だけ）。画面ごとの「番号で絞る」欄をここに集める */
+const Q_FIELDS = {
+  'tk-q': { route: '#/tickets', set: v => { tkFilter.q = v; tkSync(); tkRender(); } },
+  'lg-q': { route: '#/logs', set: v => { lgFilter.q = v; lgSync(); lgRender(); } },
+};
+document.addEventListener('input', e => {
+  const el = e.target.closest('#tk-q, #lg-q'); if (!el) return;
+  const f = Q_FIELDS[el.id];
+  clearTimeout(qDebounce); qDebounce = setTimeout(() => {
+    if (!location.hash.startsWith(f.route)) return;                                        /* 打った直後に画面を離れたら、遅れて URL を書き戻さない */
+    f.set(el.value);
   }, 150);
 });
 document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
@@ -659,7 +734,7 @@ async function route() {
     else if (seg[0] === 'intake') await viewIntake();
     else if (seg[0] === 'jobs') await viewJobs();
     else if (seg[0] === 'job') await viewJob(seg[1], true);
-    else if (seg[0] === 'logs') await viewLogs();
+    else if (seg[0] === 'logs') await viewLogs(q);
     else if (seg[0] === 'config') await viewConfig();
     else if (seg[0] === 'file') await viewFile(q);
     else render(`<div class="err">${esc(tt(T.err.noRoute, { h }))}</div>`);
