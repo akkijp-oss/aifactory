@@ -117,7 +117,7 @@ Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
 
 After PR creation, `result: human` means human review is pending. It alone does not indicate failure; inspect the history and PR. Normal cleanup removes the guest from Tart's list and clears the control plane lease. `--keep` retains both after artifact collection.
 
-Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes. Directories and symlinks are not collected; credential file `runtime.env` is excluded. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
+Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes; credential file `runtime.env` is excluded. Directories, symlinks, and anything beyond the 4 MiB total are skipped rather than collected, and their names and reasons are recorded in `artifacts_skipped` in `state.json`. Skipped entries do not stop the run, and the VM is still released. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
 
 ## Recovery
 
