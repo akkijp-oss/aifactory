@@ -13,7 +13,7 @@
   kb detach <id> <name>                          # 添付を 1 件消す
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
   kb resumable [--pj P] [--json]                 # 一時停止中（利用枠切れ / 鍵なし で todo に戻した）チケットと、続きを回せるか（解除時刻を過ぎた / 鍵が登録された。dispatch --resume-paused が読む）
-  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
+  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
                                                  # --from は human で止まった run を新しい VM で STEP からやり直す（既定は記録の resume_step、続きは記録の wip ブランチ）。--resume とは併用できない
   kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json と PR の状態（gh）を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
