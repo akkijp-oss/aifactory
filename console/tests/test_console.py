@@ -1106,6 +1106,151 @@ class SandboxSharedVmTest(unittest.TestCase):
         self.assertNotIn("#/ticket/${esc(v.task)}", vms)                # カンマ区切りのまま 1 本のリンクにしない
 
 
+class SandboxStateFileTest(unittest.TestCase):
+    """貸出台帳（state.json）の読み方（チケット 336 の 3 番目）。
+
+    PM は貸出中 VM の IP を MCP から引けず ssh で state.json を直読みした。原因は 2 つ:
+    台帳が空なのか読めていないのかを区別できないことと、貸出 1 件ぶんの項目が一覧の形で出ていなかったこと。
+    """
+
+    HEAD = "TASK     VM             VMID   IP           STATUS    SINCE\n"
+    ROWS = ("336      sb-kumitate-01 9204   10.77.1.4    running   2026-09-08T10:00:00+09:00\n"
+            "-        sb-kumitate-02 9205   10.77.1.5    stopped\n")
+    LENT = {"336": {"vmid": 9204, "name": "sb-kumitate-01", "ip": "10.77.1.4", "pj": PJ,
+                    "since": "2026-09-08T10:00:00+09:00", "phase": "ready"},
+            "40": {"vmid": 9205, "name": "sb-kumitate-02", "ip": "10.77.1.5", "pj": PJ,
+                   "since": "2026-09-08T11:00:00+09:00", "phase": "gates"}}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-state-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+
+    def state(self, lent):
+        (self.tmp / "state.json").write_text(json.dumps(lent), encoding="utf-8")
+
+    def ls_job(self, log):
+        d = self.m.core.JOBS / "20260908-120000-sandbox-ls"; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"id": d.name, "kind": "sandbox-ls", "label": "sandbox ls", "cmd": ["sandbox", "ls"],
+                                                 "ticket": None, "run_hint": None, "pid": 1, "started": self.m.core.now(),
+                                                 "finished": self.m.core.now(), "rc": 0, "state": "done"}), encoding="utf-8")
+        (d / "log").write_text("$ sandbox ls\n" + log, encoding="utf-8")
+
+    def test_missing_ledger_is_not_the_same_as_no_lease(self):
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["lent"], {}); self.assertEqual(d["leases"], [])
+        self.assertFalse(d["state_exists"]); self.assertIn("state.json", d["state_error"])
+
+    def test_unreadable_ledger_says_why(self):
+        (self.tmp / "state.json").write_text("{ broken", encoding="utf-8")
+        d = self.m.core.sandbox_view()
+        self.assertTrue(d["state_exists"]); self.assertTrue(d["state_error"]); self.assertEqual(d["leases"], [])
+
+    def test_leases_carry_ip_and_since_in_task_order(self):
+        """貸出 1 件 = 1 行。台帳の項目をそのまま載せ、チケット番号は数として並べる"""
+        self.state(self.LENT)
+        d = self.m.core.sandbox_view()
+        self.assertTrue(d["state_exists"]); self.assertIsNone(d["state_error"])
+        self.assertEqual([l["task"] for l in d["leases"]], ["40", "336"])
+        first = d["leases"][1]
+        self.assertEqual((first["vmid"], first["name"], first["ip"], first["pj"], first["phase"]),
+                         ("9204", "sb-kumitate-01", "10.77.1.4", PJ, "ready"))
+        self.assertEqual(first["since"], "2026-09-08T10:00:00+09:00")
+        self.assertEqual(first["url"], d["urls"]["336"])
+
+    def test_lease_joins_the_power_state_from_the_last_ls(self):
+        """稼働状態は最後に成功した ls から vmid で引く。ls が無ければ null（推測しない）"""
+        self.state(self.LENT)
+        self.assertEqual([l["vm_status"] for l in self.m.core.sandbox_view()["leases"]], [None, None])
+        self.ls_job(self.HEAD + self.ROWS)
+        by = {l["task"]: l["vm_status"] for l in self.m.core.sandbox_view()["leases"]}
+        self.assertEqual(by, {"336": "running", "40": "stopped"})
+
+
+class SandboxLsRefreshTest(unittest.TestCase):
+    """`sandbox ls` が古ければ sandbox_status が裏で取り直す（チケット 336 の 2 番目・ADR-0036）。
+
+    読み取りのツールがジョブを起こす唯一の例外なので、起こす / 起こさないの 3 条件をここで固定する。
+    Proxmox にも VM にも触らない: PATH の先頭に固定の表を印字する偽の `sandbox` を置く。
+    """
+
+    TABLE = ("TASK     VM             VMID   IP           STATUS    SINCE\n"
+             "336      sb-kumitate-01 9204   10.77.1.4    running   2026-09-08T10:00:00+09:00\n"
+             "-        sb-kumitate-02 9205   10.77.1.5    stopped\n")
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-ls-refresh-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+        self.bin = self.tmp / "bin"; self.bin.mkdir()
+        sb = self.bin / "sandbox"
+        sb.write_text('#!/bin/sh\n[ "$1" = ls ] || exit 2\ncat <<\'EOF\'\n' + self.TABLE + 'EOF\n', encoding="utf-8")
+        sb.chmod(0o755)
+        self.path0, self.home0 = os.environ.get("PATH", ""), os.environ.get("HOME", "")
+        self.addCleanup(os.environ.__setitem__, "PATH", self.path0)
+        self.addCleanup(os.environ.__setitem__, "HOME", self.home0)
+        os.environ["PATH"] = f"{self.bin}:{self.path0}"
+        os.environ["HOME"] = str(self.tmp)          # child_env() が足す ~/.local/bin から本物を拾わないように
+
+    def no_sandbox_on_path(self):
+        os.environ["PATH"] = "/usr/bin:/bin"
+        if shutil.which("sandbox", path=self.m.core.child_env().get("PATH")):
+            self.skipTest("この環境には本物の sandbox が PATH にある（実機を叩かない）")
+
+    def view(self):
+        return self.m.core.sandbox_ls_refresh_if_stale(self.m.core.sandbox_view())
+
+    def job(self, jid, started, rc, state):
+        d = self.m.core.JOBS / jid; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"id": jid, "kind": "sandbox-ls", "label": "sandbox ls", "cmd": ["sandbox", "ls"],
+                                                 "ticket": None, "run_hint": None, "pid": 1, "started": started,
+                                                 "finished": None if rc is None else started, "rc": rc, "state": state}), encoding="utf-8")
+        (d / "log").write_text("$ sandbox ls\n", encoding="utf-8")
+
+    def ago(self, seconds):
+        return (datetime.datetime.now().astimezone() - datetime.timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+    def n_ls_jobs(self):
+        return len([j for j in self.m.core.JobStore.list() if j.get("kind") == "sandbox-ls"])
+
+    def test_never_fetched_starts_a_refresh_and_the_next_call_is_fresh(self):
+        d = self.view()
+        self.assertTrue(d["ls_refreshing"]); self.assertIsNone(d["ls_fetched"])      # 今回は待たせない
+        jid = d["ls_refresh_job"]
+        self.assertEqual(self.m.core.job_wait(jid, 20)["rc"], 0)
+        d = self.view()
+        self.assertFalse(d["ls_refreshing"]); self.assertFalse(d["ls_stale"]); self.assertLess(d["ls_age_s"], 600)
+        self.assertEqual([v["name"] for v in d["vms"]], ["sb-kumitate-01", "sb-kumitate-02"])
+        self.assertEqual(next(p for p in d["templates"] if p["pj"] == PJ)["pool_actual"], 2)
+        self.assertEqual(self.n_ls_jobs(), 1)                                        # 新しいうちは起こさない
+
+    def test_a_running_ls_is_not_started_twice(self):
+        self.job("20260908-115900-sandbox-ls", self.ago(30), None, "running")
+        d = self.view()
+        self.assertTrue(d["ls_refreshing"]); self.assertEqual(d["ls_refresh_job"], "20260908-115900-sandbox-ls")
+        self.assertEqual(self.n_ls_jobs(), 1)
+
+    def test_a_recent_failure_is_not_retried(self):
+        """失敗直後に叩き続けない（ssh が落ちているときに sandbox_status のたびに ssh しない）"""
+        self.job("20260908-115900-sandbox-ls", self.ago(60), 1, "failed")
+        d = self.view()
+        self.assertFalse(d["ls_refreshing"]); self.assertIn("600", d["ls_refresh_error"])
+        self.assertEqual(self.n_ls_jobs(), 1)
+
+    def test_an_old_failure_is_retried(self):
+        self.job("20260908-100000-sandbox-ls", self.ago(1200), 1, "failed")
+        self.assertTrue(self.view()["ls_refreshing"]); self.assertEqual(self.n_ls_jobs(), 2)
+
+    def test_missing_command_is_reported_without_failing_the_view(self):
+        self.no_sandbox_on_path()
+        d = self.view()
+        self.assertFalse(d["ls_refreshing"]); self.assertIn("PATH", d["ls_refresh_error"])
+        self.assertIn("templates", d)                                                # 読めた分はそのまま返す
+        self.assertEqual(self.n_ls_jobs(), 0)
+
+
 class SandboxPoolCountTest(unittest.TestCase):
     """プールの「定義台数」と「実体台数」を分けて数える（チケット 241）。
 
@@ -1487,6 +1632,15 @@ class LoadCtlEnvTest(unittest.TestCase):
 
     def test_missing_file_is_not_an_error(self):
         self.assertEqual(self.core.load_ctl_env(self.tmp / "no-such.env"), [])
+
+    def test_sandbox_state_follows_the_env(self):
+        """台帳の場所は SANDBOX_STATE が正（dispatch / run と同じ）。ctl.env で与えても効く（チケット 336）"""
+        os.environ.pop("SANDBOX_STATE", None); self.addCleanup(os.environ.pop, "SANDBOX_STATE", None)
+        ledger = self.tmp / "kumitate.state.json"
+        self.envf.write_text(f"SANDBOX_STATE={ledger}\n", encoding="utf-8")
+        self.core.load_ctl_env(self.envf)
+        self.assertEqual(self.core.SANDBOX_STATE, ledger)
+        self.assertEqual(self.core.sandbox_view()["state_file"], str(ledger))
 
 
 if __name__ == "__main__":
