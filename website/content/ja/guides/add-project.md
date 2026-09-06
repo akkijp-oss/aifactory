@@ -1,25 +1,27 @@
-# PJ を追加する
+# プロジェクトを追加する
 
-このページで分かること: 新しいリポジトリを工場に入れるための 6 つの作業と、それぞれのファイルの書き方。所要はテンプレートの焼き込み（依存の重さ次第で 10〜40 分）を含めて 1〜2 時間です。手本は同梱の 2 本です: `examples/projects/aifactory/`（このリポジトリ自身。公開なので誰でもそのまま焼いて 1 周回せる。アプリは :3000 の `mkdocs serve`）と `examples/projects/kumitate/`（[akkijp/kumitate](https://github.com/akkijp/kumitate)、pnpm monorepo + Next.js + PostgreSQL。大きめのアプリの参照例）。
+新しいリポジトリを aifactory の作業対象として登録する手順を説明します。必要なのは、環境構築スクリプト、VM のテンプレートとプール、プロジェクト設定、検証スクリプト、Claude Code のトークン、GitHub App の設定です。所要時間の目安は 1〜2 時間で、このうちテンプレートの作成に 10〜40 分かかります。
 
-## 作業の全体
+同梱の例は 2 つあります。`examples/projects/aifactory/` は、この公開リポジトリ自身を対象にした例です。VM を用意して一連の処理を試せます。アプリとしてポート 3000 で `mkdocs serve` を起動します。`examples/projects/kumitate/` は、[akkijp/kumitate](https://github.com/akkijp/kumitate) を対象とし、pnpm monorepo、Next.js、PostgreSQL を使う大きめのアプリの設定例です。
+
+## 作業の流れ
 
 ```mermaid
 flowchart LR
-  A[1. provision.sh<br>テンプレの焼き込み手順] --> B[2. テンプレとプールを作る<br>Proxmox]
-  B --> C[3. project.yml<br>事実と方針]
+  A[1. provision.sh<br>テンプレートの作成手順] --> B[2. テンプレとプールを作る<br>Proxmox]
+  B --> C[3. project.yml<br>基本情報と作業ルール]
   C --> D[4. gates.sh<br>品質ゲート]
   D --> E[5. トークン<br>claude setup-token]
   E --> F[6. GitHub App を install]
   F --> G[dry-run → 本実行]
 ```
 
-PJ 固有のものは PJ 定義ディレクトリの 3 ファイルにしか無い、というのがこの工場の約束です（ADR-0009）。workflow は複製しません。
+プロジェクト固有の設定は、定義ディレクトリ内の 3 ファイル（`provision.sh`、`project.yml`、`gates.sh`）にまとめます。ワークフローは全プロジェクトで共通のものを使います（ADR-0009）。
 
 | 置き場 | 役割 |
 |---|---|
-| `$AIFACTORY_WORKSPACE/projects/<pj>/` | 自分の PJ 定義。git 追跡外（workspace） |
-| `examples/projects/<pj>/` | リポジトリ同梱の例。`kb` / `intake` / `dispatch` / runner / コンソールは workspace に無い PJ をここから探す |
+| `$AIFACTORY_WORKSPACE/projects/<pj>/` | 自分のプロジェクト定義。git 追跡外（workspace） |
+| `examples/projects/<pj>/` | リポジトリ同梱の例。`kb` / `intake` / `dispatch` / runner / コンソールは workspace にないプロジェクトをここから探す |
 
 ## 0. 例を写す
 
@@ -29,11 +31,11 @@ cp -r examples/projects/kumitate "${AIFACTORY_WORKSPACE:-workspace}/projects/mya
 ls "${AIFACTORY_WORKSPACE:-workspace}/projects/myapp"      # provision.sh  project.yml  gates.sh
 ```
 
-以下、`myapp` を新しい PJ の slug として進めます（`sandbox take myapp …`、`kb new myapp …` に使う名前です）。
+以下、`myapp` を新しいプロジェクトの slug として進めます（`sandbox take myapp …`、`kb new myapp …` に使う名前です）。
 
 ## 1. provision.sh を書く
 
-`provision.sh` は、base テンプレートから clone した VM の中で `dev` ユーザーとして実行され、リポジトリの clone、ランタイム、依存、DB、アプリ常駐を焼き込みます。雛形は `sandbox/templates/README.md`、実例は `examples/projects/kumitate/provision.sh` です。
+`provision.sh` は、base テンプレートから clone した VM の中で `dev` ユーザーとして実行され、リポジトリを取得し、ランタイム、依存パッケージ、DB、アプリの常駐設定を用意します。ひな形は `sandbox/templates/README.md`、実例は `examples/projects/kumitate/provision.sh` です。
 
 ```bash
 #!/usr/bin/env bash
@@ -62,9 +64,9 @@ unset GH_TOKEN; gh auth logout --hostname github.com || true; rm -f ~/.config/gh
 ポイント:
 
 - clone に使うトークンは環境変数で渡し、テンプレートには残さない（`GH_TOKEN="$(gh auth token)"`）
-- base に無いもの（MySQL、pgvector、ブラウザの依存など）は provision で入れる。kumitate の例は `postgresql-16-pgvector` を apt で足している
+- base にないもの（MySQL、pgvector、ブラウザの依存など）は provision で入れる。kumitate の例は `postgresql-16-pgvector` を apt で足している
 - リポジトリ直下がアプリでないなら `SANDBOX_APP_DIR` を `/etc/sandbox/app.env` に書く（kumitate は `apps/kumitate/`）
-- seed が壊れているならこの段階で分かる。直すのは PJ 側（チケットにする）
+- seed が壊れているならこの段階で分かる。直すのはプロジェクト側（チケットにする）
 
 ## 2. テンプレートとプールを作る
 
@@ -75,11 +77,11 @@ sandbox/proxmox/run.sh 50-firewall.sh       # 通信制限とスナップショ�
 sandbox ls                                  # sb-myapp-01〜03 が見える
 ```
 
-`32-pj-template.sh` は `PJ` の `provision.sh` を workspace → `examples/` の順に探します。VMID とアドレスの規則は `sandbox/README.md` の「命名・採番・アドレス」。PJ テンプレートは 911x、プールは 92xx で IP は `10.77.1.(VMID−9200)` です（`SB_POOL_BASE` / `SB_POOL_NET` で変更可）。
+`32-pj-template.sh` は `PJ` の `provision.sh` を workspace → `examples/` の順に探します。VMID とアドレスの規則は `sandbox/README.md` の「命名・採番・アドレス」。プロジェクトテンプレートは 911x、プールは 92xx で IP は `10.77.1.(VMID−9200)` です（`SB_POOL_BASE` / `SB_POOL_NET` で変更可）。
 
 ## 3. project.yml を書く
 
-`project.yml` は、runner が依頼文に貼る「PJ の事実と方針」です。形は `workflow/kit/schema/project.schema.json` で検証されます。kumitate の実物（`examples/projects/kumitate/project.yml`）を短くしたものです。
+`project.yml` には、runner がエージェントに伝えるプロジェクトの基本情報や作業ルールを記述します。形式は `workflow/kit/schema/project.schema.json` で検証されます。以下は、kumitate の設定（`examples/projects/kumitate/project.yml`）をもとにした短い例です。
 
 ```yaml
 name: myapp
@@ -107,14 +109,14 @@ known_red_gates: []           # base で既に赤いゲート名。直す PR が
 |---|---|---|
 | `name` / `repo` / `base_branch` / `app_dir` / `gates` | 必須 | 場所と宛先 |
 | `stack` | 推奨 | 1 行。依頼文の冒頭に出る |
-| `facts` | 推奨 | テストの走らせ方、生成物の置き場、既知の問題。**「全 PJ で同じ注意」は書かない**（それは `roles/_common.md`） |
-| `review_points` / `forbidden` | 推奨 | PJ 固有の観点と禁止 |
-| `known_red_gates` | 必要なら | 書くと runner が FAIL を INFO に格下げし、agent に「直せ」と戻さない |
-| `workflow_overrides` | 稀 | workflow 名 → `base_branch` の上書き |
+| `facts` | 推奨 | テストの実行方法、生成物の置き場、既知の問題。**「全プロジェクトで同じ注意」は書かない**（それは `roles/_common.md`） |
+| `review_points` / `forbidden` | 推奨 | プロジェクト固有の観点と禁止 |
+| `known_red_gates` | 必要なら | 書くと runner が FAIL を INFO（参考情報）として扱うように変更し、エージェントに「直せ」と戻さない |
+| `workflow_overrides` | 稀 | ワークフロー名 → `base_branch` の上書き |
 
 ## 4. gates.sh を書く {#gates-sh}
 
-`gates.sh` は VM 内で `$SANDBOX_APP_DIR` を cwd に実行され、ゲートごとに `PASS <name>` / `FAIL <name> (<log>)` を 1 行ずつ出し、全緑なら 0 で終わります。**PJ の CI と同じ組**にします。kumitate の実物はこの形です。
+`gates.sh` は、VM 内で `$SANDBOX_APP_DIR` を作業ディレクトリとして実行します。ゲートごとに `PASS <name>` または `FAIL <name> (<log>)` を 1 行ずつ出力し、すべて成功した場合は終了コード 0 を返します。**検証項目は、プロジェクトの CI とそろえてください。** 以下は kumitate と同じ形式で書いた例です。
 
 ```bash
 #!/usr/bin/env bash
@@ -129,7 +131,7 @@ gate test      pnpm --filter @myapp/web test
 exit $rc
 ```
 
-情報扱いにしたいもの（赤でも止めない）は `gate` ではなく `INFO` を出す形にするか、`known_red_gates` に書きます。実行時間はここが大半なので、まず「CI と同じ」で始め、重ければ後で差分実行を考えます。Rails なら `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` のように並べます。
+情報扱いにしたいもの（失敗しても止めない）は `gate` ではなく `INFO` を出す形にするか、`known_red_gates` に書きます。実行時間はここが大半なので、まず「CI と同じ」で始め、重ければ後で差分実行を考えます。Rails なら `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` のように並べます。
 
 ## 5. トークンを保存する 🧑
 
@@ -140,9 +142,9 @@ echo 'GH_REPO=owner/myapp' >> ~/.config/sandbox/pj/myapp.env
 sandbox token show myapp
 ```
 
-## 6. GitHub App を install する 🧑
+## 6. GitHub App をインストールする 🧑
 
-`sandbox gh-app status` に出る install リンクから、リポジトリのオーナーに App を install します（オーナーの管理権限が要ります）。`status` で `myapp: owner/myapp OK` になれば、`take` のたびに 1 時間トークンが払い出されます。
+`sandbox gh-app status` に出るインストールリンクから、リポジトリのオーナーに App をインストールします（オーナーの管理権限が要ります）。`status` で `myapp: owner/myapp OK` になれば、`take` のたびに 1 時間トークンが払い出されます。
 
 ## 7. 確かめる
 
@@ -154,7 +156,7 @@ kanban/bin/kb run <id> --dry-run       # schema 検証と依頼文
 kanban/bin/kb run <id>                 # 本実行
 ```
 
-dry-run の `prompt-implement-0.md` を読んで、facts に足りないもの（テストの走らせ方など）が無いかを見てから本実行してください。
+dry-run の `prompt-implement-0.md` を読んで、facts に足りないもの（テストの実行方法など）がないかを見てから本実行してください。
 
 ## チェックリスト
 
@@ -162,9 +164,9 @@ dry-run の `prompt-implement-0.md` を読んで、facts に足りないもの�
 |---|---|
 | provision.sh | `32-pj-template.sh` が最後まで通り、テンプレートにトークンが残っていない |
 | テンプレ / プール | `sandbox ls` に `sb-myapp-01〜03` が見える |
-| project.yml | `kb run --dry-run` の schema 検証が通る |
+| project.yml | `kb run --dry-run` のスキーマ検証が通る |
 | gates.sh | `sandbox ssh <id> 'bash ~/work/gates.sh'` 相当が CI と同じ結果を出す |
 | トークン | `sandbox token show myapp` |
 | App | `sandbox gh-app status` で `OK` |
 
-`project.yml` が無い PJ は起票はできますが、dispatch が `blocked` にします。
+`project.yml` がないプロジェクトはチケットの作成はできますが、dispatch が `blocked` にします。

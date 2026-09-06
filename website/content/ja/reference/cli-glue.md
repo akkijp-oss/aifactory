@@ -1,6 +1,6 @@
 # intake / dispatch（glue）
 
-`glue/bin/intake`（自由文 → チケット）と `glue/bin/dispatch`（todo → 実行）。どちらも Python 3。
+`glue/bin/intake` は自由な文章をチケットに変換し、`glue/bin/dispatch` は未着手のチケットを順に実行します。どちらも Python 3 で動作します。このページでは、引数、処理の流れ、出力とエラーを説明します。
 
 ## intake
 
@@ -11,22 +11,22 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
 | 引数 | 意味 |
 |---|---|
 | `text-file` | 自由文のファイル。`-` で標準入力 |
-| `--pj` / `--kind` | 決定的に指定。LLM の判定より優先 |
+| `--pj` / `--kind` | プロジェクトと種別を明示的に指定。LLM の判定より優先 |
 | `--model` | 使うモデル。既定は `workflow/kit/routes.env` の `MODEL_judgment` |
-| `--dry-run` | 起票せず、判定結果の JSON を出す |
+| `--dry-run` | チケットを作成せず、判定結果の JSON を出す |
 
 ### 動き
 
-1. 入力の先頭 5 行から `pj:` / `kind:` 行を拾う（決定的）。本文からは取り除く
-2. `--pj` / `--kind` があればそれを優先。指定値は実在検証する
-3. Mac 上の一時ディレクトリを cwd に、ツール無しで `claude -p` を 1 回呼ぶ。渡すのは PJ 一覧（`project.yml` の display_name / repo / stack、無い PJ は「project.yml 無し」と明記）、種別一覧（workflow yml の description）、判定の目安、チケットの形、依頼文
+1. 入力の先頭 5 行から `pj:` / `kind:` 行を読み取って指定値として使い、本文からは取り除く
+2. `--pj` / `--kind` があればそれを優先。指定値は存在の確認する
+3. Mac 上の一時ディレクトリを作業ディレクトリに、ツールなしで `claude -p` を 1 回呼ぶ。渡すのはプロジェクト一覧（`project.yml` の display_name / repo / stack、ないプロジェクトは「project.yml なし」と明記）、種別一覧（ワークフローの YAML の description）、判定の目安、チケットの形、依頼文
 4. 出力の JSON（`pj` / `kind` / `title` / `body` / `confidence` / `reason`）を取り出す。指定済みの pj / kind で上書き
 5. 本文末尾に `（intake <日時> / model <モデル> / confidence <値> / <理由>）` を付けて `kb new`。本文冒頭に `pr: N` があれば `--pr` に回す
 6. `workspace/logs/intake.log` に 1 行（日時 / id / pj / kind / confidence / モデル / 理由）
 
 ### 出力
 
-`kb new` の出力（id と本文のパス）。`--dry-run` なら JSON。
+通常は `kb new` の出力として、チケット ID と本文のパスを表示します。`--dry-run` の場合は、判定結果を JSON で表示します。
 
 ```json
 {
@@ -44,7 +44,7 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
 | メッセージ | 原因 |
 |---|---|
 | `入力が空` | ファイルが空 |
-| `pj=… は […] のどれでもない` | 指定した PJ / 種別が存在しない |
+| `pj=… は […] のどれでもない` | 指定したプロジェクト / 種別が存在しない |
 | `claude -p が失敗` | Claude Code の認証、ネットワーク |
 | `JSON が取れない` | LLM が JSON を出さなかった。出力の末尾を表示する |
 | `kb new が失敗` | LLM の判定した pj / kind が存在しない等。`kb` のエラーを表示する |
@@ -57,7 +57,7 @@ dispatch [--pj P] [--once] [--max N] [--dry-run]
 
 | 引数 | 意味 |
 |---|---|
-| `--pj` | PJ を絞る |
+| `--pj` | プロジェクトを絞る |
 | `--once` | 1 件だけ |
 | `--max N` | N 件まで（既定は無制限） |
 | `--dry-run` | `kb run --dry-run`。VM を触らず、状態も進まない |
@@ -86,7 +86,7 @@ flowchart TD
 
 ### 出力
 
-標準出力と `workspace/logs/dispatch.log` に同じ行。
+標準出力と `workspace/logs/dispatch.log` に、同じ内容を出力します。
 
 ```
 [dispatch] start 204 kumitate bug fix: calendar の表題テストを…
@@ -104,4 +104,4 @@ flowchart TD
 | `workspace/logs/intake.log` | `<日時>\t<id>\t<pj>\t<kind>\t<confidence>\t<model>\t<reason>` |
 | `workspace/logs/dispatch.log` | `<日時>\t<メッセージ>` |
 
-どちらも workspace（`$AIFACTORY_WORKSPACE/logs/`）にあり、git には入らない。秘密は出ない。
+どちらも workspace（`$AIFACTORY_WORKSPACE/logs/`）に保存され、このリポジトリでは Git の追跡対象外です。ログには処理結果を記録し、認証情報は出力しません。

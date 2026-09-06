@@ -1,6 +1,6 @@
 # ディレクトリ構成
 
-リポジトリには工場の**仕組み**だけが入ります。運用データ（PJ 定義、チケット、実行記録、ログ）は **workspace**（`AIFACTORY_WORKSPACE`、既定 `<repo>/workspace/`、git 追跡外）に置きます。
+aifactory 本体、運用データ、認証情報の保存先を説明します。コードや共通設定はこのリポジトリで管理し、プロジェクト設定、チケット、実行記録、ログは **workspace** に保存します。workspace の場所は `AIFACTORY_WORKSPACE` で指定でき、既定は `<repo>/workspace/`（このリポジトリでは Git の追跡対象外）です。
 
 ## リポジトリ
 
@@ -88,14 +88,14 @@ workspace/                           # 既定 <repo>/workspace/。git 追跡外
 └── docs/                            # 自分の環境のメモ（ホスト、電源、トークンの期限など）
 ```
 
-PJ 定義の探し方は `workspace/projects/<pj>/` → `examples/projects/<pj>/` の順です。`kb` / `intake` / `dispatch` / runner / コンソールのすべてがこの順で探します。
+プロジェクト定義の探し方は `workspace/projects/<pj>/` → `examples/projects/<pj>/` の順です。`kb` / `intake` / `dispatch` / runner / コンソールのすべてがこの順で探します。
 
 ## リポジトリの外（秘密と貸出状態）
 
 | パス | 内容 |
 |---|---|
 | `~/.config/sandbox/env` | CLI の設定（`PVE_HOST` / `GW_SSH` など） |
-| `~/.config/sandbox/pj/<pj>.env` | PJ ごとのトークンと `GH_REPO` |
+| `~/.config/sandbox/pj/<pj>.env` | プロジェクトごとのトークンと `GH_REPO` |
 | `~/.config/sandbox/gh-app/` | GitHub App の ID と秘密鍵 |
 | `~/.config/sandbox/state.json` | VM の貸出台帳 |
 | `~/.ssh/conf.d/aifactory/` | VM 用の鍵と ssh 設定 |
@@ -106,7 +106,7 @@ PJ 定義の探し方は `workspace/projects/<pj>/` → `examples/projects/<pj>/
 
 | 追跡する | 追跡しない |
 |---|---|
-| 仕組み（`sandbox/` `kanban/` `workflow/` `glue/` `console/`） | `workspace/`（台帳、チケット、実行記録、ログ、PJ 定義） |
+| 仕組み（`sandbox/` `kanban/` `workflow/` `glue/` `console/`） | `workspace/`（台帳、チケット、実行記録、ログ、プロジェクト定義） |
 | `examples/projects/`（例） | `*.env`、`*.token`、`.env*` |
 | `docs/`、`website/content/` | `website/site/`、`website/.venv/` |
 | テスト（`console/tests/`、`workflow/tests/`） | `console/jobs/`、`__pycache__/` |

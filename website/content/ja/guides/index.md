@@ -1,15 +1,15 @@
 # 使い方
 
-日常の操作を、やりたいことの順に並べています。コマンドの全オプションは [リファレンス](../reference/index.md) にあります。
+チケットの作成、実行、結果の確認など、日常の操作を目的別に説明します。コマンドの全オプションは [リファレンス](../reference/index.md) を参照してください。
 
 | やりたいこと | ページ |
 |---|---|
 | 依頼をチケットにする（自由文から / 整った本文から） | [チケットを作る](tickets.md) |
-| チケットを回す（1 件ずつ / まとめて / dry-run） | [実行する](running.md) |
+| チケットを実行する（1 件ずつ / まとめて / dry-run） | [実行する](running.md) |
 | PR・ログ・成果物・状態を読む | [結果を読む](results.md) |
 | ブラウザで見て、ボタンで動かす | [Web コンソール](console.md) |
-| 新しいリポジトリを工場に入れる | [PJ を追加する](add-project.md) |
-| hotfix / bug / feature / chore / research / merge-pr の使い分け | [workflow の選び方](workflows.md) |
+| 新しいリポジトリを工場に入れる | [プロジェクトを追加する](add-project.md) |
+| hotfix / bug / feature / chore / research / merge-pr の使い分け | [ワークフローの選び方](workflows.md) |
 | トークン更新、プール、テンプレート更新、障害対応 | [日々の運用](operations.md) |
 | 複数の AI セッションや人が同時に触るときの約束 | [複数セッションで作業する](multi-session.md) |
 

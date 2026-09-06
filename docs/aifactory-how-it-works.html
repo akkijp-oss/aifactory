@@ -47,38 +47,38 @@
 <body>
 <main>
 <h1>aifactory の仕組み</h1>
-<p class="lead">4 つの区画がどう繋がって 1 枚のチケットを PR にするか。どの設定ファイルが、いつ、誰に読まれるか。</p>
+<p class="lead">チケットの作成から PR の作成まで、aifactory の 4 つの構成要素がどのように連携するかを説明します。各設定ファイルの役割と、読み込まれるタイミングもまとめています。</p>
 <div class="meta">
   <ul>
     <li>対象: リポジトリ <code>akkijp-oss/aifactory</code> の 2026-09-06 時点（commit 0de5728 前後）</li>
-    <li>正本はリポジトリのファイル（各区画の README / ADR / STATUS）。この文書はそれらを 1 枚に「読み下した」もの。食い違ったらリポジトリが正</li>
+    <li>正本はリポジトリのファイル（各区画の README / ADR / STATUS）。この文書は、その内容を 1 ページにまとめて説明したものです。内容が異なる場合は、リポジトリ側の記録を確認してください</li>
     <li>姉妹文書: <code>sandbox-architecture.html</code>（Proxmox 側の物理構成・ネットワーク・安全面の詳細）</li>
-    <li>運用データ（PJ 定義・チケット・実行記録・ログ）は <code>$AIFACTORY_WORKSPACE</code>（既定 <code>&lt;repo&gt;/workspace/</code>、git 追跡外）に置く。本文のパスはその前提。同梱のサンプル PJ 定義は <code>examples/projects/kumitate/</code></li>
+    <li>運用データ（プロジェクト定義・チケット・実行記録・ログ）は <code>$AIFACTORY_WORKSPACE</code>（既定 <code>&lt;repo&gt;/workspace/</code>、git 追跡外）に置く。本文のパスはその前提。同梱のサンプルプロジェクト定義は <code>examples/projects/kumitate/</code></li>
   </ul>
 </div>
 <ol class="toc">
-  <li><a href="#s1">1. 一言でいうと何か</a></li>
+  <li><a href="#s1">1. 概要</a></li>
   <li><a href="#s2">2. 全体の流れ（1 枚の図）</a> / <a href="#s2b">LLM はどこで動くか</a></li>
-  <li><a href="#s3">3. 4 つの区画と実体</a></li>
-  <li><a href="#s4">4. 1 枚のチケットの一生</a></li>
-  <li><a href="#s5">5. workflow の中身（step と分岐）</a></li>
-  <li><a href="#s6">6. 設定はどこのものが使われるか</a></li>
+  <li><a href="#s3">3. 4 つの構成要素と役割</a></li>
+  <li><a href="#s4">4. チケットの作成から完了まで</a></li>
+  <li><a href="#s5">5. ワークフローの定義（工程と分岐）</a></li>
+  <li><a href="#s6">6. 設定ファイルと依頼文の組み立て</a></li>
   <li><a href="#s7">7. sandbox take の中で起きること</a></li>
   <li><a href="#s8">8. 秘密情報の流れ</a></li>
   <li><a href="#s9">9. 状態と記録はどこに残るか</a></li>
-  <li><a href="#s10">10. 「ここを変えたい」はどのファイルか</a></li>
+  <li><a href="#s10">10. 変更したい内容と編集するファイル</a></li>
   <li><a href="#s11">11. 用語集</a></li>
 </ol>
 
-<h2 id="s1">1. 一言でいうと何か</h2>
-<p>「チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストを回し、人間は最後にレビューだけする」工場です。着想は Dan Isler の動画で、要点は 3 つ。</p>
+<h2 id="s1">1. 概要</h2>
+<p>aifactory は、依頼をチケットとして登録すると、隔離された仮想マシン（VM）で AI エージェントが計画・実装を進め、テストを経てプルリクエスト（PR）を作成する仕組みです。人間が最後に PR をレビューし、マージするかどうかを判断します。Dan Isler の講演をもとに、コード、エージェント、人間が次のように役割を分担しています。</p>
 <table>
-  <tr><th>アクター</th><th>特性</th><th>この工場での担当</th></tr>
-  <tr><td><span class="tag t-code">コード</span></td><td>速い・毎回同じ・トークン 0 円・最も信頼できる</td><td>採番、配車、VM の貸出、ゲート（lint / test）、PR 作成、マージ、状態の記録</td></tr>
-  <tr><td><span class="tag t-workflow">エージェント</span></td><td>柔軟だが遅く高くブレる</td><td>計画（planner）、実装（implementer）、調査（researcher）、レビュー（reviewer）</td></tr>
-  <tr><td><span class="tag t-human">エンジニア（人間）</span></td><td>最も高価</td><td>冒頭の依頼と、末尾の PR レビュー・マージ判断だけ</td></tr>
+  <tr><th>担当</th><th>特性</th><th>主な作業</th></tr>
+  <tr><td><span class="tag t-code">コード</span></td><td>決められた処理を実行する。LLM のトークンを消費しない</td><td>採番、実行の割り当て、VM の貸出、ゲート（lint / test）、PR 作成、マージ、状態の記録</td></tr>
+  <tr><td><span class="tag t-workflow">エージェント</span></td><td>状況に応じて判断できる。時間や費用がかかり、結果にばらつきがある</td><td>計画（planner）、実装（implementer）、調査（researcher）、レビュー（reviewer）</td></tr>
+  <tr><td><span class="tag t-human">エンジニア（人間）</span></td><td>目的を決め、最終的な判断を担う</td><td>依頼の作成、PR のレビュー、マージの判断</td></tr>
 </table>
-<div class="note">設計原則は「コードとエージェントを分離する」。エージェントに lint を走らせるのではなく、コードが lint を走らせて結果をエージェントに戻す。だから workflow の step は <b>agent step</b> と <b>code step</b> の 2 種類しかありません。</div>
+<div class="note">設計原則は「コードとエージェントを分離する」。エージェントに lint を走らせるのではなく、コードが lint を走らせて結果をエージェントに戻す。だから workflow の step は <b>エージェントが担当する工程</b> と <b>スクリプトが担当する工程</b> の 2 種類しかありません。</div>
 
 <h2 id="s2">2. 全体の流れ（1 枚の図）</h2>
 <div class="fig">
@@ -135,53 +135,53 @@
 </svg>
 <div class="cap">上から下へ「何を → どう → どこで」。左から右へ時間。点線は結果の書き戻し。</div>
 </div>
-<p>言葉にすると: 自由文を <b>intake</b> が 1 枚のチケットにして <b>kanban</b> に起票する。<b>dispatch</b> が todo を取り出して <b>runner</b> を呼ぶ。runner は <b>sandbox</b> から VM を 1 台借り、workflow 定義どおりに step を順に回す。agent step は VM 内で <code>claude -p</code>、code step は <code>gates.sh</code> や <code>pr-create.sh</code>。最後に PR ができて人間に渡り、状態が kanban に戻る。</p>
+<p>まず <b>intake</b> が自由な文章をチケットに整え、<b>kanban</b> に登録します。<b>dispatch</b> は未着手のチケットを取り出し、実行プログラムである <b>runner</b> を呼び出します。runner は <b>sandbox</b> から VM を 1 台借り、ワークフローの定義に従って各工程を進めます。エージェントの作業には VM 内の <code>claude -p</code> を使い、検証や PR の作成には <code>gates.sh</code> や <code>pr-create.sh</code> を使います。作成された PR は人間のレビューに進み、実行結果は kanban に反映されます。</p>
 
 <h3 id="s2b">LLM はどこで動くか（workflow で動くのか？）</h3>
-<p>答えは「<b>workflow では動かない。VM の中で動く</b>」です。workflow（YAML）は「どの step で、どの役割が、どのクラスのモデルを呼ぶか」を書いた定義にすぎず、それを読む runner も Mac 上の Python です。runner は agent step に来ると、VM に ssh して <code>claude -p "$(cat prompt.md)" --model &lt;モデル&gt;</code> を起動し、終わるのを待ちます。LLM のプロセスは VM の中にあり、VM 内のリポジトリを読み書きします。</p>
+<p>開発作業を行う <b>Claude Code は VM 内で起動します</b>。ワークフローの YAML には、工程、担当する役割、使用するモデルの種類を記述します。Mac 上の runner がその定義を読み、エージェントの工程に進むと、VM に SSH 接続して <code>claude -p "$(cat prompt.md)" --model &lt;モデル&gt;</code> を起動します。Claude Code のツールは、VM 内のリポジトリを読み書きします。ここでいう実行場所は、Claude Code とそのツールが動く場所を指します。</p>
 <table>
   <tr><th></th><th>LLM ①</th><th>LLM ②</th><th>（参考）このセッション</th></tr>
-  <tr><td>誰が呼ぶ</td><td><code>glue/bin/intake</code></td><td><code>workflow/bin/run</code>（agent step）</td><td>メンテナが対話している Claude Code</td></tr>
-  <tr><td>どこで動く</td><td>Mac（一時ディレクトリ、ツール無し）</td><td>sandbox VM の中（<code>$SANDBOX_APP_DIR</code> が cwd、ツールあり）</td><td>Mac</td></tr>
-  <tr><td>何回</td><td>チケット 1 枚につき 1 回</td><td>agent step ごとに 1 回。差し戻しがあればその回数だけ増える</td><td>工場の外。工場を作る・直す側</td></tr>
+  <tr><td>誰が呼ぶ</td><td><code>glue/bin/intake</code></td><td><code>workflow/bin/run</code>（エージェントが担当する工程）</td><td>メンテナが対話している Claude Code</td></tr>
+  <tr><td>どこで動く</td><td>Mac（一時ディレクトリ、ツールなし）</td><td>sandbox VM の中（<code>$SANDBOX_APP_DIR</code> が cwd、ツールあり）</td><td>Mac</td></tr>
+  <tr><td>何回</td><td>チケット 1 枚につき 1 回</td><td>エージェントが担当する工程ごとに 1 回。差し戻しがあればその回数だけ増える</td><td>工場の外。工場を作る・直す側</td></tr>
   <tr><td>モデル</td><td>routes.env の judgment（Fable）</td><td>role の既定クラス → routes.env（planner / reviewer = Fable、researcher = Sonnet、implementer = Opus）</td><td>Fable</td></tr>
-  <tr><td>認証</td><td>Mac の Claude Code のログイン</td><td>PJ ごとの <code>setup-token</code> を take 時に VM へ注入</td><td>Mac のログイン</td></tr>
-  <tr><td>入力</td><td>自由文 + PJ / 種別の一覧</td><td>8 層の依頼文（第 6 節）</td><td>対話</td></tr>
-  <tr><td>出力</td><td>JSON（pj / kind / title / body）→ <code>kb new</code></td><td>artifact（plan.md 等）と git コミット</td><td>リポジトリの変更</td></tr>
+  <tr><td>認証</td><td>Mac の Claude Code のログイン</td><td>プロジェクトごとの <code>setup-token</code> を take 時に VM へ注入</td><td>Mac のログイン</td></tr>
+  <tr><td>入力</td><td>自由文 + プロジェクト / 種別の一覧</td><td>8 層の依頼文（第 6 節）</td><td>対話</td></tr>
+  <tr><td>出力</td><td>JSON（pj / kind / title / body）→ <code>kb new</code></td><td>成果物（plan.md 等）と git コミット</td><td>リポジトリの変更</td></tr>
 </table>
-<div class="note">LLM を呼ばないもの: <code>kb</code>（採番・状態）、<code>dispatch</code>（配車）、runner 本体（分岐と ssh）、<code>gates.sh</code>（テスト）、<code>pr-create.sh</code> / <code>pr-merge.sh</code>（GitHub 操作）、<code>sandbox</code> CLI（VM の貸出）。これらは Python か bash で、毎回同じ結果を返します。</div>
+<div class="note">LLM を呼ばないもの: <code>kb</code>（採番・状態）、<code>dispatch</code>（実行の割り当て）、runner 本体（分岐と ssh）、<code>gates.sh</code>（テスト）、<code>pr-create.sh</code> / <code>pr-merge.sh</code>（GitHub 操作）、<code>sandbox</code> CLI（VM の貸出）。これらは Python か bash で、定められた条件と手順に従って処理します。</div>
 
-<h2 id="s3">3. 4 つの区画と実体</h2>
+<h2 id="s3">3. 4 つの構成要素と役割</h2>
 <table>
-  <tr><th>区画</th><th>問い</th><th>実体（ファイル）</th><th>エージェントは居るか</th></tr>
-  <tr><td><span class="tag t-kanban">kanban</span></td><td>何をいつやるか</td><td><code>kanban/bin/kb</code>（CLI）、<code>$AIFACTORY_WORKSPACE/kanban/kanban.db</code>（状態の正本）、<code>$AIFACTORY_WORKSPACE/kanban/tickets/&lt;id&gt;-&lt;pj&gt;-&lt;slug&gt;.md</code>（本文の正本）、<code>$AIFACTORY_WORKSPACE/kanban/BOARD.md</code>（生成物）</td><td>居ない（ただのコード）</td></tr>
-  <tr><td><span class="tag t-glue">glue</span></td><td>区画をどう繋ぐか</td><td><code>glue/bin/intake</code>（自由文 → チケット）、<code>glue/bin/dispatch</code>（todo → 実行）、<code>$AIFACTORY_WORKSPACE/logs/intake.log</code> / <code>dispatch.log</code></td><td>intake が LLM を 1 回だけ呼ぶ。dispatch は居ない</td></tr>
-  <tr><td><span class="tag t-workflow">workflow</span></td><td>どう進めるか</td><td><code>workflow/kit/</code>（定義: workflows / roles / steps / schema / routes.env）、<code>workflow/bin/run</code>（runner）、<code>$AIFACTORY_WORKSPACE/runs/</code>（実行記録）</td><td>agent step で居る。step 間の分岐はコード</td></tr>
-  <tr><td><span class="tag t-sandbox">sandbox</span></td><td>どこで動くか</td><td><code>sandbox/bin/sandbox</code>（Mac 側 CLI）、<code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/</code>（provision.sh / project.yml / gates.sh。無ければ <code>examples/projects/&lt;pj&gt;/</code>）、Proxmox 上の VM プール</td><td>VM の中で agent が動く。貸出・巻き戻しはコード</td></tr>
+  <tr><th>区画</th><th>問い</th><th>実体（ファイル）</th><th>エージェントを使う処理</th></tr>
+  <tr><td><span class="tag t-kanban">kanban</span></td><td>何をいつやるか</td><td><code>kanban/bin/kb</code>（CLI）、<code>$AIFACTORY_WORKSPACE/kanban/kanban.db</code>（状態の正本）、<code>$AIFACTORY_WORKSPACE/kanban/tickets/&lt;id&gt;-&lt;pj&gt;-&lt;slug&gt;.md</code>（本文の正本）、<code>$AIFACTORY_WORKSPACE/kanban/BOARD.md</code>（生成物）</td><td>使わない（スクリプト）</td></tr>
+  <tr><td><span class="tag t-glue">glue</span></td><td>区画をどうつなぐか</td><td><code>glue/bin/intake</code>（自由文 → チケット）、<code>glue/bin/dispatch</code>（todo → 実行）、<code>$AIFACTORY_WORKSPACE/logs/intake.log</code> / <code>dispatch.log</code></td><td>intake が LLM を 1 回だけ呼ぶ。dispatch はスクリプトで処理</td></tr>
+  <tr><td><span class="tag t-workflow">workflow</span></td><td>どう進めるか</td><td><code>workflow/kit/</code>（定義: workflows / roles / steps / schema / routes.env）、<code>workflow/bin/run</code>（runner）、<code>$AIFACTORY_WORKSPACE/runs/</code>（実行記録）</td><td>エージェントが担当する工程で利用。step 間の分岐はコード</td></tr>
+  <tr><td><span class="tag t-sandbox">sandbox</span></td><td>どこで動くか</td><td><code>sandbox/bin/sandbox</code>（Mac 側 CLI）、<code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/</code>（provision.sh / project.yml / gates.sh。なければ <code>examples/projects/&lt;pj&gt;/</code>）、Proxmox 上の VM プール</td><td>VM の中で agent が動く。貸出・巻き戻しはコード</td></tr>
 </table>
-<div class="note"><b>PJ 固有のものは <code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/</code> にしか無い。</b>手順（workflow）は全 PJ 共通で <code>workflow/kit/</code> に 1 つ。PJ を足すときは projects に 3 ファイルを置くだけで、workflow は複製しない（探索順は workspace → <code>examples/projects/</code>）。これが「手順を育てる場所を 1 つにする」という約束（ADR-0009）。</div>
+<div class="note"><b>プロジェクト固有のものは <code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/</code> にしかない。</b>手順（workflow）は全プロジェクト共通で <code>workflow/kit/</code> に 1 つ。プロジェクトを足すときは projects に 3 ファイルを置くだけで、workflow は複製しない（探索順は workspace → <code>examples/projects/</code>）。これが「手順を育てる場所を 1 つにする」という約束（ADR-0009）。</div>
 
-<h2 id="s4">4. 1 枚のチケットの一生</h2>
-<p>kumitate の「カレンダーの週表示で月末の日付が欠ける」という依頼（kanban 207。説明用の例）を、bug workflow で回す場合に何がどの順で起こるか。</p>
+<h2 id="s4">4. チケットの作成から完了まで</h2>
+<p>kumitate の「カレンダーの週表示で月末の日付が欠ける」という依頼を例に、処理の順序を説明します。チケット番号は 207、ワークフローは bug とした説明用の例です。</p>
 <ol class="steps">
-  <li><span class="tag t-glue">intake</span> 自由文を読む。先頭に <code>pj:</code> / <code>kind:</code> 行があればそれを採用（決定的）。無い分だけ Fable（judgment クラス）に 1 回聞き、PJ・種別・題名・本文（完了条件つき）の JSON を得る。<code>kb new</code> で起票。confidence とモデル名を本文末尾に残す</li>
+  <li><span class="tag t-glue">intake</span> 自由文を読む。先頭に <code>pj:</code> / <code>kind:</code> 行があればそれを指定値として採用。ない分だけ Fable（judgment クラス）に 1 回聞き、プロジェクト・種別・題名・本文（完了条件つき）の JSON を得る。<code>kb new</code> でチケットを作成する。confidence とモデル名を本文末尾に残す</li>
   <li><span class="tag t-kanban">kb new</span> <code>MAX(id)+1</code> で採番（207）。pj / kind が実在するか検証。<code>$AIFACTORY_WORKSPACE/kanban/tickets/207-kumitate-….md</code> を作り、DB に <code>todo</code> で記録。BOARD.md を再生成</li>
-  <li><span class="tag t-glue">dispatch</span> <code>kb list --status todo</code> を古い順に見る。その PJ に <code>project.yml</code> が無ければ <code>blocked</code>。プール（PJ あたり 3 台）が全部貸出中なら飛ばす。回せるなら <code>kb run 207</code></li>
+  <li><span class="tag t-glue">dispatch</span> <code>kb list --status todo</code> を古い順に見る。そのプロジェクトに <code>project.yml</code> がなければ <code>blocked</code>。プール（プロジェクトあたり 3 台）が全部貸出中なら飛ばす。回せるなら <code>kb run 207</code></li>
   <li><span class="tag t-kanban">kb run</span> 状態を <code>in_progress</code> にし、run ディレクトリ名（<code>2026-09-06-kumitate-207</code>。実体は <code>$AIFACTORY_WORKSPACE/runs/</code> の下）を <code>run</code> 列に記録。<code>workflow/bin/run kumitate 207 bug …/tickets/207-….md</code> を呼ぶ</li>
   <li><span class="tag t-workflow">runner 起動</span> <code>kit/workflows/bug.yml</code> と <code>projects/kumitate/project.yml</code> を読み、JSON Schema で検証。ブランチ名 <code>sandbox/207-bug-&lt;slug&gt;</code> を決める。<code>state.json</code> を作る</li>
   <li><span class="tag t-sandbox">take</span> <code>sandbox take kumitate 207</code>。クリーンな VM を 1 台貸し出し、トークンを注入、DNS に <code>task-207.sb.internal</code> を登録（第 7 節）。runner は VM 内で <code>git checkout -B sandbox/207-… origin/develop</code> し、チケットを <code>~/work/207/ticket.md</code> に置く</li>
-  <li><span class="tag t-workflow">plan</span>（agent） runner が依頼文を組み立て（第 6 節）、VM 内で <code>claude -p --model claude-fable-5-1</code>。出力は <code>~/work/207/plan.md</code>。無ければ step 失敗</li>
+  <li><span class="tag t-workflow">plan</span>（agent） runner が依頼文を組み立て（第 6 節）、VM 内で <code>claude -p --model claude-fable-5-1</code>。出力は <code>~/work/207/plan.md</code>。なければ step 失敗</li>
   <li><span class="tag t-workflow">implement</span>（agent） 依頼文に plan.md を含めて Opus 5。再現テストを先に書き、直し、コミット（push はしない）。<code>report.md</code> を書く</li>
-  <li><span class="tag t-code">gates</span>（code） Mac 側の <code>kit/steps/gates.sh</code> が VM 内で <code>projects/kumitate/gates.sh</code>（tokens:check / typecheck / lint / test / test:dom）を実行。赤なら implement に戻す（最大 2 回、超えたら human）。<code>known_red_gates</code> にある赤は INFO 扱い</li>
+  <li><span class="tag t-code">gates</span>（code） Mac 側の <code>kit/steps/gates.sh</code> が VM 内で <code>projects/kumitate/gates.sh</code>（tokens:check / typecheck / lint / test / test:dom）を実行。失敗したら implement に戻す（最大 2 回、超えたら human）。<code>known_red_gates</code> に登録した失敗は参考情報（INFO）として扱う</li>
   <li><span class="tag t-workflow">review</span>（agent） Fable が plan / report / gates の結果と <code>git diff origin/develop...HEAD</code> を読み、PASS / FAIL を <code>review.md</code> に書く。FAIL なら implement へ（最大 1 回）</li>
   <li><span class="tag t-code">pr</span>（code） <code>kit/steps/pr-create.sh</code> が push して PR を作る。宛先は project.yml の <code>base_branch</code>。次は <code>human</code></li>
-  <li><span class="tag t-sandbox">release</span> <code>~/work/207/</code> を Mac の <code>$AIFACTORY_WORKSPACE/runs/…/work/</code> に回収し、VM を <code>clean</code> スナップショットへ巻き戻す。VM に残るものは無い</li>
-  <li><span class="tag t-kanban">状態の書き戻し</span> kb が <code>state.json</code> を読む。PR あり → <code>review</code>、MERGED → <code>done</code>、PR 無しで end（research）→ <code>done</code>、human で PR 無し → <code>blocked</code>。BOARD.md 再生成</li>
+  <li><span class="tag t-sandbox">release</span> <code>~/work/207/</code> を Mac の <code>$AIFACTORY_WORKSPACE/runs/…/work/</code> に回収し、VM を <code>clean</code> スナップショットへ巻き戻す。VM に残るものはない</li>
+  <li><span class="tag t-kanban">状態の書き戻し</span> kb が <code>state.json</code> を読む。PR あり → <code>review</code>、MERGED → <code>done</code>、PR なしで end（research）→ <code>done</code>、human で PR なし → <code>blocked</code>。BOARD.md 再生成</li>
   <li><span class="tag t-human">人間</span> PR をレビューしてマージ。マージ作業自体も <code>merge-pr</code> workflow で無人化できる（コンフリクト解消 → gates → review → merge）</li>
 </ol>
 
-<h2 id="s5">5. workflow の中身（step と分岐）</h2>
-<p>workflow は YAML で、<b>step の並び</b>と<b>結果に応じた行き先</b>だけを書きます。step の担い手は <code>role</code>（agent）か <code>code</code>（スクリプト）のどちらか。</p>
+<h2 id="s5">5. ワークフローの定義（工程と分岐）</h2>
+<p>ワークフローの YAML には、<b>工程の順序</b>と<b>結果に応じた次の工程</b>を記述します。各工程は、<code>role</code> で指定するエージェントか、<code>code</code> で指定するスクリプトが担当します。</p>
 <div class="fig">
 <svg viewBox="0 0 1040 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Hiragino Sans,Noto Sans JP,sans-serif" font-size="13">
   <defs><marker id="ar2" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker></defs>
@@ -206,7 +206,7 @@
   <text x="20" y="215" fill="#5c5c57" font-size="12">上限を超えたら human へ。human 行きのときは成果を origin/sandbox/&lt;id&gt;-&lt;wf&gt;-wip に退避してから VM を巻き戻す。</text>
   <text x="20" y="235" fill="#5c5c57" font-size="12">artifact（research.md / plan.md / report.md / gates.txt / review.md）は VM の ~/work/&lt;id&gt;/ に置かれ、次の step の依頼文に「入力」として貼られる。</text>
 </svg>
-<div class="cap">feature の流れ。青 = agent step、灰 = code step、赤矢印 = 差し戻し。</div>
+<div class="cap">feature の流れ。青 = エージェントが担当する工程、灰 = スクリプトが担当する工程、赤矢印 = 差し戻し。</div>
 </div>
 <table>
   <tr><th>workflow</th><th>流れ</th><th>使いどころ</th></tr>
@@ -214,10 +214,10 @@
   <tr><td>bug</td><td>plan → implement（再現テスト先行）→ gates → review → pr</td><td>不具合修正</td></tr>
   <tr><td>feature</td><td>research → design → implement → gates → review → pr</td><td>機能追加</td></tr>
   <tr><td>chore</td><td>implement → gates → pr</td><td>docs・依存更新など判断の要らない雑務</td></tr>
-  <tr><td>research</td><td>research → judge → end</td><td>調べるだけ。PR 無し。<code>summary.md</code> を回収</td></tr>
+  <tr><td>research</td><td>research → judge → end</td><td>調べるだけ。PR なし。<code>summary.md</code> を回収</td></tr>
   <tr><td>merge-pr</td><td>resolve → gates → review → merge</td><td>既存 PR のコンフリクト解消とマージ。本文の <code>pr: N</code> 行で対象を指定</td></tr>
 </table>
-<p>YAML の 1 step はこう書かれています（bug.yml の gates と review）。</p>
+<p>次の例は、bug.yml の検証（gates）とレビュー（review）の定義です。失敗した場合の戻り先と、やり直せる回数を指定しています。</p>
 <pre><code>  - id: gates
     code: gates.sh                 # code step。Mac 側 kit/steps/gates.sh が VM 内で PJ の gates.sh を実行
     outputs: [gates.txt]
@@ -231,8 +231,8 @@
     on_pass: pr
     on_fail: { goto: implement, max_loops: 1, else: human }</code></pre>
 
-<h2 id="s6">6. 設定はどこのものが使われるか</h2>
-<p>いちばん混乱しやすいところです。答えは「<b>agent への依頼文は runner が 8 層を重ねて組み立てる</b>」で、各層の出どころが違います。</p>
+<h2 id="s6">6. 設定ファイルと依頼文の組み立て</h2>
+<p>エージェントへの依頼文は、runner が 8 種類の情報を順に組み合わせて作成します。共通ルール、役割ごとの指示、プロジェクト情報など、それぞれの情報源と用途を以下に示します。</p>
 <div class="fig">
 <svg viewBox="0 0 1040 415" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Hiragino Sans,Noto Sans JP,sans-serif" font-size="13">
   <defs><marker id="ar3" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker></defs>
@@ -266,24 +266,24 @@
 <h3>設定ファイル一覧</h3>
 <table>
   <tr><th>ファイル</th><th>誰が読む</th><th>何を決める</th><th>変える頻度</th></tr>
-  <tr><td><code>workflow/kit/workflows/*.yml</code></td><td>runner（起動時に schema 検証）</td><td>step の並び、担い手、入出力、分岐と上限</td><td>低。全 PJ に効く</td></tr>
-  <tr><td><code>workflow/kit/roles/*.md</code></td><td>runner → agent（依頼文の 1〜2 層目）</td><td>役割の憲法。やること・禁止・出力の形</td><td>低</td></tr>
+  <tr><td><code>workflow/kit/workflows/*.yml</code></td><td>runner（起動時に schema 検証）</td><td>step の並び、担い手、入出力、分岐と上限</td><td>低。全プロジェクトに効く</td></tr>
+  <tr><td><code>workflow/kit/roles/*.md</code></td><td>runner → agent（依頼文の 1〜2 層目）</td><td>役割ごとの行動ルール。やること・禁止・出力の形</td><td>低</td></tr>
   <tr><td><code>workflow/kit/routes.env</code></td><td>runner、intake</td><td>クラス → モデル（judgment = Fable / research = Sonnet / coding = Opus）</td><td>低。メンテナの判断</td></tr>
-  <tr><td><code>workflow/kit/steps/*.sh</code></td><td>runner（code step）</td><td>gates.sh（PJ のゲートを VM で実行）、pr-create.sh、pr-merge.sh</td><td>低</td></tr>
+  <tr><td><code>workflow/kit/steps/*.sh</code></td><td>runner（スクリプトが担当する工程）</td><td>gates.sh（プロジェクトのゲートを VM で実行）、pr-create.sh、pr-merge.sh</td><td>低</td></tr>
   <tr><td><code>workflow/kit/schema/*.json</code></td><td>runner</td><td>workflow.yml と project.yml の正しさ</td><td>低</td></tr>
-  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/project.yml</code></td><td>runner、dispatch（有無だけ）、intake（PJ 一覧）</td><td>PJ の事実と方針。repo / base_branch / app_dir / gates / facts / forbidden / review_points / known_red_gates</td><td>中。PJ の状況で更新</td></tr>
-  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code></td><td>kit/steps/gates.sh（VM 内で）</td><td>PJ の品質ゲート。CI と同じ組。PASS / FAIL を 1 行ずつ</td><td>中</td></tr>
-  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code></td><td>Proxmox 側 32-pj-template.sh</td><td>テンプレート VM の焼き込み（依存・DB・seed）</td><td>低。テンプレ更新時</td></tr>
-  <tr><td><code>examples/projects/&lt;pj&gt;/</code></td><td>上と同じ（workspace に同名の PJ が無いときだけ）</td><td>同梱のサンプル PJ 定義（<code>kumitate</code>）。写して自分の PJ を作る雛形</td><td>低</td></tr>
-  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>sandbox CLI（take / reinject）</td><td>PJ ごとの <code>CLAUDE_CODE_OAUTH_TOKEN</code> と <code>GH_REPO</code>。<b>リポジトリ外</b></td><td>トークン更新時</td></tr>
-  <tr><td><code>~/.config/sandbox/gh-app/</code></td><td>sandbox CLI</td><td>GitHub App の ID と秘密鍵。<b>リポジトリ外</b></td><td>ほぼ無し</td></tr>
+  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/project.yml</code></td><td>runner、dispatch（有無だけ）、intake（プロジェクト一覧）</td><td>プロジェクトの事実と方針。repo / base_branch / app_dir / gates / facts / forbidden / review_points / known_red_gates</td><td>中。プロジェクトの状況で更新</td></tr>
+  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code></td><td>kit/steps/gates.sh（VM 内で）</td><td>プロジェクトの品質ゲート。CI と同じ組。PASS / FAIL を 1 行ずつ</td><td>中</td></tr>
+  <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code></td><td>Proxmox 側 32-pj-template.sh</td><td>テンプレート VM の事前設定（依存・DB・seed）</td><td>低。テンプレ更新時</td></tr>
+  <tr><td><code>examples/projects/&lt;pj&gt;/</code></td><td>上と同じ（workspace に同名のプロジェクトがないときだけ）</td><td>同梱のサンプルプロジェクト定義（<code>kumitate</code>）。写して自分のプロジェクトを作る雛形</td><td>低</td></tr>
+  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>sandbox CLI（take / reinject）</td><td>プロジェクトごとの <code>CLAUDE_CODE_OAUTH_TOKEN</code> と <code>GH_REPO</code>。<b>リポジトリ外</b></td><td>トークン更新時</td></tr>
+  <tr><td><code>~/.config/sandbox/gh-app/</code></td><td>sandbox CLI</td><td>GitHub App の ID と秘密鍵。<b>リポジトリ外</b></td><td>ほぼなし</td></tr>
   <tr><td><code>~/.config/sandbox/state.json</code></td><td>sandbox CLI、runner、dispatch、他セッション</td><td>どの VM を誰に貸しているか。<b>リポジトリ外</b></td><td>take / release のたび</td></tr>
   <tr><td><code>$AIFACTORY_WORKSPACE/kanban/kanban.db</code> + <code>tickets/</code></td><td>kb、intake、dispatch、runner（本文）</td><td>チケットの状態と本文</td><td>高。日常運用</td></tr>
 </table>
-<div class="warn">「PJ 固有のことを workflow yml に書きたくなったら間違い」。PJ 固有は <code>project.yml</code> の facts / forbidden / review_points に書く。逆に「全 PJ で毎回同じ注意」を project.yml に書くのも間違いで、<code>roles/_common.md</code> か <code>roles/&lt;role&gt;.md</code> に書く。</div>
+<div class="warn">「プロジェクト固有のことを workflow yml に書きたくなったら間違い」。プロジェクト固有は <code>project.yml</code> の facts / forbidden / review_points に書く。逆に「全プロジェクトで毎回同じ注意」を project.yml に書くのも間違いで、<code>roles/_common.md</code> か <code>roles/&lt;role&gt;.md</code> に書く。</div>
 
 <h2 id="s7">7. sandbox take の中で起きること</h2>
-<p><code>sandbox take &lt;pj&gt; &lt;id&gt;</code> の 1 コマンドで、Mac 側 CLI が Proxmox とゲートウェイに ssh して次を行います。所要は約 10 秒（VM は起動済みで、RAM 込みスナップショットから戻るため）。</p>
+<p><code>sandbox take &lt;pj&gt; &lt;id&gt;</code> を実行すると、Mac 側の CLI が Proxmox とゲートウェイに SSH 接続し、次の処理を行います。VM は起動済みで、メモリの状態も含めたスナップショットから復元するため、所要時間の目安は約 10 秒です。</p>
 <div class="fig">
 <svg viewBox="0 0 1040 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Hiragino Sans,Noto Sans JP,sans-serif" font-size="13">
   <defs><marker id="ar4" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker></defs>
@@ -320,9 +320,9 @@
 <div class="cap">物理・ネットワークの詳細は <code>sandbox-architecture.html</code>。ここでは「take が何を用意するか」だけ。</div>
 </div>
 <ol class="steps">
-  <li>貸出台帳 <code>state.json</code> から、その PJ のプールで空いている VM を 1 台選ぶ（無ければエラー）</li>
-  <li>Proxmox で <code>clean</code> スナップショットに巻き戻す（前回の残骸を消す）。RAM 込みなので起動待ちが無い</li>
-  <li>PJ の env（Claude トークン）と GitHub App の installation token（そのリポジトリ限定・1 時間）を <code>/run/sandbox/env</code>（tmpfs）に書く。runner は code step の前に払い出し直す</li>
+  <li>貸出台帳 <code>state.json</code> から、そのプロジェクトのプールで空いている VM を 1 台選ぶ（なければエラー）</li>
+  <li>Proxmox で <code>clean</code> スナップショットに巻き戻す（前回の残骸を消す）。RAM 込みなので起動待ちがない</li>
+  <li>プロジェクトの env（Claude トークン）と GitHub App の installation token（そのリポジトリ限定・1 時間）を <code>/run/sandbox/env</code>（tmpfs）に書く。runner はスクリプトが担当する工程の前に払い出し直す</li>
   <li>sb-gw の dnsmasq に <code>task-&lt;id&gt;</code> を登録。Mac から <code>sandbox ssh &lt;id&gt;</code> と <code>http://task-&lt;id&gt;.sb.internal:3000</code> が通る</li>
   <li>runner が VM 内で base ブランチを fetch し作業ブランチを切る。チケットを <code>~/work/&lt;id&gt;/ticket.md</code> に置く</li>
 </ol>
@@ -330,9 +330,9 @@
 <h2 id="s8">8. 秘密情報の流れ</h2>
 <table>
   <tr><th>秘密</th><th>置き場（正本）</th><th>VM への渡し方</th><th>寿命</th></tr>
-  <tr><td>Claude Code の長期トークン（<code>claude setup-token</code>）</td><td>Mac <code>~/.config/sandbox/pj/&lt;pj&gt;.env</code>。PJ ごと（ADR-0006）</td><td>take のたびに tmpfs へ注入。<code>sandbox reinject</code> で貸出中にも差し替え可</td><td>巻き戻しで消える</td></tr>
-  <tr><td>GitHub の push / PR 権限</td><td>GitHub App <code>aifactory-sandbox</code> の秘密鍵（Mac <code>~/.config/sandbox/gh-app/</code>、ADR-0008）</td><td>take のたびに、そのリポジトリだけに効く installation token を払い出して注入。権限は App が持つもの（contents / pull_requests write、metadata / actions read）</td><td>1 時間。launchd が 45 分ごとに更新、runner も code step 前に更新</td></tr>
-  <tr><td>SSH 鍵（Mac → VM）</td><td>Mac <code>~/.ssh/conf.d/aifactory/sb_ed25519</code></td><td>テンプレートに公開鍵を焼き込み</td><td>テンプレ更新まで</td></tr>
+  <tr><td>Claude Code の長期トークン（<code>claude setup-token</code>）</td><td>Mac <code>~/.config/sandbox/pj/&lt;pj&gt;.env</code>。プロジェクトごと（ADR-0006）</td><td>take のたびに tmpfs へ注入。<code>sandbox reinject</code> で貸出中にも差し替え可</td><td>巻き戻しで消える</td></tr>
+  <tr><td>GitHub の push / PR 権限</td><td>GitHub App <code>aifactory-sandbox</code> の秘密鍵（Mac <code>~/.config/sandbox/gh-app/</code>、ADR-0008）</td><td>take のたびに、そのリポジトリだけに効く installation token を払い出して注入。権限は App が持つもの（contents / pull_requests write、metadata / actions read）</td><td>1 時間。launchd が 45 分ごとに更新、runner もスクリプトの実行前に更新</td></tr>
+  <tr><td>SSH 鍵（Mac → VM）</td><td>Mac <code>~/.ssh/conf.d/aifactory/sb_ed25519</code></td><td>テンプレートに公開鍵を事前設定</td><td>テンプレ更新まで</td></tr>
 </table>
 <div class="note">リポジトリには秘密を一切書きません。<code>.gitignore</code> が <code>*.env</code> / <code>*.token</code> を弾きます。VM 側は tmpfs なので、巻き戻し後に残りません。</div>
 
@@ -345,27 +345,27 @@
   <tr><td>agent が見た依頼文と出力</td><td>同ディレクトリの <code>prompt-&lt;step&gt;-&lt;n&gt;.md</code> / <code>agent-&lt;step&gt;-&lt;n&gt;.log</code>（step の途中から逐次。ツール呼び出しと結果の先頭、最後に費用）。生イベントは <code>.jsonl</code>（デバッグ用）</td><td>人間（失敗の切り分け）、Web コンソール</td></tr>
   <tr><td>今動いている step とそのログ名</td><td><code>state.json</code> の <code>current</code>（終わると null）</td><td>Web コンソール、<code>tail -f</code> する人</td></tr>
   <tr><td>ゲートの結果</td><td><code>code-gates-&lt;n&gt;.log</code>、VM 内 <code>~/gates/&lt;name&gt;.log</code>（回収後は <code>work/</code>）</td><td>implementer（差し戻し時）、人間</td></tr>
-  <tr><td>artifact（plan.md / report.md / review.md / summary.md）</td><td>VM <code>~/work/&lt;id&gt;/</code> → release 時に <code>runs/…/work/</code></td><td>次の step、reviewer、人間</td></tr>
+  <tr><td>成果物（plan.md / report.md / review.md / summary.md）</td><td>VM <code>~/work/&lt;id&gt;/</code> → release 時に <code>runs/…/work/</code></td><td>次の step、reviewer、人間</td></tr>
   <tr><td>VM の貸出</td><td><code>~/.config/sandbox/state.json</code>（<code>sandbox ls</code>）</td><td>sandbox CLI、dispatch、他セッション</td></tr>
-  <tr><td>起票と配車のログ</td><td><code>$AIFACTORY_WORKSPACE/logs/intake.log</code> / <code>dispatch.log</code></td><td>人間</td></tr>
+  <tr><td>チケット作成と実行の割り当てのログ</td><td><code>$AIFACTORY_WORKSPACE/logs/intake.log</code> / <code>dispatch.log</code></td><td>人間</td></tr>
   <tr><td>設計判断の理由</td><td><code>docs/adr/NNNN-*.md</code>（書き換えず追記）</td><td>次のセッション</td></tr>
 </table>
 <div class="warn">同じ日に同じチケットを再実行すると run ディレクトリ名が同じになるので、runner は前回分を <code>-attemptN</code> に退避してから作ります。<code>--resume</code> のときは退避せず続きから。</div>
 
-<h2 id="s10">10. 「ここを変えたい」はどのファイルか</h2>
+<h2 id="s10">10. 変更したい内容と編集するファイル</h2>
 <table>
   <tr><th>やりたいこと</th><th>触るファイル</th><th>効く範囲</th></tr>
-  <tr><td>新しい PJ を工場に入れる</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code>（焼き込み。雛形は <code>examples/projects/kumitate/</code>）→ Proxmox でテンプレとプール → <code>project.yml</code> + <code>gates.sh</code> → <code>sandbox token set &lt;pj&gt;</code> → GitHub App を install</td><td>その PJ</td></tr>
-  <tr><td>ゲートを足す / 外す</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code>。base で既に赤いものは <code>project.yml</code> の <code>known_red_gates</code></td><td>その PJ</td></tr>
-  <tr><td>agent に毎回伝える事実（テストの走らせ方、既知の罠）</td><td><code>project.yml</code> の <code>facts</code></td><td>その PJ の全 step</td></tr>
-  <tr><td>この PJ でやってはいけないこと / reviewer が必ず見ること</td><td><code>project.yml</code> の <code>forbidden</code> / <code>review_points</code></td><td>その PJ</td></tr>
-  <tr><td>手順そのもの（step を足す、差し戻し回数）</td><td><code>workflow/kit/workflows/&lt;wf&gt;.yml</code></td><td>全 PJ</td></tr>
-  <tr><td>役割の振る舞い（reviewer の見方、implementer の作法）</td><td><code>workflow/kit/roles/&lt;role&gt;.md</code>。全役割共通なら <code>_common.md</code></td><td>全 PJ</td></tr>
+  <tr><td>新しいプロジェクトを工場に入れる</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code>（事前設定。雛形は <code>examples/projects/kumitate/</code>）→ Proxmox でテンプレとプール → <code>project.yml</code> + <code>gates.sh</code> → <code>sandbox token set &lt;pj&gt;</code> → GitHub App を install</td><td>そのプロジェクト</td></tr>
+  <tr><td>ゲートを足す / 外す</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code>。変更前のブランチでも失敗している項目は <code>project.yml</code> の <code>known_red_gates</code></td><td>そのプロジェクト</td></tr>
+  <tr><td>agent に毎回伝える事実（テストの走らせ方、既知の罠）</td><td><code>project.yml</code> の <code>facts</code></td><td>そのプロジェクトの全 step</td></tr>
+  <tr><td>このプロジェクトでやってはいけないこと / reviewer が必ず見ること</td><td><code>project.yml</code> の <code>forbidden</code> / <code>review_points</code></td><td>そのプロジェクト</td></tr>
+  <tr><td>手順そのもの（step を足す、差し戻し回数）</td><td><code>workflow/kit/workflows/&lt;wf&gt;.yml</code></td><td>全プロジェクト</td></tr>
+  <tr><td>役割の振る舞い（reviewer の見方、implementer の作法）</td><td><code>workflow/kit/roles/&lt;role&gt;.md</code>。全役割共通なら <code>_common.md</code></td><td>全プロジェクト</td></tr>
   <tr><td>使うモデル</td><td><code>workflow/kit/routes.env</code>（クラス単位）。1 step だけなら yml の <code>model_class</code>、1 回だけなら環境変数 <code>CLAUDE_MODEL</code></td><td>指定した範囲</td></tr>
-  <tr><td>PR の宛先ブランチ</td><td><code>project.yml</code> の <code>base_branch</code> / <code>hotfix_base</code>、workflow 別なら <code>workflow_overrides</code></td><td>その PJ</td></tr>
-  <tr><td>チケットの分類の癖（intake がいつも bug にしてしまう等）</td><td><code>glue/bin/intake</code> の prompt 文、または依頼文の先頭に <code>kind:</code> 行を書いて決定的にする</td><td>起票時</td></tr>
-  <tr><td>プール台数</td><td>Proxmox 側 <code>sandbox/proxmox/40-pool.sh</code>、<code>glue/bin/dispatch</code> の <code>POOL_PER_PJ</code></td><td>その PJ の並列数</td></tr>
-  <tr><td>Claude トークンの更新</td><td><code>sandbox token set &lt;pj&gt;</code>（貸出中は <code>sandbox reinject &lt;id&gt;</code>）</td><td>その PJ</td></tr>
+  <tr><td>PR の宛先ブランチ</td><td><code>project.yml</code> の <code>base_branch</code> / <code>hotfix_base</code>、workflow 別なら <code>workflow_overrides</code></td><td>そのプロジェクト</td></tr>
+  <tr><td>チケットの分類基準（intake がいつも bug にしてしまう等）</td><td><code>glue/bin/intake</code> の プロンプト、または依頼文の先頭に <code>kind:</code> 行を書いて明示的に指定する</td><td>チケットの作成時</td></tr>
+  <tr><td>プール台数</td><td>Proxmox 側 <code>sandbox/proxmox/40-pool.sh</code>、<code>glue/bin/dispatch</code> の <code>POOL_PER_PJ</code></td><td>そのプロジェクトの並列数</td></tr>
+  <tr><td>Claude トークンの更新</td><td><code>sandbox token set &lt;pj&gt;</code>（貸出中は <code>sandbox reinject &lt;id&gt;</code>）</td><td>そのプロジェクト</td></tr>
   <tr><td>ブラウザで見たい・ボタンで動かしたい</td><td><code>console/bin/console --open</code>（Mac ローカル。中で kb / intake / dispatch / sandbox を呼ぶだけ）</td><td>表示と操作。状態の正本は変わらない</td></tr>
 </table>
 
@@ -373,15 +373,15 @@
 <div class="kv">
   <div>workflow</div><div>チケット種別ごとの手順。step の並びと分岐。<code>kit/workflows/&lt;name&gt;.yml</code></div>
   <div>step</div><div>1 回の呼び出し。担い手は role（agent）か code（スクリプト）</div>
-  <div>role</div><div>agent の人格と権限。憲法は <code>kit/roles/&lt;role&gt;.md</code>、モデルのクラスは routes.env</div>
-  <div>artifact</div><div>step の入出力。必ずファイル。VM の <code>~/work/&lt;id&gt;/</code> に置き、release で回収</div>
+  <div>role</div><div>agent の人格と権限。行動ルールは <code>kit/roles/&lt;role&gt;.md</code>、モデルのクラスは routes.env</div>
+  <div>成果物</div><div>step の入出力。必ずファイル。VM の <code>~/work/&lt;id&gt;/</code> に置き、release で回収</div>
   <div>transition</div><div>結果に応じた次の行き先。<code>next</code> / <code>on_pass</code> / <code>on_fail</code>。<code>human</code> は人間へ渡して終了</div>
-  <div>gates</div><div>PJ の品質ゲート（lint / typecheck / test / 静的解析）。コードが走らせ、赤なら agent に戻す</div>
-  <div>known_red_gates</div><div>base で既に赤いゲート。runner が FAIL を INFO に格下げし、範囲外の修正を防ぐ</div>
+  <div>gates</div><div>プロジェクトの品質ゲート（lint / typecheck / test / 静的解析）。コードが走らせ、失敗したら agent に戻す</div>
+  <div>known_red_gates</div><div>変更前のブランチでも失敗するゲート。runner が FAIL を参考情報（INFO）として扱い、範囲外の修正を防ぐ</div>
   <div>take / release</div><div>VM の貸出と返却。返却は clean スナップショットへの巻き戻し</div>
   <div>task-id</div><div>kanban が採番する 3 桁以上の番号。VM の名前 <code>task-&lt;id&gt;</code>、ブランチ、run ディレクトリに使う</div>
   <div>run</div><div>runner の 1 回の実行。<code>$AIFACTORY_WORKSPACE/runs/&lt;date&gt;-&lt;pj&gt;-&lt;id&gt;/</code>。kanban の <code>run</code> 列にはこのディレクトリ名が入る</div>
-  <div>intake / dispatch</div><div>glue の 2 本。自由文 → チケット（LLM 1 回）、todo → 実行（ただのコード）</div>
+  <div>intake / dispatch</div><div>glue の 2 本。自由文 → チケット（LLM 1 回）、todo → 実行（スクリプト）</div>
   <div>クラス（judgment / research / coding）</div><div>作業の種類。モデル名はクラス経由で解決する（判断は Fable、Web 調査は Sonnet、実装は Opus）</div>
   <div>ADR</div><div>設計判断の記録。<code>docs/adr/</code>。1 判断 1 ファイル、書き換えず追記</div>
 </div>

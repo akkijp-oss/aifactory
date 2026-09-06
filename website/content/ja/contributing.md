@@ -1,12 +1,14 @@
 # 貢献と AI セッション向けの約束
 
-このリポジトリは Apache-2.0 で公開されています（[akkijp-oss/aifactory](https://github.com/akkijp-oss/aifactory)）。貢献は GitHub の pull request で受けます。人間（メンテナや貢献者）と複数の AI セッション（Claude Code）が交代で、ときに同時に作業する前提で書かれていて、人でも AI でも、作業の入り方は同じです。リポジトリ直下の `CONTRIBUTING.md`（貢献の手順）と `SECURITY.md`（脆弱性の報告先）が正本で、このページはその読み下しです。
+aifactory は Apache-2.0 ライセンスで公開されており、[GitHub のリポジトリ](https://github.com/akkijp-oss/aifactory)でプルリクエストを受け付けています。人間も AI セッションも、以下の手順とルールに従って作業してください。
 
-## 現在地に立つ
+貢献の手順はリポジトリ直下の `CONTRIBUTING.md`、脆弱性の報告方法は `SECURITY.md` を基準とします。このページでは、その内容を日本語で説明します。
+
+## 作業状況を確認する
 
 1. ルート `README.md` で全体像（4 区画）を掴む
 2. 着手する区画の `README.md` で設計と契約を読む
-3. sandbox を触るなら `sandbox/STATUS.md` の実機確認コマンドを流して、書かれている進捗と実機が一致するか自分で確かめる。一致していなければ、先に `STATUS.md` を実機に合わせて直す
+3. sandbox を触るなら `sandbox/STATUS.md` の実機確認コマンドを実行して、書かれている進捗と実機が一致するか自分で確かめる。一致していなければ、先に `STATUS.md` を実機に合わせて直す
 4. 判断を変えたら `docs/adr/` に 1 枚追加する（既存 ADR を書き換えない）
 
 ## 守ること
@@ -32,20 +34,20 @@
 | 進捗票と実機確認 | `sandbox/STATUS.md` |
 | 運用（貸出・返却・障害） | `sandbox/OPERATIONS.md` |
 | 設計判断の理由 | `docs/adr/NNNN-*.md` |
-| 踏んだ罠 | `workflow/README.md` の「踏んだ罠と対処」 |
+| 過去に起きた問題 | `workflow/README.md` の「踏んだ罠と対処」 |
 | 利用者向けの変更履歴 | `CHANGELOG.md` |
 | 自分の環境のメモ | `$AIFACTORY_WORKSPACE/docs/`（リポジトリ外） |
-| 人向けの読み下し | `docs/*.html`、このサイト（`website/`） |
+| 利用者向けの解説 | `docs/*.html`、このサイト（`website/`） |
 
 ## 変更の作法
 
 | 変えるもの | 前に | 後に |
 |---|---|---|
-| workflow yml / roles / project.yml | `kb run <id> --dry-run` で schema 検証と依頼文を確認 | 次の run で効く。走っている run には触らない |
+| ワークフローの YAML / roles / project.yml | `kb run <id> --dry-run` でスキーマ検証と依頼文を確認 | 次の run で効く。実行中の run には触らない |
 | `sandbox/bin/sandbox` | `bash -n` | `sandbox/bin/install.sh` で PATH のコピーを更新 |
-| runner（`workflow/bin/run`） | 走っている run が無いことを確認（Python なので実行中の編集は安全だが、挙動の差が混ざる） | `python3 -m unittest discover -s workflow/tests` と `--dry-run` で確認 |
+| runner（`workflow/bin/run`） | 実行中の run がないことを確認（Python なので実行中の編集は安全だが、挙動の差が混ざる） | `python3 -m unittest discover -s workflow/tests` と `--dry-run` で確認 |
 | console / mcp | `python3 -m unittest discover -s console/tests` | launchd 常駐なら `launchctl kickstart -k gui/$(id -u)/com.aifactory.console` |
-| Proxmox 側スクリプト | `sandbox ls` で貸出中が無いことを確認 | `STATUS.md` を更新 |
+| Proxmox 側スクリプト | `sandbox ls` で貸出中がないことを確認 | `STATUS.md` を更新 |
 | kanban / glue | `AIFACTORY_WORKSPACE=<別ディレクトリ>`（または `KB_ROOT`）でテスト | |
 | このサイト | `website/content/ja/` を直し `en/` に訳す | `mkdocs build --strict` が通ること |
 
@@ -56,7 +58,7 @@ CI（`.github/workflows/ci.yml`）は pull request ごとに `console/tests` と
 - 自分の変更だけを `git add` で選ぶ。`git add -A` は使わない
 - メッセージは「何を・なぜ」を 1 行目に。本文に判断と実測を残す
 - 実行記録（`workspace/runs/`）と台帳（`workspace/kanban/kanban.db`）は workspace にあり、リポジトリでは**追跡しない**。PR に含めない
-- 変更は main へ直接 push せず、ブランチを切って pull request にする。マージは人間が判断する（agent は push しない）
+- 変更は main へ直接 push せず、ブランチを切って pull request にする。マージは人間が判断する（エージェントは push しない）
 - 設計を変える PR には ADR を 1 枚添える。利用者に見える変更は `CHANGELOG.md` に 1 行足す
 
 ## AI セッションへの補足

@@ -1,8 +1,8 @@
 # sandbox CLI
 
-`sandbox/bin/sandbox`（`sandbox/bin/install.sh` で `~/.local/bin/sandbox` に実体コピー）。Mac 側から Proxmox とゲートウェイに ssh して VM を貸し出す bash スクリプト。
+`sandbox/bin/sandbox` は、Mac から Proxmox とゲートウェイに SSH 接続し、VM の貸出や返却を行う CLI です。bash で実装されています。`sandbox/bin/install.sh` を実行すると、`~/.local/bin/sandbox` にコピーされます。
 
-## 契約の 5 操作 + ls
+## 5 つの基本操作と ls
 
 ```
 sandbox take <pj> <task-id>      空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）
@@ -15,10 +15,10 @@ sandbox ls                       貸出状況
 
 | 操作 | 何をするか | 失敗の条件 |
 |---|---|---|
-| `take` | `state.json` から PJ プールの空き VM を選ぶ → `qm rollback clean` → PJ の env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → `state.json` に記録 | 空きなし、PJ の env 無し、App が未 install |
+| `take` | `state.json` からプロジェクトプールの空き VM を選ぶ → `qm rollback clean` → プロジェクトの env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → `state.json` に記録 | 空きなし、プロジェクトの env なし、App が未インストール |
 | `ssh` | `ssh dev@10.77.1.N`（`SB_JUMP` があれば ProxyJump）。cmd は login shell 経由（`/etc/profile.d/sandbox.sh` で env が読まれる） | VM に届かない |
 | `url` | `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` を表示 | |
-| `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` が無い |
+| `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない |
 | `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は待ってリトライ | |
 | `ls` | `TASK VM VMID IP STATUS SINCE` | |
 
@@ -30,7 +30,7 @@ TASK     VM             VMID   IP           STATUS    SINCE
 -        sb-kumitate-02 9205   10.77.1.5    running
 ```
 
-## 運用補助（契約外）
+## 認証情報の管理と更新
 
 ```
 sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
@@ -46,30 +46,32 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 |---|---|
 | `token set <pj>` | `~/.config/sandbox/pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN` |
 | `token set <pj> gh` | 同 `GH_TOKEN`（App 未設定時のフォールバック） |
-| `token set global` | `~/.config/sandbox/env`（全 PJ の既定） |
+| `token set global` | `~/.config/sandbox/env`（全プロジェクトの既定） |
 | `token show [pj]` | 効いているトークンの出どころとマスク表示 |
 
 ### gh-app
 
 | コマンド | 何をするか |
 |---|---|
-| `gh-app status` | App の ID、権限一覧（必要: contents / pull_requests write、metadata / actions read。任意: checks read）、installation 一覧、PJ ごとの token 可否、変更用 URL |
-| `gh-app token <pj>` | その PJ のリポジトリ限定の installation token を払い出して表示（1 時間） |
+| `gh-app status` | App の ID、権限一覧（必要: contents / pull_requests write、metadata / actions read。任意: checks read）、installation 一覧、プロジェクトごとの token 可否、変更用 URL |
+| `gh-app token <pj>` | そのプロジェクトのリポジトリ限定の installation token を払い出して表示（1 時間） |
 | `gh-app refresh` | 貸出中の全 VM の `GH_TOKEN` を払い出し直す。launchd が 45 分ごとに呼ぶ |
 
-要求する権限は「欲しい権限のうち App が持っているもの」。App 側で権限を足して installation が承認すれば、CLI を触らずにトークンに乗る。
+CLI は、必要な権限のうち GitHub App に許可されているものを要求します。App に権限を追加し、インストール先で承認すると、CLI を変更せずに新しいトークンへ反映されます。
 
 ## 設定
 
 | ファイル | 内容 |
 |---|---|
-| `~/.config/sandbox/env` | `PVE_HOST`（Proxmox ホストの ssh エイリアス。必須、既定無し）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定無し）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）。雛形 `sandbox/templates/env.example` |
+| `~/.config/sandbox/env` | `PVE_HOST`（Proxmox ホストの ssh エイリアス。必須、既定なし）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定なし）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）。ひな形 `sandbox/templates/env.example` |
 | `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、（フォールバック用 `GH_TOKEN`） |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App。`sandbox/bin/gh-app-setup` が作る |
 | `~/.config/sandbox/state.json` | 貸出台帳。`{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
-| `~/.ssh/conf.d/aifactory/config` | `sb-gw` / `*.sb.internal` / `10.77.*` の ssh 設定。雛形 `ssh_config.example` |
+| `~/.ssh/conf.d/aifactory/config` | `sb-gw` / `*.sb.internal` / `10.77.*` の ssh 設定。ひな形 `ssh_config.example` |
 
-読む順: `env`（全体既定）→ `pj/<pj>.env`（PJ 別上書き）→ `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（1 回限りの上書き）。シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` は**無視**する（PJ 設定を黙って上書きした事故があったため）。
+設定は `env`（全体の既定値）、`pj/<pj>.env`（プロジェクト別）、`SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（今回だけの指定）の順に読み込み、後の値で上書きします。
+
+シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` は使いません。過去に、これらの値が意図せずプロジェクト設定を上書きしたためです。
 
 ## VM に注入されるもの
 
@@ -85,11 +87,13 @@ GH_REPO=akkijp/kumitate
 GH_TOKEN_EXPIRES_AT=2026-09-06T03:55:00Z
 ```
 
-`/etc/profile.d/sandbox.sh` がログイン時に読み、`SANDBOX_APP_DIR` と PATH も設定する。
+ログイン時に `/etc/profile.d/sandbox.sh` がこのファイルを読み込みます。同時に `SANDBOX_APP_DIR` と PATH も設定します。
 
 ## Proxmox 側スクリプト {#proxmox}
 
-`sandbox/proxmox/run.sh <script> [args]` が `PVE_HOST`（必須）の Proxmox ホストに ssh してスクリプトを流す入口。Mac の公開鍵を `SB_PUBKEY` として渡す。ネットワークと VMID の設計値は環境変数で渡せる（未設定なら各スクリプトの既定）。
+`sandbox/proxmox/run.sh <script> [args]` は、`PVE_HOST` で指定した Proxmox ホストに SSH 接続し、スクリプトを実行します。`PVE_HOST` は必須です。Mac の公開鍵は `SB_PUBKEY` として渡されます。
+
+ネットワークと VMID は、次の環境変数で指定できます。指定しなければ、各スクリプトの既定値が使われます。
 
 | 変数 | 意味 | 既定 |
 |---|---|---|
@@ -105,14 +109,16 @@ GH_TOKEN_EXPIRES_AT=2026-09-06T03:55:00Z
 | `20-gateway-lxc.sh` | `sb-gw` LXC 9000（dnsmasq、tailscaled、VM 発の転送を落とす systemd unit） |
 | `30-base-template.sh create` | `sb-base` 9100（cloud image + cloud-init → `31-provision-base.sh` → template） |
 | `31-provision-base.sh` | base 層の中身（VM 内で実行） |
-| `32-pj-template.sh` | `sb-tpl-<pj>` 911x（base から clone → PJ の `provision.sh`（`workspace/projects/<pj>/` → `examples/projects/<pj>/`）→ template）。env: `GH_TOKEN` `TPL_VMID` `PJ` |
+| `32-pj-template.sh` | `sb-tpl-<pj>` 911x（base から clone → プロジェクトの `provision.sh`（`workspace/projects/<pj>/` → `examples/projects/<pj>/`）→ template）。env: `GH_TOKEN` `TPL_VMID` `PJ` |
 | `40-pool.sh <pj> <n>` | プール 92xx（linked clone × n → 起動 → `clean` スナップショット）。env: `TPL_VMID` |
-| `50-firewall.sh` | datacenter firewall + group `sandbox` + 全 VM に firewall=1 + `clean` 取り直し + sb-gw の FORWARD DROP。env: `LENT`（貸出中 VMID を飛ばす） |
+| `50-firewall.sh` | datacenter ファイアウォール + group `sandbox` + 全 VM にファイアウォール=1 + `clean` 取り直し + sb-gw の FORWARD DROP。env: `LENT`（貸出中 VMID を飛ばす） |
 
 ## gh-app-setup
 
-`sandbox/bin/gh-app-setup [app-name]`。GitHub App を manifest flow で作り、App ID と秘密鍵を `~/.config/sandbox/gh-app/` に保存する。既定名 `aifactory-sandbox`（GitHub 全体で一意である必要がある）。既定権限は contents / pull_requests write、metadata / actions / checks read。
+`sandbox/bin/gh-app-setup [app-name]` は、マニフェストを使って GitHub App を作成し、App ID と秘密鍵を `~/.config/sandbox/gh-app/` に保存します。既定の名前は `aifactory-sandbox` です。名前は GitHub 全体で重複しないものを指定してください。既定の権限は contents / pull_requests の write と、metadata / actions / checks の read です。
 
 ## launchd
 
-`sandbox/templates/launchd/com.aifactory.sandbox.gh-refresh.plist`。45 分ごとに `sandbox gh-app refresh`。`~/Library/LaunchAgents/` にコピーして `launchctl load`。実体コピーの `~/.local/bin/sandbox` を呼ぶ（シンボリックリンクだと TCC で動かない）。
+`sandbox/templates/launchd/com.aifactory.sandbox.gh-refresh.plist` を `~/Library/LaunchAgents/` にコピーし、`launchctl load` で登録します。登録後は、45 分ごとに `sandbox gh-app refresh` が実行されます。
+
+実行するのは `~/.local/bin/sandbox` にコピーしたファイルです。シンボリックリンクでは、macOS のアクセス制御（TCC）によって実行できないためです。

@@ -1,15 +1,15 @@
 # 役割とモデル
 
-`workflow/kit/roles/*.md`（役割の憲法）と `workflow/kit/routes.env`（クラス → モデル）。
+エージェントの役割は `workflow/kit/roles/*.md`、作業の種類と使用するモデルの対応は `workflow/kit/routes.env` で定義します。各役割の担当範囲、出力する成果物、モデルの変更方法を説明します。
 
 ## 役割
 
 | 役割 | クラス | やること | やらないこと | 出力 |
 |---|---|---|---|---|
 | **planner** | judgment | チケットとリポジトリを読み、再現条件・原因の仮説・変更範囲（ファイル単位）・検証方法・リスクを決める。不明確・矛盾・危険なら先頭に **STOP** | コードを書かない | `plan.md` |
-| **implementer** | coding | 計画に従って実装。バグ修正は先に失敗するテストを書いて赤を確認。lint / 型 / 関係するテストを自分で緑にしてコミット | 範囲外に手を出さない（止めて report.md に理由）。push しない | git コミット + `report.md` |
-| **researcher** | research | 問いを 3 つ以内に分解し、リポジトリと Web の一次情報を集め、出典つきで整理。GitHub は `gh`（CI 履歴は `gh run list`） | コードの変更、コミット。推測を事実のように書かない | `research.md`（research workflow では judge が `summary.md`） |
-| **reviewer** | judgment | 差分・計画・報告・ゲート結果を「範囲 → 正しさ → 安全 → PJ 固有 → ゲート」の順に見て PASS / FAIL。範囲外の懸念は人間向けメモに分ける | コードを直さない | `review.md` |
+| **implementer** | coding | 計画に従って実装。バグ修正は先に失敗するテストを書いて失敗することを確認。lint / 型 / 関係するテストを自分で成功させてコミット | 範囲外に手を出さない（止めて report.md に理由）。push しない | git コミット + `report.md` |
+| **researcher** | research | 問いを 3 つ以内に分解し、リポジトリと Web の一次情報を集め、出典つきで整理。GitHub は `gh`（CI 履歴は `gh run list`） | コードの変更、コミット。推測を事実のように書かない | `research.md`（research ワークフローでは judge が `summary.md`） |
+| **reviewer** | judgment | 差分・計画・報告・ゲート結果を「範囲 → 正しさ → 安全 → プロジェクト固有 → ゲート」の順に見て PASS / FAIL。範囲外の懸念は人間向けメモに分ける | コードを直さない | `review.md` |
 
 すべての役割に `_common.md`（共通の約束）が先に付きます。
 
@@ -23,7 +23,7 @@
 - 範囲の外を変えない。範囲外の問題は直さずに報告書に書く
 - 指示と実態が食い違ったら実態を正として、食い違いを報告書に書く
 - 推測で埋めない。判断が必要なら選択肢と推奨を書き、安全側で進める
-- 指定された artifact は必ず `~/work/<id>/` の指定パスに書く（無いと step は失敗扱い）
+- 指定された成果物は必ず `~/work/<id>/` の指定パスに書く（ないと工程は失敗扱い）
 
 ## 出力の形
 
@@ -79,22 +79,22 @@ MODEL_default=claude-opus-5
 
 | クラス | 用途 | 既定の役割 |
 |---|---|---|
-| judgment | 最重要判断 | planner、reviewer、（research workflow の）judge、intake |
+| judgment | 最重要判断 | planner、reviewer、（research ワークフローの）judge、intake |
 | research | Web クローリング調査 | researcher |
 | coding | コーディング | implementer |
 
-判断は Fable、Web 調査は Sonnet、それ以外は Opus という型はメンテナの判断（2026-09-06）。`routes.env` を変えれば別のモデルにできる。
+判断には Fable、Web 調査には Sonnet、それ以外には Opus を使う構成です。これは 2026-09-06 時点のメンテナの方針で、`routes.env` を編集すれば変更できます。
 
 ## 上書き
 
 | 範囲 | 方法 |
 |---|---|
 | 全体 | `routes.env` を変える |
-| 1 つの step | workflow yml の `model_class: judgment` など |
+| 1 つの工程 | ワークフローの YAML の `model_class: judgment` など |
 | 1 回の run | 環境変数 `CLAUDE_MODEL=claude-opus-5 kb run 204` |
 
 ## 役割を足す
 
 1. `workflow/kit/roles/<role>.md` を書く（クラス、やること、禁止、出力の形）
 2. runner の役割 → 既定クラスの対応（`bin/run` の `model_for`）に足す
-3. workflow yml の step で `role: <role>` として使う
+3. ワークフローの YAML の工程で `role: <role>` として使う

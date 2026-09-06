@@ -2,7 +2,7 @@
 # ローカル確認: website/.venv/bin/mkdocs serve -f website/mkdocs.yml
 # ビルド:       website/.venv/bin/mkdocs build -f website/mkdocs.yml --strict  → website/site/
 site_name: aifactory
-site_description: チケットを入れると、隔離された VM の中でエージェントが計画・実装し、コードがテストを回し、人間は最後にレビューだけするソフトウェアファクトリー
+site_description: 依頼をチケットにすると、隔離された VM で AI エージェントが計画・実装し、テストを経て PR を作成。人間がレビューしてマージを判断する開発の仕組み
 site_author: aifactory contributors
 site_url: https://akkijp-oss.github.io/aifactory/
 repo_url: https://github.com/akkijp-oss/aifactory
@@ -77,32 +77,32 @@ plugins:
             前提と準備するもの: Requirements
             Mac 側のセットアップ: Set up the Mac
             sandbox の構築: Build the sandbox
-            はじめての 1 周: First run
+            はじめてのチケット実行: First run
             使い方: Guides
             チケットを作る: Create tickets
             実行する: Run work
             結果を読む: Read the results
             Web コンソール: Web console
-            PJ を追加する: Add a project
-            workflow の選び方: Choose a workflow
+            プロジェクトを追加する: Add a project
+            ワークフローの選び方: Choose a workflow
             日々の運用: Day-to-day operations
             複数セッションで作業する: Working with multiple sessions
             仕組み: Concepts
             全体の構成: Architecture
-            チケットの一生: Ticket lifecycle
-            workflow エンジン: Workflow engine
+            チケットの作成から完了まで: Ticket lifecycle
+            ワークフローエンジン: Workflow engine
             LLM はどこで動くか: Where the LLM runs
             sandbox の内側: Inside the sandbox
-            設定の出どころ: Configuration
+            設定ファイルと優先順位: Configuration
             状態と記録: State and records
-            安全と秘密情報: Security and secrets
+            安全対策と認証情報の管理: Security and secrets
             リファレンス: Reference
             kb（kanban CLI）: kb (kanban CLI)
             intake / dispatch（glue）: intake / dispatch (glue)
             run（workflow runner）: run (workflow runner)
             sandbox CLI: sandbox CLI
             project.yml: project.yml
-            workflow yml: workflow yml
+            ワークフローの YAML: workflow yml
             役割とモデル: Roles and models
             ディレクトリ構成: Directory layout
             用語集: Glossary
@@ -146,27 +146,27 @@ nav:
       - 前提と準備するもの: getting-started/requirements.md
       - Mac 側のセットアップ: getting-started/install-mac.md
       - sandbox の構築: getting-started/build-sandbox.md
-      - はじめての 1 周: getting-started/first-run.md
+      - はじめてのチケット実行: getting-started/first-run.md
   - 使い方:
       - guides/index.md
       - チケットを作る: guides/tickets.md
       - 実行する: guides/running.md
       - 結果を読む: guides/results.md
       - Web コンソール: guides/console.md
-      - PJ を追加する: guides/add-project.md
-      - workflow の選び方: guides/workflows.md
+      - プロジェクトを追加する: guides/add-project.md
+      - ワークフローの選び方: guides/workflows.md
       - 日々の運用: guides/operations.md
       - 複数セッションで作業する: guides/multi-session.md
   - 仕組み:
       - concepts/index.md
       - 全体の構成: concepts/architecture.md
-      - チケットの一生: concepts/ticket-lifecycle.md
-      - workflow エンジン: concepts/workflow-engine.md
+      - チケットの作成から完了まで: concepts/ticket-lifecycle.md
+      - ワークフローエンジン: concepts/workflow-engine.md
       - LLM はどこで動くか: concepts/where-llm-runs.md
       - sandbox の内側: concepts/sandbox-internals.md
-      - 設定の出どころ: concepts/configuration.md
+      - 設定ファイルと優先順位: concepts/configuration.md
       - 状態と記録: concepts/state-and-records.md
-      - 安全と秘密情報: concepts/security.md
+      - 安全対策と認証情報の管理: concepts/security.md
   - リファレンス:
       - reference/index.md
       - kb（kanban CLI）: reference/cli-kb.md
@@ -174,7 +174,7 @@ nav:
       - run（workflow runner）: reference/cli-run.md
       - sandbox CLI: reference/cli-sandbox.md
       - project.yml: reference/project-yml.md
-      - workflow yml: reference/workflow-yml.md
+      - ワークフローの YAML: reference/workflow-yml.md
       - 役割とモデル: reference/roles-and-models.md
       - ディレクトリ構成: reference/directory-layout.md
       - 用語集: reference/glossary.md

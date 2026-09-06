@@ -1,6 +1,6 @@
-# はじめての 1 周
+# はじめてのチケット実行
 
-このページで分かること: チケットを 1 枚作り、VM を触らない dry-run で定義を確かめ、本実行して PR まで届くところ。所要は dry-run が数秒、本実行が 5〜60 分（ゲートの重さで決まります）。
+チケットを 1 枚作り、設定と依頼文を確認してから実行し、PR ができるまでを体験します。まずは VM を操作しない dry-run（事前確認）を試してください。所要時間の目安は、dry-run が数秒、本実行が 5〜60 分です。本実行の時間は、主にテストなどの検証にかかる時間によって変わります。
 
 ## 0. 事前確認
 
@@ -24,7 +24,7 @@ kanban/bin/kb list                 # 台帳が読める（空でもよい）
     glue/bin/intake /tmp/memo.txt
     ```
 
-    LLM が PJ（kumitate）と種別（chore）を判定し、題名と完了条件を付けて起票します。判定を見てから起票したいときは `--dry-run`。
+    LLM がプロジェクト（kumitate）と種別（chore）を判定し、題名と完了条件を付けてチケットを作成します。判定を見てからチケットを作成したいときは `--dry-run`。
 
 === "整った ticket.md から（kb new）"
 
@@ -46,7 +46,7 @@ kanban/bin/kb list                 # 台帳が読める（空でもよい）
 kanban/bin/kb run 206 --dry-run
 ```
 
-VM を触らず、workflow yml と project.yml の schema 検証、各 step の依頼文の組み立てだけを行い、`workspace/runs/<日付>-kumitate-206-dry/` に出します。`prompt-implement-0.md` を開くと、agent が受け取る依頼文（共通の約束・役割の憲法・PJ の事実・チケット）が読めます。ここで PJ の facts や forbidden の書き漏れに気づけます。
+VM を触らず、ワークフローの YAML と project.yml のスキーマ検証、各工程の依頼文の組み立てだけを行い、`workspace/runs/<日付>-kumitate-206-dry/` に出します。`prompt-implement-0.md` を開くと、エージェントが受け取る依頼文（共通の約束・役割ごとの行動ルール・プロジェクトの事実・チケット）が読めます。ここでプロジェクトの facts や forbidden の書き漏れに気づけます。
 
 ## 3. 本実行
 
@@ -78,7 +78,7 @@ sequenceDiagram
   kb->>kb: status → review
 ```
 
-ターミナルには step ごとの進行が出ます。
+ターミナルには工程ごとの進行が出ます。
 
 ```
 [run kumitate/206 0s] workflow chore: implement → gates → pr  (branch sandbox/206-chore-readme → develop)
@@ -97,14 +97,14 @@ sequenceDiagram
 | 何を | どこ |
 |---|---|
 | PR | ターミナルの `PR:`、または `kb show 206` の `pr` |
-| agent が見た依頼文と出力 | `workspace/runs/<日付>-kumitate-206/prompt-*.md` / `agent-*.log` |
+| エージェントが見た依頼文と出力 | `workspace/runs/<日付>-kumitate-206/prompt-*.md` / `agent-*.log` |
 | ゲートの結果 | 同 `code-gates-*.log` と `work/gates.txt` |
 | 成果物（report.md など） | 同 `work/` |
 | 状態と履歴 | `kb show 206` / `kb history 206` / `workspace/kanban/BOARD.md` |
 
-詳しくは [結果を読む](../guides/results.md)。
+各ファイルの見方は [結果を読む](../guides/results.md) を参照してください。
 
-## 5. 人間の出番
+## 5. PR のレビューとマージ
 
 PR をレビューしてマージします。マージ作業も無人化できます。
 
@@ -120,8 +120,8 @@ kanban/bin/kb run 207
 | 症状 | 見るところ |
 |---|---|
 | `take` が「空きなし」 | `sandbox ls`。貸出中の VM が残っていれば `sandbox release <id>` |
-| agent が認証エラー | `sandbox token show <pj>`。切れていれば `claude setup-token` → `sandbox token set <pj>` |
-| gates が赤で 2 回差し戻されて `human` 行き | `code-gates-*.log`。base で既に赤なら `project.yml` の `known_red_gates` に書く |
+| エージェントが認証エラー | `sandbox token show <pj>`。切れていれば `claude setup-token` → `sandbox token set <pj>` |
+| gates が失敗して 2 回差し戻されて `human` 行き | `code-gates-*.log`。変更前のブランチでも失敗しているなら `project.yml` の `known_red_gates` に書く |
 | 途中で VM に ssh できなくなった | 別セッションが VM を作り替えていないか。[複数セッションで作業する](../guides/multi-session.md) |
 
-そのほかは [トラブルシューティング](../troubleshooting.md)。
+そのほかの症状は [トラブルシューティング](../troubleshooting.md) を参照してください。

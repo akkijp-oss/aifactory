@@ -1,6 +1,8 @@
 # 設計判断（ADR）
 
-設計判断は `docs/adr/NNNN-slug.md` に 1 判断 1 ファイルで残します。**既存の ADR は書き換えず**、判断を変えるときは新しい番号で「supersedes NNNN」と書きます。節は「状況 / 決定 / 理由 / 結果（トレードオフ）/ 状態」。
+設計を決めた理由は、ADR（Architecture Decision Record）として `docs/adr/NNNN-slug.md` に記録します。1 つの判断につき 1 ファイルを作り、「状況」「決定」「理由」「結果（トレードオフ）」「状態」を記述します。
+
+**既存の ADR は書き換えません。** 判断を変更するときは新しい番号の ADR を作り、`supersedes NNNN` と書いて、どの判断を置き換えるかを示します。
 
 ここは一覧と要約です。本文はリポジトリの `docs/adr/` を読んでください。
 
@@ -12,18 +14,18 @@
 | 0002 | sandbox は Proxmox VM、アプリは VM 内ネイティブ | Rails をそのまま動かす。Docker を使わない。VM のほうが事故が少ない | 採用 |
 | 0003 | プールは使い回し + スナップショット巻き戻し | タスクごとに VM を作らず、常駐プールから貸し出して `clean` へ戻す。DB も巻き戻しで初期化 | 採用 |
 | 0004 | Mac からの到達はゲートウェイ LXC の Tailscale subnet router | VM に Tailscale を入れると巻き戻しでノード鍵が重複する。ゲートウェイ 1 台だけ tailnet に | 採用 |
-| 0005 | Claude Code 認証は setup-token の長期トークンを take 時に tmpfs 注入 | OAuth の焼き込みはリフレッシュトークンの取り合いが起きる | 採用 |
-| 0006 | トークンは PJ ごとに持ち、貸出中の VM にも差し替えを反映（`token` / `reinject`） | 1 PJ の漏洩が他に及ばない。0005 を拡張 | 採用 |
-| 0007 | 複数 PJ 同居: テンプレート 911x を PJ ごとに、VM の IP は VMID から導く | PJ 横断で IP が一意。task-id から IP を導かない | 採用 |
+| 0005 | Claude Code 認証は setup-token の長期トークンを take 時に tmpfs 注入 | OAuth の認証状態をテンプレートに保存する方法はリフレッシュトークンの取り合いが起きる | 採用 |
+| 0006 | トークンはプロジェクトごとに持ち、貸出中の VM にも差し替えを反映（`token` / `reinject`） | 1 プロジェクトの漏洩が他に及ばない。0005 を拡張 | 採用 |
+| 0007 | 複数プロジェクト同居: テンプレート 911x をプロジェクトごとに、VM の IP は VMID から導く | プロジェクト横断で IP が一意。task-id から IP を導かない | 採用 |
 | 0008 | GitHub の push / PR 権限は GitHub App の installation token を take のたびに払い出す | 静的 PAT は全リポジトリに効き失効しない。App なら「そのリポジトリだけ・1 時間」 | 採用 |
-| 0009 | workflow の定義は YAML + JSON Schema、手順は常備側に 1 つ、PJ 固有は事実と方針だけ | 手順を PJ ごとに複製しない。PJ 固有は `project.yml` の facts / forbidden / review_points | 採用 |
-| 0010 | sandbox VM の通信はインターネットと sb-gw の DNS だけ。LAN・他 VM・tailnet へは出さない | 実測で隣の VM やホストの SSH に届いた。Proxmox firewall + sb-gw の FORWARD DROP | 採用 |
+| 0009 | ワークフローの定義は YAML + JSON Schema、手順は共通の定義に 1 つ、プロジェクト固有は基本情報と作業ルールだけ | 手順をプロジェクトごとに複製しない。プロジェクト固有は `project.yml` の facts / forbidden / review_points | 採用 |
+| 0010 | sandbox VM の通信はインターネットと sb-gw の DNS だけ。LAN・他 VM・tailnet へは出さない | 実測で隣の VM やホストの SSH に届いた。Proxmox ファイアウォール + sb-gw の FORWARD DROP | 採用 |
 | 0011 | kanban はリポジトリ内の SQLite + CLI（`kb`）。外部システムは取り込み口として後から足す | 個人タスク台帳は ID が衝突し粒度も違う。termboard / Notion は別システム | 採用 |
-| 0012 | glue は取り込み（LLM 1 回）と配車（ただのコード）の 2 本。ステップ間の状態は runner に任せる | ルーターを LLM 1 回に留めると失敗の切り分けが簡単。状態を二重に持たない | 採用 |
+| 0012 | glue は取り込み（LLM 1 回）と実行の割り当て（スクリプト）の 2 本。ステップ間の状態は runner に任せる | ルーターを LLM 1 回に留めると失敗の切り分けが簡単。状態を二重に持たない | 採用 |
 | 0013 | Web コンソールは Mac ローカルの Python 標準ライブラリ製。状態は既存 CLI 経由でしか変えない | UI が独自の書き込み経路を持つと同時セッションとの衝突点が増える。依存ゼロで壊れない | 採用 |
-| 0014 | agent step の出力は stream-json を人が読める形に起こして逐次書き、生イベントはローカルにだけ残す | 60 分の step の途中が見える。生 JSONL は大きいので git に入れない。`state.json` の `current` で今の step を指す | 採用 |
+| 0014 | エージェントが担当する工程の出力は stream-json を人が読める形に起こして逐次書き、生イベントはローカルにだけ残す | 60 分の工程の途中が見える。生 JSONL は大きいので git に入れない。`state.json` の `current` で今の工程を指す | 採用 |
 | 0015 | 操作口は Web コンソール（HTTP）と MCP（stdio）の 2 つ。読み書きの正本は `console/lib/core.py` に 1 つ | 口ごとに判定を複製すると穴になる。ジョブ記録は flock で共有。MCP は標準ライブラリの最小実装 | 採用 |
-| 0016 | 枠組み（リポジトリ）と運用データ（`AIFACTORY_WORKSPACE`）を分ける。置き場の判断は `lib/aifactory_paths.py` に 1 つ | 公開リポジトリに私有 PJ の情報が混ざる事故を置き場で構造的に防ぐ。例は `examples/projects/` に同梱し、テストは本番データに依存しない | 採用 |
+| 0016 | 枠組み（リポジトリ）と運用データ（`AIFACTORY_WORKSPACE`）を分ける。置き場の判断は `lib/aifactory_paths.py` に 1 つ | 公開リポジトリに私有プロジェクトの情報が混ざる事故を置き場で構造的に防ぐ。例は `examples/projects/` に同梱し、テストは本番データに依存しない | 採用 |
 
 ## 判断の流れ
 
@@ -37,15 +39,15 @@ flowchart LR
   I --> K[0011 kanban SQLite] --> L[0012 glue 2 本] --> M[0013 Web コンソール] --> N[0014 逐次ログ] --> O[0015 MCP] --> P[0016 workspace 分離]
 ```
 
-## 保留中の論点（ADR 無し）
+## 保留中の論点（ADR なし）
 
 `docs/ledger.md` の「やりたいこと」に置いてあるもの。着手を決めたら ADR にします。
 
 - hotfix 用の「複数 sandbox で競争させて最速を採る」パターン。プール台数が増えてから
-- ノード跨ぎのプール（複数の Proxmox ノード）。共有ストレージが無いなら、テンプレートを各ノードに複製するか VXLAN zone にするか
+- ノード跨ぎのプール（複数の Proxmox ノード）。共有ストレージがないなら、テンプレートを各ノードに複製するか VXLAN zone にするか
 - ゲートの並列化・差分実行。1 周の時間の大半がゲート
-- 画面確認（スクショを Mac に回収）と `url` を workflow に組み込む
-- dispatch の PJ 単位並列
+- 画面確認（スクショを Mac に回収）と `url` をワークフローに組み込む
+- dispatch のプロジェクト単位並列
 
 ## ADR を書くとき
 

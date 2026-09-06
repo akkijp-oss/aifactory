@@ -1,6 +1,6 @@
 # kb（kanban CLI）
 
-`kanban/bin/kb`。チケットの採番・状態・履歴を持つ台帳（SQLite）と、runner の呼び出し口。Python 3 標準ライブラリのみ。
+`kanban/bin/kb` は、チケットの作成、状態の更新、履歴の確認、runner の呼び出しを行う CLI です。状態と履歴を SQLite に保存します。Python 3 の標準ライブラリだけで動作します。
 
 ```
 kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
@@ -29,11 +29,11 @@ kb render
 
 | 状態 | 表示 | 意味 |
 |---|---|---|
-| `todo` | 未着手 | 起票済み |
+| `todo` | 未着手 | チケット作成済み |
 | `in_progress` | 実行中 | runner が実行中 |
 | `review` | レビュー待ち | PR あり。人間待ち |
-| `blocked` | 人間待ち | human 行き、異常終了、project.yml 無し。メモに理由 |
-| `done` | 完了 | マージ済み、または PR 無しで終了 |
+| `blocked` | 人間待ち | human 行き、異常終了、project.yml なし。メモに理由 |
+| `done` | 完了 | マージ済み、または PR なしで終了 |
 
 ## コマンド
 
@@ -45,16 +45,16 @@ kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--id N] [--status S] [--
 
 | 引数 | 意味 |
 |---|---|
-| `pj` | PJ 定義ディレクトリ（`$AIFACTORY_WORKSPACE/projects/<pj>/`、無ければ `examples/projects/<pj>/`）があること |
+| `pj` | プロジェクト定義ディレクトリ（`$AIFACTORY_WORKSPACE/projects/<pj>/`、なければ `examples/projects/<pj>/`）があること |
 | `kind` | `workflow/kit/workflows/<kind>.yml` に一致すること（chore / bug / feature / hotfix / research / merge-pr） |
 | `title` | 1 行目。70 字で切る |
-| `--body` | 本文ファイル。`-` で標準入力。無ければ本文なし |
+| `--body` | 本文ファイル。`-` で標準入力。なければ本文なし |
 | `--pr` | merge-pr の対象 PR 番号。本文 2 行目に `pr: N` として書かれる |
 | `--id` | 番号を指定（既定は `MAX(id)+1`、最小 100）。既にあればエラー |
 | `--status` | 初期状態（既定 todo） |
 | `--note` | メモ |
 
-出力: `<id> <状態> <pj> <kind> <PR> <題名>` の 1 行と本文のパス。ファイル名の slug は題名の ASCII 部分から作り、無ければ kind。
+`<id> <状態> <pj> <kind> <PR> <題名>` の 1 行と、本文ファイルのパスを出力します。ファイル名の slug は題名に含まれる ASCII 文字から作ります。該当する文字がなければ `kind` を使います。
 
 ### list / show / next
 
@@ -78,7 +78,7 @@ kb reopen 204                    # → todo
 kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" --kind feature
 ```
 
-`--pr` を変えると本文の `pr:` 行も書き換わる（runner が本文の `pr:` を読むため）。`--run` は run ディレクトリ名（`workspace/runs/` からの相対）。`--kind` は実在検証あり。すべて履歴に残り、BOARD.md が再生成される。
+`--pr` を変更すると、runner が参照する本文の `pr:` 行も更新されます。`--run` には、`workspace/runs/` からの相対パスで run ディレクトリ名を指定します。`--kind` は、指定した種別が存在するか確認されます。変更はすべて履歴に残り、`BOARD.md` が再生成されます。
 
 ### run
 
@@ -86,7 +86,7 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 ```
 
-1. `pj` に `project.yml` が無ければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
+1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
 2. 状態を `in_progress` に、run ディレクトリ名（`<日付>-<pj>-<id>`。実体は `workspace/runs/` の下）を記録
 3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` を渡すと `kind` も書き換わる
 4. 終わったら `state.json` を読んで状態を進める（下表）
@@ -95,11 +95,11 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 |---|---|---|
 | `pr_url` に `MERGED` | done | マージ済み URL |
 | `pr_url` あり | review | PR 待ち URL |
-| `result: end`、PR 無し | done | PR 無しで終了（research 等） |
-| `result: human`、PR 無し | blocked | 人間へ（wip ブランチ） |
-| `finished` 無し / 異常終了 | blocked | runner が異常終了 rc=N |
+| `result: end`、PR なし | done | PR なしで終了（research 等） |
+| `result: human`、PR なし | blocked | 人間へ（wip ブランチ） |
+| `finished` なし / 異常終了 | blocked | runner が異常終了 rc=N |
 
-`--dry-run` は状態を変えない。終了コードは runner のもの（0 = end か PR あり、2 = human）。
+`--dry-run` ではチケットの状態を変更しません。終了コードは runner の値をそのまま返します。0 は正常終了または PR の作成完了、2 は PR がない状態での `human` 終了を表します。
 
 ### sync
 
@@ -107,7 +107,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 kb sync 204 [--run DIR]
 ```
 
-`state.json` を読み直して状態を合わせる。runner を直接呼んだとき、`kb run` が途中で落ちたとき、他セッションが回した run を取り込むときに使う。`finished` が無ければ `in_progress` のまま「次の step」をメモに書く。
+`state.json` を読み直し、チケットの状態に反映します。runner を直接呼び出した場合、`kb run` が途中で終了した場合、別のセッションの実行結果を反映する場合に使います。`finished` がなければ状態は `in_progress` とし、次の工程をメモに記録します。
 
 ### history / render
 
