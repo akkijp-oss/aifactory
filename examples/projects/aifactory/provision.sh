@@ -50,14 +50,9 @@ log "website venv"
 python3 -m venv website/.venv
 website/.venv/bin/pip install -q -r website/requirements.txt
 
-# ---------- 5. 品質ゲート（gates.sh と同じ組）
+# ---------- 5. 品質ゲート（一覧は gates.sh が持つ。ここで別の一覧を持たない）
 log "quality gates"
-: > "$HOME/GATES.txt"
-gate() { local name=$1; shift; if "$@" > "$HOME/gate-$name.log" 2>&1; then echo "$name: PASS" | tee -a "$HOME/GATES.txt"; else echo "$name: FAIL (see ~/gate-$name.log)" | tee -a "$HOME/GATES.txt"; fi; }
-gate unittest-workflow python3 -m unittest discover -s workflow/tests
-gate unittest-console python3 -m unittest discover -s console/tests
-gate mkdocs-strict website/.venv/bin/mkdocs build --strict -f website/mkdocs.yml
-gate oss-check bin/oss-check.sh
+SANDBOX_APP_DIR="$APP_DIR" bash examples/projects/aifactory/gates.sh 2>&1 | tee "$HOME/GATES.txt" || true
 
 # ---------- 6. systemd（:3000 = ドキュメントサイト）。clean スナップショットは起動済み状態で取る
 log "systemd unit"
