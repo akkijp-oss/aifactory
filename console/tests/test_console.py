@@ -85,6 +85,7 @@ class ApiTest(unittest.TestCase):
         st, o = self.http.get("/api/overview")
         self.assertEqual(st, 200); self.assertTrue(o["db"]); self.assertEqual(set(o["counts"]), {"todo", "in_progress", "review", "blocked", "done"})
         self.assertEqual(o["paths"]["workspace"], str(self.ws)); self.assertFalse(o["paths"]["legacy"])
+        self.assertEqual(set(o["repo"]) >= {"known", "diverged", "ahead", "behind", "dirty", "branch", "path"}, True)   # 337: PJ 定義を読む checkout の状態
         _, t = self.http.get("/api/tickets"); self.assertGreater(len(t["tickets"]), 0); self.assertIn("bug", t["kinds"])
         _, tp = self.http.get(f"/api/tickets?pj={PJ}"); self.assertGreater(len(tp["tickets"]), 0)
         self.assertEqual({x["pj"] for x in tp["tickets"]}, {PJ})                      # 絞り込みはサーバー側で効いている
@@ -1662,6 +1663,100 @@ class LoadCtlEnvTest(unittest.TestCase):
         self.core.load_ctl_env(self.envf)
         self.assertEqual(self.core.SANDBOX_STATE, ledger)
         self.assertEqual(self.core.sandbox_view()["state_file"], str(ledger))
+
+
+class RepoStatusTest(unittest.TestCase):
+    """PJ 定義を読む checkout が origin と食い違っていないか（チケット 337）。
+
+    runner は PJ 定義（examples/projects/<pj>/ の gates.sh など）を作業ツリーから直接読むので、
+    ctl で直して push していない変更はそのまま本番の挙動になる。ahead / behind / 汚れ を overview に
+    出して気づけるようにする。ここでは一時的な checkout を作って判定だけを確かめる（本物の checkout は触らない）。
+    """
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-repo-status-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.core = load_module(self.tmp / "jobs").core
+        self.origin, self.work = self.tmp / "origin.git", self.tmp / "work"
+        self.git(self.tmp, "init", "--bare", "-b", "main", str(self.origin))
+        self.git(self.tmp, "clone", str(self.origin), str(self.work))
+        self.git(self.work, "config", "user.email", "t@example.invalid")
+        self.git(self.work, "config", "user.name", "test")
+        self.commit("gates.sh", "echo one\n", "最初のコミット")
+        self.git(self.work, "push", "-u", "origin", "main")
+
+    def git(self, cwd, *args):
+        r = subprocess.run(["git", *args], cwd=str(cwd), text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def commit(self, name, body, msg, cwd=None):
+        cwd = cwd or self.work
+        (cwd / name).write_text(body, encoding="utf-8")
+        self.git(cwd, "add", name); self.git(cwd, "commit", "-m", msg)
+
+    def status(self):
+        return self.core.repo_status(self.work, ttl=0)                 # 検査では毎回 git を読む
+
+    def test_clean_checkout_is_not_diverged(self):
+        d = self.status()
+        self.assertTrue(d["known"]); self.assertFalse(d["diverged"])
+        self.assertEqual((d["branch"], d["upstream"]), ("main", "origin/main"))
+        self.assertEqual((d["ahead"], d["behind"], d["dirty"], d["detached"]), (0, 0, 0, False))
+        self.assertEqual(d["path"], str(self.work))
+
+    def test_commit_without_push_is_ahead(self):
+        """337 そのもの: ctl で gates.sh を直して commit すると runner には効くが、origin には無い"""
+        self.commit("gates.sh", "echo two\n", "gates.sh に db-migrate を足す")
+        d = self.status()
+        self.assertEqual((d["ahead"], d["behind"], d["dirty"]), (1, 0, 0))
+        self.assertTrue(d["diverged"])
+
+    def test_uncommitted_and_untracked_changes_count_as_dirty(self):
+        (self.work / "gates.sh").write_text("echo dirty\n", encoding="utf-8")
+        (self.work / "new.sh").write_text("echo new\n", encoding="utf-8")
+        d = self.status()
+        self.assertEqual(d["dirty"], 2); self.assertTrue(d["diverged"])
+        self.assertEqual((d["ahead"], d["behind"]), (0, 0))
+
+    def test_behind_after_fetch(self):
+        """網は触らない（fetch しない）ので、behind は最後に fetch した時点との差"""
+        other = self.tmp / "other"
+        self.git(self.tmp, "clone", str(self.origin), str(other))
+        self.git(other, "config", "user.email", "t@example.invalid"); self.git(other, "config", "user.name", "test")
+        self.commit("gates.sh", "echo three\n", "別の checkout から直す", cwd=other)
+        self.git(other, "push")
+        self.assertEqual(self.status()["behind"], 0)                   # fetch する前は気づけない
+        self.git(self.work, "fetch")
+        d = self.status()
+        self.assertEqual((d["ahead"], d["behind"]), (0, 1)); self.assertTrue(d["diverged"])
+
+    def test_detached_head_has_no_upstream(self):
+        sha = self.git(self.work, "rev-parse", "HEAD").strip()
+        self.git(self.work, "checkout", "--detach", sha)
+        d = self.status()
+        self.assertTrue(d["detached"]); self.assertIsNone(d["branch"]); self.assertIsNone(d["upstream"])
+        self.assertEqual((d["ahead"], d["behind"]), (None, None))
+        self.assertFalse(d["diverged"])                                # 比べられないときは警告を出さない
+
+    def test_not_a_checkout_is_unknown_and_silent(self):
+        plain = self.tmp / "plain"; plain.mkdir()
+        d = self.core.repo_status(plain, ttl=0)
+        self.assertFalse(d["known"]); self.assertFalse(d["diverged"])
+
+    def test_result_is_cached_per_path(self):
+        """overview は 5 秒ごとに来る。毎回 git を 4 本走らせない"""
+        first = self.core.repo_status(self.work, ttl=300)
+        self.commit("gates.sh", "echo cached\n", "キャッシュ中の変更")
+        self.assertEqual(self.core.repo_status(self.work, ttl=300)["ahead"], first["ahead"])
+        self.assertEqual(self.status()["ahead"], 1)                    # ttl=0 なら読み直す
+
+    def test_board_warns_when_the_checkout_differs_from_origin(self):
+        """JS を動かす基盤が無いので、ボードのソースを検査する（他の画面の作りと同じ）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewBoard"); board = app[i: app.index("\n}", i)]
+        for key in ("o.repo", "repo.diverged", "T.board.repoDiverged", "T.board.repoAhead", "T.board.repoBehind", "T.board.repoDirty", "T.board.repoHow"):
+            self.assertIn(key, board, key)
 
 
 if __name__ == "__main__":
