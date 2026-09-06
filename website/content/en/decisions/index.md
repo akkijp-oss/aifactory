@@ -59,3 +59,5 @@ Kept under "things we want" in `docs/ledger.md`. They become ADRs once work star
 - [ADR 0023: Computer use in dedicated VMs](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0023-computer-use.md)
 
 - [ADR 0024: Standalone Linux worker](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0024-standalone-linux-worker.md)
+
+- [ADR 0026: Timestamps carry a UTC offset](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0026-timestamps-carry-utc-offset.md)
