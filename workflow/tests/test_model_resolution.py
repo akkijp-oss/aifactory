@@ -23,9 +23,10 @@ spec.loader.exec_module(run)
 
 import sys
 sys.path.insert(0, str(REPO / "lib"))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import aifactory_workflow as wf   # noqa: E402
-import model_fixture as fx        # noqa: E402
+
+_fx = importlib.util.spec_from_file_location("model_fixture", pathlib.Path(__file__).resolve().parent / "model_fixture.py")
+fx = importlib.util.module_from_spec(_fx); _fx.loader.exec_module(fx)
 
 ROUTES = fx.ROUTES
 STEPS = fx.STEPS

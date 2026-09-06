@@ -20,6 +20,7 @@ const T = {
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
+    "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く", "openDefinition": "定義の原文を読む"
@@ -202,7 +203,12 @@ const T = {
     "classFromRole": "役割 {role} の既定", "classFromStep": "この工程の model_class",
     "human": "人間待ち", "end": "正常終了", "none": "未指定",
     "start": "ブランチの作り方", "baseBranch": "PR の宛先", "inputs": "workflow の入力", "definition": "定義",
-    "unknownKeys": "読めない項目", "schemaErrors": "schema との食い違い", "seeStats": "実際に使ったモデルを統計で見る"
+    "unknownKeys": "読めない項目", "schemaErrors": "schema との食い違い", "seeStats": "実際に使ったモデルを統計で見る",
+    "modelEdit": "モデルを変える", "modelStep": "この工程だけのモデル", "modelStepClass": "この工程のクラス",
+    "modelRoutes": "共通の経路 {key}", "modelNow": "いまの値", "modelInherited": "継承（この工程には書いていません）",
+    "modelAffected": "実効モデルが変わる工程", "modelNoChange": "実効モデルが変わる工程はありません",
+    "modelRunning": "動いている実行記録", "modelWhen": "反映", "modelChanges": "最近の変更",
+    "modelFile": "書き先", "modelBackup": "退避"
   },
   "kind": {
     "bug": "動きが期待と違うときに選びます。再現するテストを先に書いてから直し、PR まで進みます。",
@@ -251,6 +257,15 @@ const T = {
     "configModelNoRoute": "経路表にこのクラスの行も既定の行もないので、モデルが決まりません。",
     "configModelFallback": "このクラスの行が経路表に無いので、既定の行を使います。",
     "configSeverity": "レビューの指摘が軽微なときは、戻せる回数が 1 回だけ増えることがあります（ADR-0053）。",
+    "configModelEdit": "変えたい欄を選んで「変更を確かめる」を押すと、変更後の実効モデルと影響する工程を見てから保存できます。",
+    "configModelStep": "この工程だけのモデルです。同じクラスを使うほかの工程は動きません。",
+    "configModelStepClass": "この工程が読む経路を、ほかのクラスに替えます。替えた先の共通の値になります。",
+    "configModelRoutes": "共通の設定です。このクラスを使う工程は、ほかの workflow の分も一緒に変わります。",
+    "configModelInherit": "この工程の指定を消して、クラスの共通の値に戻します。",
+    "configModelUncommitted": "保存しても git には commit しません。制御系で git pull すると元に戻ることがあります。",
+    "configModelWhen": "次に始める run から効きます。動いている run と、その run の途中の工程は変わりません。",
+    "configModelKeys": "モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。分からない名前は保存できません。",
+    "configModelChanges": "書けたときだけ記録しています。元に戻すには、退避した控えの内容を入れ直してください。",
     "configUnknownKeys": "schema にないキーです。定義の書き間違いか、schema の更新漏れかもしれません。",
     "configParseError": "この workflow の定義を読めませんでした: {why}。",
     "configSchemaErrors": "定義が schema と食い違っているので、runner はこの workflow を実行できません。",
@@ -329,7 +344,9 @@ const T = {
     "keyAdded": "鍵 {name} を登録しました。次に VM を借りる run から使われます。",
     "keySaved": "鍵 {name} を保存しました。",
     "keyRemoved": "鍵 {name} を削除しました。",
-    "keyReinject": "実行中の VM {n} 台に別の鍵を入れ直すジョブを起こしました。"
+    "keyReinject": "実行中の VM {n} 台に別の鍵を入れ直すジョブを起こしました。",
+    "modelSaved": "{file} を保存しました。次に始める run から効きます。",
+    "modelSame": "いまと同じ設定なので、何も書きませんでした。"
   },
 
   "err": {
@@ -372,6 +389,13 @@ const T = {
       "runWarning": "この VM では run {run} が動いています（工程 {step}）。返却すると run は止まり、途中の作業は失われます。",
       "noRun": "この VM で動いている run はありません。",
       "sharedWarning": "この VM はチケット {others} にも貸出中です。返却すると snapshot clean に巻き戻るので、そのチケットの作業も消えます。台帳からはチケット {task} の行だけが消え、{others} の行は巻き戻った VM を指したまま残ります。"
+    },
+    "model": {
+      "title": "{where} のモデルを変える",
+      "body": "{file} を書き換えます。git には commit しないので、変更は制御系の作業ツリーに残ります。",
+      "common": "共通の設定です。ほかの workflow を含めて {n} 件の工程の実効モデルが変わります。",
+      "runningNote": "動いている run は起動のときに読んだ設定のまま進みます。途中で切り替わることはありません。",
+      "backupNote": "書く前の内容は同じ場所に控えを残すので、元の設定に戻せます。"
     },
     "sync": {
       "title": "チケット {id} の状態を実行記録に合わせる",
