@@ -665,6 +665,43 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(d["outcome"]["reason"], "not_started")
         self.assertEqual([(a["name"], a["kind"]) for a in d["groups"]["artifacts"]], [("ticket.md", "ticket")])
 
+    def test_run_outcome_reads_the_automatic_merge(self):
+        """runner が条件を確かめて自分でマージした run（チケット 358）。「PR ができました」ではなく
+           「自動マージしました（完了）」と読め、続きから回す口は出さない"""
+        ok = [("research", True), ("design", True), ("implement", True), ("gates", True), ("review", True),
+              ("sync", True), ("pr", True), ("automerge", True)]
+        merged = {"at": "2026-09-09T12:00:00+09:00", "sha": "abc1234", "method": "merge",
+                  "pr_url": "https://github.com/akkijp-oss/aifactory/pull/45", "base": "develop"}
+        name = self._fixture_run(f"2026-09-09-{PJ}-{self.seed}", self._state(
+            ok, result="end", pr_url=merged["pr_url"], merged=merged), {"work/report.md": "# 報告\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "merged")
+        self.assertEqual(o["merged"], merged); self.assertEqual(o["pr_url"], merged["pr_url"])
+        self.assertIsNone(o["resume"], "片が付いた run に「続きから回す」を出している")
+        self.assertEqual(d["summary"]["merged"], merged)                   # MCP run_show も同じ事実を返す
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.merged", app); self.assertIn("T.outcome.automerge_skipped", app)
+
+    def test_run_outcome_tells_why_the_automatic_merge_did_not_happen(self):
+        """条件を満たさずマージしなかった run は今までどおり pr_created（PR は開いている）。
+           そこに runner が残した理由を添える（推し量らず error の 1 行を読むだけ）"""
+        hist = [("implement", True), ("gates", True), ("review", True), ("sync", True), ("pr", True), ("automerge", False)]
+        name = self._fixture_run(f"2026-09-09-{PJ}-{self.seed}-b", self._state(
+            hist, pr_url="https://github.com/akkijp-oss/aifactory/pull/46",
+            error="automerge: CI 赤 (test)"), {"work/report.md": "# 報告\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "pr_created")
+        self.assertEqual(o["automerge_error"], "automerge: CI 赤 (test)")
+        self.assertIsNone(o["merged"])
+        # automerge を回していない run（auto_merge の無い PJ）には理由の行が付かない
+        plain = self._fixture_run(f"2026-09-09-{PJ}-{self.seed}-c", self._state(
+            hist[:-1], pr_url="https://github.com/akkijp-oss/aifactory/pull/47"), {"work/report.md": "# 報告\n"})
+        _, d2 = self.http.get(f"/api/runs/{plain}")
+        self.assertEqual(d2["outcome"]["reason"], "pr_created")
+        self.assertNotIn("automerge_error", d2["outcome"])
+
     def test_run_outcome_step_failed_points_at_the_step_log(self):
         """ゲート以外の工程で止まった run は、その工程のログを「理由を読む」の先にする"""
         hist = [("research", True), ("design", False)]

@@ -11,6 +11,9 @@ VM も claude も GitHub も使わない。一時 dir に bare の origin と cl
 - 同じ行で衝突 → sync FAIL → implementer（resolve）に戻り、解消後 gates → review → sync → pr
 - 3 回続けて解消できない → human。state.json の error と kb の note に理由が残る
 - base と作業ブランチが同じ ADR 番号を採番 → マージは成功するが sync FAIL（番号の振り直しに戻す）
+- auto_merge の無い PJ → automerge の工程は回らず、今までどおり PR を作って人間待ち（チケット 358）
+- auto_merge のある PJ → automerge が merged.json を返せば state.json に merged が載り、kb はチケットを done にする
+- auto_merge のある PJ で条件を満たさなかった → PR は開いたまま人間へ。error は automerge: で始まり、続きから回す口は付かない
 """
 import datetime
 import importlib.machinery
@@ -81,6 +84,8 @@ class SyncBaseTest(unittest.TestCase):
         r = run.Run("kumitate", str(task), workflow, str(self.ticket))
         self.assertEqual(r.base, "develop")
         self.done = []; self.gates_n = 0; self.pr_n = 0
+        self.vm_files = {}
+        self.automerge = lambda step: (True, "")
         app = self.app
 
         def sb(cmd, input_text=None, check=True):
@@ -99,6 +104,10 @@ class SyncBaseTest(unittest.TestCase):
             self.done.append(step["id"])
             if step["code"] == "sync-base": return run.Run.run_code(r, step)
             if step["code"] == "gates.sh": self.gates_n += 1; return True, "PASS すべて緑"
+            if step["code"] == "pr-automerge.sh":
+                ok, info = self.automerge(step)
+                r.note_merged()                 # 本物の run_code と同じ順で merged.json を読ませる
+                return ok, info
             self.pr_n += 1; return True, "https://example.invalid/pull/1"
 
         r.sb = sb
@@ -107,7 +116,7 @@ class SyncBaseTest(unittest.TestCase):
         r.preserve = lambda: ""
         r.refresh_token = lambda: None
         r.scp_to = lambda *a: None
-        r.vm_read = lambda name: ""
+        r.vm_read = lambda name: self.vm_files.get(name, "")
         r.run_agent = run_agent
         r.run_code = run_code
         return r
@@ -210,6 +219,60 @@ class SyncBaseTest(unittest.TestCase):
                                          "resolve", "gates", "review", "sync", "pr"])
         self.assertIn("0003", self.notes["resolve"])
         self.assertEqual(self.pr_n, 1)
+
+    # ---------- f: auto_merge が無い PJ は今までどおり PR で止まる（automerge の工程は回らない）
+    def test_a_project_without_auto_merge_still_stops_at_a_human_after_the_pr(self):
+        r = self.build(906, {"implement": self.writes("feature.txt", "新機能\n", "feature を足した")})
+        self.assertIsNone(r.auto_merge)
+        r.main()
+        self.assertNotIn("automerge", self.steps(r))
+        self.assertEqual(r.state["result"], "human")
+        self.assertIsNone(r.state.get("merged"))
+
+    # ---------- g: auto_merge のある PJ で条件が揃った
+    def test_automerge_records_the_merge_and_the_ticket_becomes_done(self):
+        r = self.build(907, {"implement": self.writes("feature.txt", "新機能\n", "feature を足した")})
+        r.auto_merge = run.Run.normalize_auto_merge(True)
+        self.vm_files["pr_url"] = "https://example.invalid/pull/7\n"
+        self.vm_files["merged.json"] = json.dumps({"sha": "abc1234", "method": "merge", "base": "develop",
+                                                   "pr_url": "https://example.invalid/pull/7", "at": "2026-09-09T12:00:00+09:00"})
+        self.automerge = lambda step: (True, "MERGED: abc1234 https://example.invalid/pull/7")
+        r.main()
+        self.assertEqual(self.steps(r)[-2:], ["pr", "automerge"])
+        self.assertEqual(r.state["result"], "end")
+        self.assertEqual(r.state["merged"]["sha"], "abc1234")
+        self.assertEqual(r.state["merged"]["base"], "develop")
+        t = self.kb_sync(907, r)
+        self.assertEqual(t["status"], "done", t)
+        self.assertIn("自動マージ #7", t["note"])
+
+    # ---------- h: auto_merge のある PJ だが条件を満たさなかった（PR は開いたまま人間へ）
+    def test_automerge_that_does_not_merge_hands_the_open_pr_to_a_human_with_the_reason(self):
+        r = self.build(908, {"implement": self.writes("feature.txt", "新機能\n", "feature を足した")})
+        r.auto_merge = run.Run.normalize_auto_merge({"wait_min": 5})
+        self.vm_files["pr_url"] = "https://example.invalid/pull/8\n"
+        self.automerge = lambda step: (False, "poll 中\nNOMERGE: CI 赤 (test)")
+        r.main()
+        self.assertEqual(r.state["result"], "human")
+        self.assertIsNone(r.state.get("merged"))
+        self.assertEqual(r.state["error"], "automerge: CI 赤 (test)")
+        self.assertIsNone(r.state.get("resume_step"))       # PR はできている。続きから回す対象ではない
+        t = self.kb_sync(908, r)
+        self.assertEqual(t["status"], "review", t)
+        self.assertIn("/pull/8", t["note"])
+
+    def kb_sync(self, tid, r):
+        """run の記録を kb に流し込み、チケットの状態とメモを読み返す"""
+        env = dict(os.environ, AIFACTORY_WORKSPACE=str(self.ws))
+        new = subprocess.run([sys.executable, str(KB), "new", "kumitate", "bug", "自動マージの再現",
+                              "--body", "-", "--id", str(tid)], input=TICKET, text=True, capture_output=True, env=env)
+        self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
+        subprocess.run([sys.executable, str(KB), "set", str(tid), "--run", r.run_dir.name], capture_output=True, text=True, env=env)
+        sync = subprocess.run([sys.executable, str(KB), "sync", str(tid)], capture_output=True, text=True, env=env)
+        self.assertEqual(sync.returncode, 0, sync.stdout + sync.stderr)
+        show = subprocess.run([sys.executable, str(KB), "show", str(tid)], text=True, capture_output=True, env=env)
+        head = show.stdout.split("-" * 60)[0].splitlines()
+        return {l.split(" ", 1)[0]: l.split(" ", 1)[1].strip() for l in head if l.strip()}
 
 
 if __name__ == "__main__":
