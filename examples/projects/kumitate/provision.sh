@@ -3,7 +3,7 @@
 #   kumitate = akkijp/kumitate（pnpm 10 monorepo + turbo / Node 22 / Next.js web :3000 / Postgres 16 + pgvector / drizzle / vitest）
 #   リポジトリ直下は台帳・docs、アプリは apps/kumitate/（pnpm workspace: apps/{web,marketing,scheduler} packages/{db,dsl,generate,...}）
 #   PR の宛先は develop。
-#   実行: ssh dev@10.77.0.112 "GH_TOKEN=... bash -s" < sandbox/templates/kumitate/provision.sh
+#   実行: ssh dev@10.77.0.112 "GH_TOKEN=... bash -s" < examples/projects/kumitate/provision.sh
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 export DEBIAN_FRONTEND=noninteractive
