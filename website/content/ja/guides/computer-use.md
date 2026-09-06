@@ -110,6 +110,7 @@ display:
 - CPUとメモリは4 CPU・8 GiB固定のまま。解像度を変えても割当は変えない。
 - ゲストの `desktop-native` を2560px対応版へ入れ替えて基準VMを作り直すまで、画面を広げてもscreenshotは1024px幅に縮小されたまま返る。本書「Macへの導入」のビルドと再確認をやり直す。
 - 画像が大きくなっても工程ログは膨らまない。stream-jsonに載る画像のbase64は記録前に `[image N bytes]` へ置き換えるため、1操作16 MiBのログ上限には解像度に関係なく当たりにくい。MCPの `computer_action` は画像をファイルとして保存し、`actions.jsonl` にはハッシュだけを書く。
+- MCP から直接開くセッション（`computer_open`）はワーカー設定の `display` に従う。PJ ごとの指定はチケット経由のrunだけに効く。
 - Windows・Linuxのワーカーにこの設定はない。両者のscreenshotは最大幅1024ピクセルのまま。
 
 ## Windowsへの導入

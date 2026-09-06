@@ -108,6 +108,7 @@ The JSON above goes into the worker configuration `~/.config/aifactory-worker/co
 - CPU and memory stay fixed at 4 CPUs and 8 GiB. Resolution does not change the allocation.
 - Until the guest's `desktop-native` is replaced with the 2560-pixel build and the base VM is rebuilt, screenshots are still scaled down to 1024 pixels wide even on a larger display. Repeat the build and re-verification in "Mac setup" below.
 - Larger images do not inflate step logs. Image base64 on stream-json is replaced with `[image N bytes]` before it is recorded, so the 16 MiB per-operation log limit stays out of reach regardless of resolution. The MCP `computer_action` stores images as files and records only their hashes in `actions.jsonl`.
+- A session opened directly through MCP (`computer_open`) follows the worker configuration's `display`; the per-project setting applies only to runs started from a ticket.
 - Windows and Linux workers have no such setting; their screenshots stay at a maximum width of 1024 pixels.
 
 ## Windows setup
