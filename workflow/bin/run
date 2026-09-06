@@ -205,6 +205,7 @@ class Run:
         if base == "hotfix_base": base = self.project.get("hotfix_base") or self.project["base_branch"]
         ov = (self.project.get("workflow_overrides") or {}).get(wf_name) or {}
         self.base = ov.get("base_branch", base)
+        self.auto_merge = self.normalize_auto_merge(self.project.get("auto_merge"))
         slug = re.sub(r"[^a-z0-9]+", "-", self.title.lower().encode("ascii", "ignore").decode())[:30].strip("-") or wf_name
         self.branch = f"sandbox/{task}-{wf_name}-{slug}"
         # start: pr … チケット 2 行目 `pr: <番号>` の PR head を作業ブランチにし、base はその PR の base
@@ -253,6 +254,15 @@ class Run:
             self.state["current"] = {"step": "take", "kind": "take", "log": None,
                                      "since": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             self.save()
+
+    AUTO_MERGE_DEFAULTS = {"method": "merge", "wait_min": 20, "delete_branch": True, "require_checks": True}
+
+    @staticmethod
+    def normalize_auto_merge(v):
+        """project.yml の `auto_merge` を「無し（None）」か「全部の値が埋まった dict」のどちらかにする（ADR-0041）。
+        無し / false は今までどおり（PR を作って人間に渡す）。true は既定値、dict は書かれた分だけ上書き"""
+        if not v: return None
+        return {**Run.AUTO_MERGE_DEFAULTS, **(v if isinstance(v, dict) else {})}
 
     def resolve_from(self, from_step, from_branch):
         """`--from` の再開: 「どの step から」「どのブランチの続きから」を、指定と前回の run の記録から決める（チケット 333）。
@@ -602,13 +612,42 @@ class Run:
                "GATES": self.project["gates"], "WORK": self.work, "APP_DIR": self.project["app_dir"], "BASE": self.base,
                "BRANCH": self.branch, "WORKFLOW": self.wf_name, "TITLE": self.title,
                "PR_NUMBER": self.pr_number or "", "MERGE_METHOD": os.environ.get("MERGE_METHOD", "merge"),
-               "KNOWN_RED": " ".join(self.project.get("known_red_gates", []))}
+               "KNOWN_RED": " ".join(self.project.get("known_red_gates", [])),
+               **self.automerge_env()}
         log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
         self.set_current(step["id"], "code", log_path.name)
         rc, out = stream(["bash", str(script)], log_path, env=env)
         if step["code"] == "gates.sh": self.note_base_red()
+        if step["code"] == "pr-automerge.sh": self.note_merged()
         print(out.strip()[-1500:])
         return rc == 0, out[-4000:]
+
+    def automerge_env(self):
+        """pr-automerge.sh に渡す条件。PJ の設定（auto_merge）と workflow の形（review があるか）から決める。
+        script 側で project.yml や workflow を読み直させない（読み方の判断は runner に 1 つだけ置く）"""
+        am = self.auto_merge or {}
+        return {"AUTO_MERGE": "1" if self.auto_merge else "0",
+                "AUTO_MERGE_METHOD": str(am.get("method", "merge")),
+                "AUTO_MERGE_WAIT_MIN": str(am.get("wait_min", 20)),
+                "AUTO_MERGE_DELETE_BRANCH": "1" if am.get("delete_branch", True) else "0",
+                "AUTO_MERGE_REQUIRE_CHECKS": "1" if am.get("require_checks", True) else "0",
+                "HAS_REVIEW": "1" if any(s.get("role") == "reviewer" for s in self.wf["steps"]) else "0",
+                "RUN_NAME": self.run_dir.name}
+
+    def note_merged(self):
+        """pr-automerge.sh が実際にマージしたとき、その事実を run の記録に残す（ADR-0041）。
+
+        書き手は runner だけ（ADR-0039 の契約）。kb と console はこれを読むだけで、マージしたかどうかを推し量らない。
+        マージしなかった回は merged.json が無いので、ここは何もしない（PR は開いたまま人間へ渡る）"""
+        try:
+            raw = (self.vm_read("merged.json") or "").strip()
+            if not raw: return
+            m = json.loads(raw)
+        except Exception as e:
+            self.log(f"automerge: merged.json を読めなかった（マージ自体は済んでいる可能性がある）: {e}")
+            return
+        self.state["merged"] = {k: m.get(k) for k in ("at", "sha", "method", "pr_url", "base")}
+        self.save()
 
     def note_base_red(self):
         """gates.sh が「base でも赤い」と実際に確かめたゲート名を run の記録に足す（チケット 330）。
@@ -714,6 +753,12 @@ class Run:
         cur = self.state["next"]; retry_note = self.first_retry_note(); result = "end"
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")
+            # auto_merge の無い PJ では automerge の工程そのものを回さない（PR を作って人間に渡す、今までどおりの終わり方）。
+            # workflow の定義は全 PJ 共通なので、飛ばす判断は PJ の設定を持っている runner 側に置く（ADR-0041）
+            if step.get("code") == "pr-automerge.sh" and not self.auto_merge:
+                self.log("automerge: この PJ は auto_merge が無いので飛ばす（PR は人間が判断する）")
+                self.state["next"] = cur = "human"; self.state["current"] = None; self.save()
+                continue
             self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
             self.base_check_broken = False          # 同上（gates.sh が base を見た後にツリーを戻せなかった、の目印）
             if "role" in step: ok, info = self.run_agent(step, retry_note)
@@ -734,6 +779,14 @@ class Run:
             # 戻すときは前回の結果を添える
             # base 確認で作業ツリーを戻せなかったときは、赤が全部 INFO に落ちて ok=True でも人間へ回す。理由と再開先を残す
             if (not ok or self.base_check_broken) and nxt == "human":
+                # 自動マージしなかった回（ADR-0041）。工程が失敗したのではなく PR ができた上での終わり方なので、
+                # 「戻せる回数を使い切った」とは書かず、続きから回す口（resume_step）も付けない
+                if step.get("code") == "pr-automerge.sh" and not self.base_check_broken:
+                    why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]
+                    self.state["error"] = f"automerge: {why.removeprefix('NOMERGE: ')}"
+                    self.save()
+                    cur = nxt
+                    continue
                 # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）
                 self.state["resume_step"] = self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
