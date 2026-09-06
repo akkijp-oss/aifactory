@@ -19,10 +19,12 @@ const T = {
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
+    "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
   },
 
   "h": {
+    "outcome": "結果", "artifacts": "成果物", "stepLogs": "工程のログ", "otherFiles": "その他のファイル（{n} 件）",
     "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "intakeFree": "自由文から起票する", "intakeNew": "整った本文で起票する", "next": "次にすること", "output": "出力",
@@ -69,6 +71,23 @@ const T = {
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
     "notStarted": "開始前（記録なし）",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
+  },
+  "outcome": {
+    "pr_created": "PR ができました。次はレビューです。",
+    "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",
+    "step_failed": "工程 {step} で止まりました。",
+    "gateFails": "赤いゲート: {gates}。",
+    "ended": "すべての工程が終わりました。",
+    "waiting": "工程は終わり、人間の判断を待っています。",
+    "running": "工程 {step} を実行中です。",
+    "unknown": "止まった理由は記録にありません。工程のログを確かめてください。",
+    "noDetail": "理由を書いたファイルは残っていません。",
+    "ticketNow": "この run は {end} に終わりました。チケット {id} の今の状態は「{status}」です（{at} 更新）。",
+    "ticketNewerRun": "チケット {id} の最新の実行記録は {run} です。",
+    "noTicket": "この run に対応するチケットはありません。"
+  },
+  "artifact": {
+    "ticket": "チケット", "researcher": "調査", "planner": "計画", "implementer": "報告", "reviewer": "レビュー", "judge": "まとめ", "gates": "検証結果"
   },
   "sandbox": {
     "count": "{n} 台", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
