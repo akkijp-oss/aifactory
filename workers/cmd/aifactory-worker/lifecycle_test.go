@@ -620,3 +620,23 @@ func TestStartRefusesForeignLeaseOrMissingGuest(t *testing.T) {
 		t.Fatal("a failed start dropped the retained lease")
 	}
 }
+
+// 制御系は info の guest_start を見て guest-start を投げるか決める（pull.py の 409 と二重のガード）。
+// ここが落ちると --resume は黙って従来の「ゲストが停止」エラーへ戻るので、広告そのものを固定する。
+func TestInfoAdvertisesGuestStartOnlyForLifecycleWorkers(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	w := &worker{c: config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+	w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "printf '[]'")
+	}
+	info := w.info()
+	if info["guest_start"] != true || info["lifecycle"] != true {
+		t.Fatal(info)
+	}
+	// 基準VMを持たない probe-only のワーカーは起動し直すゲストを持たない。
+	bare := &worker{c: config{Tart: "/approved/tart"}, j: j}
+	if info = bare.info(); info["guest_start"] != false {
+		t.Fatal(info)
+	}
+}
