@@ -1,5 +1,7 @@
 # aifactory
 
+![aifactory — a miniature software factory where tickets move through isolated agent workspaces and automated tests to human review.](docs/assets/aifactory-hero.png)
+
 A self-hosted **software factory**: a ticket goes in, an agent plans and implements inside an isolated VM, code runs the tests and lints, and a human only reviews at the end.
 
 [日本語 README](README.ja.md) · [Documentation site](https://akkijp-oss.github.io/aifactory/) · [Design decisions (ADR)](docs/adr/) · [Changelog](CHANGELOG.md)
