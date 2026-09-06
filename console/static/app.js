@@ -10,6 +10,7 @@ const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
 const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（画面が用途を出す）
+let pjReady = {};    // PJ → project.yml があるか（起票画面が、配車で人間待ちになる PJ を先に知らせる）
 
 /* ---------- 通信・通知 */
 async function api(path, body) {
@@ -368,7 +369,16 @@ const draftWatch = e => { if (e.target.id && e.target.id in DRAFT) draftSave(); 
 main.addEventListener('input', draftWatch);
 main.addEventListener('change', draftWatch);
 
-/* ---------- 起票 */
+/* ---------- 起票
+   PJ を選んだ時点で「配車すると人間待ちになるか」を出す。色だけに頼らないよう、状態はバッジの文字と本文で読める。
+   起票そのものは止めない（project.yml が無くても backlog には積める。ADR-0012 の現状の切り分け） */
+const pjHelpClass = pj => (pj && !pjReady[pj]) ? 'warn' : 'help';
+function pjHelpHtml(pj) {
+  if (!pj) return '';
+  if (pjReady[pj]) return `<span class="st done">${esc(T.intake.pjReadyBadge)}</span> ${esc(tt(T.help.pjReady, { pj }))}`;
+  return `<span class="st blocked">${esc(T.intake.pjNotReadyBadge)}</span> ${esc(tt(T.help.pjNotReady, { pj }))} <a href="#/sandbox">${esc(T.intake.checkSandbox)}</a>`;
+}
+
 async function viewIntake() {
   clearInterval(timer);
   const t = await api('tickets');
@@ -377,6 +387,7 @@ async function viewIntake() {
   const pick = (list, v) => { if (!v) return ''; if (list.includes(v)) return v; lost.push(v); return ''; };
   const opt = (list, blank, sel) => (blank != null ? `<option value="">${esc(blank)}</option>` : '') + list.map(x => `<option ${x === sel ? 'selected' : ''}>${esc(x)}</option>`).join('');
   kindDesc = t.kind_desc || {};
+  pjReady = t.pj_ready || {};
   const kind0 = t.kinds.includes('bug') ? 'bug' : (t.kinds[0] || '');                      /* 初期値は並び順の先頭任せにしない */
   const kindOpt = sel => t.kinds.map(k => `<option ${k === sel ? 'selected' : ''}>${esc(k)}</option>`).join('');
   const inPj = pick(t.pjs, d.pj), inKind = pick(t.kinds, d.kind);
@@ -389,12 +400,14 @@ async function viewIntake() {
     <div class="grid2">
       <div class="panel"><h2>${esc(T.h.intakeFree)}<small>glue/bin/intake</small></h2>
         <div class="field"><label for="in-text">${esc(T.label.request)}</label><textarea id="in-text" placeholder="${esc(T.label.requestPlaceholder)}">${esc(d.text || '')}</textarea></div>
-        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj">${opt(t.pjs, T.label.letLlm, inPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind" data-act="kind-help">${opt(t.kinds, T.label.letLlm, inKind)}</select></label>
+        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj" data-act="pj-help">${opt(t.pjs, T.label.letLlm, inPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind" data-act="kind-help">${opt(t.kinds, T.label.letLlm, inKind)}</select></label>
           <label class="help check"><input type="checkbox" id="in-dry" ${d.dry ? 'checked' : ''}> ${esc(T.label.intakeDry)}</label></div>
+        <div class="${pjHelpClass(inPj)}" id="in-pj-help">${pjHelpHtml(inPj)}</div>
         <div class="help" id="in-kind-help">${esc(kindDesc[inKind] || '')}</div>
         <div class="actions"><button class="primary" data-act="intake">${esc(T.btn.intake)}</button>${clearBtn('intake-clear', DRAFT_FREE)}<span class="help">${esc(T.help.intake)}</span></div></div>
       <div class="panel"><h2>${esc(T.h.intakeNew)}<small>kb new</small></h2>
-        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj">${opt(t.pjs, null, newPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(newKind)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100" value="${esc(d.newPr || '')}"></label></div>
+        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj" data-act="pj-help">${opt(t.pjs, null, newPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(newKind)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100" value="${esc(d.newPr || '')}"></label></div>
+        <div class="${pjHelpClass(newPj)}" id="new-pj-help">${pjHelpHtml(newPj)}</div>
         <div class="help" id="new-kind-help">${esc(kindDesc[newKind] || '')}</div>
         <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}" value="${esc(d.title || '')}"></div>
         <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" class="h140">${esc(d.body || '')}</textarea></div>
@@ -564,6 +577,7 @@ const actions = {
     const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });
     if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
   },
+  'pj-help': el => { const h = $(el.id + '-help'); if (h) { h.innerHTML = pjHelpHtml(el.value); h.className = pjHelpClass(el.value); } },
   'kind-help': el => { const h = $(el.id + '-help'); if (h) { h.textContent = kindDesc[el.value] || ''; h.className = 'help'; } },
   'run-file': el => { runFile[el.dataset.run] = el.dataset.path; runPicked[el.dataset.run] = true; viewRun(el.dataset.run); },
 };
