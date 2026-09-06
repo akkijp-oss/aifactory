@@ -16,6 +16,7 @@ kb detach <id> <name>
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
 kb sync <id> [--run DIR]
+kb sync --all-review [--pj P]
 kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
 kb history <id>
 kb render
@@ -198,9 +199,36 @@ kb run-note 2026-09-06-kumitate-204 --result done --pr 300 --text "wip から PR
 
 ```bash
 kb sync 204 [--run DIR]
+kb sync --all-review [--pj P] [--dry-run]
 ```
 
 `state.json` を読み直し、チケットの状態に反映します。runner を直接呼び出した場合、`kb run` が途中で終了した場合、別のセッションの実行結果を反映する場合に使います。`finished` がなければ状態は `in_progress` とし、次の工程をメモに記録します。
+
+そのうえで、チケットが `review` で PR 番号が入っていれば、**その PR が GitHub でどうなったか**を `gh pr view` で確かめます（ADR-0050）。run に紐づいていないチケット（人が板で PR を付けたもの）も、`review` かつ PR があれば同期できます。run も PR も無いときだけ断ります。
+
+| PR の状態 | チケット | メモの 1 行目 |
+|---|---|---|
+| `MERGED` | `done` | `[run] PR #n マージ済み <mergedAt>` |
+| `CLOSED`（未マージ） | `blocked` | `[run] PR #n がマージされずに閉じられた <closedAt>。作り直すなら kb reopen <id> → kb run <id>` |
+| `OPEN` / 不明 / 問い合わせ失敗 | 変えない | 触らない |
+
+判定に使うのは `state` と `mergedAt` の 2 つだけです。誤って `done` にするのが最大の害なので、分からないときは何もしません。日時は GitHub が返した値（`Z` 付き）をそのまま書きます。
+
+```bash
+kb sync --all-review              # review のチケット全件（全 PJ）
+kb sync --all-review --pj asura   # PJ を絞る
+kb sync --all-review --dry-run    # 書かずに、変わる予定のチケットを 1 件 1 行の JSON で出す
+```
+
+`--all-review` は `review` のチケットを id 順に回し、PR の状態だけを見ます（run の再判定はしません）。最後に要約を 1 行出します。
+
+```
+[kb] sync --all-review: 対象 5 件 / done 2 / blocked 1 / 変更なし 2 / 飛ばした 0
+```
+
+`gh` の認証は PR 作成と同じ PJ 別の GitHub App（ADR-0008 / ADR-0030）を使い、トークンは PJ ごとに払い出します（App のトークンはリポジトリ限定のため）。`GH_TOKEN` が環境変数にあればそれをそのまま使います。**App も `GH_TOKEN` も無い環境（開発機・CI）では黙って飛ばします**: チケットは変えず、終了コードは 0 のまま、理由を `[kb] warn:` として標準エラーに 1 行だけ出します（`--all-review` では PJ ごとに 1 行）。
+
+PR 由来の更新でも run 記録への転記（ADR-0039）はしません（`kb sync` は転記しない、という規約のままです）。
 
 ### history / render
 

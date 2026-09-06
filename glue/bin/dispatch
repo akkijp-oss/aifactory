@@ -3,6 +3,7 @@
 
   glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]] [--resume-paused]
 
+- 回し始める前に `kb sync --all-review` を 1 回呼び、人が GitHub でマージ / クローズした PR を板に反映する（345。`--dry-run` / `--resume-paused` では呼ばない）
 - `kb next --json [--pj P]` で最も古い todo を 1 件取り、`kb run <id>` を呼ぶ。終わったら次を取る。todo が無くなれば終了
 - 鍵の利用枠切れで一時停止中のチケット（`kb resumable`。runner が todo に戻したもの）は、解除時刻を過ぎていれば `kb run <id> --from`
   で**続きから**回し、過ぎていなければ飛ばす（初めからやり直さない。チケット 380 / ADR-0043）
@@ -68,6 +69,16 @@ def lent_per_pj():
     return out
 
 
+def sync_review(a):
+    """回し始める前に 1 回だけ、review のチケットの PR が GitHub でマージ / クローズされていないか kb に見せる（345）。
+       人が GitHub でマージした PR はここで done になり、レビュー待ちが自動で片付く。gh が使えない環境では kb 側が黙って飛ばす。
+       状態を進めない約束の `--dry-run` と、5 分ごとに回る `--resume-paused`（GitHub を叩き続けない）では呼ばない"""
+    if a.dry_run or a.resume_paused: return
+    r = sh([str(KB), "sync", "--all-review"] + (["--pj", a.pj] if a.pj else []))
+    last = ([l.strip() for l in (r.stdout or "").splitlines() if l.strip()] or [""])[-1]
+    log("sync " + (last.removeprefix("[kb] ") or f"rc={r.returncode}"))
+
+
 def main():
     ap = argparse.ArgumentParser(prog="dispatch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pj"); ap.add_argument("--once", action="store_true"); ap.add_argument("--max", type=int, default=0); ap.add_argument("--dry-run", action="store_true")
@@ -76,6 +87,7 @@ def main():
     a = ap.parse_args()
     limit = 1 if a.once else (a.max or 10**9)
     done = 0; skip = set(); busy_pj = set()
+    sync_review(a)
     paused = resumable(a.pj)
     if a.resume_paused:
         # 解除時刻を過ぎたものだけ（古い順）。回数超過は kb が blocked にしているはずだが、ここでも回さない

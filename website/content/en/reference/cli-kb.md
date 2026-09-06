@@ -16,6 +16,7 @@ kb detach <id> <name>
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [minutes]]
 kb sync <id> [--run DIR]
+kb sync --all-review [--pj P]
 kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
 kb history <id>
 kb render
@@ -198,9 +199,36 @@ Runs without `finished` (the runner is still writing) and runs that already have
 
 ```bash
 kb sync 204 [--run DIR]
+kb sync --all-review [--pj P] [--dry-run]
 ```
 
 Re-reads `state.json` and aligns the state. Use it after calling the runner directly, when `kb run` died midway, or to import a run done by another session. If `finished` is missing, the state stays `in_progress` and the note records the next step.
+
+On top of that, when the ticket is in `review` and carries a PR number, `kb sync` asks GitHub **what happened to that PR** with `gh pr view` (ADR-0050). Tickets with no run at all (someone added the PR from the board) can be synced too, as long as they are in `review` and have a PR. Only a ticket with neither a run nor a PR is refused.
+
+| PR state | Ticket | First line of the note |
+|---|---|---|
+| `MERGED` | `done` | `[run] PR #n マージ済み <mergedAt>` |
+| `CLOSED` (not merged) | `blocked` | `[run] PR #n がマージされずに閉じられた <closedAt>。作り直すなら kb reopen <id> → kb run <id>` |
+| `OPEN` / unknown / lookup failed | unchanged | not touched |
+
+Only two fields decide this: `state` and `mergedAt`. Marking a ticket `done` by mistake is the worst outcome, so anything unclear means "do nothing". The timestamp is written exactly as GitHub returned it (with the trailing `Z`).
+
+```bash
+kb sync --all-review              # every ticket in review, across all projects
+kb sync --all-review --pj asura   # narrow to one project
+kb sync --all-review --dry-run    # print one JSON line per ticket that would change, without writing
+```
+
+`--all-review` walks the `review` tickets in id order and looks only at the PR state (it does not re-evaluate runs). It prints one summary line at the end.
+
+```
+[kb] sync --all-review: 対象 5 件 / done 2 / blocked 1 / 変更なし 2 / 飛ばした 0
+```
+
+`gh` authenticates with the same per-project GitHub App used for opening PRs (ADR-0008 / ADR-0030), and a token is minted per project because App tokens are repository-scoped. An existing `GH_TOKEN` in the environment is used as is. **Where neither the App nor `GH_TOKEN` is available (a dev machine, CI), the check is skipped silently**: tickets are left alone, the exit code stays 0, and the reason is printed as a single `[kb] warn:` line on stderr (one line per project with `--all-review`).
+
+Updates that come from a PR are still not transcribed into the run record (ADR-0039) — the "`kb sync` does not transcribe" rule is unchanged.
 
 ### history / render
 
