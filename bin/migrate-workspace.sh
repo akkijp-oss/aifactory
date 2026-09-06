@@ -42,7 +42,7 @@ for d in sandbox/templates/*/; do
 done
 
 echo "== kanban"
-for f in kanban.db tickets BOARD.md; do move "kanban/$f" "$WS/kanban/$f"; done
+for f in kanban.db tickets attachments BOARD.md; do move "kanban/$f" "$WS/kanban/$f"; done
 
 echo "== runs"
 if [[ -d workflow/runs ]]; then
