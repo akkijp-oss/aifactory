@@ -20,8 +20,9 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: bash -n
         run: |
-          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh; do
-            bash -n "$f" && echo "ok $f"
+          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh; do
+            bash -n "$f" || exit 1
+            echo "ok $f"
           done
       - name: python -m py_compile
         run: python3 -m py_compile lib/aifactory_paths.py workflow/bin/run kanban/bin/kb glue/bin/intake glue/bin/dispatch console/bin/console console/bin/mcp console/lib/core.py

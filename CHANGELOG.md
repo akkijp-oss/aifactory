@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Runner: when the wip-branch push fails (for example the GitHub App lacks a permission), the diff is saved to `wip.patch` in the run directory instead of being lost with the VM rollback
 - GitHub App manifest now requests `workflows: write`, and `sandbox` includes it when issuing installation tokens; without it GitHub rejects pushes that touch `.github/workflows/`
 - `console/bin/install.sh`: a fullwidth parenthesis right after `$ws` was parsed as part of the variable name
+- CI: the `bash -n` loop used `bash -n "$f" && echo ok`, so a syntax error in any file but the last one left the step green; it now fails on the first bad file and also checks `console/bin/install.sh`. The gate list lives in `examples/projects/aifactory/gates.sh` alone — it gained the `paths` check and `provision.sh` calls it instead of keeping its own shorter list
 
 ## [0.1.0] - 2026-09-06
 
