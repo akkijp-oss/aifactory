@@ -26,7 +26,7 @@
 | `outputs` | array of 成果物 | 工程が作るべき成果物。エージェントが担当する工程では依頼文に「ここに書け」と出る。なければ失敗 |
 | `next` | transition | 結果に関係なく次へ。分岐のない工程が失敗したら human |
 | `on_pass` / `on_fail` | transition | 合否で分岐 |
-| `timeout_min` | integer | エージェントの上限時間（既定 60） |
+| `timeout_min` | integer | エージェントの上限時間（分。既定 60）。超えると `timeout` が工程を切り、runner が追跡済みの未コミット変更を `wip: step timeout` としてコミットしてから失敗にします（退避ブランチに残ります） |
 
 `role` と `code` は、どちらか一方を指定します。両方を書くとスキーマ検証でエラーになります。
 
