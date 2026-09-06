@@ -28,13 +28,49 @@ STATUS_LABEL = {"todo": "未着手", "in_progress": "実行中", "review": "レ�
 READ_ROOTS = [RUNS, KB_ROOT / "tickets", LOGS, REPO / "workflow" / "kit", *paths.PROJECT_DIRS, JOBS]
 
 
+# ---------- 時刻（ADR-0026: 記録はオフセット付き ISO 8601。オフセットの無い古い記録は書いたホスト＝ここの時間帯とみなす）
 def now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def ts_dt(s):
+    """ISO 8601 の文字列を時間帯付きの datetime にする。オフセットが無ければこのホストの時間帯を補う"""
+    d = datetime.datetime.fromisoformat(s)
+    return d if d.tzinfo is not None else d.astimezone()
+
+
+def ts_aware(s):
+    """画面に出す時刻を「オフセット付き ISO 8601」に揃える。日時として読めないもの（v0 の自由文など）はそのまま返す。
+       これが無いとブラウザーは naive な時刻を自分の時間帯として読み、サーバーと時間帯が違うだけで経過時間が時差ぶんずれる（チケット 235）"""
+    if not isinstance(s, str) or not s: return s
+    try: return ts_dt(s).isoformat(timespec="seconds")
+    except ValueError: return s
+
+
+def ts_file(p):
+    """ファイルの更新時刻。オフセット付きで返す"""
+    return datetime.datetime.fromtimestamp(pathlib.Path(p).stat().st_mtime).astimezone().isoformat(timespec="seconds")
+
+
+def ts_keys(d, *keys):
+    """dict の指定した鍵だけ ts_aware に通した新しい dict（元は変えない）。d が dict でなければそのまま返す"""
+    if not isinstance(d, dict): return d
+    return {**d, **{k: ts_aware(d[k]) for k in keys if k in d}}
+
+
+def tz_info():
+    """このサーバーの時間帯。画面がブラウザーとの違いを言うために使う"""
+    d = datetime.datetime.now().astimezone()
+    off = d.isoformat()[-6:]
+    name = d.tzname() or ""
+    plain = not name or name.upper() in ("UTC", "GMT") or name[0] in "+-"
+    return {"name": name, "offset": off, "label": f"UTC{off}" if plain else f"{name} UTC{off}"}
 
 
 def after(a, b):
-    """ISO 8601 の日時 a が b より後か。どちらかが無い・読めないときは False（比較を諦めて安全側）"""
-    try: return datetime.datetime.fromisoformat(a) > datetime.datetime.fromisoformat(b)
+    """ISO 8601 の日時 a が b より後か。どちらかが無い・読めないときは False（比較を諦めて安全側）。
+       オフセットの有無が混ざっても比べられるよう、入口で時間帯を補う（混在は例外になり黙って False になっていた）"""
+    try: return ts_dt(a) > ts_dt(b)
     except (TypeError, ValueError): return False
 
 
@@ -63,10 +99,13 @@ def db():
     return c
 
 
+ROW_TIME_COLS = ("created", "updated", "at")   # kanban の時刻の列。読むときにオフセットを補う（ADR-0026）
+
+
 def rows(q, p=()):
     c = db()
     if c is None: return []
-    try: return [dict(r) for r in c.execute(q, p).fetchall()]
+    try: return [ts_keys(dict(r), *ROW_TIME_COLS) for r in c.execute(q, p).fetchall()]
     finally: c.close()
 
 
@@ -107,6 +146,15 @@ def kb(*args, stdin=None):
 RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)-(\d+)(?:-dry)?(?:-attempt\d+)?$")
 
 
+def ts_state(s):
+    """runner の state.json の時刻を揃える（画面に出す写しだけ。ファイルは書き換えない）"""
+    if not isinstance(s, dict): return s
+    out = ts_keys(s, "started", "finished")
+    out["current"] = ts_keys(s.get("current"), "since")
+    if isinstance(s.get("history"), list): out["history"] = [ts_keys(h, "at") for h in s["history"]]
+    return out
+
+
 def run_summary(d):
     st = d / "state.json"
     s = {}
@@ -126,11 +174,11 @@ def run_summary(d):
             if not task: task, from_name = m.group(2), True
     return {"name": d.name, "kind": "v1", "status": status, "pj": pj, "task": task, "from_name": from_name,
             "state_error": s.get("_error"), "runner": None, "workflow": s.get("workflow"),
-            "branch": s.get("branch"), "base": s.get("base"), "started": s.get("started"), "finished": s.get("finished"),
+            "branch": s.get("branch"), "base": s.get("base"), "started": ts_aware(s.get("started")), "finished": ts_aware(s.get("finished")),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
-            "next": s.get("next"), "current": s.get("current"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
+            "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
             "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
-            "mtime": datetime.datetime.fromtimestamp((st if st.exists() else d).stat().st_mtime).isoformat(timespec="seconds")}
+            "mtime": ts_file(st if st.exists() else d)}
 
 
 def v0_summary(f):
@@ -139,8 +187,8 @@ def v0_summary(f):
     started = next((l.split(":", 1)[1].strip() for l in head if l.startswith("- 日時")), None)
     return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None,
             "from_name": False, "state_error": None, "runner": None, "workflow": "spin-v0",
-            "started": started, "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
-            "mtime": datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")}
+            "started": ts_aware(started), "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
+            "mtime": ts_file(f)}
 
 
 def run_liveness(s, jobs, tickets):
@@ -296,12 +344,11 @@ def run_detail(name):
     s = run_summary(d)
     state = {}
     if (d / "state.json").exists():
-        try: state = json.loads((d / "state.json").read_text(encoding="utf-8"))
+        try: state = ts_state(json.loads((d / "state.json").read_text(encoding="utf-8")))
         except Exception as e: state = {"_error": str(e)}
     files = []
     for p in sorted(d.rglob("*")):
-        if p.is_file(): files.append({"path": rel(p), "name": str(p.relative_to(d)), "size": p.stat().st_size,
-                                     "mtime": datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")})
+        if p.is_file(): files.append({"path": rel(p), "name": str(p.relative_to(d)), "size": p.stat().st_size, "mtime": ts_file(p)})
     wf = None
     if s.get("workflow"):
         wp = REPO / "workflow" / "kit" / "workflows" / f"{s['workflow']}.yml"
@@ -325,7 +372,8 @@ def run_lease(task):
     try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
     except Exception: return None
     v = lent.get(str(task))
-    return {"task": str(task), "pj": v.get("pj"), "name": v.get("name"), "since": v.get("since")} if isinstance(v, dict) else None
+    # since は API が返す時刻なのでオフセットを補う（ADR-0026）
+    return {"task": str(task), "pj": v.get("pj"), "name": v.get("name"), "since": ts_aware(v.get("since"))} if isinstance(v, dict) else None
 
 
 def rel(p):
@@ -367,6 +415,7 @@ def parse_ls(text):
     CLI は固定幅の printf で出す（sandbox/bin/sandbox の cmd_ls）。VM 名・IP・時刻に空白は入らないので空白で区切る。
     捨てる行: ジョブ先頭の `$ ...`、`[error]` のような注記、見出し（TASK ...）、列数が合わない行。
     読めない行は黙って捨てる（生ログはジョブの記録にそのまま残る）。task が `-`（貸出なし）のときは None。
+    同じ VM に複数の貸出があると CLI は 1 台 1 行のまま task を `221,222` と並べるので、戻りの task もカンマ区切りになる。
     """
     out = []
     for line in (text or "").splitlines():
@@ -380,19 +429,37 @@ def parse_ls(text):
     return out
 
 
+def _task_key(t):
+    """チケット番号は数として並べる（10 が 9 の前に来ない）。番号でなければ後ろにまとめる"""
+    return (0, int(t), "") if str(t).isdigit() else (1, 0, str(t))
+
+
+def leases_by_vmid(lent):
+    """台帳を vmid ごとにまとめる → {"9213": ["221", "222"]}。vmid は str に揃える（台帳は数値、`sandbox ls` は文字列）"""
+    by = {}
+    for task, v in (lent or {}).items():
+        if not isinstance(v, dict) or v.get("vmid") in (None, ""): continue
+        by.setdefault(str(v["vmid"]), []).append(str(task))
+    return {vmid: sorted(tasks, key=_task_key) for vmid, tasks in by.items()}
+
+
 def sandbox_view():
     lent = {}
     if SANDBOX_STATE.exists():
-        try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
+        try: lent = {k: ts_keys(v, "since") for k, v in json.loads(SANDBOX_STATE.read_text(encoding="utf-8")).items()}
         except Exception as e: lent = {"_error": str(e)}
+    # 貸出は「1 チケット = 1 件」、VM は vmid の異なり。同じ VM を 2 台と数えないために分けて持つ（チケット 237）
+    by_vmid = leases_by_vmid(lent)
+    shared = {vmid: tasks for vmid, tasks in by_vmid.items() if len(tasks) > 1}
     tpl = []
     for pj in pjs():
         py = project_yml(pj)
         y = load_yaml(py) if py.exists() else None
-        n = sum(1 for v in lent.values() if isinstance(v, dict) and v.get("pj") == pj)
+        mine = {t: v for t, v in lent.items() if isinstance(v, dict) and v.get("pj") == pj}
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
-                    "lent": n, "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
+                    "lent": len(leases_by_vmid(mine)), "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
+                    "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
     ls_jobs = [j for j in JobStore.list() if j.get("kind") == "sandbox-ls"]   # 新しい順
     last_ls = ls_jobs[0] if ls_jobs else None                                 # 直近（失敗・実行中も含む）。画面は取得中 / 成功 / 失敗 / 未取得を分けて出す
     last_ok_ls = next((j for j in ls_jobs if j.get("rc") == 0), None)          # 表に出せる最後の成功。失敗しても前回の表は残す
@@ -403,6 +470,7 @@ def sandbox_view():
     e = sandbox_env()
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
     return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
+            "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
             "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms}
 
 
@@ -436,7 +504,7 @@ class JobStore:
         for d in JOBS.iterdir():
             m = cls._meta(d.name)
             if m.exists():
-                try: out.append(json.loads(m.read_text(encoding="utf-8")))
+                try: out.append(ts_keys(json.loads(m.read_text(encoding="utf-8")), "started", "finished", "stop_requested"))
                 except Exception: pass
         out.sort(key=lambda j: j.get("started", ""), reverse=True)
         return out
@@ -542,7 +610,9 @@ def overview():
         except Exception: lent = {}
     return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:6], "runs_active": active[:6], "runs_not_started": {"n": len(not_started), "runs": not_started[:6]},
             "runs_abandoned": {"n": len(abandoned), "runs": abandoned[:6]},
-            "lent": len([v for v in lent.values() if isinstance(v, dict)]), "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now()}
+            "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
+            "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
+            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now(), "tz": tz_info()}
 
 
 
@@ -620,6 +690,8 @@ def sync_preview(tid, run=None):
     try: p = json.loads(out.strip().splitlines()[-1])
     except Exception: raise ApiError("実行記録を読み直した結果を読めませんでした。もう一度お試しください")
     b, a = p["before"], p["after"]
+    p["run_finished"] = ts_aware(p.get("run_finished"))
+    p["before"] = ts_keys(b, "updated")
     p["ticket"] = {k: t[k] for k in ("id", "title", "pj", "status", "note", "run", "updated")}
     p["updated_after_run"] = after(t["updated"], p.get("run_finished"))
     p["changes"] = b.get("status") != a.get("status") or (b.get("note") or "") != (a.get("note") or "")
@@ -689,6 +761,7 @@ def op_sandbox_release(b):
 def job_view(jid, offset=0):
     j = JobStore.get(jid)
     if not j: raise ApiError(f"ジョブ {jid} は見つかりません", 404)
+    j = ts_keys(j, "started", "finished", "stop_requested")
     data, _ = read_file(str(JOBS / j["id"] / "log"), offset=offset)   # JOBS はリポジトリ外でもよい（絶対パス。根の検査は read_file）
     # 過去のジョブを開いたとき、画面が「今」のチケットで案内を決められるように現在値を添える（古い復旧案内を主表示しないため）
     t = None
@@ -706,7 +779,7 @@ def job_wait(jid, timeout_s=120):
     while True:
         j = JobStore.get(jid)
         if not j: raise ApiError(f"ジョブ {jid} は見つかりません", 404)
-        if j.get("state") != "running" or time.time() - t0 >= timeout_s: return j
+        if j.get("state") != "running" or time.time() - t0 >= timeout_s: return ts_keys(j, "started", "finished", "stop_requested")
         time.sleep(1)
 
 
@@ -716,10 +789,98 @@ def op_job_stop(jid):
     return {"ok": True, "message": msg}
 
 
+# ---------- ログ（起票・配車）
+# intake.log / dispatch.log の行は「console が読む契約」（ADR-0027）。glue 側の形式は変えず、ここで項目に分解する。
+# どの規則にも当てはまらない行は event="other" にして原文（raw / reason）をそのまま出す（推測で埋めない。ADR-0025 と同じ姿勢）。
+LOG_ENTRY = {"at": "", "source": "", "event": "other", "tid": None, "pj": "", "kind": "", "status": None,
+             "rc": None, "elapsed_s": None, "confidence": None, "model": "", "reason": "", "detail": "",
+             "dry_run": False, "raw": ""}
+# dispatch.log の本文（日時の後ろ）。glue/bin/dispatch が書く 6 種類。上から順に当てる
+DISPATCH_RULES = (
+    ("end", re.compile(r"^end\s+(?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+) rc=(?P<rc>-?\d+) status=(?P<status>\S+) (?P<elapsed_s>\d+)s$")),
+    ("start", re.compile(r"^start (?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+) ?(?P<title>.*)$")),
+    ("blocked", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+): project\.yml 無し → blocked$")),
+    ("worker_unavailable", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+): Pull worker unavailable → skip$")),
+    ("pool_busy", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+): プール (?P<detail>\d+) 台すべて貸出中 → この PJ は飛ばす$")),
+    ("idle", re.compile(r"^todo が無い")),
+)
+DRY_RUN_MARK = " (dry-run)"
+
+
+def log_entry(**kw):
+    e = dict(LOG_ENTRY); e.update(kw); return e
+
+
+def as_int(v):
+    try: return int(v)
+    except (TypeError, ValueError): return None
+
+
+def as_float(v):
+    try: return float(v)
+    except (TypeError, ValueError): return None
+
+
+def log_other(line, source):
+    """規則に当てはまらない行。日時だけ切り出し、本文は原文のまま出す（隠さない・推測で埋めない）"""
+    at, tab, body = line.partition("\t")
+    if not tab: at, body = "", line
+    return log_entry(at=at, source=source, event="other", reason=body, raw=line)
+
+
+def parse_intake_line(line):
+    """intake.log の 1 行（日時 / id / pj / kind / confidence / model / reason の 7 列、tab 区切り）"""
+    if not line.strip(): return None
+    c = line.split("\t", 6)
+    if len(c) < 7: return log_other(line, "intake")
+    at, tid, pj, kind, conf, model, reason = c
+    return log_entry(at=at, source="intake", event="intake", tid=as_int(tid), pj=pj, kind=kind,
+                     confidence=as_float(conf), model=model, reason=reason, raw=line)
+
+
+def parse_dispatch_line(line):
+    """dispatch.log の 1 行（日時 tab 本文）。本文は行の種類ごとに列が違うので規則を順に当てる"""
+    if not line.strip(): return None
+    at, tab, body = line.partition("\t")
+    if not tab: return log_other(line, "dispatch")                  # 日時が無い行も原文として残す
+    for name, rx in DISPATCH_RULES:
+        m = rx.match(body)
+        if not m: continue
+        g = m.groupdict()
+        e = log_entry(at=at, source="dispatch", raw=line, tid=as_int(g.get("tid")), pj=g.get("pj") or "", kind=g.get("kind") or "")
+        if name == "end":
+            e.update(event="end", rc=as_int(g["rc"]), status=g["status"], elapsed_s=as_int(g["elapsed_s"]))
+        elif name == "start":
+            title = g.get("title") or ""
+            if title == DRY_RUN_MARK.strip(): title = ""; e["dry_run"] = True      # 題名が空の dry-run（印だけ残る）
+            elif title.endswith(DRY_RUN_MARK): title = title[: -len(DRY_RUN_MARK)]; e["dry_run"] = True
+            e.update(event="start", reason=title)
+        elif name == "blocked":
+            e.update(event="blocked", status="blocked")
+        elif name == "idle":
+            e.update(event="idle")
+        else:
+            e.update(event="skip", reason=name, detail=g.get("detail") or "")
+        return e
+    return log_other(line, "dispatch")
+
+
 def logs_view():
-    out = {}
+    """生のログ（intake / dispatch）と、そこから導いた行の一覧（entries、新しい順）を返す。
+
+    entries は画面の表と絞り込みが読む。生の text は「元のログを見る」と MCP の logs ツールが使うので消さない。
+    """
+    out = {}; rows = []
     for name in ("intake", "dispatch"):
         data, _ = read_file(str(LOGS / f"{name}.log"), tail=200_000); out[name] = data
+        if not data: continue
+        lines = data["text"].splitlines()
+        if data.get("truncated") and lines: lines = lines[1:]        # tail の切れ目。先頭の不完全な 1 行は捨てる
+        parse = parse_intake_line if name == "intake" else parse_dispatch_line
+        rows += [e for e in (parse(l) for l in lines) if e]
+    rows = [e for _, e in sorted(enumerate(rows), key=lambda t: (t[1]["at"], t[0]), reverse=True)]
+    out["total"] = len(rows)
+    out["entries"] = rows[:1000]                                     # 画面は新しい分だけ。件数は total で言う
     return out
 
 

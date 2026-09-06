@@ -168,13 +168,13 @@ class Run:
         self.state_file = self.run_dir / "state.json"
         self.state = json.loads(self.state_file.read_text()) if (resume and self.state_file.exists()) else {
             "pj": pj, "task": task, "workflow": wf_name, "branch": self.branch, "base": self.base,
-            "started": datetime.datetime.now().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
+            "started": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
         if resume: self.branch = self.state["branch"]; self.base = self.state["base"]
         (self.run_dir / "ticket.md").write_text(self.ticket, encoding="utf-8")
         if not resume:
             # ticket.md だけの run を残さない。take の途中で落ちても console と kb が読める記録にする（2026-09-08 チケット 238）
             self.state["current"] = {"step": "take", "kind": "take", "log": None,
-                                     "since": datetime.datetime.now().isoformat(timespec="seconds")}
+                                     "since": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             self.save()
 
     # ---------- VM helpers
@@ -228,7 +228,7 @@ class Run:
         self.state_file.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
     def set_current(self, step_id, kind, log_name):
         """今動いている step とそのログ名を state.json に置く（console が「実行中の step」を追い読みするため）"""
-        self.state["current"] = {"step": step_id, "kind": kind, "log": log_name, "since": datetime.datetime.now().isoformat(timespec="seconds")}
+        self.state["current"] = {"step": step_id, "kind": kind, "log": log_name, "since": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
         self.save()
 
     def refresh_token(self):
@@ -369,7 +369,7 @@ class Run:
         記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう"""
         err = scrub(str(e))[-1500:]
         self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
-                           "finished": datetime.datetime.now().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
+                           "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
         self.save()
         self.log(f"take failed: {([l for l in err.splitlines() if l.strip()] or ['(理由なし)'])[-1]}")
         # take が通った後（fetch など）で落ちると VM は貸出中のまま。sandbox backend では返す（take 自体が失敗したなら貸出は無い）。
@@ -395,7 +395,7 @@ class Run:
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)
             nxt = self.transition(step, ok)
-            self.state["history"].append({"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().isoformat(timespec="seconds")})
+            self.state["history"].append({"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")})
             self.state["next"] = nxt; self.state["current"] = None; self.save()
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
@@ -409,7 +409,7 @@ class Run:
         result = cur
         wip = self.preserve() if result == "human" else ""
         pr = self.vm_read("pr_url").strip() if not self.dry else ""
-        self.state.update({"result": result, "pr_url": pr, "wip_branch": wip, "finished": datetime.datetime.now().isoformat(timespec="seconds"), "elapsed_s": int(time.time()-self.t0)})
+        self.state.update({"result": result, "pr_url": pr, "wip_branch": wip, "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time()-self.t0)})
         self.save()
         self.release()
         self.log(f"result: {result}  PR: {pr or 'なし'}{'  wip: origin/' + wip if wip else ''}  run: {self.run_dir}")

@@ -469,8 +469,9 @@ cmd_ls() {
   while read -r vmid name status; do
     [[ -n "$vmid" ]] || continue
     local ip; ip="$(pool_ip "$vmid")"
-    local task; task="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE")"
-    local since=""; [[ -n "$task" ]] && since="$(state_field "$task" since)"
+    # 同じ vmid に複数の貸出があっても 1 台 1 行にする（改行のままだと表の行が割れる）。SINCE は先頭の貸出のもの
+    local task; task="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE" | paste -sd, -)"
+    local since=""; [[ -n "$task" ]] && since="$(state_field "${task%%,*}" since)"
     printf '%-8s %-14s %-6s %-12s %-9s %s\n' "${task:--}" "$name" "$vmid" "$ip" "$status" "$since"
   done <<< "$all"
 }

@@ -6,12 +6,16 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import datetime, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
 KB = REPO / "kanban" / "bin" / "kb"
 PJ = "kumitate"   # examples/projects/kumitate
+OFFSET_ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")   # 記録の時刻の形（ADR-0026）
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from test_strings import load as load_strings   # noqa: E402  文言の実物を読む（node のテストで使う）
 
 
 def seed_workspace(ws):
@@ -303,6 +307,81 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
         self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
 
+    def test_logs_are_derived_into_rows(self):
+        """起票・配車のログを、項目名つきの表にできる形（entries）にして返す（チケット 230、ADR-0027）。
+
+        dispatch.log は行の種類ごとに列が違い（tid の無い行もある）、intake.log は 7 列固定。分解は
+        コンソール側で一度だけ行い、glue のログ形式は変えない。どの規則にも当てはまらない行は隠さず
+        event="other" として原文を残す（推測で埋めない）。生の text は「元のログを見る」と MCP が使うので消さない。
+        """
+        logs = self.ws / "logs"; logs.mkdir(parents=True, exist_ok=True)
+        (logs / "dispatch.log").write_text(
+            "2026-09-07T10:00:01\ttodo が無い（または全部飛ばした）。終了\n"
+            "2026-09-07T10:00:02\t204 kumitate bug: project.yml 無し → blocked\n"
+            "2026-09-07T10:00:03\t205 kumitate: Pull worker unavailable → skip\n"
+            "2026-09-07T10:00:04\t206 kumitate: プール 3 台すべて貸出中 → この PJ は飛ばす\n"
+            "2026-09-07T10:00:05\tstart 207 kumitate feature ログ画面を表にする (dry-run)\n"
+            "2026-09-07T10:00:06\tend   207 kumitate feature rc=2 status=todo 93s\n"
+            "2026-09-07T10:00:07\tこれから足される種類の行\n", encoding="utf-8")
+        (logs / "intake.log").write_text(
+            "2026-09-07T09:00:01\t203\tkumitate\tbug\t0.9\tmodel-x\t題名と本文が整っている\n"
+            "2026-09-07T09:00:02\t204\tkumitate\tfeature\t0.97\tmodel-x\tPJ の指定があった\n", encoding="utf-8")
+        st, d = self.http.get("/api/logs")
+        self.assertEqual(st, 200)
+        self.assertEqual(d["total"], 9); self.assertEqual(len(d["entries"]), 9)
+        rows = d["entries"]
+        self.assertEqual([r["at"] for r in rows], sorted((r["at"] for r in rows), reverse=True), "新しい順に並んでいない")
+        one = lambda src, ev: next(r for r in rows if r["source"] == src and r["event"] == ev)
+
+        idle = one("dispatch", "idle")
+        self.assertIsNone(idle["tid"]); self.assertEqual(idle["pj"], "")                     # tid / pj の無い行も落とさない
+        blocked = one("dispatch", "blocked")
+        self.assertEqual((blocked["tid"], blocked["pj"], blocked["kind"], blocked["status"]), (204, PJ, "bug", "blocked"))
+        skips = sorted((r for r in rows if r["event"] == "skip"), key=lambda r: r["tid"])
+        self.assertEqual([(r["tid"], r["reason"]) for r in skips], [(205, "worker_unavailable"), (206, "pool_busy")])
+        self.assertEqual(skips[1]["detail"], "3")                                            # 台数は項目にして持つ
+        start = one("dispatch", "start")
+        self.assertEqual((start["tid"], start["kind"], start["dry_run"]), (207, "feature", True))
+        self.assertEqual(start["reason"], "ログ画面を表にする")                              # dry-run の印は題名から外す
+        end = one("dispatch", "end")
+        self.assertEqual((end["tid"], end["status"], end["rc"], end["elapsed_s"]), (207, "todo", 2, 93))
+        other = one("dispatch", "other")
+        self.assertEqual(other["reason"], "これから足される種類の行"); self.assertIn("これから足される", other["raw"])
+        intake = [r for r in rows if r["source"] == "intake"]
+        self.assertEqual([(r["tid"], r["kind"], r["confidence"], r["model"]) for r in intake],
+                         [(204, "feature", 0.97, "model-x"), (203, "bug", 0.9, "model-x")])
+        self.assertEqual(intake[0]["reason"], "PJ の指定があった")
+        self.assertIn("rc=2", d["dispatch"]["text"]); self.assertIn("0.97", d["intake"]["text"])   # 原文も残っている
+
+    def test_logs_screen_is_a_table_that_links_to_tickets(self):
+        """ログの 1 行から対象チケットへ直接移動でき、項目名・絞り込み・原文がそろっている（チケット 230）。
+
+        JS を動かす基盤が無いので、test_list_rows_have_real_links と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewLogs")
+        view = app[i:app.index("\n}", i)]
+        for key in ("q", "pj", "src"):
+            self.assertIn(f"p.get('{key}')", view, f"絞り込み条件 {key} を URL から読んでいない（詳細から戻ると条件が消える）")
+        self.assertIn('id="lg-q"', view, "チケット番号で絞る欄が無い")
+        self.assertIn("T.h.rawLog", view, "元のログを見る導線が無い")
+        self.assertIn('<pre class="log small" id="lg-raw-', view, "原文（生のログ）を残していない")
+        self.assertIn("schedule(lgRefresh", view, "定期更新が表だけの描き直しになっていない")
+        self.assertNotIn("schedule(viewLogs", app, "10 秒ごとに画面全体を作り直すと、絞り込みの入力が飛ぶ")
+        i = app.index("function lgRender")
+        render = app[i:app.index("\n}", i)]
+        self.assertIn('<a href="#/ticket/', render, "チケット番号が本物のリンクになっていない（Tab で届かない）")
+        self.assertIn('tr class="link" data-href', render, "行クリックでチケットを開けない")
+        self.assertIn("T.logs.count", render, "件数（何件中の何件か）を出していない")
+        self.assertIn("T.empty.logs", render, "0 件のときの案内が無い")
+        for key in ("T.th.at", "T.th.process", "T.label.pj", "T.th.ticket", "T.th.result", "T.th.reason"):
+            self.assertIn(key, render, f"列名 {key} が表に無い")
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        for path, v in (("logs.endDetail", T["logs"]["endDetail"]), ("logs.event.end", T["logs"]["event"]["end"])):
+            for word in ("rc", "status"):
+                self.assertNotIn(word, v, f"{path} に開発者の語彙が残っている（{word}）")
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
@@ -329,6 +408,59 @@ class ApiTest(unittest.TestCase):
                 "started": "2020-01-01T09:00:00", "finished": "2020-01-01T10:00:00", "elapsed_s": 3600,
                 "result": "human", "pr_url": "", "next": "human", "current": None, "loops": {},
                 "history": [{"step": st, "ok": ok, "next": "x", "at": "2020-01-01T09:10:00"} for st, ok in hist], **kw}
+
+    def _assert_offset(self, label, v):
+        """時刻がオフセット付きで、このサーバーの時間帯に一致すること"""
+        off = datetime.datetime.now().astimezone().utcoffset()
+        self.assertRegex(str(v), OFFSET_ISO, f"{label}: {v!r}")
+        self.assertEqual(datetime.datetime.fromisoformat(v).utcoffset(), off, f"{label}: {v!r}")
+
+    def test_timestamps_carry_offset(self):
+        """API が返す時刻はオフセット付き（チケット 235）。オフセットが無いとブラウザーが自分の時間帯として読み、
+           サーバーと時間帯が違うだけで実行中の経過時間が時差ぶんずれる（終了後の所要と食い違う）"""
+        name = self._fixture_run("2020-01-03-kumitate-993", {
+            "pj": PJ, "task": self.seed, "workflow": "feature", "branch": "sandbox/x", "base": "main",
+            "started": "2020-01-03T09:00:00", "finished": None, "next": "implement", "loops": {},
+            "current": {"step": "implement", "kind": "agent", "log": "agent-implement-1.log", "since": "2020-01-03T09:05:00"},
+            "history": [{"step": "plan", "ok": True, "next": "implement", "at": "2020-01-03T09:04:00"}]},
+            {"work/ticket.md": "# x\n"})
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == name)
+        self._assert_offset("runs[].started", row["started"]); self._assert_offset("runs[].mtime", row["mtime"])
+        self._assert_offset("runs[].current.since", row["current"]["since"])
+        done = next(x for x in r["runs"] if x["kind"] == "v1" and x.get("finished"))
+        self._assert_offset("runs[].finished", done["finished"])
+
+        _, d = self.http.get(f"/api/runs/{name}")
+        self._assert_offset("run.summary.started", d["summary"]["started"])
+        self._assert_offset("run.state.started", d["state"]["started"])
+        self._assert_offset("run.state.current.since", d["state"]["current"]["since"])
+        self._assert_offset("run.state.history[].at", d["state"]["history"][0]["at"])
+        self._assert_offset("run.files[].mtime", d["files"][0]["mtime"])
+
+        jid = "20200103-090000-old"                                    # 古い（オフセット無しの）ジョブの記録も読むときに補う
+        jd = pathlib.Path(self.tmp) / "jobs" / jid; jd.mkdir(parents=True, exist_ok=True)
+        (jd / "meta.json").write_text(json.dumps({"id": jid, "kind": "kb-run", "label": "kb run 0", "cmd": ["x"], "ticket": None,
+                                                  "run_hint": None, "pid": 1, "started": "2020-01-03T09:00:00",
+                                                  "finished": "2020-01-03T09:10:00", "rc": 0, "state": "done"}), encoding="utf-8")
+        _, jl = self.http.get("/api/jobs")
+        j = next(x for x in jl["jobs"] if x["id"] == jid)
+        self._assert_offset("jobs[].started", j["started"]); self._assert_offset("jobs[].finished", j["finished"])
+        _, jv = self.http.get(f"/api/jobs/{jid}")
+        self._assert_offset("job.started", jv["job"]["started"])
+
+        _, t = self.http.get("/api/tickets")
+        for x in t["tickets"]:
+            self._assert_offset("tickets[].created", x["created"]); self._assert_offset("tickets[].updated", x["updated"])
+        _, td = self.http.get(f"/api/tickets/{self.seed}")
+        self._assert_offset("ticket.updated", td["ticket"]["updated"])
+        self._assert_offset("ticket.history[].at", td["history"][0]["at"])
+
+        _, o = self.http.get("/api/overview")
+        self._assert_offset("overview.now", o["now"])
+        self.assertRegex(o["tz"]["offset"], r"^[+-]\d\d:\d\d$")      # 画面がブラウザーとの時間帯の違いを言えるように
+        self.assertEqual(o["tz"]["offset"], datetime.datetime.now().astimezone().isoformat()[-6:])
+        self.assertTrue(o["tz"]["label"])
 
     def test_run_outcome_loop_limit(self):
         """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
@@ -664,6 +796,77 @@ class SandboxLsTest(unittest.TestCase):
         self.assertNotIn("ls.log.text", body)                            # 固定幅の生ログをそのまま出さない
 
 
+class SandboxSharedVmTest(unittest.TestCase):
+    """同じ VM（同じ vmid）が複数チケットに貸出中のときの数え方と明示（チケット 237）。
+
+    台帳（state.json）はコンソールからは読むだけ。ここで確かめるのは「2 件の貸出を 2 台と数えない」ことと、
+    共有している組を画面に渡すことだけで、台帳の直しや返却は一切しない。
+    """
+
+    SHARED = {"221": {"vmid": 9213, "name": "sb-kumitate-01", "ip": "10.77.1.13", "pj": "kumitate", "since": "2026-09-06T10:00:00+09:00"},
+              "222": {"vmid": 9213, "name": "sb-kumitate-01", "ip": "10.77.1.13", "pj": "kumitate", "since": "2026-09-06T11:00:00+09:00"},
+              "223": {"vmid": 9214, "name": "sb-kumitate-02", "ip": "10.77.1.14", "pj": "kumitate", "since": "2026-09-06T12:00:00+09:00"}}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-shared-vm-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+
+    def state(self, lent):
+        (self.tmp / "state.json").write_text(json.dumps(lent), encoding="utf-8")
+
+    def test_shared_vmid_is_counted_once_and_reported(self):
+        """貸出 3 件・VM 2 台。221 と 222 が同じ 9213 だと分かる形で返す"""
+        self.state(self.SHARED)
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["lease_count"], 3)
+        self.assertEqual(d["vm_count"], 2)
+        self.assertEqual(d["shared"], {"9213": ["221", "222"]})
+
+    def test_pj_pool_counts_vms_not_leases(self):
+        """PJ の使用数は台数（2 / 3）。件数は別に持ち、同じ VM を無説明に 2 台と数えない"""
+        self.state(self.SHARED)
+        pj = next(p for p in self.m.core.sandbox_view()["templates"] if p["pj"] == PJ)
+        self.assertEqual(pj["lent"], 2)
+        self.assertEqual(pj["leases"], 3)
+
+    def test_overview_keeps_lent_and_adds_vm_count(self):
+        """ナビの数字は台数にする。既存の lent（件数）は MCP の利用者のために残す"""
+        self.state(self.SHARED)
+        o = self.m.core.overview()
+        self.assertEqual(o["lent"], 3)
+        self.assertEqual(o["vms_lent"], 2)
+
+    def test_no_duplicate_is_not_reported_as_shared(self):
+        self.state({k: v for k, v in self.SHARED.items() if k != "222"})
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["shared"], {})
+        self.assertEqual(d["vm_count"], d["lease_count"])
+        self.assertEqual(self.m.core.overview()["vms_lent"], 2)
+
+    def test_broken_state_does_not_count(self):
+        """読めない台帳（_error）や dict でない値は台数にも件数にも入れない"""
+        (self.tmp / "state.json").write_text("{ broken", encoding="utf-8")
+        d = self.m.core.sandbox_view()
+        self.assertEqual((d["lease_count"], d["vm_count"], d["shared"]), (0, 0, {}))
+
+    def test_screen_explains_sharing_and_release_impact(self):
+        """画面は共有を明示し、返却の前に影響するチケットを出す（JS は動かせないのでソースを検査する）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
+        for key in ("d.shared", "T.sandbox.sharedWarn", "T.sandbox.sharedBadge", "T.sandbox.sharedWith", "T.sandbox.countShared"):
+            self.assertIn(key, body, key)
+        j = app.index("'sandbox-release':"); rel = app[j: app.index("'job-stop':", j)]
+        for key in ("T.dialog.release.sharedWarning", "shared"):
+            self.assertIn(key, rel, key)
+        self.assertRegex(rel, r"typed:\s*[^,]*shared")                  # 共有なら run が無くても番号入力を求める
+        # 実勢の表（sandbox ls）の貸出先は共有時 `221,222` で来る。1 本のリンクにすると /tickets/(\d+) に合わず開けない
+        self.assertIn("split(',')", body)                               # 1 チケット 1 リンクに分ける
+        vms = body[body.index("d.vms.map"): body.index("T.help.lsAxes")]
+        self.assertNotIn("#/ticket/${esc(v.task)}", vms)                # カンマ区切りのまま 1 本のリンクにしない
+
+
 class AuthDocsTest(unittest.TestCase):
     """CONSOLE_TOKEN（合言葉）付きで起動したときの認証と、/docs/ の配信（ADR-0017）"""
     @classmethod
@@ -787,6 +990,99 @@ class JobStoreTest(unittest.TestCase):
         self.assertEqual(self.JS.get(dead["id"])["state"], "lost")
 
 
+class TimestampTest(unittest.TestCase):
+    """時刻の正規化（ADR-0026）。記録はオフセット付きで返し、オフセットの無い古い記録は書いたホスト＝サーバーの時間帯とみなす"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-ts-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_ts_aware_fills_missing_offset(self):
+        off = datetime.datetime.now().astimezone().utcoffset()
+        v = self.core.ts_aware("2020-01-03T09:00:00")
+        self.assertRegex(v, OFFSET_ISO)
+        self.assertEqual(datetime.datetime.fromisoformat(v).utcoffset(), off)
+        self.assertEqual(datetime.datetime.fromisoformat(v).replace(tzinfo=None), datetime.datetime(2020, 1, 3, 9, 0, 0))
+
+    def test_ts_aware_keeps_existing_offset(self):
+        self.assertEqual(self.core.ts_aware("2020-01-03T09:00:00+00:00"), "2020-01-03T09:00:00+00:00")
+        self.assertEqual(self.core.ts_aware("2020-01-03T09:00:00+09:00"), "2020-01-03T09:00:00+09:00")
+        self.assertEqual(self.core.ts_aware("2020-01-03T09:00:00Z"), "2020-01-03T09:00:00+00:00")
+
+    def test_ts_aware_passes_through_what_is_not_a_timestamp(self):
+        for v in (None, "", "2026-09-08 の夕方", 3, {"a": 1}):
+            self.assertEqual(self.core.ts_aware(v), v)
+
+    def test_now_carries_offset(self):
+        self.assertRegex(self.core.now(), OFFSET_ISO)
+
+    def test_after_compares_mixed_records(self):
+        """オフセットの有無が混ざっても比較できる（例外で False に落ちない）"""
+        self.assertTrue(self.core.after("2020-01-03T09:10:00", "2020-01-03T09:00:00+00:00")
+                        or self.core.after("2020-01-03T09:10:00+00:00", "2020-01-03T09:00:00"))
+        self.assertTrue(self.core.after("2020-01-04T09:00:00", "2020-01-03T09:00:00+00:00"))
+        self.assertFalse(self.core.after("2020-01-02T09:00:00", "2020-01-03T09:00:00+00:00"))
+        self.assertFalse(self.core.after(None, "2020-01-03T09:00:00"))
+        self.assertFalse(self.core.after("2020-01-03T09:00:00", None))
+        self.assertFalse(self.core.after("いつか", "2020-01-03T09:00:00"))
+
+
+def js_line(src, name):
+    """app.js から 1 行の関数定義を抜く（表示の部品はすべて 1 行で書く約束。console/static/app.js の「表示の部品」節）"""
+    m = re.search(rf"^(?:function {name}\(|const {name} = ).*$", src, re.M)
+    assert m, f"app.js に {name} の 1 行の定義が無い"
+    return m.group(0)
+
+
+@unittest.skipUnless(shutil.which("node"), "node が無い")
+class BrowserTimeTest(unittest.TestCase):
+    """経過時間の計算がブラウザーの時間帯に左右されないこと（チケット 235）。app.js の関数を node で直に動かす"""
+    NOW = "2020-01-01T00:31:00Z"
+
+    def run_js(self, tz):
+        app = (pathlib.Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        strings = (pathlib.Path(__file__).resolve().parents[1] / "static" / "strings.js").read_text(encoding="utf-8")
+        parts = [strings] + [js_line(app, n) for n in ("tt", "pad", "fmtT", "fmtDur", "sec", "since", "span")]
+        parts.append(f'Date.now = () => Date.parse("{self.NOW}");')
+        parts.append("""console.log(JSON.stringify({
+          aware: since("2020-01-01T00:21:00+00:00"),
+          naive: since("2020-01-01T00:21:00"),
+          missing: since(null),
+          unreadable: since("2026-09-08 の夕方"),
+          ahead: since("2020-01-01T02:00:00+00:00"),
+          spanNone: span(null, null),
+          spanBoth: span("2020-01-01T00:21:00+00:00", "2020-01-01T00:31:00+00:00")}));""")
+        src = self.tmp / f"probe-{tz.replace('/', '-')}.js"
+        src.write_text("\n".join(parts), encoding="utf-8")
+        p = subprocess.run(["node", str(src)], text=True, capture_output=True, env={**os.environ, "TZ": tz})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-js-test-"))
+        self.T = load_strings()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_elapsed_is_the_same_in_any_browser_timezone(self):
+        tokyo, utc = self.run_js("Asia/Tokyo"), self.run_js("UTC")
+        ten = self.T["time"]["min"].replace("{n}", "10")
+        self.assertEqual(tokyo["aware"], ten); self.assertEqual(utc["aware"], ten)
+        self.assertEqual(tokyo["spanBoth"], ten); self.assertEqual(utc["spanBoth"], ten)
+        # オフセットが無い記録は読む側の時間帯で答えが変わる（この不具合の本体。API はもう naive を返さない）
+        self.assertNotEqual(tokyo["naive"], utc["naive"])
+
+    def test_missing_and_odd_times_say_what_is_going_on(self):
+        for r in (self.run_js("Asia/Tokyo"), self.run_js("UTC")):
+            self.assertEqual(r["missing"], self.T["time"]["unknown"])
+            self.assertEqual(r["spanNone"], self.T["time"]["unknown"])
+            self.assertEqual(r["ahead"], self.T["time"]["ahead"])
+            self.assertEqual(r["unreadable"], "2026-09-08 の夕方")
+
+
 class KitListingTest(unittest.TestCase):
     """種別・役割の一覧は kit のディレクトリ走査。macOS の AppleDouble（`._bug.yml`）などのごみを候補に出さない"""
     def setUp(self):
@@ -808,6 +1104,21 @@ class KitListingTest(unittest.TestCase):
     def test_dot_files_are_not_candidates(self):
         self.assertEqual(self.core.kinds(self.kit), ["bug"])
         self.assertEqual(self.core.roles(self.kit), ["planner"])
+
+
+class DispatchLineTest(unittest.TestCase):
+    """dispatch.log の 1 行の分解（HTTP を経由せず parse_dispatch_line を直接。ADR-0027）"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-logline-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_dry_run_start_without_title(self):
+        """題名が空の dry-run（印だけが残る行）でも dry-run と分かる。印を題名として出さない"""
+        e = self.core.parse_dispatch_line("2026-09-07T10:00:05\tstart 207 kumitate feature (dry-run)")
+        self.assertEqual((e["event"], e["tid"], e["dry_run"], e["reason"]), ("start", 207, True, ""))
 
 
 if __name__ == "__main__":

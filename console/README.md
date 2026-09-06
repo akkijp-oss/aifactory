@@ -46,7 +46,7 @@ journalctl -u aifactory-console -f
 | sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml / トークンファイルの有無、プールの使用数）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
 | 起票 | — | 自由文 → `glue/bin/intake` / 整った本文 → `kb new`（配車はボードへ移した） |
 | ジョブ | このコンソールが起動した CLI の一覧と出力（2 秒ごとに追い読み）。終わると**「次にすること」**（intake → できたチケットを開く / run 停止 → 状態を実行記録に合わせる / 返却 → sandbox） | 止める（ダイアログ。プロセスグループに SIGTERM） |
-| ログ | `$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log` | — |
+| ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
 | 設定 | workflow の流れ・モデルの経路（routes.env）・PJ 定義の置き場・git status | — |
 
