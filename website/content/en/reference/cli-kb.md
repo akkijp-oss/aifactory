@@ -163,7 +163,16 @@ With `--from`, a run that ended at `human` is redone **on a new VM**, continuing
 
 `--dry-run` leaves the state unchanged. The exit code is the runner's (0 = end or PR present, 2 = human).
 
-When the same ticket is run again (today's run directory already exists, or `--from` / `--branch` was given), the note is replaced with `再走中（attempt N・workflow W）`. Without that, the "handed to a human (wip: …)" note from the previous stop stays on as the note of a running ticket and the list looks out of date. The previous note remains in `kb history`. A first run leaves the note alone.
+When the same ticket is run again (today's run directory already exists, or `--from` / `--branch` was given), the run line of the note is replaced with `[run] 再走中（attempt N・workflow W）`. Without that, the "handed to a human (wip: …)" note from the previous stop stays on as the note of a running ticket and the list looks out of date. The previous run line remains in `kb history`. A first run leaves the note alone.
+
+The "Note" column above does not replace the whole note: only **the first line, the one starting with `[run] `**, is rewritten (`kb run`, `kb sync` and reruns all follow the same rule; ADR-0048). Everything from the second line on belongs to people and a run never removes it. When a person writes with `kb set --note`, `kb block --note` and so on, they still write the whole note (`--note ''` empties it), and the next run rewrites its own first line.
+
+```
+[run] PR 待ち https://github.com/akkijp/kumitate/pull/300   <- the machine rewrites this one line
+Mac (Claude Code MBP) で実施。Linux sandbox は gates 赤のため   <- written by a person (never removed)
+```
+
+The note is a **summary of the state**. Keep longer hand-offs in the ticket body under `## PM 補足` (`kb append --section "PM 補足"`). On existing tickets whose first line is a run-produced sentence from before `[run] ` existed (`人間へ…`, `PR 待ち…` and the like), that line is dropped by the next `kb run` / `kb sync`. No data migration is needed.
 
 ### run-note
 

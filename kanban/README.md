@@ -62,6 +62,7 @@ $kb render                                                              # BOARD.
 - `--pr` を変えると本文の `pr:` 行も書き換える（runner は本文の `pr:` を読むため）
 - `kb append` は**本文の末尾**に足す。`--section` を付けると `## <見出し>` を先に書く（例 `## PM 補足`）。「`## 完了条件` の手前」には入れない: 節を見分ける仕組みが `kb` に無く、末尾なら diff が 1 か所で済むため。見出しで後から書き足したものだと分かる
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
+- `note` は**状態の要約**で、1 行目が `[run] ` で始まる行だけが機械（`kb run` / `kb sync` / 再走）のもの。2 行目以降は人のもので、run は消さない（ADR-0048）。長い申し送りは本文の `## PM 補足` に（`kb append --section "PM 補足"`）。人の `kb set --note` は今までどおりメモ全体を書く
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
 - 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
   - 名前は sanitize する（パス区切り・`..`・制御文字・Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）を落とし 120 バイトに切る。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所（console / MCP / intake も同じ判定を通る）

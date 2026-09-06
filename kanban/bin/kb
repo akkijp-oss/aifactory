@@ -401,6 +401,26 @@ def attempt_no(run_dir):
     return n
 
 
+RUN_TAG = "[run] "
+# `[run] ` を付ける前に kb 自身が note 全体として書いていた文言の書き出し（342）。既存チケットの 1 行目がこれで始まるなら
+# run 由来と見なして捨てる（人の行に格上げすると #294 の「板が古く見える」が戻る）。移行スクリプトは要らない
+LEGACY_RUN_PREFIXES = ("人間へ", "PR 待ち", "再走中", "VM を取得できず", "VM の空き待ち", "自動マージ", "マージ済み",
+                       "PR 無しで終了", "runner が", "貸出直後の準備", "鍵の利用枠切れ", "鍵が使えず", "Claude の鍵が無いので")
+
+
+def run_note(prev, text):
+    """run 由来の状態文をチケットのメモに置く。1 行目（`[run] …`）だけが機械のもので、残りは人のもの（342）。
+
+    PM が `kb set --note` で書いた申し送りを run / sync / 再走が丸ごと上書きして消していたので、
+    自分が前に書いた 1 行だけを差し替え、人が書いた行はそのまま後ろに残す。人の `kb set --note` は今までどおり
+    note 全体を書く（note の持ち主は人。次の run が自分の 1 行目を書き直す）"""
+    lines = (prev or "").splitlines()
+    if lines and (lines[0].startswith(RUN_TAG) or lines[0].startswith(LEGACY_RUN_PREFIXES)):
+        lines = lines[1:]
+    human = "\n".join(lines).strip()
+    return RUN_TAG + text + (f"\n{human}" if human else "")
+
+
 def rerun_note(r, run_dir, resuming, restarting, wf, from_step):
     """同じチケットを回し直すとき、チケットのメモを「再走中」に替える（335）。替えないと前回 human で止まったときの
        「人間へ（wip: …）…」が in_progress のまま残り、板が古い状態に見える。触らないときは None（初回の run は今までどおり）"""
@@ -430,7 +450,9 @@ def cmd_run(a):
     wf = a.workflow or (resuming and run_workflow(run_dir)) or (restarting and r["run"] and run_workflow(r["run"])) or r["kind"]
     if wf not in kinds(): die(f"workflow {wf} が無い（{kinds()}）")
     if not a.dry_run:
-        update(c, a.id, status="in_progress", run=run_dir, note=rerun_note(r, run_dir, resuming, restarting, wf, a.from_step), transcribe=False)
+        rn = rerun_note(r, run_dir, resuming, restarting, wf, a.from_step)
+        update(c, a.id, status="in_progress", run=run_dir,
+               note=run_note(r["note"], rn) if rn is not None else None, transcribe=False)
         if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
         render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
@@ -602,8 +624,10 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             step = s.get("resume_step")
             if wip and step: note += f" 再開: kb run {tid} --from {step} --branch {wip}"
         else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
+    # run 由来の文は note の 1 行目に置き、人が書いた行は後ろに残す（342）。dry の下見にも合成後を出す
+    r = get(c, tid)
+    note = run_note(r["note"], note)
     if dry:
-        r = get(c, tid)
         print(json.dumps({"id": tid, "run": run_dir, "run_finished": s.get("finished"), "run_result": s.get("result"),
                           "before": {"status": r["status"], "note": r["note"], "run": r["run"], "pr": r["pr"], "updated": r["updated"]},
                           "after": {"status": status, "note": note, "pr": pr, "run": run_dir}}, ensure_ascii=False))
