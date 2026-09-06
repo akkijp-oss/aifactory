@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+- Console board: the pipeline strip counted every project while the columns below it counted only the selected one, so a project filter looked broken. The strip, the "in progress" run list and the columns now all come from the filtered ticket list, the scope is stated above the strip, and the columns follow the strip's order (todo, in progress, review, done, then "waiting for a human" to the side)
+
 ## [0.3.0] - 2026-09-08
 
 ### Added
