@@ -8,7 +8,7 @@ const T = {
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
   "result": { "end": "終了", "human": "人間へ" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分" },
-  "nav": { "board": "ボード", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
+  "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
            "updated": "更新 {t}", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "banner": { "offline": "サーバーに届きません。console/bin/console が動いているか確かめてください。" },
@@ -19,7 +19,7 @@ const T = {
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
-    "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
+    "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
   },
 
   "h": {
@@ -32,10 +32,11 @@ const T = {
   "th": {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
-    "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ"
+    "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ"
   },
 
   "label": {
+    "q": "番号・題名", "qPlaceholder": "204 や 起票 のように", "status": "状態", "allStatus": "すべて",
     "pj": "PJ", "allPj": "すべて", "pjIfKnown": "PJ（分かっていれば）", "letLlm": "LLM に決めさせる", "kind": "種別", "workflow": "workflow", "option": "オプション",
     "workflowAsKind": "{kind}（種別のまま）", "keep": "終了後も VM を返却しない（中を見る）", "resume": "貸出中の VM で続きから（--resume）",
     "pr": "PR 番号", "prForMerge": "PR 番号（merge-pr のとき）", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
@@ -49,6 +50,7 @@ const T = {
 
   "sub": {
     "board": "未着手 → 実行中 → レビュー待ち → 完了。人間待ちは横に置きます。",
+    "tickets": "番号・題名・PJ・状態で探せます。完了したチケットもすべてここに並びます。",
     "runs": "runs/ の state.json を読んでいます。",
     "sandbox": "貸出状況は state.json、VM の実勢は sandbox ls（Proxmox に ssh、数秒）で取ります。",
     "intake": "自由文は intake（LLM 1 回）、整った本文は kb new で起票します。",
@@ -60,9 +62,10 @@ const T = {
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
     "runsCount": "実行記録 {n} 件（うち開始前 {m} 件）", "ticketCount": "左の数字はチケットの件数です。",
-    "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）",
+    "noLive": "動いている run はありません。", "more": "ほか {n} 件をすべて見る",
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
+  "tickets": { "count": "{n} 件（全 {m} 件）" },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
@@ -85,6 +88,7 @@ const T = {
       "blocked": "人間の判断を待っているチケットが、ここに出ます。",
       "done": "完了したチケットは、ここに並びます。"
     },
+    "tickets": "条件に合うチケットはありません。番号や題名を短くするか、PJ と状態を「すべて」にしてください。",
     "ticketRuns": "まだありません。上の「実行する」で作られます。",
     "runs": "まだありません。チケットの「実行する」か、ボードの「配車する」で作られます。",
     "jobs": "まだありません。起票・実行・配車・返却を押すと、ここに出ます。",

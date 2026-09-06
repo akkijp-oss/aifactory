@@ -141,10 +141,15 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .muted { color: var(--muted); }
 .top { margin-top: 8px; }
 .w100 { width: 100px; }
+.w220 { width: 220px; }
 .h140 { min-height: 140px; }
 .grow { flex: 1; min-width: 220px; }
 .check { display: inline-flex; align-items: center; gap: 6px; }
 .row.checks { margin: 2px 0 10px; gap: 16px; }
+.row.filters { margin-bottom: 4px; }
+.row.filters .field { margin-bottom: 6px; }
+#tk-list > .help { margin-bottom: 8px; }
+#tk-list .empty { color: var(--muted); font-size: 12.5px; }
 .panel.note { padding: 8px 14px; }
 .panel.next { border-left: 3px solid var(--accent); }
 .panel.next p { margin: 0 0 10px; }

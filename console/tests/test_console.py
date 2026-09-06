@@ -124,6 +124,29 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_done_overflow_leads_to_ticket_list(self):
+        """ボードの完了列からあふれた分が、CLI ではなく画面（#/tickets）に続く。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        board = app[app.index("async function viewBoard"):app.index("\n}", app.index("async function viewBoard"))]
+        self.assertIn("#/tickets", board, "完了列からあふれた分を見る導線が画面に無い（CLI の案内だけで終わっている）")
+        self.assertIn("T.btn.openTickets", board, "ボードから一覧へ行くボタンが無い")
+        self.assertRegex(app, r"seg\[0\] === 'tickets'", "route() に #/tickets が無い")
+
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertNotIn("kb list", T["board"]["more"], "あふれた分の案内が CLI のコマンドのままになっている")
+
+        i = app.index("async function viewTickets")
+        view = app[i:app.index("\n}", i)]
+        for key in ("q", "pj", "status"):
+            self.assertIn(f"p.get('{key}')", view, f"絞り込み条件 {key} を URL から読んでいない（詳細から戻ると条件が消える）")
+        render = app[app.index("function tkRender"):app.index("\n}", app.index("function tkRender"))]
+        self.assertIn("T.tickets.count", render, "件数（何件中の何件か）を出していない")
+        self.assertIn("T.empty.tickets", render, "0 件のときの案内が無い")
+
     def test_intake_keeps_draft_across_navigation(self):
         """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
 

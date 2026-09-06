@@ -8,7 +8,7 @@ const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != nul
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
 const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: 'logs', c: 'config' };   // g + 頭文字で移動
-let timer = null, lastRoute = '';
+let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（画面が用途を出す）
 
 /* ---------- 通信・通知 */
@@ -138,11 +138,12 @@ async function viewBoard() {
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
   const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
     <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
-  const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty">${esc(tt(T.board.more, { n: list.length - cap }))}</div>` : ''}</section>`;
+  const tickets = extra => `#/tickets?pj=${encodeURIComponent(pj)}${extra || ''}`;                /* ボードで選んだ PJ を一覧に引き継ぐ */
+  const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty"><a href="${tickets('&amp;status=' + s)}">${esc(tt(T.board.more, { n: list.length - cap }))}</a></div>` : ''}</section>`;
   const canDispatch = by.todo.length > 0;
   render(head(esc(T.nav.board), T.sub.board, `
       <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
-      <a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
+      <a class="btn" href="${tickets()}">${esc(T.btn.openTickets)}</a><a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
     + `<div class="help">${pj ? tt(T.board.scopePj, { pj: esc(pj) }) : esc(T.board.scopeAll)}</div>
     <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
     <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);
@@ -176,6 +177,51 @@ async function dispatchDialog() {
   go(`#/job/${r.job.id}`);
 }
 
+/* ---------- チケットの一覧（ボードの完了列に出しきれない過去分も、ここで探す）
+   読むだけの画面なので確認もトーストも無い。絞り込みは URL のクエリを正とし、
+   詳細から「戻る」で条件がそのまま戻る。5 秒更新はしない（開いたとき 1 回だけ取る） */
+let tkAll = [], tkFilter = { q: '', pj: '', status: '' }, tkDebounce = null;
+function tkMatch(x) {
+  const q = tkFilter.q.trim().toLowerCase();
+  if (tkFilter.pj && x.pj !== tkFilter.pj) return false;
+  if (tkFilter.status && x.status !== tkFilter.status) return false;
+  if (!q) return true;
+  if (String(x.title).toLowerCase().includes(q)) return true;
+  return /^\d+$/.test(q) && String(x.id).startsWith(q);            /* 数字だけなら番号の前方一致も見る */
+}
+/* 表と件数だけを描き直す。入力欄には触らないので、打っている途中でフォーカスが飛ばない */
+function tkRender() {
+  const box = $('tk-list'); if (!box) return;
+  const list = tkAll.filter(tkMatch);
+  const row = x => `<tr class="link" data-href="#/ticket/${x.id}"><td class="mono">${x.id}</td><td>${esc(x.pj)}</td><td>${esc(x.kind)}</td><td>${esc(x.title)}</td><td>${st(x.status)}</td><td>${prLink(x)}</td><td>${fmtT(x.updated)}</td></tr>`;
+  box.innerHTML = `<div class="help">${esc(tt(T.tickets.count, { n: list.length, m: tkAll.length }))}</div>`
+    + (list.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.label.kind)}</th><th>${esc(T.th.title)}</th><th>${esc(T.th.state)}</th><th>PR</th><th>${esc(T.th.updated)}</th></tr>${list.map(row).join('')}</table>`
+      : `<div class="empty">${esc(T.empty.tickets)}</div>`);
+}
+/* 条件を URL に書き戻す。hashchange は起きないので画面は作り直されない。lastRoute も合わせて schedule の比較をずらさない */
+function tkSync() {
+  const p = new URLSearchParams();
+  for (const k of ['q', 'pj', 'status']) if (tkFilter[k]) p.set(k, tkFilter[k]);
+  const h = '#/tickets' + (p.toString() ? '?' + p : '');
+  history.replaceState(null, '', h); lastRoute = h;
+}
+async function viewTickets(q) {
+  clearInterval(timer);
+  const p = new URLSearchParams(q || '');
+  tkFilter = { q: p.get('q') || '', pj: p.get('pj') || '', status: p.get('status') || '' };
+  const d = await api('tickets');
+  tkAll = d.tickets.slice().sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  const opt = (list, blank, sel, label) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option value="${esc(x)}" ${x === sel ? 'selected' : ''}>${esc(label ? label[x] || x : x)}</option>`).join('');
+  render(head(esc(T.nav.tickets), T.sub.tickets, link('#/board', T.btn.openBoard)) + `
+    <div class="row filters">
+      <label class="field">${esc(T.label.q)}<input type="text" id="tk-q" data-act="tickets-q" class="w220" placeholder="${esc(T.label.qPlaceholder)}" value="${esc(tkFilter.q)}"></label>
+      <label class="field">${esc(T.label.pj)}<select data-act="tickets-pj">${opt(d.pjs, T.label.allPj, tkFilter.pj)}</select></label>
+      <label class="field">${esc(T.label.status)}<select data-act="tickets-status">${opt(STATUSES, T.label.allStatus, tkFilter.status, T.status)}</select></label>
+    </div>
+    <div class="panel" id="tk-list"></div>`);
+  tkRender();
+}
+
 /* ---------- チケット */
 async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
@@ -190,7 +236,8 @@ async function viewTicket(id, flash) {
   kindDesc = d.kind_desc || {};
   const kindKnown = d.kinds.includes(t.kind);                                              /* 台帳に workflow の無い種別が入っていることがある */
   const runBtn = (label, cls, dry) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''}>${esc(label)}</button>`;
-  render(crumb('#/board', T.nav.board, tt(T.ticket.crumb, { id: t.id })) + `
+  const from = prevRoute.startsWith('#/tickets') ? prevRoute : '#/board';                        /* 絞り込んだ一覧から来たなら、その条件のまま戻す */
+  render(crumb(esc(from), from === '#/board' ? T.nav.board : T.nav.tickets, tt(T.ticket.crumb, { id: t.id })) + `
     <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
     ${t.note ? `<div class="panel note"><b>${esc(T.label.note)}</b> ${esc(t.note)}</div>` : ''}
     <div class="grid2">
@@ -429,6 +476,8 @@ async function viewFile(q) {
 const TO = { start: 'in_progress', review: 'review', done: 'done', reopen: 'todo', block: 'blocked' };
 const actions = {
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
+  'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
+  'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
   'runs-all': el => { localStorage.setItem('runs-all', el.checked ? '1' : '0'); viewRuns(); },
   'dispatch': () => dispatchDialog(),
   'help': () => showHelp(),
@@ -520,6 +569,10 @@ document.addEventListener('click', async e => {
   e.preventDefault();
   try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
+document.addEventListener('input', e => {
+  const el = e.target.closest('[data-act="tickets-q"]'); if (!el) return;
+  clearTimeout(tkDebounce); tkDebounce = setTimeout(() => { tkFilter.q = el.value; tkSync(); tkRender(); }, 150);
+});
 document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
 function go(h) { location.hash = h; }
 
@@ -540,11 +593,12 @@ function showHelp() {
 
 /* ---------- ルーター */
 async function route() {
-  const h = location.hash || '#/board'; lastRoute = h; clearInterval(timer);
+  const h = location.hash || '#/board'; prevRoute = lastRoute; lastRoute = h; clearInterval(timer);
   document.querySelectorAll('.rail a[data-nav]').forEach(a => a.classList.toggle('active', h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'))));
   const [path, q] = h.slice(1).split('?'); const seg = path.split('/').filter(Boolean);
   try {
     if (seg[0] === 'board' || !seg.length) await viewBoard();
+    else if (seg[0] === 'tickets') await viewTickets(q);
     else if (seg[0] === 'ticket') await viewTicket(seg[1]);
     else if (seg[0] === 'runs') await viewRuns();
     else if (seg[0] === 'run') await viewRun(decodeURIComponent(seg.slice(1).join('/')));
