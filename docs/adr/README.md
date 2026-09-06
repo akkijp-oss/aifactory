@@ -79,3 +79,4 @@
 - [0065: モデルの設定は console が作業ツリーの `workflow/kit/` を直接書き、工程単位の `model` を新設する](0065-console-edits-model-settings-in-the-work-tree.md)
 - [0066: 制御系 sqlite のロックは「長く待つ」のではなく「トランザクションをやり直す」（WAL 併用。runner の poll は op を取り消さない）](0066-control-sqlite-retries-the-transaction.md)
 - [0067: worker はゲストを止める前に作業ブランチを wip へ push する（保全コマンドは制御系が payload で渡す）](0067-worker-preserves-work-before-stopping-the-guest.md)
+- [0068: 止まったゲストは `guest-start` で起動し直し、`--resume` がそれを自動で呼ぶ（起動できない回は作り直さず止まる）](0068-guest-start-restarts-a-stopped-guest.md)

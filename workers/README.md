@@ -13,7 +13,7 @@ Windowsは [Windowsワーカーの導入と運用](../docs/windows-worker.md) �
 
 - 制御系: Python標準ライブラリのHTTPS受信サービスとSQLite操作キュー。既存consoleから独立して起動する。
 - Mac: Go製ワーカー。HTTPSによる操作取得、heartbeat、逐次ログ送信、結果返送、永続ジャーナル。
-- 操作: `probe`、`guest-exec`、`guest-prepare`、`guest-release`。VM名と基準イメージは管理者のローカル設定で固定する。
+- 操作: `probe`、`guest-exec`、`guest-prepare`、`guest-start`、`guest-release`。VM名と基準イメージは管理者のローカル設定で固定する。
 - 同時1操作。停止・切断・異常終了で結果が不明なら `uncertain` として再割当を止める。ログ上限の超過は理由にならない（切り捨てて続行する）。クラッシュ後に同じコマンドを自動再実行しない。
 - `backend: macos-pull` のプロジェクトを通常の `ticket_run` / `kb run` から実行する。制御系がrun単位のleaseを保持し、step間も他のrunを割り込ませない。
 - `base_vm` を設定すると、prepareで専用ゲストをcloneし、成果物の受領・SHA-256照合後にreleaseでゲストを停止・削除する。失敗時はleaseと記録を保持する。既存VMは引き取らない。
@@ -146,7 +146,7 @@ app_dir: /Users/admin/app
 
 成果物はrunの作業ディレクトリ直下の通常ファイルに限定し、合計4 MiB、個別入力は350 KBまで。認証情報 `runtime.env` は回収しない。`runs/<run>/worker-operations.log` で操作IDを追い、`artifacts.json` に回収したファイルのハッシュ、`state.json` にbackend、worker、lease、回収・返却状態を記録する。転送失敗時にVMを削除しない。
 
-`--keep` は回収後もVMとleaseを保持する。`--resume` は記録されたleaseを所有している場合だけ継続する。認証注入・リポジトリ作成前のprovision失敗は、同じ稼働中ゲストで再試行できるため、provision.shは再実行可能にする。途中まで作られたリポジトリや停止したゲストは自動で引き取らない。`kb run --resume` は日付が変わっていてもチケットに記録されたrunを使う。失敗後の再実行で新たなVMを自動割当しない。状態不明なら既存の `control show` / `resolve` で操作を確認し、専用ゲストの状態を確定してから復旧する。成功した `guest-release` 操作を指定した `control release-lease <worker> <lease> --operation <id>` だけが制御系の予約を解放する。
+`--keep` は回収後もVMとleaseを保持する。`--resume` は記録されたleaseを所有している場合だけ継続する。認証注入・リポジトリ作成前のprovision失敗は、同じ稼働中ゲストで再試行できるため、provision.shは再実行可能にする。途中まで作られたリポジトリは自動で引き取らない。止まっているだけのゲストは `--resume` が `guest-start` で起動し直す（clone も delete もしない）が、一覧に無い・起動できないゲストは作り直さずに失敗する（ADR-0068）。`kb run --resume` は日付が変わっていてもチケットに記録されたrunを使う。失敗後の再実行で新たなVMを自動割当しない。状態不明なら既存の `control show` / `resolve` で操作を確認し、専用ゲストの状態を確定してから復旧する。成功した `guest-release` 操作を指定した `control release-lease <worker> <lease> --operation <id>` だけが制御系の予約を解放する。
 
 ## VMの画面操作
 

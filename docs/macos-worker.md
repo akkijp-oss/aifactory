@@ -253,12 +253,12 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 | `base_ready` がfalse | 設定したローカル基準VMが存在するか、イメージ取得が完了したかを確認する |
 | CLI導入が長時間かかる | provisionログで進行・再取得を確認する。取得済みという理由だけで未検証のバイナリを配置しない |
 | GitHub token発行に失敗 | PJ設定とAppのインストール権限を確認する。runnerは同じリポジトリ内のsandbox CLIを呼ぶ。値をログへ出さない |
-| 日付をまたいで再開する | `kb run <id> --resume`。チケットに記録されたrunを使う |
+| 日付をまたいで再開する | `kb run <id> --resume`。チケットに記録されたrunを使う。ゲストが止まっていれば起動し直してから続く |
 | 操作が `uncertain` | ゲスト停止と操作状態を管理者が確認する。手順は「[uncertainからの復旧](#uncertainからの復旧)」 |
 | ログが途中で切れている | 1操作16 MiBに達した合図。切り捨て行が入り結果に `truncated` が付く。操作自体は完走しているので、exit codeと成果物で判断する |
 | 成果物回収・VM削除に失敗 | leaseを保持する。回収状況・ゲストの実状態を確定してから復旧する |
 
-`--resume` はそのrunのleaseを所有している場合に限る。認証情報・リポジトリ・工程履歴がまだないprovision失敗なら、同じ稼働中ゲストで再試行できる。途中まで作られたリポジトリや停止したゲストは自動で作り直さない。
+`--resume` はそのrunのleaseを所有している場合に限る。認証情報・リポジトリ・工程履歴がまだないprovision失敗なら、同じゲストで再試行できる。**止まっているだけのゲストは、中を見る前に `guest-start` で起動し直してから続く**（ADR-0068）。ゲストが一覧に無い・起動できないときは `Mac guest cannot be restarted` で止まり、leaseもゲストも残る。途中まで作られたリポジトリや、起動できないゲストを自動で作り直すことはない。
 
 再開する工程は `state.json` の工程履歴（`history`）から決まる。履歴が空（provisionで落ちて1工程も終えていない）ならworkflowの先頭工程から、履歴があれば最後に走った工程から続く。`next: human` を引き継いで工程を1つも走らせずにVMを返却することはない。続きが無いrun（PRまで出ている、`next: end`）はVMに触る前に止まる（ADR-0047）。
 
@@ -315,10 +315,11 @@ python3 workers/bin/control --db "$db" submit <worker> guest-exec \
 
 **leaseをpayloadに入れないと断られる。** ワーカーがleaseを保持している間、payloadのleaseがそれと一致しない操作は制御系が409で拒否し、`operation does not own worker lease` を返す（`workers/lib/pull.py`）。`--lease auto` は保持中のleaseが無ければ何も入れないので、その場合はMacのようなlifecycleワーカーでは `lifecycle worker requires a lease` になる。payloadファイルに `lease` があればそちらが優先し、`--lease <id>` の明示指定はpayloadを上書きする。payloadはDBに残るので、診断コマンドに秘密情報を書かない。
 
-**5. 続けるか、片づけるかを決める。** ここでゲストの実状態によって道が分かれる。`--resume` は、そのrunのleaseをワーカーが**保持したまま**であることと、ゲストが**動いたまま**であることの両方を要求する（`workflow/lib/macos.py`。leaseを欠くと `Mac resume requires this run's retained lease` で止まる）。6でleaseを解放したrunは `--resume` できない。
+**5. 続けるか、片づけるかを決める。** ここでゲストの実状態によって道が分かれる。`--resume` は、そのrunのleaseをワーカーが**保持したまま**であることを要求する（`workflow/lib/macos.py`。leaseを欠くと `Mac resume requires this run's retained lease` で止まる）。ゲストは止まっていてもよい。止まっているだけなら `--resume` が `guest-start` で起動し直してから続く（ADR-0068）。6でleaseを解放したrunは `--resume` できない。
 
 - **ゲストが生きていて（3の「動いたまま」）、leaseも保持している** → 6へ進まない。leaseを解放しないまま `kb run <id> --resume` で続ける。準備済みのゲスト（cloneが済み `work/ticket.md` が空でない）なら、工程履歴の最後に走った工程から続く。準備前なら、工程履歴が空で `$SANDBOX_APP_DIR` と `work/runtime.env` がまだ無いprovision失敗のときだけ再実行できる。どちらにも当てはまらないゲストは `Mac setup is incomplete or the guest is stopped` で止まるので、中を見てから決める（工程の決まり方は「[失敗時の復旧](#失敗時の復旧)」）。
-- **ゲストが落ちている、またはこのrunを畳む** → 6でleaseを片づけ、`--resume` ではなく新しいrunを投げ直す。新しいVMを取り直して記録のwipブランチと工程から続けるなら `kb run <id> --from`、最初から回すなら `kb run <id>`。断られ方は2つあり、直し方が違う（`kanban/bin/kb`）。`--from`（`--branch` も同じ）は、台帳が実行中のrunを指していて**そのrunの記録もまだ終わっていない**ときに断られる。まだ動いているなら終わるのを待ち、動いていないなら `kb reopen <id>` で板を戻すか、承知の上なら `--force` を付ける。素の `kb run <id>` が断られるのは**チケットが `done`** のときで、こちらも `kb reopen <id>` で戻してから投げる。
+- **ゲストが止まっているだけ（`tart list` にあって `stopped`）で、leaseも保持している** → 6へ進まない。leaseを解放しないまま `kb run <id> --resume` で続ける。runnerが先に `guest-start` を投げてゲストを起動し直し、そのあとは1つ上と同じ判断に進む（ADR-0068）。手で先に起動して確かめたいときは `python3 workers/bin/control --db "$db" submit <worker> guest-start --lease auto --wait 300` を使う。ワーカーのバイナリが古く `guest_start` を広告していないと自動では起動しないので、その場合はワーカーを更新する。
+- **ゲストが一覧に無い・起動できない、またはこのrunを畳む** → 6でleaseを片づけ、`--resume` ではなく新しいrunを投げ直す。新しいVMを取り直して記録のwipブランチと工程から続けるなら `kb run <id> --from`、最初から回すなら `kb run <id>`。断られ方は2つあり、直し方が違う（`kanban/bin/kb`）。`--from`（`--branch` も同じ）は、台帳が実行中のrunを指していて**そのrunの記録もまだ終わっていない**ときに断られる。まだ動いているなら終わるのを待ち、動いていないなら `kb reopen <id>` で板を戻すか、承知の上なら `--force` を付ける。素の `kb run <id>` が断られるのは**チケットが `done`** のときで、こちらも `kb reopen <id>` で戻してから投げる。
 
 **6. leaseを解放する（片づける場合）。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
 

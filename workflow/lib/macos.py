@@ -313,6 +313,14 @@ def backend(Run):
             owned = next((w for w in self.client.store.workers() if w["id"] == self.project["worker"]), {})
             if (owned.get("lease") or {}).get("id") != lease:
                 raise RuntimeError("Mac resume requires this run's retained lease")
+            # 止まっているだけのゲストは、中を見る前に起動し直す（チケット 478）。ゲストが無い・起動できない
+            # ときは失敗で止め、lease もゲストも消さずに人の検査に残す。guest-start を広告しない古い worker
+            # には投げない（届いても uncertain で worker ごと塞がるだけ）
+            if (owned.get("info") or {}).get("guest_start"):
+                self.log("Mac guest start (resume)")
+                _, r = self.client.execute("guest-start")
+                if r.returncode:
+                    raise RuntimeError("Mac guest cannot be restarted (missing or broken); lease retained for inspection")
             ready = self.sb(f"test -d \"$SANDBOX_APP_DIR/.git\" && test -s {shlex.quote(self.work + '/ticket.md')} && printf prepared", check=False)
             if ready == "prepared":
                 self.refresh_token()
@@ -321,7 +329,8 @@ def backend(Run):
             # a repository were created, in the same running, owned guest.
             clean = self.sb(f"test ! -e \"$SANDBOX_APP_DIR\" && test ! -L \"$SANDBOX_APP_DIR\" && test ! -e {shlex.quote(self.env_file)} && printf provisionable", check=False)
             if self.state.get("history") or clean != "provisionable":
-                raise RuntimeError("Mac setup is incomplete or the guest is stopped; inspect the retained guest before recovery")
+                raise RuntimeError("Mac setup is incomplete or the guest is stopped; inspect the retained guest before recovery"
+                                   + ("" if (owned.get("info") or {}).get("guest_start") else "; this worker does not advertise guest-start, so update the worker"))
             self.log("resume provisioning in the retained Mac VM")
             self.setup_project()
 
