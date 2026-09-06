@@ -136,6 +136,8 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 
 `--resume` はそのrunのleaseを所有している場合に限る。認証情報・リポジトリ・工程履歴がまだないprovision失敗なら、同じ稼働中ゲストで再試行できる。途中まで作られたリポジトリや停止したゲストは自動で作り直さない。
 
+再開する工程は `state.json` の工程履歴（`history`）から決まる。履歴が空（provisionで落ちて1工程も終えていない）ならworkflowの先頭工程から、履歴があれば最後に走った工程から続く。`next: human` を引き継いで工程を1つも走らせずにVMを返却することはない。続きが無いrun（PRまで出ている、`next: end`）はVMに触る前に止まる（ADR-0047）。
+
 `control cancel` は停止要求であり、停止確認ではない。`resolve <operation-id> --confirmed-stopped` は管理者が停止確認した後だけ使う。操作の解決とrunのlease解放は別で、後者は成功した `guest-release` を指定する `control release-lease` が必要。詳しい引数と通信断時の動作は [workersの復旧手順](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧)を参照する。
 
 ## 実機で確認した範囲と制約

@@ -14,7 +14,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `ticket.md` | The ticket. Line 1 is the title, optionally `pr: N` on line 2 |
 | `--dry-run` | No VM: validate definitions and assemble prompts only, into `workspace/runs/…-dry/` |
 | `--keep` | Do not release the VM afterwards (to look inside) |
-| `--resume` | Continue from the next step in `state.json` on the VM already lent |
+| `--resume` | Continue on the VM already lent, from the step decided by the step history in `state.json` (the first step of the workflow when the history is empty, otherwise the last step that ran). A run with nothing left to continue stops before the VM is touched (ADR-0047) |
 | `--from[=step]` | Redo a run that ended at `human` from the given step **on a new VM**. Without a step, uses the previous `resume_step`. The previous run is passed in the `AIFACTORY_FROM_RUN` environment variable (run names only; ADR-0036) |
 | `--branch=name` | The branch to continue from with `--from`. Defaults to the previous `wip_branch` |
 | `--wait[=seconds]` | When the pool has no free VM, wait for one and retry `sandbox take` (3600 seconds on its own; the retry interval is `AIFACTORY_WAIT_POLL_S` seconds, 30 by default) |

@@ -136,6 +136,8 @@ Collection accepts regular files directly under the guest working directory, up 
 
 `--resume` requires ownership of the run's lease. A provisioning failure can be retried in the same running guest if credentials, repository, and step history have not been created. A partially created repository or stopped guest is not automatically recreated.
 
+Which step it restarts from is decided from the step history (`history`) in `state.json`: from the first step of the workflow when the history is empty (provisioning failed before any step ran), and from the last step that ran when it is not. It never carries over `next: human` and releases the guest without running a single step. A run with nothing left to continue (the PR is already out, or `next: end`) stops before the guest is touched (ADR-0047).
+
 `control cancel` requests a stop; it does not confirm it. Use `resolve <operation-id> --confirmed-stopped` only after an administrator verifies shutdown. Resolving an operation is separate from releasing the run's lease: `control release-lease` requires a successful `guest-release` operation. See the [worker recovery reference](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧) for arguments and disconnection behavior.
 
 ## Hardware verification and limitations
