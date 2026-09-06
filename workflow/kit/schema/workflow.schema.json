@@ -120,7 +120,12 @@
             "research",
             "coding"
           ],
-          "description": "役割の既定クラスを上書きする"
+          "description": "役割の既定クラスを上書きする（同じクラスを使う工程は routes.env の 1 行で道連れに変わる）"
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "description": "この工程だけモデル名を固定する（routes.env より優先、環境変数 CLAUDE_MODEL はさらに優先）。同じクラスの他の工程は動かない"
         },
         "inputs": {
           "type": "array",
