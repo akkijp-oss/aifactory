@@ -114,3 +114,79 @@ class SandboxTakeTest(unittest.TestCase):
                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.state_json(), {})
+
+
+# rollback() 本体を走らせるための偽装（245）。pve_rollback は $CALLS に呼び出し回数を数え、
+# FAIL_N 回目までは Proxmox の lock timeout と同じ体裁で失敗する
+ROLLBACK_FAKES = FAKES.replace('rollback() { return 0; }\n', '') + '''
+pve_lock() { :; }
+pve_status() { echo running; }
+pve_start() { return 0; }
+pve_rollback() {
+  local n; n=$(( $(cat "$CALLS" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CALLS"
+  if (( n <= FAIL_N )); then
+    echo "[api] task: stopped can't lock file '/var/lock/qemu-server/lock-$1.conf' - got timeout" >&2
+    return 1
+  fi
+  return 0
+}
+'''
+
+LENT = ('{"101":{"vmid":9201,"name":"sb-t-pj-01","ip":"10.77.1.1","pj":"pj",'
+        '"since":"2026-09-06T10:00:00+09:00"}}')
+
+
+@unittest.skipUnless(shutil.which('jq'), 'jq required by sandbox CLI')
+class SandboxRollbackFailureTest(unittest.TestCase):
+    """rollback が失敗した release / reset は非 0 で終わり、state を消さないこと（245）"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.state = os.path.join(self.dir, 'state.json')
+        pathlib.Path(self.state).write_text(LENT)
+        self.calls = os.path.join(self.dir, 'calls')
+
+    script = SandboxTakeTest.script
+    state_json = SandboxTakeTest.state_json
+
+    def run_cmd(self, cmd, *args, fail_n=0):
+        script = self.script(fakes=ROLLBACK_FAKES, tail='cmd_%s "$@"\n' % cmd)
+        env = dict(os.environ, CALLS=self.calls, FAIL_N=str(fail_n),
+                   SB_ROLLBACK_TRIES='3', SB_ROLLBACK_WAIT='0')
+        return subprocess.run(['bash', '-c', script, 'sandbox', *args], text=True, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def call_count(self):
+        return int(pathlib.Path(self.calls).read_text().strip())
+
+    def test_release_retries_transient_rollback_failure(self):
+        r = self.run_cmd('release', '101', fail_n=1)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.state_json(), {})
+        self.assertIn('[warn]', r.stderr)
+        self.assertIn('rollback 失敗 (1/3)', r.stderr)
+        self.assertIn('[ok] released', r.stdout)
+        self.assertEqual(self.call_count(), 2)
+
+    def test_release_keeps_state_when_rollback_keeps_failing(self):
+        r = self.run_cmd('release', '101', fail_n=99)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(list(self.state_json()), ['101'])
+        self.assertIn('巻き戻しに失敗', r.stderr)
+        self.assertIn('state は保持', r.stderr)
+        self.assertIn('sandbox release 101', r.stderr)
+        self.assertNotIn('[ok] released', r.stdout)
+        self.assertEqual(self.call_count(), 3)
+
+    def test_release_force_deletes_state_even_if_rollback_fails(self):
+        r = self.run_cmd('release', '101', '--force', fail_n=99)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.state_json(), {})
+        self.assertIn('--force', r.stderr)
+
+    def test_reset_fails_nonzero_when_rollback_keeps_failing(self):
+        r = self.run_cmd('reset', '101', fail_n=99)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(list(self.state_json()), ['101'])
+        self.assertIn('巻き戻しに失敗', r.stderr)
+        self.assertIn('貸出は継続', r.stderr)

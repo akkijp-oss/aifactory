@@ -9,7 +9,7 @@ sandbox take <pj> <task-id>      lend a free VM (DNS task-<id>.sb.internal, env 
 sandbox ssh <task-id> [cmd...]   log in as dev / run a command (via login shell)
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          roll back to snapshot clean (stays lent, env re-injected)
-sandbox release <task-id>        roll back and return
+sandbox release <task-id> [--force]  roll back and return (--force: drop from the ledger even if the rollback failed)
 sandbox ls                       list the pool VMs (who it is lent to / IP / power state)
 ```
 
@@ -18,8 +18,8 @@ sandbox ls                       list the pool VMs (who it is lent to / IP / pow
 | `take` | Picks a free VM of the project's pool and reserves it in `state.json` (this much runs inside the `state.json.lock` critical section, so concurrent takes never pick the same VM) → `qm rollback clean` → writes the project env and a GitHub App token to `/run/sandbox/env` → registers in dnsmasq on sb-gw → confirms the reservation. A failure on the way drops the reservation | No free VM, no project env, App not installed |
 | `ssh` | `ssh dev@10.77.1.N` (ProxyJump if `SB_JUMP` is set). cmd runs through a login shell (`/etc/profile.d/sandbox.sh` loads the env) | VM unreachable |
 | `url` | Prints `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` | |
-| `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean` |
-| `release` | reset → remove DNS → delete from `state.json`. Waits and retries on rollback lock contention | |
+| `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean`; the rollback failed (exits non-zero, the VM stays lent) |
+| `release` | reset → remove DNS → delete from `state.json`. On rollback lock contention it waits and retries, 3 times 10 seconds apart by default (`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`), printing every failure to stderr | The rollback failed (exits non-zero and keeps the entry in `state.json`; the message tells you what to do next). `--force` deletes the entry even when the rollback failed, for a VM you fixed by hand |
 | `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it, so `running` rows appear even when nothing is lent | |
 
 Example `sandbox ls` output:

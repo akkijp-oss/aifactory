@@ -25,7 +25,8 @@ sandbox ssh 013                 # 中に入る（dev ユーザー）
 sandbox ssh 013 'git status'    # コマンドだけ実行
 sandbox url 013                 # http://task-013.sb.internal:3000
 sandbox reset 013               # clean に巻き戻す（貸出は継続。env も消えるので take し直しは不要、CLI が再注入する）
-sandbox release 013             # 巻き戻して返却
+sandbox release 013             # 巻き戻して返却（巻き戻しに失敗したら非0で終わり、台帳には残る）
+sandbox release 013 --force     # 手で直した VM を巻き戻さずに返す（台帳からだけ消す）
 ```
 
 cmux から使うときは surface で `sandbox take … && sandbox ssh …` を1行で打つ。surface = ssh セッション = 1エージェント。
@@ -87,6 +88,7 @@ base を直したら PJ 層も作り直しになる。`30-base-template.sh` → 
 | 10.77.0.2 に ping 不可 | Tailscale 管理コンソールで `sb-gw` の route が Approved か。Approved でも不可なら `pct exec 9000 -- journalctl -u tailscaled -n 20` に `Drop: … no rules matched` が出ていないか（= tailnet **ACL** に `10.77.0.0/16:*` 宛て accept が無い） | `pct exec 9000 -- tailscale status`。落ちていれば `pct start 9000`。**急ぎなら** `~/.config/sandbox/env` に `SB_JUMP=pve1`（`PVE_HOST` と同じ値）を入れると CLI が Proxmox ホスト経由（ProxyJump）で VM に入る（ホストに ssh できる Mac から。URL は IP 直打ち） |
 | VM に ssh 不可 | `qm status 92NN`、`qm agent 92NN network-get-interfaces` | `qm start`。起動していれば `qm terminal 92NN` でシリアルから見る |
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | 無ければその VM は破棄して `40-pool.sh` で作り直す |
+| `release` / `reset` が「巻き戻しに失敗」で止まる | `sandbox ls`、`qm config 92NN | grep lock` | 台帳は残っているので少し待って再実行（既定で 3 回・10 秒間隔まで自動再試行。`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT` で伸ばせる）。ロックが残り続けるなら Proxmox 側で task を確認。手で直したら `sandbox release <task> --force` |
 | VM から外に出られない | `ssh "$PVE_HOST" 'iptables -t nat -S | grep 10.77'`、`pve-firewall status` | SDN を再適用 `pvesh set /cluster/sdn`。firewall で落ちている場合は `/etc/pve/firewall/cluster.fw` の group sandbox を確認（LAN / 他 VM / tailnet 宛ては仕様で不可。ADR-0010） |
 | Mac から VM に届かない（firewall 有効化後） | VM の `/etc/pve/firewall/<vmid>.fw` と `qm config <vmid> | grep firewall` | `sandbox/proxmox/run.sh 50-firewall.sh` を再実行。プールは clean スナップショットに firewall=1 が含まれている必要がある |
 | Claude Code が認証エラー | VM 内 `env | grep CLAUDE_CODE_OAUTH_TOKEN` | Mac で `sandbox token set <pj>` を更新して `sandbox reinject`（トークン期限切れは `claude setup-token` 再実行） |
