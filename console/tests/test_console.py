@@ -124,6 +124,47 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_intake_keeps_draft_across_navigation(self):
+        """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
+
+        `route()` は hash が変わるたび `viewIntake()` を呼び、`render()` が main を作り直す。
+        入力をどこにも保持しないと、起票 → ログ → 起票の往復・再読み込み・戻るで必ず空になる。
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、ソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+
+        def action(name):
+            j = app.index(f"  '{name}': ")
+            m = re.compile(r"\n  '[\w-]+': ").search(app, j + 1)
+            return app[j:m.start() if m else len(app)]
+
+        # 保存先は sessionStorage（同じタブの往復・再読み込み・戻るで残り、タブを閉じれば消える）
+        self.assertIn("sessionStorage", app, "下書きの保存先が無い")
+        self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
+        self.assertTrue(re.search(r"(?:d|draft)\s*=\s*\w*[Dd]raft\w*\(", view), "viewIntake が保存済みの下書きを読んでいない")
+
+        # 9 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
+        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"), ("in-dry", "dry"),
+                         ("new-pj", "newPj"), ("new-kind", "newKind"), ("new-pr", "newPr"),
+                         ("new-title", "title"), ("new-body", "body")):
+            self.assertIn(f'id="{eid}"', view, f"{eid} が起票画面に無い")
+            self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} が下書きの対応表に無い（保存されない）")
+            self.assertTrue(re.search(rf"\b(?:d|draft)\.{key}\b", view), f"{eid} の下書き {key} を描画で復元していない")
+
+        # 破棄の規則: 送信が成功したときだけ、そのパネルの分を消す（失敗したら直して送り直せる）
+        for name in ("intake", "new"):
+            b = action(name)
+            self.assertIn("draftDrop", b, f"actions['{name}'] が送信後に下書きを消していない")
+            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"actions['{name}'] が送信の前に下書きを消している")
+
+        # 破棄は明示操作（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
+        for act in ("intake-clear", "new-clear"):
+            self.assertIn(f"'{act}'", view, f"「下書きを捨てる」（{act}）のボタンが起票画面に無い")
+            self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
+        self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")

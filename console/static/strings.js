@@ -14,7 +14,7 @@ const T = {
   "banner": { "offline": "サーバーに届きません。console/bin/console が動いているか確かめてください。" },
 
   "btn": {
-    "cancel": "キャンセル", "close": "閉じる", "undo": "元に戻す",
+    "cancel": "キャンセル", "close": "閉じる", "undo": "元に戻す", "draftClear": "下書きを捨てる",
     "file": "起票する", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
@@ -109,7 +109,8 @@ const T = {
     "pjPool": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
-    "shortcutsClose": "ダイアログを閉じる。"
+    "shortcutsClose": "ダイアログを閉じる。",
+    "draftLost": "下書きの {v} は今は選べません。既定に戻しました。"
   },
 
   "msg": {
@@ -119,7 +120,9 @@ const T = {
     "synced": "チケット {id} の状態を実行記録に合わせました。",
     "filed": "チケット {id} を起票しました。",
     "stopSent": "止める合図（SIGTERM）を送りました。終わるまで数秒かかることがあります。",
-    "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。"
+    "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
+    "draftRestored": "前回の下書きを復元しました。",
+    "draftCleared": "下書きを捨てました。"
   },
 
   "err": {
