@@ -31,7 +31,7 @@ git ls-files 'docs/source/*.transcript.md' | grep -q . && { echo "NG  文字起�
 (( rc )) || echo "ok"
 
 echo "== 2. 秘密情報らしきもの（全履歴）"
-secrets"$(git log -p --all | grep -nE "$SECRET_PAT" | head -5)"
+secrets="$(git log -p --all | grep -nE "$SECRET_PAT" | head -5)"
 if [[ -n "$secrets" ]]; then echo "$secrets" | cut -c1-160; echo "NG  上の行を確認"; rc=1; else echo "ok"; fi
 
 echo "== 3. 環境固有・私有の名前（追跡ファイル）"
