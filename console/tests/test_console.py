@@ -665,6 +665,10 @@ class SandboxSharedVmTest(unittest.TestCase):
         for key in ("T.dialog.release.sharedWarning", "shared"):
             self.assertIn(key, rel, key)
         self.assertRegex(rel, r"typed:\s*[^,]*shared")                  # 共有なら run が無くても番号入力を求める
+        # 実勢の表（sandbox ls）の貸出先は共有時 `221,222` で来る。1 本のリンクにすると /tickets/(\d+) に合わず開けない
+        self.assertIn("split(',')", body)                               # 1 チケット 1 リンクに分ける
+        vms = body[body.index("d.vms.map"): body.index("T.help.lsAxes")]
+        self.assertNotIn("#/ticket/${esc(v.task)}", vms)                # カンマ区切りのまま 1 本のリンクにしない
 
 
 class AuthDocsTest(unittest.TestCase):

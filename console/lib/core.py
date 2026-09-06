@@ -293,6 +293,7 @@ def parse_ls(text):
     CLI は固定幅の printf で出す（sandbox/bin/sandbox の cmd_ls）。VM 名・IP・時刻に空白は入らないので空白で区切る。
     捨てる行: ジョブ先頭の `$ ...`、`[error]` のような注記、見出し（TASK ...）、列数が合わない行。
     読めない行は黙って捨てる（生ログはジョブの記録にそのまま残る）。task が `-`（貸出なし）のときは None。
+    同じ VM に複数の貸出があると CLI は 1 台 1 行のまま task を `221,222` と並べるので、戻りの task もカンマ区切りになる。
     """
     out = []
     for line in (text or "").splitlines():

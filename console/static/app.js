@@ -385,6 +385,9 @@ async function viewSandbox() {
   const sharedEntries = Object.entries(shared);
   const othersOf = task => (Object.values(shared).find(ts => ts.includes(String(task))) || []).filter(t => t !== String(task));
   const vmOf = vmid => ((lent.find(([, v]) => String(v.vmid) === vmid) || [, {}])[1].name) || '';
+  /* 実勢の表（sandbox ls）の貸出先は、同じ VM に複数の貸出があると `221,222` で来る。
+     1 本のリンクにするとチケットを開けないので、1 チケット 1 リンクに分けて共有の印を添える */
+  const lentToCell = task => { const ts = String(task).split(',').filter(t => t); return ts.map(t => `<a href="#/ticket/${esc(t)}" class="mono">${esc(t)}</a>`).join('、') + (ts.length > 1 ? ` <span class="st blocked">${esc(T.sandbox.sharedBadge)}</span>` : ''); };
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
     <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(sharedEntries.length ? tt(T.sandbox.countShared, { n: d.lease_count, m: d.vm_count }) : tt(T.sandbox.count, { n: lent.length }))}</small></h2>
       ${sharedEntries.map(([vmid, tasks]) => `<div class="warn">${esc(tt(T.sandbox.sharedWarn, { vm: vmOf(vmid), vmid, tasks: tasks.join('、') }))}</div>`).join('')}
@@ -398,7 +401,7 @@ async function viewSandbox() {
       ${lsFailed ? `<div class="err">${esc(tt(T.sandbox.lsFailed, { t: fmtT(lsFailed.finished) }))} <a href="#/job/${esc(lsFailed.id)}">${esc(T.btn.openJob)}</a></div>
         <div class="help top">${esc(T.help.lsFailed)}</div>${failLog && failLog.log && tail3(failLog.log.text) ? `<pre class="log small top">${esc(tail3(failLog.log.text))}</pre>` : ''}` : ''}
       ${d.vms.length ? `<table class="top"><tr><th>${esc(T.th.lentTo)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.power)}</th><th>${esc(T.th.lentSince)}</th></tr>
-        ${d.vms.map(v => `<tr><td>${v.task ? `<a href="#/ticket/${esc(v.task)}" class="mono">${esc(v.task)}</a>` : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(pjOf(v.name))}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
+        ${d.vms.map(v => `<tr><td>${v.task ? lentToCell(v.task) : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(pjOf(v.name))}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
         <div class="help top">${esc(T.help.lsAxes)}</div>` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
