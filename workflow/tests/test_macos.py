@@ -341,3 +341,187 @@ class MacLeaseWaitTest(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+# 偽 sandbox。鍵の選び方の正本は bash の keys_pick / _pool_apply_locked（test_sandbox_keys.py が固定する）ので、
+# ここが写すのは「どう呼ばれるか」と「stdout の形」だけ。--current が有効な鍵ならそれを、駄目なら先頭を返す
+FAKE_SANDBOX = r'''#!/usr/bin/env python3
+import json, os, pathlib, sys
+argv = sys.argv[1:]
+calls = pathlib.Path(os.environ['FAKE_SANDBOX_CALLS'])
+calls.write_text(calls.read_text(encoding='utf-8') + json.dumps(argv, ensure_ascii=False) + '\n', encoding='utf-8')
+if argv[:2] == ['gh-app', 'token']:
+    print('ghs_fake-token-gh'); sys.exit(0)
+if argv[:2] == ['keys', 'used']:
+    sys.exit(0)
+if argv[:2] != ['keys', 'pick']:
+    sys.exit('[error] unexpected: ' + ' '.join(argv))
+opts, rest, i = {}, argv[2:], 0
+while i < len(rest):
+    a = rest[i]
+    if '=' in a: k, v = a.split('=', 1); opts[k] = v; i += 1
+    elif a == '--json': opts[a] = True; i += 1
+    else: opts[a] = rest[i + 1]; i += 2
+enabled = json.loads(pathlib.Path(os.environ['FAKE_POOL']).read_text(encoding='utf-8'))
+if not enabled:
+    sys.exit('[error] 鍵なし: Fable に使う、Opus・Sonnet・Haiku に使う鍵が鍵プールに無い')
+cur = dict(kv.split('=', 1) for kv in opts.get('--current', '').split(',') if '=' in kv)
+keys, env = {}, {}
+for group, families in (('fable', ['FABLE']), ('other', ['OPUS', 'SONNET', 'HAIKU'])):
+    if group not in opts.get('--need', 'fable,other').split(','): continue
+    name = cur[group] if cur.get(group) in enabled else enabled[0]
+    keys[group] = name
+    for f in families:
+        env['CLAUDE_CODE_OAUTH_TOKEN_' + f] = 'fake-token-' + name
+        env['CLAUDE_KEY_NAME_' + f] = name
+    if group == 'other': env['CLAUDE_CODE_OAUTH_TOKEN'] = 'fake-token-' + name
+print(json.dumps({'keys': keys, 'env': env}))
+'''
+
+
+class PullBackendKeyTest(unittest.TestCase):
+    """pull backend の Claude の鍵は制御系の鍵プールが正本（チケット 391 / ADR-0044・ADR-0046）。
+
+    実測（2026-09-10）: 長生きした MCP サーバーの環境に残った古い鍵が runner まで素通りし、
+    credentials() が env ファイルの source に落ちてその鍵を guest の runtime.env に書いていた。
+    無効化済みの鍵が全工程・全モデルで使われ続けたので、
+    「環境の鍵は guest に届かない」「系統ごとにプールから選ぶ」「鍵が無ければ書かずに止まる」を固定する。
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.tmp = pathlib.Path(tmp.name)
+        fake = self.tmp / 'sandbox' / 'bin' / 'sandbox'
+        fake.parent.mkdir(parents=True)
+        fake.write_text(FAKE_SANDBOX, encoding='utf-8'); fake.chmod(0o755)
+        self.calls = self.tmp / 'calls.jsonl'; self.calls.write_text('', encoding='utf-8')
+        self.pool = self.tmp / 'pool.json'; self.set_pool('pool-a', 'pool-b')
+        old = macos.ROOT; macos.ROOT = self.tmp
+        self.addCleanup(setattr, macos, 'ROOT', old)
+        # runner の環境に残った古い鍵と、env ファイルの置き場（プール運用では鍵は入っていない）
+        for k, v in (('FAKE_SANDBOX_CALLS', str(self.calls)), ('FAKE_POOL', str(self.pool)),
+                     ('XDG_CONFIG_HOME', str(self.tmp / 'config')),
+                     ('CLAUDE_CODE_OAUTH_TOKEN', 'fake-token-leaked-n5')):
+            self.addCleanup(os.environ.pop, k, None)
+            os.environ[k] = v
+
+    def set_pool(self, *names):
+        self.pool.write_text(json.dumps(list(names)), encoding='utf-8')
+
+    def picks(self):
+        return [json.loads(l) for l in self.calls.read_text(encoding='utf-8').splitlines() if '"pick"' in l]
+
+    def make_run(self):
+        run = object.__new__(macos.backend(object))
+        run.dry = False; run.keep = False; run.pj = 'kumitate'; run.task = '391'
+        run.work = str(self.tmp / 'guest'); pathlib.Path(run.work).mkdir(exist_ok=True)
+        run.env_file = run.work + '/runtime.env'
+        run.project = {'worker': 'mac1', 'app_dir': str(self.tmp / 'guest' / 'app')}
+        run.state = {'history': []}; run.save = lambda: None
+        self.logs = []; run.log = self.logs.append
+        run.needed_keys = lambda: ['fable', 'other']
+        run.sb = self.guest_sb(run)
+        return run
+
+    def guest_sb(self, run):
+        """偽 guest。runtime.env を実ファイルとして扱い、命令は本物の command() を通して bash に渡す
+        （Mac 実機は使わない。runtime.env を source した結果が本番と同じ形になることを見る）"""
+        def sb(cmd, input_text=None, check=True):
+            r = subprocess.run(['bash', '-c', run.command(cmd)], input=input_text, text=True, capture_output=True,
+                               env={k: v for k, v in os.environ.items()
+                                    if not k.startswith(('CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_KEY_NAME'))})
+            if check and r.returncode: raise RuntimeError(f'guest command failed ({r.returncode})')
+            return r.stdout
+        return sb
+
+    def env_body(self):
+        return pathlib.Path(self.tmp / 'guest' / 'runtime.env').read_text(encoding='utf-8')
+
+    # ---------- 完了条件 2: 環境の鍵は guest に届かない
+    def test_a_key_left_in_the_runner_environment_never_reaches_the_guest(self):
+        run = self.make_run()
+        run.refresh_token()
+        body = self.env_body()
+        self.assertNotIn('leaked', body)
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN_FABLE='fake-token-pool-a'", body)
+        for f in ('OPUS', 'SONNET', 'HAIKU'):
+            self.assertIn(f"CLAUDE_CODE_OAUTH_TOKEN_{f}='fake-token-pool-a'", body)
+            self.assertIn(f"CLAUDE_KEY_NAME_{f}='pool-a'", body)
+        self.assertIn("CLAUDE_KEY_NAME_FABLE='pool-a'", body)
+        self.assertIn("GH_TOKEN='ghs_fake-token-gh'", body)
+        self.assertEqual(run.state['keys'], {'fable': 'pool-a', 'other': 'pool-a'})
+        need = [a for a in self.picks()[0] if a.startswith('--need=')]
+        self.assertEqual(need, ['--need=fable,other'])
+
+    def test_the_pick_is_asked_for_this_task_and_keeps_the_previous_key(self):
+        """次の工程は state に残った名前を --current で渡すので、同じ鍵を使い続ける（ADR-0046）"""
+        run = self.make_run()
+        run.refresh_token(); run.refresh_token()
+        first, second = self.picks()
+        self.assertIn('--task', first); self.assertEqual(first[first.index('--task') + 1], '391')
+        self.assertIn('--pj', first); self.assertEqual(first[first.index('--pj') + 1], 'kumitate')
+        self.assertNotIn('--current=fable=pool-a,other=pool-a', first)
+        self.assertIn('--current=fable=pool-a,other=pool-a', second)
+        self.assertIn("CLAUDE_KEY_NAME_FABLE='pool-a'", self.env_body())
+
+    # ---------- 完了条件 3: 無効化すると次の工程から別の鍵
+    def test_disabling_the_key_moves_the_next_step_to_another_one(self):
+        run = self.make_run()
+        run.refresh_token()
+        self.assertEqual(run.state['keys']['other'], 'pool-a')
+        self.set_pool('pool-b')                                   # pool-a を無効化した
+        run.refresh_token()
+        self.assertEqual(run.state['keys'], {'fable': 'pool-b', 'other': 'pool-b'})
+        self.assertIn("CLAUDE_KEY_NAME_OPUS='pool-b'", self.env_body())
+        self.assertNotIn('pool-a', self.env_body())
+
+    # ---------- 完了条件 4: 鍵が無ければ書かずに止まる
+    def test_an_empty_pool_stops_the_step_without_writing_the_guest_env(self):
+        run = self.make_run()
+        run.NoKey = run_mod.NoKey
+        self.set_pool()
+        with self.assertRaises(run_mod.NoKey) as e:
+            run.refresh_token()
+        self.assertIn('鍵なし:', str(e.exception))
+        self.assertFalse((self.tmp / 'guest' / 'runtime.env').exists())
+        self.assertNotIn('keys', run.state)
+
+    def test_a_step_that_cannot_get_a_key_pauses_instead_of_failing(self):
+        """鍵が取れない工程は「その step が悪い」ではないので、wip を保全して一時停止（PAUSE_KINDS）に載せる"""
+        run = self.make_run()
+        run.NoKey = run_mod.NoKey; run.WIP_KEY_MESSAGE = run_mod.WIP_KEY_MESSAGE
+        run.configure_computer = lambda: self.fail('rented a guest without a key')
+        committed = []; run.commit_tracked = committed.append
+        self.set_pool()
+        ok, info = run.run_agent({'id': 'implement', 'role': 'implementer'})
+        self.assertFalse(ok)
+        self.assertEqual(run.last_fail['failure'], 'key')
+        self.assertEqual(committed, [run_mod.WIP_KEY_MESSAGE])
+        self.assertIn('鍵なし:', info)
+
+    # ---------- 秘密の扱い
+    def test_the_key_value_never_reaches_the_log_state_or_an_exception(self):
+        run = self.make_run()
+        run.refresh_token()
+        blob = json.dumps(run.state, ensure_ascii=False) + '\n'.join(self.logs)
+        self.assertNotIn('fake-token-', blob)
+        self.assertIn('pool-a', json.dumps(run.state))          # 名前だけは残す
+
+    # ---------- 完了条件 5: LAUNCHES に pull backend の起動が数えられる
+    def test_the_guest_reports_the_pool_key_name_for_launches(self):
+        """runtime.env を source した guest で key_probe_command が `(pool: <名前>)` を返し、
+        runner の report_key_launch が `sandbox keys used <名前>` を呼ぶところまで（#75）"""
+        run = self.make_run()
+        run.refresh_token()
+        line = run.sb(run_mod.Run.key_probe_command('OPUS'), check=False).strip()
+        self.assertEqual(line, 'CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: pool-a)')
+        self.assertEqual(run_mod.Run.POOL_KEY_RE.search(line).group(1), 'pool-a')
+
+    # ---------- 再開判定（ADR-0046）
+    def test_take_records_the_needed_purposes_before_preparing(self):
+        run = self.make_run()
+        run.resume = False; run.run_lock = object(); run.client = None
+        with self.assertRaises(Exception):
+            run.take()
+        self.assertEqual(run.state.get('needed_keys'), ['fable', 'other'])
+

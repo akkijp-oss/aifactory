@@ -88,4 +88,24 @@ class WindowsBackendTest(unittest.TestCase):
         r.release()
         self.assertEqual(r.state['artifacts_skipped'],[{'name':'shots','reason':'directory'}])
 
+    def test_every_credential_reaches_the_guest_not_just_two_names(self):
+        """guest の環境には runtime.env の全 key を入れる（チケット 391）。GH_TOKEN と CLAUDE_CODE_OAUTH_TOKEN の
+        2 つ決め打ちだったので、鍵プールの系統別の鍵（_FABLE / _OPUS / …）と CLAUDE_KEY_NAME_* が guest に届かず、
+        全モデルが同じ 1 本で動き、起動も LAUNCHES に数えられなかった"""
+        cmd=self.make_run().command('claude -p x')
+        self.assertIn('PSObject.Properties',cmd)
+        self.assertIn('Set-Item',cmd)
+        self.assertNotIn('$credentials.GH_TOKEN',cmd)              # 決め打ちで写さない（増えた key が黙って落ちる）
+        self.assertNotIn('$credentials.CLAUDE_CODE_OAUTH_TOKEN',cmd)
+
+    def test_credentials_are_asked_for_every_refresh(self):
+        """工程ごとに鍵を選び直す（無効化した鍵が次の工程で入れ替わる。ADR-0046）"""
+        r=self.make_run();asked=[]
+        r.credentials=lambda:(asked.append(1),{'GH_TOKEN':'g','CLAUDE_KEY_NAME_OPUS':'pool-a'})[1]
+        written=[];r.write_remote=lambda remote,data:written.append((remote,data))
+        r.refresh_token();r.refresh_token()
+        self.assertEqual(len(asked),2)
+        self.assertEqual(json.loads(written[-1][1])['CLAUDE_KEY_NAME_OPUS'],'pool-a')
+        self.assertEqual(written[-1][0],r.env_file)
+
 if __name__=='__main__':unittest.main()

@@ -49,6 +49,11 @@ class SandboxKeysTest(unittest.TestCase):
                 'CONF_DIR=%s\nSTATE=%s\nSANDBOX_KEYS=%s\nENV_FILE=%s\nPJ_DIR=%s\nCTL_ENV=%s\nFAKE_ENV_DIR=%s\n'
                 'SB_DOMAIN=t.sb.internal\nAPP_PORT=3000\nAPI_MODE=0\nPVE_HOST=x\nSB_JUMP=\n'
                 '_src_claude=""\n_src_gh=""\nGH_TOKEN=\nGH_REPO=\n'
+                'CLAUDE_TOKEN_FAMILIES="FABLE OPUS SONNET HAIKU"\n'
+                # 本物の起動と同じ並び（sandbox/bin/sandbox の冒頭）: プロセスに残った鍵を捨ててから env ファイルを読む。
+                # これが無いと「env ファイルの鍵」と「環境に残った古い鍵」を分けて確かめられない（チケット 391）
+                'unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU\n'
+                'set -a; source "$ENV_FILE"; set +a\n'
                 'die() { echo "[error] $*" >&2; exit 1; }\n'
                 % (self.dir, self.state, self.keys, self.env_file, os.path.join(self.dir, 'pj'), self.ctl, self.dir))
 
@@ -58,9 +63,11 @@ class SandboxKeysTest(unittest.TestCase):
         if token_part: body += text[text.index('mask() {'):text.index('cmd_gh_app() {')]
         return self.head() + body + FAKES + tail
 
-    def run_sh(self, tail, *args, stdin=None, token_part=False):
-        # VM の中で走らせるので、この VM 自身の鍵が bash に引き継がれて期待と食い違わないよう落とす
+    def run_sh(self, tail, *args, stdin=None, token_part=False, env_extra=None):
+        # VM の中で走らせるので、この VM 自身の鍵が bash に引き継がれて期待と食い違わないよう落とす。
+        # env_extra は「呼び手のプロセスに鍵が残っている」状況を作るため（チケット 391）
         env = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDE_CODE_OAUTH_TOKEN', 'GH_TOKEN', 'CLAUDE_KEY_NAME'))}
+        env.update(env_extra or {})
         return subprocess.run(['bash', '-c', self.script(tail, token_part), 'sandbox', *args], input=stdin, text=True,
                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -73,6 +80,13 @@ class SandboxKeysTest(unittest.TestCase):
 
     def reinject(self, task):
         return self.run_sh('cmd_reinject "$@"\n', task, token_part=True)
+
+    def pick(self, task, pj='pj', need=None, current=None, stale_env=None):
+        """pull backend の runner が呼ぶ口（チケット 391）。stale_env は呼び手のプロセスに残った古い鍵"""
+        args = ['pick', '--pj', pj, '--task', task, '--json']
+        if need: args.append('--need=' + need)
+        if current is not None: args.append('--current=' + current)
+        return self.run_sh('cmd_keys "$@"\n', *args, env_extra=stale_env)
 
     def add(self, name, *flags, token='fake-token-token', note=None):
         args = ['add', name, *flags] + (['--note', note] if note else [])
@@ -258,6 +272,70 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN_', body)
         self.assertIn('CLAUDE_CODE_OAUTH_TOKEN=env-plain\n', body)
         self.assertNotIn('keys', self.state_json()['379'])
+
+    # ---------- keys pick（pull backend の runner が呼ぶ。チケット 391）
+    def test_pick_returns_only_json_with_the_family_variables(self):
+        self.add('fable-a', '--fable', token='fake-token-fable-aaaa')
+        self.add('opus-a', '--other', token='fake-token-other-bbbb')
+        r = self.pick('391')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(r.stdout.strip().splitlines()), 1)          # stdout は JSON 1 行だけ（runner がそのまま読む）
+        out = json.loads(r.stdout)
+        self.assertEqual(out['keys'], {'fable': 'fable-a', 'other': 'opus-a'})
+        env = out['env']
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_FABLE'], 'fake-token-fable-aaaa')
+        self.assertEqual(env['CLAUDE_KEY_NAME_FABLE'], 'fable-a')
+        for f in ('OPUS', 'SONNET', 'HAIKU'):
+            self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_' + f], 'fake-token-other-bbbb')
+            self.assertEqual(env['CLAUDE_KEY_NAME_' + f], 'opus-a')
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-token-other-bbbb')
+        self.assertEqual(self.keys_json()['keys'][0]['uses'], 1)         # 割り当てとして数える（reinject と同じ意味）
+
+    def test_pick_never_falls_back_to_a_key_in_the_process_environment(self):
+        """本件の芯（2026-09-10）: env ファイルに鍵が無くても、プロセスに残った古い鍵は返さない"""
+        self.add('opus-a', '--other', token='fake-token-other-bbbb')
+        leaked = {'CLAUDE_CODE_OAUTH_TOKEN': 'fake-token-leaked-n5', 'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'fake-token-leaked-n5'}
+        r = self.pick('391', need='other', stale_env=leaked)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('leaked', r.stdout)
+        self.assertEqual(json.loads(r.stdout)['env']['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-token-other-bbbb')
+
+    def test_pick_keeps_the_current_key_until_it_is_disabled(self):
+        """--current が「前にこの task が使った鍵」。台帳に載らない pull backend の run はここから同じ鍵を使い続ける"""
+        self.add('fable-a', '--fable', token='fake-token-fable-aaaa')
+        self.add('fable-b', '--fable', token='fake-token-fable-bbbb')
+        first = json.loads(self.pick('391', need='fable').stdout)['keys']['fable']
+        again = json.loads(self.pick('391', need='fable', current='fable=' + first).stdout)['keys']['fable']
+        self.assertEqual(again, first)
+        self.assertEqual(self.keys_cmd('set', first, '--disable').returncode, 0)
+        r = self.pick('391', need='fable', current='fable=' + first)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        picked = json.loads(r.stdout)['keys']['fable']
+        self.assertNotEqual(picked, first)                                # 無効化したら次の工程から別の鍵
+        self.assertEqual(json.loads(r.stdout)['env']['CLAUDE_KEY_NAME_FABLE'], picked)
+
+    def test_pick_stops_with_no_key_and_writes_nothing_to_stdout(self):
+        self.add('opus-a', '--other', token='fake-token-other-bbbb')
+        r = self.pick('391', stale_env={'CLAUDE_CODE_OAUTH_TOKEN': 'fake-token-leaked-n5'})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('鍵なし:', r.stderr); self.assertIn('Fable に使う', r.stderr)
+        self.assertEqual(r.stdout.strip(), '')
+        self.assertEqual(self.keys_json()['keys'][0]['uses'], 0)          # 止まった回は使用回数を動かさない
+
+    def test_pick_on_an_empty_pool_falls_back_to_the_env_file_key(self):
+        """プールが空なら env ファイルの鍵（互換。ADR-0045 で非推奨だが規則は take と同じ）"""
+        pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=fake-token-envfile\n')
+        r = self.pick('391')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out['keys'], {})
+        self.assertEqual(out['env'], {'CLAUDE_CODE_OAUTH_TOKEN': 'fake-token-envfile'})
+
+    def test_pick_needs_json_and_a_task(self):
+        r = self.run_sh('cmd_keys "$@"\n', 'pick', '--pj', 'pj', '--task', '391')
+        self.assertNotEqual(r.returncode, 0); self.assertIn('keys pick', r.stderr)
+        r = self.run_sh('cmd_keys "$@"\n', 'pick', '--json')
+        self.assertNotEqual(r.returncode, 0); self.assertIn('keys pick', r.stderr)
 
     def test_token_show_counts_the_pool(self):
         self.add('fable-a', '--fable')
