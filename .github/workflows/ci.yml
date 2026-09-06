@@ -20,7 +20,7 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: bash -n
         run: |
-          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh console/bin/mcp-remote workers/install.sh workers/templates/install-linux-worker.sh workers/computer/*.sh; do
+          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh bin/ctl-update console/bin/install.sh console/bin/mcp-remote workers/install.sh workers/templates/install-linux-worker.sh workers/computer/*.sh; do
             bash -n "$f" || exit 1
             echo "ok $f"
           done

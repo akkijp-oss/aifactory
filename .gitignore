@@ -26,6 +26,8 @@ workspace
 *.qcow2
 *.tar.zst
 .DS_Store
+# macOS の AppleDouble（Mac の tree を別ホストに被せると残り、種別・役割の候補に混ざる。218 / 247）
+._*
 docs/source/media/
 
 # console が起動した CLI の記録（ローカルの運転ログ。正本は runs/ と kb history）

@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# bin/ctl-update: 制御系（ctl LXC）の checkout を main の最新（か --ref の版）にし、
+#   sandbox CLI / 常駐（console）/ ドキュメントまで一度に配備して疎通まで確かめる（247）。
+#
+#   bin/ctl-update                  origin/main の最新へ
+#   bin/ctl-update --ref v1.2.0     任意の版へ（sha / tag / origin/<branch>。detached になる）
+#   bin/ctl-update --no-docs        website の mkdocs build を飛ばす（docs を直していないとき）
+#   bin/ctl-update --dry-run        何をするかだけ出す（何も変えない）
+#
+# 前提: 制御系の ~/aifactory は clean な checkout であること（ADR-0017）。汚れていたら退避手順を出して止まる。
+#   テナント構築時に AIFACTORY_LOCAL_TREE=1 で手元の作業ツリーを被せた LXC はこれに当たる（247）。
+# sudo が要るのは systemd（unit の更新と restart）だけ。頭で sudo -v を 1 回だけ聞き、以降は聞かない。
+# git の更新は fetch 済みの origin/main への `git merge --ff-only`（= git pull --ff-only）。早送りできなければ止まる。
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REF=""; DOCS=1; DRY=0
+UNIT=/etc/systemd/system/aifactory-console.service
+
+usage() { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+say()  { echo "[ctl-update] $*"; }
+step() { echo; echo "== $*"; }
+die()  { echo "[error] $*" >&2; exit 1; }
+run()  { if (( DRY )); then printf '  (dry) %s\n' "$*"; else "$@"; fi; }
+
+while (( $# )); do
+  case "$1" in
+    --ref) REF="${2:-}"; [[ -n "$REF" ]] || die "--ref に版（sha / tag / origin/<branch>）が要る"; shift 2 ;;
+    --ref=*) REF="${1#--ref=}"; shift ;;
+    --no-docs) DOCS=0; shift ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; die "知らない引数: $1" ;;
+  esac
+done
+
+cd "$REPO"
+say "repo: $REPO$( (( DRY )) && echo '  (dry-run)')"
+
+# ---------- 1. macOS のごみを消す（218 の直接原因。tree が汚れて git が使えなくなるのも防ぐ）
+step "macOS のごみ（._* / .DS_Store）を消す"
+mapfile -t junk < <(find "$REPO" -path "$REPO/.git" -prune -o \( -name '._*' -o -name '.DS_Store' \) -print)
+if (( ${#junk[@]} )); then
+  printf '  %s\n' "${junk[@]#$REPO/}"
+  (( DRY )) || rm -f -- "${junk[@]}"
+  say "${#junk[@]} 個を消した"
+else
+  say "無し"
+fi
+
+# ---------- 2. clean な checkout であることを確かめる
+step "checkout の状態"
+git rev-parse --git-dir >/dev/null 2>&1 || die "$REPO は git の checkout ではない"
+dirty="$(git status --porcelain)"
+if [[ -n "$dirty" ]]; then
+  echo "$dirty" >&2
+  cat >&2 <<EOM
+[error] 作業ツリーが clean ではない。制御系は clean な checkout で運用する（247）。
+  退避して clone し直す:
+    mv ~/aifactory ~/aifactory.pre-clean-\$(date +%Y%m%d)
+    git clone $(git remote get-url origin 2>/dev/null || echo '<origin の URL>') ~/aifactory
+    # workspace/ をリポジトリ内に置いていたなら退避先から移す:
+    #   mv ~/aifactory.pre-clean-*/workspace ~/aifactory/
+    # ローカルにしか無い変更は退避先から拾って PR にする（この tree には戻さない）
+EOM
+  exit 1
+fi
+say "clean"
+
+# ---------- 3. sudo は頭で 1 回だけ（以降の systemd 操作で聞かれない）
+if (( ! DRY )) && [[ $EUID -ne 0 ]]; then
+  command -v sudo >/dev/null || die "sudo が無い（root で実行する）"
+  sudo -v || die "sudo が要る（systemd の unit 更新と restart）"
+fi
+
+# ---------- 4. コードを更新
+step "コードを更新${REF:+（--ref $REF）}"
+run git fetch --prune --tags origin
+if [[ -n "$REF" ]]; then
+  run git checkout --detach "$REF"
+else
+  run git checkout main
+  run git merge --ff-only origin/main
+fi
+
+# ---------- 5. 配備（sandbox CLI → docs → console。console の restart が最後になるように）
+step "sandbox CLI と gh-refresh timer"
+run "$REPO/sandbox/bin/install.sh" --systemd
+
+step "ドキュメントサイト"
+if (( ! DOCS )); then
+  say "--no-docs なので飛ばす"
+elif [[ -x "$REPO/website/.venv/bin/mkdocs" ]]; then
+  run "$REPO/website/.venv/bin/mkdocs" build -q -f "$REPO/website/mkdocs.yml"
+  say "website/site/ を作り直した（console の /docs/）"
+else
+  say "warn: website/.venv が無いので飛ばす（作る: cd website && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt）"
+fi
+
+step "console（systemd unit の更新と restart）"
+# bind 先は今の unit を正とする（既定に戻すと 10.x に出ていた制御系が localhost に落ちる）
+if [[ -r "$UNIT" ]]; then
+  unit_host="$(sed -n 's/^Environment=CONSOLE_HOST=//p' "$UNIT" | tail -1)"
+  unit_port="$(sed -n 's/^Environment=CONSOLE_PORT=//p' "$UNIT" | tail -1)"
+fi
+export CONSOLE_HOST="${CONSOLE_HOST:-${unit_host:-127.0.0.1}}"
+export CONSOLE_PORT="${CONSOLE_PORT:-${unit_port:-8765}}"
+say "bind: ${CONSOLE_HOST}:${CONSOLE_PORT}"
+run "$REPO/console/bin/install.sh" --systemd
+
+if (( DRY )); then echo; say "dry-run なのでここまで（疎通は確かめない）"; exit 0; fi
+
+# ---------- 6. 疎通（console / MCP / runner）
+step "疎通"
+token="$(sed -n "s/^CONSOLE_TOKEN=//p" "$HOME/.config/aifactory/ctl.env" 2>/dev/null | tail -1 || true)"
+auth=()
+if [[ -n "$token" ]]; then auth=(-H "Authorization: Bearer $token"); fi   # 合言葉を掛けていれば付ける（ADR-0021）
+cfg=""
+for _ in $(seq 1 20); do
+  cfg="$(curl -sf "http://${CONSOLE_HOST}:${CONSOLE_PORT}/api/config" ${auth[@]+"${auth[@]}"} || true)"
+  [[ -n "$cfg" ]] && break
+  sleep 0.5
+done
+[[ -n "$cfg" ]] || die "console が ${CONSOLE_HOST}:${CONSOLE_PORT} で応答しない（journalctl -u aifactory-console）"
+# 出た設定に ._ のごみが混ざっていないことも見る（218 は守りが入ったが、ごみ自体が無いことを確かめる）
+printf '%s' "$cfg" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+names = [w.get("name", "") for w in d.get("workflows", [])] + list(d.get("roles", []))
+bad = [n for n in names if n.startswith("._")]
+print("  console: ok  workflow %d / role %d 種" % (len(d.get("workflows", [])), len(d.get("roles", []))))
+print("  repo:    %s" % d.get("repo", "?"))
+if bad:
+    sys.exit("  [error] 設定にごみが混ざっている: %s" % ", ".join(bad))
+' || exit 1
+
+# MCP は stdio。initialize を 1 往復して答えが返ることだけ見る
+if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ctl-update","version":"1"}}}' \
+   | timeout 20 python3 "$REPO/console/bin/mcp" 2>/dev/null | grep -q '"serverInfo"'; then
+  echo "  mcp:     ok（initialize に応答）"
+else
+  die "MCP（console/bin/mcp）が initialize に答えない"
+fi
+
+# runner（制御系側）: 使う python3 に yaml / jsonschema があること、sandbox CLI が今の checkout と同じ実体であること
+python3 -c 'import yaml, jsonschema' 2>/dev/null && echo "  runner:  ok（python3 に yaml / jsonschema）" \
+  || die "runner が使う python3 に yaml / jsonschema が無い（apt install python3-yaml python3-jsonschema）"
+if cmp -s "$REPO/sandbox/bin/sandbox" "$HOME/.local/bin/sandbox"; then
+  echo "  sandbox: ok（~/.local/bin/sandbox は今の checkout と同じ）"
+else
+  echo "  sandbox: warn（~/.local/bin/sandbox が checkout と違う。sandbox/bin/install.sh を確かめる）" >&2
+fi
+
+step "配備した版"
+git --no-pager log -1 --format='  %h %ad %s%n  branch: %D' --date=short
