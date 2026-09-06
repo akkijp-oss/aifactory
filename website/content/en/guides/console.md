@@ -90,7 +90,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/overview` | Counts per state, running runs and jobs, number of lent VMs |
+| `GET /api/overview[?pj=]` | Counts per state, running runs and jobs, number of lent VMs. `pj` narrows the run lists only, before the `limit` is applied (so a project's run is never dropped when seven or more are running; `runs_active_n` is the count after filtering). `counts` always covers every project |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | List / body, history, runs, jobs. The list also returns the project candidates (`pjs`) and whether each one has a project.yml (`pj_ready`) |
 | `GET /api/next[?pj=]` | The todo `kb next` would pick for dispatch, or `null` |
 | `GET /api/tickets/<id>/sync-preview[?run=]` | A preview of the state sync (`kb sync --dry-run`): state and note before and after, and whether the ticket was updated after that run |
@@ -117,7 +117,7 @@ claude mcp reset-project-choices   # approve again
 
 | Tool | What it does |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | Overview, list, one ticket (body, history, runs, jobs; plus `sync_preview` when the ticket has a run) |
+| `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs; plus `sync_preview` when the ticket has a run) |
 | `ticket_new` / `intake` | File a ticket (well-formed body / free text; intake is a job) |
 | `ticket_action` | start / review / done / reopen / block / set / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |

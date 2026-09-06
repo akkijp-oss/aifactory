@@ -71,7 +71,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 
 | ツール | 内容 |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | 概況・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
+| `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
 | `ticket_action` | start / review / done / reopen / block / set / sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
@@ -116,7 +116,8 @@ console/
 ## API（画面が使うもの。curl でも叩ける）
 
 ```
-GET  /api/overview                 状態の件数・動いている run / ジョブ・貸出数
+GET  /api/overview[?pj=]           状態の件数・動いている run / ジョブ・貸出数
+     pj は run の一覧だけ絞る（上限 limit を掛ける前に絞る。件数は runs_active_n）。counts は常に全 PJ
 GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・履歴・run・ジョブ
      どちらも kinds（workflow/kit/workflows/*.yml。`.` / `_` 始まりは出さない）と kind_desc（種別 → 用途）を返す
 GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる

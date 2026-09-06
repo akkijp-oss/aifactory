@@ -93,6 +93,54 @@ class ApiTest(unittest.TestCase):
         _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
         for ep in ("/api/sandbox", "/api/config", "/api/logs", "/api/jobs"): self.assertEqual(self.http.get(ep)[0], 200)
 
+    def test_overview_filters_runs_by_pj_before_the_cap(self):
+        """動いている run の一覧を PJ で絞るのはサーバー側（先に絞ってから上限を掛ける）。
+
+        `runs_active` は 6 件で切るので、ブラウザーが受け取ってから絞ると、7 本以上動いているときに
+        選んだ PJ の run が一覧から漏れる。プール合計は PJ × 3 台なので現実に起きる。"""
+        mine = [self._fixture_run(f"2020-02-0{i}-other-90{i}",
+                                  {"pj": "other", "task": f"90{i}", "workflow": "feature", "started": f"2020-02-0{i}T09:00:00+00:00",
+                                   "next": "implement", "loops": {}, "current": None, "history": []}) for i in range(1, 7)]
+        mine.append(self._fixture_run(f"2020-01-01-{PJ}-989",
+                                      {"pj": PJ, "task": "989", "workflow": "feature", "started": "2020-01-01T09:00:00+00:00",
+                                       "next": "implement", "loops": {}, "current": None, "history": []}))
+        try:
+            st, o = self.http.get("/api/overview")
+            self.assertEqual(st, 200)
+            self.assertNotIn(f"2020-01-01-{PJ}-989", [r["name"] for r in o["runs_active"]])   # 全体では上限に押し出される
+
+            st, f = self.http.get(f"/api/overview?pj={PJ}")
+            self.assertEqual(st, 200); self.assertEqual(f["pj"], PJ)
+            names = [r["name"] for r in f["runs_active"]]
+            self.assertIn(f"2020-01-01-{PJ}-989", names, "PJ で絞ったのに、その PJ の動いている run が漏れている")
+            self.assertEqual({r["pj"] for r in f["runs_active"]}, {PJ})
+            _, allr = self.http.get("/api/runs")
+            live = [r for r in allr["runs"] if r["status"] == "running" and not r.get("dry") and r["pj"] == PJ and r["kind"] == "v1"]
+            self.assertEqual(f["runs_active_n"], len(live))                                  # 画面が「ほか n 件」を出せる
+            self.assertEqual(f["counts"], o["counts"])                                       # 件数はナビ用に全 PJ のまま
+            self.assertEqual(f["limit"], 6); self.assertGreaterEqual(o["runs_active_n"], 7)   # 上限は結果と一緒に返す
+
+            _, g = self.http.get("/api/overview?pj=other")
+            self.assertEqual(g["runs_active_n"], 6); self.assertEqual(len(g["runs_active"]), 6)
+            self.assertEqual({r["name"] for r in g["runs_active"]}, set(mine[:6]))
+            self.assertEqual(self.http.get("/api/overview?pj=nosuch")[1]["runs_active"], [])
+        finally:
+            for name in mine: shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+    def test_board_and_nav_read_the_run_count_from_the_server(self):
+        """ボードは PJ で絞った overview を読み、上限からあふれた分を画面に出す。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewBoard")
+        board = app[i:app.index("\n}", i)]
+        self.assertRegex(board, r"overview\?pj=", "ボードが PJ で絞った overview を取っていない（7 本以上で run が漏れる）")
+        self.assertIn("T.board.moreRuns", board, "上限からあふれた run の案内が無い")
+        i = app.index("async function refreshNav")
+        nav = app[i:app.index("\n}", i)]
+        self.assertIn("runs_active_n", nav, "ナビの run 数が一覧の長さのままで、6 で頭打ちになる")
+
     def test_next_for_dispatch_dialog(self):
         """配車ダイアログが押す前に見せる「次に回るチケット」（kb next --json）"""
         tid = self.todo_id()
