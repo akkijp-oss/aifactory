@@ -6,7 +6,7 @@
 const T = {
   "status": { "todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了" },
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
-  "result": { "end": "終了", "human": "人間へ" },
+  "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分" },
   "nav": { "board": "ボード", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
            "updated": "更新 {t}", "shortcuts": "? でショートカット" },
@@ -67,7 +67,7 @@ const T = {
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
-    "notStarted": "開始前（記録なし）",
+    "notStarted": "開始前（記録なし）", "error": "失敗の理由",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
   },
   "sandbox": {
