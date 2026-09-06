@@ -7,9 +7,9 @@ const T = {
   "status": { "todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了" },
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
   "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）" },
-  "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分" },
+  "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
   "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
-           "updated": "更新 {t}", "shortcuts": "? でショートカット" },
+           "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "banner": { "offline": "サーバーに届きません。console/bin/console が動いているか確かめてください。" },
 
