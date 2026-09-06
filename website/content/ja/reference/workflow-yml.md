@@ -21,7 +21,8 @@
 | `role` | planner / implementer / reviewer / researcher | エージェントが担当する工程。行動ルールは `roles/<role>.md`、モデルは役割の既定クラス |
 | `code` | string | スクリプトが担当する工程。`kit/steps/` からの相対パス。制御系で実行され、VM へは `sandbox ssh` で入る。特別値 `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、`kit/steps/` にファイルは無い |
 | `brief` | string（Markdown） | この工程の追加指示。役割ごとの行動ルールの後ろに付く |
-| `model_class` | judgment / research / coding | 役割の既定クラスを上書き |
+| `model_class` | judgment / research / coding | 役割の既定クラスを上書き（同じクラスを使う工程は `routes.env` の 1 行で一緒に動く） |
+| `model` | string（`^[A-Za-z0-9._-]{1,64}$`） | この工程だけモデル名を固定する。`routes.env` より優先し、`CLAUDE_MODEL` はさらに優先。同じクラスの他の工程は動かない |
 | `inputs` | array of 成果物 | VM の `~/work/<id>/` から読んで依頼文に添える。reviewer には自動で差分も付く |
 | `outputs` | array of 成果物 | 工程が作るべき成果物。エージェントが担当する工程では依頼文に「ここに書け」と出る。なければ失敗 |
 | `next` | transition | 結果に関係なく次へ。分岐のない工程が失敗したら human |

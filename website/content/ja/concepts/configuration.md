@@ -61,7 +61,7 @@ flowchart LR
 
 | 何 | 弱い → 強い |
 |---|---|
-| モデル | 役割の既定クラス → 工程の `model_class` → 環境変数 `CLAUDE_MODEL`（1 回限り） |
+| モデル | 役割の既定クラス → 工程の `model_class` → 工程の `model`（モデル名を固定）→ 環境変数 `CLAUDE_MODEL`（1 回限り） |
 | PR の宛先 | `project.yml` の `base_branch` → ワークフローの `base_branch: hotfix_base` → `project.yml` の `workflow_overrides.<wf>.base_branch` |
 | Claude トークン（VM に渡すもの） | 鍵プール（`keys.json`）のみ。`~/.config/sandbox/env` / `pj/<pj>.env` / シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` は**無視**（ADR-0060） |
 | GitHub トークン | 静的 `GH_TOKEN`（フォールバック）→ GitHub App の installation token → `SANDBOX_GH_TOKEN`（1 回限り） |
@@ -77,7 +77,7 @@ flowchart LR
 | このプロジェクトでやってはいけないこと / reviewer が必ず見ること | `project.yml` の `forbidden` / `review_points` | そのプロジェクト |
 | 手順そのもの（工程を足す、差し戻し回数） | `workflow/kit/workflows/<wf>.yml` | 全プロジェクト |
 | 役割の振る舞い（reviewer の見方、implementer の作法） | `workflow/kit/roles/<role>.md`。全役割共通なら `_common.md` | 全プロジェクト |
-| 使うモデル | `workflow/kit/routes.env`（クラス単位）。1 工程なら yml の `model_class`、1 回なら `CLAUDE_MODEL` | 指定した範囲 |
+| 使うモデル | `workflow/kit/routes.env`（クラス単位）。1 工程なら yml の `model_class` / `model`、1 回なら `CLAUDE_MODEL`。コンソールの「設定」→ workflow → 工程からも、影響する工程を見てから保存できる（ADR-0063） | 指定した範囲 |
 | PR の宛先ブランチ | `project.yml` の `base_branch` / `hotfix_base` / `workflow_overrides` | そのプロジェクト |
 | チケットの分類基準 | `glue/bin/intake` のプロンプト、または依頼文の先頭に `kind:` 行 | チケット作成時 |
 | プール台数（実体） | `sandbox/proxmox/40-pool.sh <pj> <台数>`（作った台数がそのまま実体） | そのプロジェクトの並列数 |
@@ -95,7 +95,7 @@ flowchart LR
 
 | 変えたもの | いつ効くか |
 |---|---|
-| ワークフローの YAML / roles / routes.env / project.yml / gates.sh | **次の run から**。実行中の run には効かない（runner は起動時に読む） |
+| ワークフローの YAML / roles / routes.env / project.yml / gates.sh | **次の run から**。実行中の run には効かない（runner は起動時に読む）。コンソールから保存したときも同じで、走っている run は途中で切り替わらない |
 | `sandbox/bin/sandbox` | `sandbox/bin/install.sh` を実行した後（PATH のコピーが更新される） |
 | Claude の鍵 | `sandbox keys add` / `set` の後の take から。貸出中は `reinject` |
 | `kb` / `intake` / `dispatch` | 即（リポジトリのパスを直接呼ぶ） |

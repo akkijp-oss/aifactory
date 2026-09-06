@@ -74,3 +74,4 @@
 - [0060: VM に渡す Claude の鍵の出どころは鍵プールだけにし、`sandbox` の env ファイル経路（`token set claude` と空プール時のフォールバック）を廃止する](0060-claude-keys-come-only-from-the-pool.md)
 - [0061: チケットの `note` は複数行を正本とし、画面の編集欄は textarea・保存は無変換にする](0061-ticket-note-is-multiline-and-saved-verbatim.md)
 - [0062: 実効モデルと分岐の解決規則は `lib/aifactory_workflow.py` の 1 か所に置き、設定画面は静的な定義だけから解く](0062-workflow-resolution-rules-in-lib.md)
+- [0063: モデルの設定は console が作業ツリーの `workflow/kit/` を直接書き、工程単位の `model` を新設する](0063-console-edits-model-settings-in-the-work-tree.md)
