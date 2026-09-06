@@ -124,6 +124,26 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_ticket_run_area_follows_status(self):
+        """チケットの実行エリアが今の状態に合う（完了で押せる緑ボタン、ボタンが無い画面での「上の実行する」案内を防ぐ）。
+
+        JS を動かす基盤が無いので、ボードの帯と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket")
+        body = app[i:app.index("\n}", i)]
+        self.assertRegex(body, r"canRun\s*=[^;\n]*status\s*!==\s*'done'", "実行できるかを status から決めていない")
+        self.assertRegex(body, r"const runBtn = \([^)]*disabled[^)]*\)", "runBtn が押せない状態を受け取れない")
+        self.assertRegex(body, r"runBtn\(T\.btn\.run,\s*'primary'[^)]*canRun", "本番の実行ボタンに実行可否を渡していない")
+        self.assertNotRegex(body, r"runBtn\(T\.btn\.dryRun[^)]*canRun", "dry-run は完了済みでも通るので、押せなくしない")
+        for key in ("T.help.runReview", "T.help.runBlocked"):
+            self.assertIn(key, body, f"実行の案内が状態ごとに分かれていない（{key} が無い）")
+        for key in ("T.empty.ticketRunsNoProjectYml", "T.empty.ticketRunsBusy", "T.empty.ticketRunsDone"):
+            self.assertIn(key, body, f"実行記録の空文言が状態で変わらない（{key} が無い）")
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertIn(T["btn"]["redo"], T["help"]["runDone"], "完了時の案内が、隣に出すボタンの名前と一致していない")
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
