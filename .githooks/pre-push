@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# .githooks/pre-push: push 直前に、送るコミット範囲を検査する（gitleaks）+ 追跡ファイル全体の公開前チェック。
+# 有効化: bin/install-hooks.sh か `git config core.hooksPath .githooks`。迂回: git push --no-verify
+set -uo pipefail
+REPO="$(git rev-parse --show-toplevel)"
+"$REPO/bin/oss-check.sh" >/dev/null || { "$REPO/bin/oss-check.sh" | grep -E '^NG' >&2; echo "[pre-push] 公開前チェックに引っかかった（bin/oss-check.sh）" >&2; exit 1; }
+command -v gitleaks >/dev/null || { echo "[pre-push] warn: gitleaks が無い。範囲の検査を省略" >&2; exit 0; }
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_sha" == "$zero" ]] && continue                      # ブランチ削除
+  if [[ "$remote_sha" == "$zero" ]]; then range="$local_sha --not --remotes"; else range="$remote_sha..$local_sha"; fi
+  gitleaks git --no-banner --redact --exit-code 1 --log-opts="$range" "$REPO" >/dev/null 2>&1 || { gitleaks git --no-banner --redact --log-opts="$range" "$REPO" 2>&1 | tail -20; echo "[pre-push] gitleaks が $local_ref の送信範囲で秘密情報らしきものを検出" >&2; exit 1; }
+done
+exit 0

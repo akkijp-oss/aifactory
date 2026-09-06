@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
+- Leak guards: `.githooks/` (pre-commit on staged changes, pre-push with gitleaks) installed by `bin/install-hooks.sh`; `bin/oss-check.sh --staged`; a `secrets` CI job (gitleaks over full history); GitHub secret scanning and push protection enabled
 - `examples/projects/aifactory/`: aifactory as its own sandbox project (public, tokenless clone, `mkdocs serve` on :3000 as the app, gates = CI set + `bin/oss-check.sh`). Anyone can run a ticket end to end with it; the maintainers use it for dogfooding
 - `console/bin/install.sh --launchd` bakes `AIFACTORY_WORKSPACE` into the plist, so a workspace outside the repository also works for the resident console
 

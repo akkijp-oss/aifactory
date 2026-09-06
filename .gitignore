@@ -6,6 +6,14 @@
 # workflow/kit/routes.env はモデルの経路表（設定）で秘密ではない。*.env の例外
 !workflow/kit/routes.env
 *.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.envrc
+*.tfvars
+credentials*.json
 
 # 運用データ（枠組みとは別に置く。lib/aifactory_paths.py / ADR-0016）
 # 既定は <repo>/workspace/。AIFACTORY_WORKSPACE で外にも置ける。

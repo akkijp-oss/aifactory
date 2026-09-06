@@ -7,6 +7,7 @@ Thanks for looking. aifactory is written to be worked on by humans and AI sessio
 1. Read `README.md` for the four areas, then the `README.md` of the area you are touching (it holds the contract and the lessons learned)
 2. `git status`, `ls docs/adr/`: another session may be working in the same checkout. Never revert changes you did not make; commit only your own files (`git add <paths>`, not `git add -A`)
 3. Never restart, roll back or rebuild a sandbox VM that is lent out (`sandbox ls`)
+4. Run `bin/install-hooks.sh` once per clone. It installs a pre-commit hook (staged changes: secrets, private hostnames, forbidden paths) and a pre-push hook (gitleaks on the pushed range plus `bin/oss-check.sh`). Put the `gitleaks` binary on your PATH
 
 ## Making a change
 

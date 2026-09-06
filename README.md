@@ -66,6 +66,7 @@ EOF
 kanban/bin/kb run 100 --dry-run     # validates definitions and writes the prompts under workspace/runs/…-dry/
 console/bin/console --open          # http://127.0.0.1:8765/
 python3 -m unittest discover -s console/tests && python3 -m unittest discover -s workflow/tests
+bin/install-hooks.sh                # pre-commit / pre-push guards against leaking secrets (needs gitleaks on PATH)
 ```
 
 Two project definitions ship under `examples/projects/` (`project.yml`, `provision.sh`, `gates.sh`):

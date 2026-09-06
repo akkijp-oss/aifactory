@@ -68,6 +68,7 @@ EOF
 kanban/bin/kb run 100 --dry-run     # 定義を検証し、依頼文を workspace/runs/…-dry/ に書く
 console/bin/console --open          # http://127.0.0.1:8765/
 python3 -m unittest discover -s console/tests && python3 -m unittest discover -s workflow/tests
+bin/install-hooks.sh                # 秘密情報の混入を止める pre-commit / pre-push（gitleaks が PATH にあること）
 ```
 
 `examples/projects/` に PJ 定義（`project.yml` / `provision.sh` / `gates.sh`）を 2 本同梱している。

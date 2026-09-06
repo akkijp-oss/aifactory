@@ -5,6 +5,22 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 rc=0
+# パターン（自分自身の本文に一致しないように分割して組み立てる）
+SECRET_PAT="ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9-]{10,}|PVEAPIToken""=[^ ]+|BEGIN (RSA|OPENSSH|EC) PRIVATE"" KEY"
+# ALLOW: kumitate / akkijp/kumitate は公開許可済みのサンプル、akkijp-oss/aifactory はこのリポジトリ、10.77.x は文書上の既定例、100.64.0.0/10 は Tailscale の CGNAT 範囲（固有情報ではない）
+PAT='秋月|akki-pve|a1pve|a1mpve|pvexf|hokenss|kosuke19952000|marugoto|devboard|pcbcad|companyhub|granthub|zenkoku|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|iDRAC|homelab|mytask|オーナー指示'
+ALLOW='100\.64\.0\.0/10|192\.168\.0\.0/16'
+
+if [[ "${1:-}" == "--staged" ]]; then
+  # pre-commit 用: ステージされたファイルだけ（速い）。追跡禁止の置き場・秘密情報・固有名
+  files="$(git diff --cached --name-only --diff-filter=ACMR)"
+  [[ -n "$files" ]] || exit 0
+  bad="$(echo "$files" | grep -E '^(workspace/|kanban/(tickets/|kanban\.db|BOARD\.md)|workflow/runs/|glue/.*\.log|workflow/prompts/|docs/infra/|docs/source/.*transcript|console/jobs/|sandbox/templates/[^/]+/provision\.sh)' || true)"
+  [[ -z "$bad" ]] || { echo "NG  追跡してはいけない置き場: "; echo "$bad"; rc=1; }
+  hits="$(echo "$files" | grep -v '^bin/oss-check.sh$' | tr '\n' '\0' | xargs -0 git diff --cached -U0 -- 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' | grep -nE "$PAT|$SECRET_PAT" | grep -vE "$ALLOW" || true)"
+  [[ -z "$hits" ]] || { echo "$hits" | cut -c1-160; echo "NG  秘密情報か環境固有の名前がステージされた変更にある"; rc=1; }
+  exit $rc
+fi
 
 echo "== 1. 追跡されてはいけない置き場"
 for p in workspace kanban/kanban.db kanban/tickets kanban/BOARD.md workflow/runs glue/intake.log glue/dispatch.log workflow/prompts docs/infra docs/source/media console/jobs; do
@@ -15,15 +31,11 @@ git ls-files 'docs/source/*.transcript.md' | grep -q . && { echo "NG  文字起�
 (( rc )) || echo "ok"
 
 echo "== 2. 秘密情報らしきもの（全履歴）"
-# パターンは自分自身（このスクリプトの本文）に一致しないように分割して組み立てる
-SECRET_PAT="ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9-]{10,}|PVEAPIToken""=[^ ]+|BEGIN (RSA|OPENSSH|EC) PRIVATE"" KEY"
-secrets="$(git log -p --all | grep -nE "$SECRET_PAT" | head -5)"
+secrets"$(git log -p --all | grep -nE "$SECRET_PAT" | head -5)"
 if [[ -n "$secrets" ]]; then echo "$secrets" | cut -c1-160; echo "NG  上の行を確認"; rc=1; else echo "ok"; fi
 
 echo "== 3. 環境固有・私有の名前（追跡ファイル）"
-# ALLOW: kumitate / akkijp/kumitate は公開許可済みのサンプル、akkijp/aifactory はこのリポジトリ、10.77.x は文書上の既定例、100.64.0.0/10 は Tailscale の CGNAT 範囲（固有情報ではない）
-PAT='秋月|akki-pve|a1pve|a1mpve|pvexf|hokenss|kosuke19952000|marugoto|devboard|pcbcad|companyhub|granthub|zenkoku|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|iDRAC|homelab|mytask|オーナー指示'
-hits="$(git ls-files -z | grep -zv '^bin/oss-check.sh$' | xargs -0 grep -nE "$PAT" 2>/dev/null | grep -vE '100\.64\.0\.0/10|192\.168\.0\.0/16' )"
+hits="$(git ls-files -z | grep -zv '^bin/oss-check.sh$' | xargs -0 grep -nE "$PAT" 2>/dev/null | grep -vE "$ALLOW" )"
 if [[ -n "$hits" ]]; then echo "$hits" | head -60; echo "NG  $(echo "$hits" | wc -l | tr -d ' ') 件"; rc=1; else echo "ok"; fi
 
 echo "== 4. 必須ファイル"

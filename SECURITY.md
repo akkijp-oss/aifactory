@@ -10,6 +10,17 @@ Please do not open a public issue for security problems. Use GitHub's private vu
 - The Proxmox-side scripts under `sandbox/proxmox/` (network, firewall, token handling)
 - Token handling: Claude Code long-lived tokens and GitHub App installation tokens are injected into a tmpfs inside the VM at `sandbox take` time and must never be written to disk in a template (see ADR-0005 / 0006 / 0008)
 
+## Layers that keep secrets out of this public repository
+
+1. Layout: operational data (project definitions, tickets, run records, private notes) lives in `AIFACTORY_WORKSPACE`, never in the repository (ADR-0016). Tokens live in `~/.config/sandbox/`
+2. `.gitignore`: env files, keys, certificates, the workspace
+3. Local hooks (`bin/install-hooks.sh`): pre-commit scans staged changes (secret patterns, private hostnames and project names, forbidden paths); pre-push runs gitleaks on the pushed range and `bin/oss-check.sh`
+4. Sandbox gate: `examples/projects/aifactory/gates.sh` runs `bin/oss-check.sh` inside the VM before an agent's branch can be pushed
+5. CI: a `secrets` job runs gitleaks over the full history on every push and pull request
+6. GitHub: secret scanning and push protection are enabled on the repository and as the organization default
+
+If a secret does land in history, rotate it first, then rewrite history; contact the maintainer via private vulnerability reporting.
+
 ## Design notes that matter for security
 
 - The Web console binds to 127.0.0.1 only and has no authentication. Do not expose it (ADR-0013).

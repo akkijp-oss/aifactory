@@ -33,6 +33,21 @@ jobs:
       - name: paths (fresh clone = workspace mode)
         run: python3 lib/aifactory_paths.py | tee /dev/stderr | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["legacy"] is False, d'
 
+  secrets:
+    # 秘密情報の漏えい検査（全履歴）。gitleaks の CLI を直接使う（gitleaks-action は org で license が要る）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (full history)
+        run: |
+          ver=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks git --no-banner --redact --exit-code 1 --log-opts="--all" .
+      - name: oss-check (secrets + paths)
+        run: bin/oss-check.sh
+
   docs:
     runs-on: ubuntu-latest
     steps:

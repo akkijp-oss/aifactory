@@ -29,4 +29,4 @@ CI（`.github/workflows/ci.yml`）も同じことを PR ごとに回す。
 - [x] GitHub Pages（Actions）でドキュメントサイトを公開: https://akkijp-oss.github.io/aifactory/ （更新は Actions の `docs` を手動起動）
 - [x] org のトップページ: `akkijp-oss/.github` の `profile/README.md`
 - [x] 他人が clone して 1 周回せる公開サンプル PJ: `examples/projects/aifactory/`（aifactory 自身。メンテナの dogfooding 用でもある）。`kumitate` は私有リポジトリなので参照用
-- [ ] 公開後は `bin/oss-check.sh` を PR ごとに回す（CI には入っていない。固有名の一覧を CI に載せるのを避けるため）
+- [x] 公開後の防御: `bin/install-hooks.sh`（pre-commit / pre-push）、CI の `secrets` ジョブ（gitleaks 全履歴 + `bin/oss-check.sh`）、GitHub の secret scanning と push protection（リポジトリと org 既定）

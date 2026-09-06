@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit: コミット直前に、ステージされた変更だけを検査する（秘密情報・環境固有の名前・追跡してはいけない置き場）。
+# 有効化: bin/install-hooks.sh（.git/hooks に symlink）か `git config core.hooksPath .githooks`
+# 迂回（自己責任）: git commit --no-verify
+set -uo pipefail
+REPO="$(git rev-parse --show-toplevel)"
+"$REPO/bin/oss-check.sh" --staged || { echo "[pre-commit] 公開前チェックに引っかかった。直すか、意図どおりなら --no-verify" >&2; exit 1; }
+if command -v gitleaks >/dev/null; then
+  gitleaks git --no-banner --redact --staged --exit-code 1 "$REPO" >/dev/null 2>&1 || { gitleaks git --no-banner --redact --staged "$REPO" 2>&1 | tail -20; echo "[pre-commit] gitleaks が秘密情報らしきものを検出" >&2; exit 1; }
+else
+  echo "[pre-commit] warn: gitleaks が無い（https://github.com/gitleaks/gitleaks/releases のバイナリを PATH に置く）" >&2
+fi
