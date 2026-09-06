@@ -95,7 +95,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/next[?pj=]` | 配車で次に回る todo（`kb next`）。無ければ `null` |
 | `GET /api/tickets/<id>/sync-preview[?run=]` | 状態同期の下見（`kb sync --dry-run`）。前後の状態とメモ、run の後にチケットが更新されたか |
 | `POST /api/tickets` | `kb new` |
-| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr}` |
+| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr, dry_run}`。`sync` は既定で書かず前後を返します（書くのは `dry_run: false` のときだけ） |
 | `POST /api/tickets/<id>/run` | `kb run` をジョブで。`{dry_run, workflow, keep, resume}` |
 | `GET /api/runs` / `GET /api/runs/<name>` | 実行記録 |
 | `GET /api/file?path=&tail=` | 許可されたディレクトリ内のファイル |
@@ -117,9 +117,9 @@ claude mcp reset-project-choices   # 承認をやり直す
 
 | ツール | 内容 |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | 概況・一覧・1 件（本文・履歴・run・ジョブ） |
+| `overview` / `ticket_list` / `ticket_show` | 概況・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | チケット作成（整った本文 / 自由文。intake はジョブ） |
-| `ticket_action` | start / review / done / reopen / block / set / sync |
+| `ticket_action` | start / review / done / reopen / block / set / sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log` など） |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実機の状態確認（ジョブ）/ 返却（ジョブ） |

@@ -682,7 +682,7 @@ const actions = {
         ${p.updated_after_run ? `<div class="warn">${esc(tt(T.dialog.sync.newer, { id, at: fmtT(p.ticket.updated) }))}</div>` : ''}
         ${p.changes ? '' : `<p class="help">${esc(T.dialog.sync.same)}</p>`}` });
     if (!ok) return;
-    await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined });
+    await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined, dry_run: false });   /* ダイアログで前後を見せた後なので、ここで初めて書く */
     const b = p.before;
     toast(esc(tt(T.msg.synced, { id })), { action: { label: T.btn.undo, run: async () => {
       await api(`tickets/${id}/action`, { action: 'set', status: b.status, note: b.note || undefined });

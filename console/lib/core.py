@@ -670,11 +670,30 @@ def ticket_action(tid, b):
         if b.get("run"): args += ["--run", b["run"]]
         if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run のどれかを指定してください")
     elif act == "sync":
-        args = ["sync", tid] + (["--run", b["run"]] if b.get("run") else [])
+        return sync_apply(tid, b)
     else: raise ApiError(f"操作 {act} はありません。start / review / done / reopen / block / set / sync のどれかを指定してください")
     rc, out, err = kb(*args)
     if rc != 0: raise ApiError((err or out).strip() or f"kb {act} が失敗 rc={rc}")
     return {"rc": rc, "stdout": out, "stderr": err}
+
+
+def sync_apply(tid, b):
+    """「実行記録に状態を合わせる」。状態とメモを上書きする半可逆の操作なので、既定は書かずに前後を返す（下見）。
+       書くのは dry_run に false を明示したときだけ。画面はダイアログで確認してから明示し、MCP は呼び手が明示する。
+       文字列の "false" は下見のまま扱う（安全側。書くのは JSON の false だけ）"""
+    dry = b.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    p = sync_preview(tid, b.get("run"))
+    out = err = None
+    if not dry:
+        rc, out, err = kb("sync", str(tid), "--run", p["run"])
+        if rc != 0: raise ApiError((err or out).strip() or f"kb sync が失敗 rc={rc}")
+    warn = []
+    if p.get("updated_after_run"):
+        warn.append(f"この run が終わった後（{p['ticket']['updated']}）にチケットが更新されています。"
+                    + ("実行すると、その更新を上書きします。" if dry else "その更新を上書きしました。"))
+    if dry: warn.append("まだ書き込んでいません。書くには dry_run に false を指定してください。")
+    return {**p, "dry_run": dry, "warning": " ".join(warn) or None, "stdout": out, "stderr": err}
 
 
 def sync_preview(tid, run=None):

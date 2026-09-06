@@ -704,6 +704,31 @@ class ApiTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get(f"/api/tickets/{d['id']}/sync-preview")
         self.assertEqual(cm.exception.code, 400); self.assertIn("--run", json.loads(cm.exception.read())["error"])
 
+    def test_sync_action_writes_only_when_asked(self):
+        """状態を合わせる操作は、既定では書かずに前後を返す（HTTP も MCP も同じ関数を通る）。
+
+        書くのは dry_run: false を明示したときだけ。画面はダイアログで前後を見せてから明示する。"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: 合わせる操作の既定", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        name = self._fixture_run(f"2020-01-02-{PJ}-{tid}", {"pj": PJ, "task": tid, "workflow": "research", "started": "2000-01-01T00:00:00+00:00",
+                                                            "finished": "2000-01-01T00:00:00+00:00", "result": "end", "pr_url": "", "history": []})
+        try:
+            st, p1 = self.http.post(f"/api/tickets/{tid}/action", {"action": "sync", "run": name})
+            self.assertEqual(st, 200, p1)
+            self.assertTrue(p1["dry_run"]); self.assertEqual(p1["before"]["status"], "todo"); self.assertEqual(p1["after"]["status"], "done")
+            self.assertTrue(p1["updated_after_run"]); self.assertTrue(p1["warning"])
+            self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")   # 既定は書かない
+            st, p2 = self.http.post(f"/api/tickets/{tid}/action", {"action": "sync", "run": name, "dry_run": False})
+            self.assertEqual(st, 200, p2); self.assertFalse(p2["dry_run"]); self.assertEqual(p2["before"]["status"], "todo")
+            self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "done")
+        finally:
+            shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("  'sync': async el =>")
+        body = app[i:app.index("\n  },", i)]
+        self.assertIn("dry_run: false", body, "ダイアログで確認した後に書く指定が無い（押しても状態が変わらない）")
+
     def test_new_ticket(self):
         st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: console テスト", "body": "本文\n\n## 完了条件\n- summary.md"})
         self.assertEqual(st, 200, d); self.assertIsInstance(d["id"], int)
