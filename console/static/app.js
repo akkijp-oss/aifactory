@@ -126,9 +126,10 @@ async function viewBoard() {
   if (!o) return render(`<div class="err">${esc(T.err.noOverview)}</div>`);
   const by = {}; STATUSES.forEach(s => by[s] = []); t.tickets.forEach(x => (by[x.status] || by.todo).push(x));
   by.done.sort((a, b) => b.updated.localeCompare(a.updated));
-  const live = o.runs_active.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
+  const n = s => by[s].length;                                                  /* 帯も列も同じ絞り込み結果から数える（PJ を選んだら両方が動く） */
+  const live = o.runs_active.filter(r => !pj || r.pj === pj).map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
-  const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${o.counts[s]}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
+  const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
   const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
     <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
   const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty">${esc(tt(T.board.more, { n: list.length - cap }))}</div>` : ''}</section>`;
@@ -136,8 +137,9 @@ async function viewBoard() {
   render(head(esc(T.nav.board), T.sub.board, `
       <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
-    + `<div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${o.counts.blocked}</div></div></div>
-    <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('blocked', by.blocked)}${col('done', by.done, 15)}</div>`);
+    + `<div class="help">${pj ? tt(T.board.scopePj, { pj: esc(pj) }) : esc(T.board.scopeAll)}</div>
+    <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
+    <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);
   schedule(viewBoard, 5000);
 }
 
