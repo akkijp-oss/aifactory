@@ -318,6 +318,10 @@ def run_outcome(d, s, state, wf, files):
         # VM の空きを待ったが出なかった run（チケット 242）。直す所は無く、チケットは未着手に戻っている
         if state.get("failure") == "wait_timeout":
             o["reason"] = "wait_timeout"; o["stopped_step"] = "wait-vm"; o["waited_s"] = int(state.get("waited_s") or 0)
+        # 貸出直後の準備（project.yml の prepare）で落ちた run（チケット 330）。VM は取れていて、直す所は
+        # prepare.sh か VM の側にある。「VM を取得できなかった」と混ぜない
+        if state.get("failure") == "prepare":
+            o["reason"] = "prepare_failed"; o["stopped_step"] = "prepare"
         return o
     if state.get("_error") or (not hist and s.get("finished")): return o
     if not hist: return o
@@ -525,6 +529,22 @@ def idle_stop_view():
             "candidates": [{"vmid": str(v.get("vmid")), "name": v.get("name"), "last_used": v.get("last_used")} for v in candidates]}
 
 
+def recent_red_gates(pj, limit=20):
+    """直近の run が「base でも赤い」と実際に確かめたゲート名（workflow/bin/run の note_base_red が state.json に書く。330）。
+
+    project.yml の known_red_gates は人が手で書くもので、実際は誰も書かなかった。機械が確かめた分をここで拾って
+    合わせて見せる。run 名は <日付>-<pj>-<チケット> なので、名前の降順＝新しい順に数件だけ読む"""
+    out = []
+    if not RUNS.is_dir(): return out
+    names = sorted((p.name for p in RUNS.iterdir() if p.is_dir() and f"-{pj}-" in p.name), reverse=True)[:limit]
+    for n in names:
+        try: s = json.loads((RUNS / n / "state.json").read_text(encoding="utf-8"))
+        except Exception: continue
+        for g in s.get("known_red_gates") or []:
+            if g not in out: out.append(g)
+    return out
+
+
 def sandbox_view():
     lent = {}
     if SANDBOX_STATE.exists():
@@ -553,12 +573,15 @@ def sandbox_view():
         # 実体と貸出は取得の時点が違う（ls に出ない VM が台帳にあることもある）。空きは 0 で止める
         free = max(n_actual - n_lent, 0) if n_actual is not None else None
         unbuilt = max(POOL_PER_PJ - n_actual, 0) if n_actual is not None else None
+        red_gates = list((y or {}).get("known_red_gates") or [])
+        red_gates += [g for g in recent_red_gates(pj) if g not in red_gates]
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
                     "lent": n_lent, "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
                     "pool_defined": POOL_PER_PJ, "pool_actual": n_actual, "free": free, "unbuilt": unbuilt,
                     "hint": f"未構築 {unbuilt} 台。proxmox/40-pool.sh {pj} {unbuilt} で足せます" if unbuilt else None,
-                    "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
+                    # 人が project.yml に書いた分と、runner が base で回して確かめた分（330）を合わせて見せる
+                    "pool": POOL_PER_PJ, "known_red_gates": red_gates})
     fetched = ts_aware(last_ok_ls["finished"]) if last_ok_ls and last_ok_ls.get("finished") else None
     age = None
     if fetched:

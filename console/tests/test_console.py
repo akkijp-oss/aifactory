@@ -708,6 +708,42 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.wait_timeout", app)
 
+    def test_run_that_failed_in_prepare_is_not_a_take_failure(self):
+        """貸出直後の準備（project.yml の prepare）で落ちた run（チケット 330）。
+
+        VM は取れているので「VM を取得できなかった」と混ぜない。直す所は prepare.sh か VM の側にある"""
+        name = "2026-09-07-kumitate-996"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "ticket.md").write_text("# 調査: 準備で止まった run\n", encoding="utf-8")
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "996", "workflow": "research", "branch": "sandbox/996-research-x", "base": "develop",
+            "started": "2026-09-07T10:00:00", "finished": "2026-09-07T10:02:05", "elapsed_s": 125, "history": [], "loops": {},
+            "result": "failed", "next": "human", "current": None, "pr_url": "", "wip_branch": "", "failure": "prepare",
+            "error": "prepare (prepare.sh) が rc=1 で失敗: db:migrate が当たりません"}, ensure_ascii=False), encoding="utf-8")
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200)
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "prepare_failed")
+        self.assertEqual(o["stopped_step"], "prepare")
+        self.assertIn("db:migrate", o["error_summary"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.prepare_failed", app)
+
+    def test_sandbox_known_red_gates_include_what_the_runner_confirmed_on_base(self):
+        """known_red_gates は人が project.yml に書く前提で、実際は誰も書かなかった（チケット 330）。
+
+        runner が base で回して確かめた分（state.json の known_red_gates）を直近の run から拾って合わせて見せる"""
+        name = "2026-09-07-kumitate-995"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "995", "workflow": "feature", "branch": "sandbox/995-feature-x", "base": "develop",
+            "started": "2026-09-07T10:00:00", "finished": "2026-09-07T11:00:00", "history": [], "loops": {},
+            "result": "human", "known_red_gates": ["unittest-console"]}, ensure_ascii=False), encoding="utf-8")
+        st, v = self.http.get("/api/sandbox")
+        self.assertEqual(st, 200)
+        pj = next(x for x in v["templates"] if x["pj"] == PJ)
+        self.assertIn("unittest-console", pj["known_red_gates"])
+
     def test_run_whose_job_ended_is_abandoned(self):
         """起動したジョブが終わっているのに finished が書かれていない run は「実行中」ではなく「中断」（チケット 236）。
 
