@@ -1,0 +1,3 @@
+### Added
+- **Mac worker: 基準イメージに何が入っているかを文書化し、`provision.sh` の雛形を置いた**。`docs/macos-worker.md` に「基準イメージの中身」の節を足し、3 つの層（上流イメージ / 専用基準VM / PJ の provision）、ツールごとの入り方・実体のパス・runner の PATH で見えるか・入れ直してよいか、既存を壊さない `command -v X >/dev/null || brew install X` の書き方、版と digest の採取コマンドを載せた。雛形は `workers/templates/provision.macos.sh`（ネットワーク隔離プローブ + gh / coreutils / claude だけ）。npm -g や cask が置いたものを brew の formula で入れ直すと link が衝突して provision が落ちる。
+- **Mac worker: `uncertain` からの復旧を 1 節にまとめた**。`docs/macos-worker.md` の「uncertainからの復旧」に、`control list` / `show` の見方、lease 付き `guest-exec` での生存確認、`resolve --confirmed-stopped` を使ってよい条件、`release-lease` が別に要ること、再開のリンクを集約した。lease を payload に入れないと `operation does not own worker lease` で断られることを明記した。

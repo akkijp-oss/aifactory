@@ -84,11 +84,117 @@ gates: gates.sh
 
 `worker` は登録済みIDと一致させ、`app_dir` はゲストのアカウントに合わせる。同じディレクトリにPJ用の `gates.sh` と、必要なら `provision.sh` を置く。ゲートは製品と変更内容に合う検証を行い、失敗時は非ゼロで終了する。
 
-ゲストにはrunner用の `gh`、Claude CLI、GNU `timeout` などが必要。provisionは認証注入前に動き、ツールを準備する。cloneはrunnerが行う。既存ツールの再ダウンロードを避けるなど、provisionは再実行可能にしておく。Linux用のパスやパッケージ管理コマンドをそのまま流用しない。
+ゲストにはrunner用の `gh`、Claude CLI、GNU `timeout` などが必要。provisionは認証注入前に動き、ツールを準備する。cloneはrunnerが行う。既存ツールの再ダウンロードを避けるなど、provisionは再実行可能にしておく。Linux用のパスやパッケージ管理コマンドをそのまま流用しない。何が既に入っているかは「[基準イメージの中身](#基準イメージの中身)」を先に読む。雛形は [workers/templates/provision.macos.sh](../workers/templates/provision.macos.sh)。
 
 制御系にはsandboxのPJ別GitHub App設定とClaude OAuthトークンを用意する。GitHub Appの対象リポジトリへのインストールとPR作成に必要な権限を確認する。値をPJ定義・チケット・ログへ書かない。
 
 鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使い、どちらにも鍵が無ければ**runnerのプロセスに残っている値には落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
+
+## 基準イメージの中身
+
+`provision.sh` を書く前に、専用ゲストへ**既に入っているもの**を把握する。入っているものを入れ直すと壊れる。2026-09-09、あるPJの `provision.sh` が `brew install gh coreutils node@24 pnpm` を無条件に実行し、既にある `pnpm` とHomebrewが置こうとした `/opt/homebrew/bin/pn` のリンクが衝突して、provisionが非ゼロで終了した。
+
+### 中身は3つの層でできている
+
+どの層で入ったかで、入れ直してよいかが変わる。
+
+| 層 | 誰がいつ | 入るもの |
+|---|---|---|
+| 1. 上流の基準イメージ | Cirrus Labsが公開しているTart用イメージ | Homebrew、Xcode Command Line Tools、gh、node@24、`npm -g` のpnpm / yarn、mise、rbenv、Tart Guest Agentなど。Xcode入りの系統ならXcodeとcask版のClaude Code |
+| 2. 専用基準VM | 管理者が[ワンライナー導入](worker-install.md)で1回 | `brew install python gh coreutils`、`claude`（無ければ公式スクリプト）、画面操作ヘルパー、ゲストのDNSとIPv6の設定（`workers/bootstrap/install.py`） |
+| 3. 専用ゲスト | runnerがrunごとに、PJの `provision.sh` を1回 | そのPJだけに要るもの |
+
+イメージは2系統ある。どちらを使っているかは実機で確認する。
+
+| 系統 | イメージ | 補足 |
+|---|---|---|
+| 素のmacOS | `ghcr.io/cirruslabs/macos-sequoia-base` | 導入スクリプトの既定。`MAC_IMAGE` で変更できる |
+| Xcode入り | `ghcr.io/cirruslabs/macos-tahoe-xcode` | 上にXcode・Android SDK・cask類を足したもの。ディスクを大きく使う |
+
+`latest` という名前だけでは再現しない。取得のたびにdigestとゲストOSを記録する（この節の「版とdigestを採取する」）。
+
+### ゲストでコマンドが動く形
+
+`command -v` が何を見つけるかは、この形で決まる。
+
+- ワーカーはゲスト操作を `tart exec <guest> /bin/bash -lc '<command>'` で実行する（`workers/cmd/aifactory-worker/main.go`）。**ログインシェル**なので `~/.profile` を読む。上流イメージは `~/.profile` を `~/.zprofile` へのsymlinkにしてあるので、`~/.zprofile` が足すPATH（`node@24`、`PNPM_HOME`、`openjdk@17` など）も効く。`~/.bash_profile` や `~/.bash_login` を作るとこのsymlinkが読まれなくなるので、provisionで作らない。
+- runnerはその上で、コマンドの先頭に固定のPATHを足す（`workflow/lib/macos.py`）。
+
+    ```
+    /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
+    ```
+
+- `provision.sh` はこのPATHを継いだ `bash provision.sh` として走る。ログインシェルの子なので `~/.zprofile` の分もそのまま見える。
+
+### 入っているもの
+
+次の表は上流のイメージ定義（`cirruslabs/macos-image-templates` の `templates/base.pkr.hcl` と `templates/xcode.pkr.hcl`。2026-09-10参照）と本リポジトリのコードから書いている。**版の数値は書かない。実機の採取結果を正とする。**
+
+| ツール | 入り方 | 実体 | runnerのPATHで見えるか | provisionで入れてよいか |
+|---|---|---|---|---|
+| brew | Homebrewの導入スクリプト | `/opt/homebrew/bin/brew` | 見える | 入れない |
+| git | Xcode Command Line Tools（Homebrew導入時に入る） | `/usr/bin/git` | 見える | 入れない |
+| python3 | 同上。層2で `brew install python` も入る | `/usr/bin/python3`、`/opt/homebrew/bin/python3` | 見える | 入れない |
+| gh | brewのformula `gh`（層1と層2） | `/opt/homebrew/bin/gh` | 見える | `command -v` で守れば可。実質no-op |
+| node | brewのformula `node@24`。**keg-only** で `/opt/homebrew/bin` にはリンクされない | `/opt/homebrew/opt/node@24/bin/node` | 見える（`~/.zprofile` のPATH経由） | 入れない |
+| npm | `node@24` 同梱。formulaが `npmrc` に `prefix = /opt/homebrew` を書くので、`npm install -g` した実行ファイルは `/opt/homebrew/bin` に出る | `/opt/homebrew/opt/node@24/bin/npm` | 見える（同上） | 入れない |
+| pnpm / yarn | `npm install --global yarn pnpm`（層1） | `/opt/homebrew/bin/pnpm`、`/opt/homebrew/bin/yarn` | 見える | **brewで入れない**（下記） |
+| Xcode | `xcodes` で導入し `xcode-select` で選択済み（Xcode入りの系統のみ） | `/Applications/Xcode_<版>.app` | 見える（`xcodebuild` は `/usr/bin` 経由） | 入れない |
+| claude | caskの `claude-code`（Xcode入りの系統）、または層2の公式スクリプト | `/opt/homebrew/bin/claude` か `$HOME/.local/bin/claude` | 見える | 無ければ入れる |
+| timeout（GNU） | brewのformula `coreutils`。**上流イメージには入っていない**。層2で入る | `/opt/homebrew/opt/coreutils/libexec/gnubin/timeout` | 見える | 無ければ入れる |
+
+上流イメージにはほかに mise / rbenv / git-lfs / jq / yq / awscli / wget / unzip / zip / cmake / gcc / gitlab-runner / Tart Guest Agent が入る。Xcode入りの系統にはさらに openjdk@17 / xcodes / Android SDK / codex / amazon-q が入る。
+
+### 入れ直してはいけないもの
+
+見分ける規則は1つ。
+
+> **brewが入れたものを `brew install` し直すのは無害**（「already installed」で終わる）。**brew以外**（`npm -g`、caskのbinary、`curl | bash`）が同じ場所に置いたファイルをbrewのformulaで入れようとすると、リンクが衝突して非ゼロで落ちる。
+
+- **`pnpm` / `yarn`**: 上流イメージは `npm install --global` で入れていて、`npm` のprefixが `/opt/homebrew` なので実行ファイルは `/opt/homebrew/bin` にある。Homebrewの `pnpm` formulaは `pnpm` に加えて `pn` / `pnpx` / `pnx` を同じ場所へ置くため、`brew install pnpm` がリンクで衝突する。2026-09-09に踏んだのはこれ。pnpmが要るなら入っているものを使う。版を固定したいならリポジトリの `packageManager` と `corepack` に任せる
+- **`node` / `node@24`**: keg-onlyなので `/opt/homebrew/bin/node` は無いが、入っていないわけではない。別系統のnodeを足すとPATHの先勝ちで版が入れ替わる。`command -v node` が空に見えたら、まず「ログインシェルで走っているか」「`~/.bash_profile` を作っていないか」を疑う
+- **`gh`**: 層1と層2の両方で入っている。`brew install gh` は落ちないが、毎runの無駄な待ち時間になる
+- **`claude`**: Xcode入りの系統はcaskで `/opt/homebrew/bin/claude` に入っていることがある。公式スクリプトで入れると `$HOME/.local/bin/claude` になり、runnerのPATHでは `/opt/homebrew/bin` の方が先に来る。二重に入れて版がずれないよう `command -v` で守る
+
+### 既存を守る書き方
+
+```bash
+command -v gh      >/dev/null || brew install gh
+command -v timeout >/dev/null || brew install coreutils
+command -v claude  >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
+```
+
+keg-onlyのものを確実に使いたいときは、入れ直さずにPATHを足す。
+
+```bash
+[ -d /opt/homebrew/opt/node@24/bin ] && export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+```
+
+雛形は [workers/templates/provision.macos.sh](../workers/templates/provision.macos.sh)。ネットワーク隔離の確認とこの3つだけが入っている。PJ固有の追加は雛形が指す位置から下に足す。
+
+### 版とdigestを採取する
+
+版もdigestも環境ごとに違うので、この文書には数値を書かない。実機で採取して、非追跡の `$AIFACTORY_WORKSPACE/docs/STATUS.md` へ日付つきで貼る。
+
+```bash
+db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
+python3 workers/bin/control --db "$db" submit <worker> guest-exec --lease auto --wait 120 \
+  --command 'sw_vers; brew --version; brew list --versions; which -a node npm pnpm yarn python3 gh git brew claude timeout; xcodebuild -version'
+```
+
+`guest-exec` は専用ゲストが起きていてleaseがある間しか通らない（「[uncertainからの復旧](#uncertainからの復旧)」）。`kb run <id> --keep` で保持したrunのleaseを使う。Xcodeの無い系統では最後の `xcodebuild -version` だけが失敗するが、手前の出力は取れる。
+
+取得元のdigestは、イメージを取得したMacで確認する。
+
+```bash
+image=cirruslabs/macos-tahoe-xcode
+token=$(curl -sS "https://ghcr.io/token?scope=repository:$image:pull" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+curl -sS -o /dev/null -D - -H "Authorization: Bearer $token" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  "https://ghcr.io/v2/$image/manifests/latest" | grep -i docker-content-digest
+```
+
+**基準イメージを更新したら、この節と `$AIFACTORY_WORKSPACE/docs/STATUS.md` の採取結果を同じ日に更新する。**
 
 ## 依頼と進捗確認
 
@@ -134,7 +240,7 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 | CLI導入が長時間かかる | provisionログで進行・再取得を確認する。取得済みという理由だけで未検証のバイナリを配置しない |
 | GitHub token発行に失敗 | PJ設定とAppのインストール権限を確認する。runnerは同じリポジトリ内のsandbox CLIを呼ぶ。値をログへ出さない |
 | 日付をまたいで再開する | `kb run <id> --resume`。チケットに記録されたrunを使う |
-| 操作が `uncertain` | ゲスト停止と操作状態を管理者が確認する。ジャーナルを消して再実行しない。ログ上限の超過はこの原因にならない |
+| 操作が `uncertain` | ゲスト停止と操作状態を管理者が確認する。手順は「[uncertainからの復旧](#uncertainからの復旧)」 |
 | ログが途中で切れている | 1操作16 MiBに達した合図。切り捨て行が入り結果に `truncated` が付く。操作自体は完走しているので、exit codeと成果物で判断する |
 | 成果物回収・VM削除に失敗 | leaseを保持する。回収状況・ゲストの実状態を確定してから復旧する |
 
@@ -142,7 +248,55 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 
 再開する工程は `state.json` の工程履歴（`history`）から決まる。履歴が空（provisionで落ちて1工程も終えていない）ならworkflowの先頭工程から、履歴があれば最後に走った工程から続く。`next: human` を引き継いで工程を1つも走らせずにVMを返却することはない。続きが無いrun（PRまで出ている、`next: end`）はVMに触る前に止まる（ADR-0047）。
 
-`control cancel` は停止要求であり、停止確認ではない。`resolve <operation-id> --confirmed-stopped` は管理者が停止確認した後だけ使う。操作の解決とrunのlease解放は別で、後者は成功した `guest-release` を指定する `control release-lease` が必要。詳しい引数と通信断時の動作は [workersの復旧手順](../workers/README.md#操作と復旧)を参照する。
+`control cancel` は停止要求であり、停止確認ではない。`uncertain` になった操作を戻す手順は次節「[uncertainからの復旧](#uncertainからの復旧)」にまとめてある。引数の一覧と通信断時の動作は [workersの復旧手順](../workers/README.md#操作と復旧)を参照する。
+
+## uncertainからの復旧
+
+`uncertain` は「操作を止めようとしたが、止まったことを確認できなかった」状態。制御系は自分で予約を解除せず、人が実状態を確定するまで待つ。ログが16 MiBの上限に達したことはこの原因にならない。以下は制御系のリポジトリルートで実行する。
+
+**1. 状態を見る。**
+
+```bash
+db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
+python3 workers/bin/control --db "$db" list
+python3 workers/bin/control --db "$db" show '<operation-id>'
+```
+
+`list` はワーカーごとに `online`、`info`（`lifecycle`・`base_ready`・`network_ready`）、未完了の `operation`（`queued` / `running` / `uncertain` のどれか1件とそのID）、保持中の `lease` を出す。`uncertain` の操作IDはここで分かる。どのrunのものかは `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` と突き合わせる。`show` はその操作の状態・exit code・ログを出す。
+
+**2. ゲストが生きているか確かめる。** 診断も同じ操作キューを通る。`--lease auto` は、そのワーカーが今持っているleaseをDBから引いてpayloadに入れる。
+
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-exec \
+  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
+```
+
+**leaseをpayloadに入れないと断られる。** ワーカーがleaseを保持している間、payloadのleaseがそれと一致しない操作は制御系が409で拒否し、`operation does not own worker lease` を返す（`workers/lib/pull.py`）。`--lease auto` は保持中のleaseが無ければ何も入れないので、その場合はMacのようなlifecycleワーカーでは `lifecycle worker requires a lease` になる。payloadファイルに `lease` があればそちらが優先し、`--lease <id>` の明示指定はpayloadを上書きする。payloadはDBに残るので、診断コマンドに秘密情報を書かない。
+
+Macホスト側では管理者のSSHで `tart list` を見る。ゲストが一覧に無ければ既に止まっている。
+
+**3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは4）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
+
+- 管理者がMac上でそのゲストの実状態を確認した（`tart list` に無い、または `tart stop` した）
+- `cancel` を送っただけで済ませていない。`cancel` は停止要求であって停止確認ではない
+- ジャーナルを消していない。消してから同じ未完了操作を再開しない（起動済みのコマンドを二重に走らせない根拠が消える）
+
+```bash
+python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stopped
+```
+
+`--confirmed-stopped` は必須。以前の結果とログは保存される。
+
+**4. leaseの解放は別の操作。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
+
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
+python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<成功したguest-releaseの操作ID>'
+```
+
+`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。
+
+**5. 再開する。** leaseを片づけたら `kb run <id> --resume` で続ける。どの工程から再開するか、再開できない条件、`--resume` がleaseの所有を要求することは「失敗時の復旧」と [ADR-0047](adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
 
 ## 実機で確認した範囲と制約
 
