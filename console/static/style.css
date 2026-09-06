@@ -119,6 +119,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12.5px; }
+th.nw, td.nw { white-space: nowrap; }   /* VM 名・IP・時刻。折り返すと列頭と値が離れる */
 tr.link { cursor: pointer; }
 tr.link:hover td { background: var(--ground); }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }

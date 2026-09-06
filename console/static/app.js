@@ -329,7 +329,12 @@ async function viewSandbox() {
   const [d, o] = await Promise.all([api('sandbox'), refreshNav()]);
   const lent = Object.entries(d.lent).filter(([k, v]) => v && typeof v === 'object');
   const lsRunning = o && o.jobs.find(j => j.kind === 'sandbox-ls');
-  let ls = null; if (d.last_ls) ls = await api(`jobs/${d.last_ls.id}`);
+  /* 取得中 / 成功 / 失敗 / 未取得 を分ける。last_ls は直近（成否問わず）、last_ok_ls は表に出せる最後の成功 */
+  const lsFailed = d.last_ls && (d.last_ls.state === 'failed' || (d.last_ls.rc != null && d.last_ls.rc !== 0)) ? d.last_ls : null;
+  const failLog = lsFailed ? await api(`jobs/${lsFailed.id}`) : null;
+  const tail3 = t => (t || '').split('\n').filter(l => l.trim() && l[0] !== '$').slice(-3).join('\n');
+  const pjOf = name => (d.templates.find(p => name.startsWith(`sb-${p.pj}-`)) || {}).pj || '';   /* VM 名 sb-<pj>-NN から引く。命名が違えば空欄 */
+  const power = st => T.power[st] ? `<span class="st ${st === 'running' ? 'done' : 'todo'}">${esc(T.power[st])}</span>` : `<span class="tag">${esc(st)}</span>`;
   const runOf = task => o && o.runs_active.find(r => String(r.task) === String(task));
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
     <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(tt(T.sandbox.count, { n: lent.length }))}</small></h2>
@@ -339,7 +344,12 @@ async function viewSandbox() {
     <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(tt(T.sandbox.perPj, { n: d.pool_per_pj }))}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.lent)}</th></tr>
       ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? `<span class="st done">${esc(T.sandbox.yes)}</span>` : `<span class="st blocked">${esc(T.sandbox.no)}</span>`}</td><td>${p.token_file ? `<span class="st done">${esc(T.sandbox.tokenSaved)}</span>` : `<span class="st todo">${esc(T.sandbox.tokenMissing)}</span>`}</td><td>${p.lent} / ${p.pool}</td></tr>`).join('')}</table>
       <div class="help top">${esc(T.help.pjPool)}</div></div>
-    <div class="panel"><h2>${esc(T.h.lsResult)}<small>${ls ? esc(tt(T.sandbox.lsAt, { t: fmtT(ls.job.finished) })) : esc(T.sandbox.lsNever)}</small></h2>${ls ? `<pre class="log small">${esc(ls.log.text.replace(/^\$.*\n/, ''))}</pre>` : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
+    <div class="panel"><h2>${esc(T.h.lsResult)}<small>${lsRunning ? esc(T.label.fetching) : d.last_ok_ls ? esc(tt(T.sandbox.lsAt, { t: fmtT(d.last_ok_ls.finished) })) : lsFailed ? '' : esc(T.sandbox.lsNever)}</small></h2>
+      ${lsFailed ? `<div class="err">${esc(tt(T.sandbox.lsFailed, { t: fmtT(lsFailed.finished) }))} <a href="#/job/${esc(lsFailed.id)}">${esc(T.btn.openJob)}</a></div>
+        <div class="help top">${esc(T.help.lsFailed)}</div>${failLog && failLog.log && tail3(failLog.log.text) ? `<pre class="log small top">${esc(tail3(failLog.log.text))}</pre>` : ''}` : ''}
+      ${d.vms.length ? `<table class="top"><tr><th>${esc(T.th.lentTo)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.power)}</th><th>${esc(T.th.lentSince)}</th></tr>
+        ${d.vms.map(v => `<tr><td>${v.task ? `<a href="#/ticket/${esc(v.task)}" class="mono">${esc(v.task)}</a>` : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(pjOf(v.name))}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
+        <div class="help top">${esc(T.help.lsAxes)}</div>` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
 
