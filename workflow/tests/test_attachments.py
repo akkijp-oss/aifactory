@@ -102,6 +102,12 @@ class AttachmentsLibTest(unittest.TestCase):
         self.assertEqual(by["表.csv"]["size"], 4)
         self.assertRegex(by["表.csv"]["added"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")   # ADR-0026
 
+    def test_ticket_id_is_normalised_and_never_a_path(self):
+        self.assertEqual(att.dir_for(101), att.dir_for("101"))
+        self.assertEqual(att.dir_for("0101").name, "101")
+        self.assertEqual(att.dir_for("../etc").name, "etc")        # 数字でない task-id でも落とさず外にも出ない
+        self.assertEqual(att.listing("../etc"), [])
+
     def test_listing_is_empty_for_a_ticket_without_attachments(self):
         self.assertEqual(att.listing(999), [])
         self.assertEqual(att.total_size(999), 0)

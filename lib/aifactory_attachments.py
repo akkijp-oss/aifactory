@@ -22,8 +22,12 @@ CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def dir_for(tid):
-    """チケット <tid> の添付ディレクトリ（作らない）。ATTACHMENTS はモジュール属性として毎回引く（テストが差し替える）"""
-    return paths.ATTACHMENTS / str(int(tid))
+    """チケット <tid> の添付ディレクトリ（作らない）。ATTACHMENTS はモジュール属性として毎回引く（テストが差し替える）。
+
+    id は数字（`0101` は `101` に揃える）。runner は CLI から任意の task-id を受け取れるので、
+    数字でない値でも落とさず sanitize した名前にする（置き場の外には出さない）"""
+    s = sanitize(tid)
+    return paths.ATTACHMENTS / (str(int(s)) if s.isdigit() else s)
 
 
 def sanitize(name):
