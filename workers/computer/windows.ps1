@@ -55,8 +55,18 @@ try {
   }
   'type' {[DesktopInput]::Text([string]$r.text);$out=@{ok=$true}}
   'key' {
-   $keys=@{CTRL=17;ALT=18;SHIFT=16;WIN=91;ENTER=13;TAB=9;ESC=27;BACKSPACE=8;DELETE=46;SPACE=32;UP=38;DOWN=40;LEFT=37;RIGHT=39;HOME=36;END=35;PAGEUP=33;PAGEDOWN=34;F1=112;F2=113;F3=114;F4=115;F5=116;F6=117;F7=118;F8=119;F9=120;F10=121;F11=122;F12=123}
-   $codes=@();foreach($key in $r.keys){$k=$key.ToUpperInvariant();if($keys.ContainsKey($k)){$codes+=[byte]$keys[$k]}elseif($k -match '^[A-Z0-9]$'){$codes+=[byte][char]$k}else{throw 'Unsupported key'}}
+   # キー名は 3 OS 共通の契約（チケット 344）、値は MSDN の仮想キーコード。記号は US 配列の VK_OEM_*。
+   # 'CMD' は VK_LWIN の別名、'+' は物理キーが無いので SHIFT + VK_OEM_PLUS で送る。
+   $keys=@{CTRL=17;ALT=18;SHIFT=16;WIN=91;CMD=91;ENTER=13;TAB=9;ESC=27;BACKSPACE=8;DELETE=46;SPACE=32;UP=38;DOWN=40;LEFT=37;RIGHT=39;HOME=36;END=35;PAGEUP=33;PAGEDOWN=34;F1=112;F2=113;F3=114;F4=115;F5=116;F6=117;F7=118;F8=119;F9=120;F10=121;F11=122;F12=123;';'=0xBA;'='=0xBB;'+'=0xBB;','=0xBC;'-'=0xBD;'.'=0xBE;'/'=0xBF;'`'=0xC0;'['=0xDB;'\'=0xDC;']'=0xDD;"'"=0xDE}
+   foreach($c in [char[]]'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'){$keys["$c"]=[int][char]$c}
+   $supported=($keys.Keys | Sort-Object) -join ' '
+   $codes=@()
+   foreach($key in $r.keys){
+    $k=([string]$key).ToUpperInvariant()
+    if(-not $keys.ContainsKey($k)){throw "unsupported key: $($k.Substring(0,[Math]::Min(12,$k.Length))); supported: $supported"}
+    if($k -eq '+'){$codes+=[byte]$keys['SHIFT']}
+    $codes+=[byte]$keys[$k]
+   }
    try{foreach($c in $codes){[DesktopInput]::keybd_event($c,0,0,[UIntPtr]::Zero)}}finally{[Array]::Reverse($codes);foreach($c in $codes){[DesktopInput]::keybd_event($c,0,2,[UIntPtr]::Zero)}}
    $out=@{ok=$true}
   }
