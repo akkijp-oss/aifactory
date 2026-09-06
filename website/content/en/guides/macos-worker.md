@@ -270,11 +270,23 @@ For each worker, `list` prints `online`, `info` (`lifecycle`, `base_ready`, `net
 
 **2. Check whether the guest is alive (from the Mac host).** While one `uncertain` operation remains, no new operation can be submitted to that worker. The control plane allows a worker only one unfinished operation (`queued`, `running`, or `uncertain`); a second submit is refused with HTTP 409 and `worker is busy; operation not queued` (the `one_reserved_worker` unique index in `workers/lib/pull.py`). Diagnostic `guest-exec` goes through the same queue, so it is unavailable at this point.
 
-An administrator checks `tart list` on the Mac host over SSH. A guest listed as `running` is alive; one that is not listed has already stopped. If the run is being wound up, finish with `tart stop <guest>` so the real state is settled.
+An administrator checks `tart list` on the Mac host over SSH. A guest listed as `running` is alive; one that is not listed has already stopped. What to check next depends on whether the run is being wound up or kept.
+
+- **Winding it up** → finish with `tart stop <guest>` so the real state is settled.
+- **Keeping it (you want to continue the run)** → do not stop the guest. Instead look inside it directly from the Mac host and confirm that the operation's command is no longer running. The worker itself runs guest commands through the same entry point (`tart exec <guest> /bin/bash -lc '<command>'` in `workers/cmd/aifactory-worker/main.go`).
+
+```bash
+# On the Mac host. This bypasses the control-plane queue, so it works while the operation is uncertain
+tart exec <guest> /bin/bash -lc 'pgrep -fl claude; pgrep -fl bash; uptime'
+```
+
+`uncertain` also appears while the guest is still running: the worker sets it both when it tried to stop the guest and could not confirm the stop, and when it restarts and takes over an operation that has no result (`workers/cmd/aifactory-worker/main.go`). A running guest is not by itself an anomaly.
 
 **3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 6). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
 
-- An administrator confirmed the guest's real state on the Mac (absent from `tart list`, or stopped with `tart stop`)
+- An administrator confirmed the guest's real state from the Mac host, in one of two ways
+    - **Stopped it**: absent from `tart list`, or stopped with `tart stop <guest>` (this run is being wound up → the second path in step 5)
+    - **Left it running**: the guest stays `running`, but `tart exec` in step 2 confirmed that the operation's command is not running (this run continues → the first path in step 5)
 - You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
 - You did not delete the journal. Never delete it and then rerun the same unfinished operation: that is the record that keeps an already-started command from running twice
 
@@ -284,7 +296,7 @@ python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stop
 
 `--confirmed-stopped` is required. Earlier results and logs are kept.
 
-**4. Look inside the guest (after `resolve`, while the lease is still held and the guest is running).** Once the reservation is free, operations can be submitted to that worker again. Diagnostics go through the same operation queue. `--lease auto` reads the lease the worker currently holds from the database and puts it in the payload.
+**4. Look inside the guest (after `resolve`, in the "left it running" case of step 3, with the lease still held).** Once the reservation is free, operations can be submitted to that worker again. Diagnostics go through the same operation queue. `--lease auto` reads the lease the worker currently holds from the database and puts it in the payload.
 
 ```bash
 python3 workers/bin/control --db "$db" submit <worker> guest-exec \
@@ -295,8 +307,8 @@ python3 workers/bin/control --db "$db" submit <worker> guest-exec \
 
 **5. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`). A run whose lease was released in step 6 can no longer be resumed.
 
-- **The guest is alive and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. A prepared guest (the clone is done and `work/ticket.md` is not empty) continues from the last step in the step history. Before that point, it can rerun provisioning only when the step history is empty and neither `$SANDBOX_APP_DIR` nor `work/runtime.env` exists yet. A guest that is neither stops the run with `Mac setup is incomplete or the guest is stopped`, so look inside it before deciding (how the step is chosen is under "[Recovery](#recovery)").
-- **The guest is gone, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. If the board still points at a run in progress the command refuses; put the ticket back with `kb reopen <id>` first.
+- **The guest is alive (the "left it running" case of step 3) and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. A prepared guest (the clone is done and `work/ticket.md` is not empty) continues from the last step in the step history. Before that point, it can rerun provisioning only when the step history is empty and neither `$SANDBOX_APP_DIR` nor `work/runtime.env` exists yet. A guest that is neither stops the run with `Mac setup is incomplete or the guest is stopped`, so look inside it before deciding (how the step is chosen is under "[Recovery](#recovery)").
+- **The guest is gone, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. There are two different refusals (`kanban/bin/kb`). `--from` (and `--branch`) is refused when the board points at a run in progress **and that run's record has not finished either**; wait for it if it is still going, otherwise put the ticket back with `kb reopen <id>` or pass `--force` deliberately. A plain `kb run <id>` is refused when **the ticket is `done`**, which `kb reopen <id>` also clears.
 
 **6. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
 
