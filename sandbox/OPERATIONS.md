@@ -14,7 +14,34 @@
 **1 テナントに制御系は 1 つ**。貸出台帳（`~/.config/sandbox/state.json`）は制御系ごとに別なので、Mac と制御系 LXC の両方から同じプールに `take` すると二重貸出になる。制御系 LXC に寄せたら Mac 側では `take` しない（`ls` は読むだけなので可）。
 同じ制御系の中でなら `take` は安全で、空き VM の選定と台帳への予約は `state.json.lock`（`flock`。無い環境は `state.json.lock.d`）で直列化される。`kb run` を同時に何本立てても同じ VM が 2 つの task に貸し出されることはない（2026-09 の 234）。プールが尽きたときは後発が「空きなし」で失敗する。
 
-制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer`、ログは `journalctl -u aifactory-console -f`。コードを更新したら LXC の中で `cd ~/aifactory && git pull && sandbox/bin/install.sh && (cd website && .venv/bin/mkdocs build -q) && sudo systemctl restart aifactory-console`。
+制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer`、ログは `journalctl -u aifactory-console -f`。コードの更新は下記の `bin/ctl-update` 1 本。
+
+## 制御系にコードを配備する（`bin/ctl-update`）
+
+main にマージしただけでは制御系のコンソール・MCP・runner には効かない（VM は GitHub から clone するので効く）。LXC の中で 1 本走らせる。
+
+```bash
+cd ~/aifactory
+bin/ctl-update                  # origin/main の最新へ（fetch → 早送り → CLI → docs → console restart → 疎通 → 版）
+bin/ctl-update --ref v1.2.0     # 任意の版へ（sha / tag / origin/<branch>。detached になる）
+bin/ctl-update --no-docs        # website を直していないとき（mkdocs build を飛ばす）
+bin/ctl-update --dry-run        # 何をするかだけ見る
+```
+
+- `sudo` は頭で 1 回だけ聞かれる（systemd の unit 更新と restart）。console の bind 先は今の unit の `CONSOLE_HOST` / `CONSOLE_PORT` を引き継ぐ
+- 最後に console（`/api/config`）・MCP（`initialize`）・runner（python3 の yaml / jsonschema）の疎通と、配備した版の `git log -1` が出る
+- `._*` / `.DS_Store` は走るたびに消す（種別・役割の候補に `._bug` が混ざる原因。218 / 247）
+
+**制御系の `~/aifactory` は clean な checkout で運用する。** 汚れていると `ctl-update` は配備せずに止まる。テナント構築を `AIFACTORY_LOCAL_TREE=1`（未 push の tree を被せる。`25-control-lxc.sh`）でやった LXC はこの状態なので、一度だけ入れ替える:
+
+```bash
+mv ~/aifactory ~/aifactory.pre-clean-$(date +%Y%m%d)
+git clone <origin の URL> ~/aifactory
+mv ~/aifactory.pre-clean-*/workspace ~/aifactory/   # workspace をリポジトリ内に置いていたときだけ（ADR-0016）
+cd ~/aifactory && bin/ctl-update
+```
+
+退避先にしか無い変更は、そこから拾って PR にする（この tree には戻さない）。落ち着いたら `rm -rf ~/aifactory.pre-clean-*`。
 
 ## 日常の5操作
 

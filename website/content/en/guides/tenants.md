@@ -97,7 +97,8 @@ From there it is the same as [Create tickets](tickets.md) → [Run work](running
 
 ## Operating notes
 
-- Updating the code (inside the LXC): `cd ~/aifactory && git pull && sandbox/bin/install.sh && (cd website && .venv/bin/mkdocs build -q) && sudo systemctl restart aifactory-console`
+- Updating the code (inside the LXC): `cd ~/aifactory && bin/ctl-update`. It fast-forwards to the latest `origin/main`, deploys the `sandbox` CLI, the docs and the console, then prints the connectivity checks and the deployed revision. Use `--ref <sha|tag>` for a specific revision, `--no-docs` to skip the docs build, `--dry-run` to see the plan only. `sudo` is asked for once, up front
+- Keep the control plane's `~/aifactory` a **clean checkout**. If it is dirty, `bin/ctl-update` stops without deploying and prints the steps to move it aside and `git clone` again (see `sandbox/OPERATIONS.md`)
 - Rotating the API token: the maintainer re-runs `SB_TENANT=acme sandbox/proxmox/run.sh 25-control-lxc.sh`
 - `sandbox ls` says `Proxmox API … failed`: from the LXC check `curl --cacert ~/.config/sandbox/pve-ca.pem --resolve <node>:8006:10.78.0.1 https://<node>:8006/api2/json/version` (the certificate's SAN carries the node name, so `PVE_API_RESOLVE` points it at the SDN-side IP), and that the OUT rules of firewall group `sb-acme-ctl` allow the tenant's own /16
 - Open (ADR-0017): scripted tenant teardown, per-tenant RAM / disk limits, automatic updates of the control plane
