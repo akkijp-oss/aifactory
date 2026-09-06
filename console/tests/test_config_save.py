@@ -264,5 +264,67 @@ class RunningRunTest(KitTestCase):
         self.assertEqual(r2.model_for(step)[0], "claude-opus-5")   # 次に起こす run（resume も別プロセス）は新しい値を読む
 
 
+@unittest.skipUnless(shutil.which("node"), "node が無い")
+class RenderTest(KitTestCase):
+    """編集の欄と下見の中身（app.js の部品を node で直に動かす）"""
+
+    def js(self, probe):
+        import json as _json, subprocess
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from test_console import js_line, js_block
+        static = REPO / "console" / "static"
+        app = (static / "app.js").read_text(encoding="utf-8")
+        w = core.workflow_detail("feature")
+        d = {"routes": core.model_routes(), "model_edit": core.model_edit_view()}
+        src = self.tmp / "cfg.js"
+        src.write_text("\n".join([
+            (static / "strings.js").read_text(encoding="utf-8"),
+            *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgOpts", "cfgAffectedRows")],
+            *[js_block(app, n) for n in ("cfgModelPreview", "cfgModelEdit")],
+            f"const wf = {_json.dumps(w, ensure_ascii=False)};",
+            f"const d = {_json.dumps(d, ensure_ascii=False)};",
+            "const steps = {}; wf.steps.forEach(s => steps[s.id] = s);",
+            "const out = {};",
+            *[f"out[{k!r}] = {v};" for k, v in probe.items()],
+            "console.log(JSON.stringify(out));"]), encoding="utf-8")
+        r = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return _json.loads(r.stdout)
+
+    def test_the_panel_offers_the_three_scopes_and_going_back_to_inheritance(self):
+        html = self.js({"edit": "cfgModelEdit(wf, steps.design, d)"})["edit"]
+        self.assertIn('data-target="step" data-key="model"', html)
+        self.assertIn('data-target="step" data-key="model_class"', html)
+        self.assertIn('data-target="routes" data-key="MODEL_judgment"', html)
+        self.assertNotIn("data-inherit", html)                      # 指定が無いので「継承へ戻す」は出さない
+        self.assertIn("claude-fable-5-1", html)                     # 共通の経路のいまの値
+        self.assertIn(self.T()["config"]["modelEdit"], html)          # 見出しは文言の集約から出す
+
+    def test_the_inherit_button_appears_once_the_step_has_its_own_value(self):
+        self.save(target="step", workflow="feature", step="design", key="model", value="claude-sonnet-5")
+        html = self.js({"edit": "cfgModelEdit(wf, steps.design, d)"})["edit"]
+        self.assertIn('data-inherit="1"', html)
+        self.assertIn('value="claude-sonnet-5"', html)
+
+    def test_the_preview_shows_the_affected_steps_and_says_it_is_a_shared_setting(self):
+        p = self.apply(target="routes", key="MODEL_judgment", value="claude-opus-5")
+        html = self.js({"pre": f"cfgModelPreview({json.dumps(p, ensure_ascii=False)})"})["pre"]
+        self.assertIn("claude-fable-5-1", html)
+        self.assertIn("claude-opus-5", html)
+        for a in p["affected"]: self.assertIn(f">{a['step']}<", html)
+        self.assertIn("共通の設定です", html)
+        self.assertIn("commit しません", html)                      # 未コミットの注意
+
+    def test_the_preview_of_one_step_does_not_claim_a_shared_change(self):
+        p = self.apply(target="step", workflow="feature", step="design", key="model", value="claude-opus-5")
+        html = self.js({"pre": f"cfgModelPreview({json.dumps(p, ensure_ascii=False)})"})["pre"]
+        self.assertNotIn("共通の設定です", html)
+        self.assertIn(">design<", html)
+
+    def T(self):
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        return __import__("test_strings").load()
+
+
 if __name__ == "__main__":
     unittest.main()

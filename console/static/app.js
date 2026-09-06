@@ -977,7 +977,7 @@ const cfgUnknown = s => !(s.unknown_keys || []).length ? '' : `<div class="panel
 const cfgOpts = (vals, cur) => vals.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
 const cfgAffectedRows = p => (p.affected || []).map(a => `<tr><td>${esc(a.workflow)}</td><td class="mono">${esc(a.step)}</td><td class="mono">${esc(a.before || '-')}</td><td class="mono"><b>${esc(a.after || '-')}</b></td></tr>`).join('');
 /* 下見の中身: 前後の実効モデル・影響する工程・動いている run・反映時点・退避と未コミットの注意 */
-const cfgModelPreview = p => `<p>${esc(tt(T.dialog.model.body, { file: p.file }))}</p>
+function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p.file }))}</p>
   ${(p.affected || []).length ? `<div class="k">${esc(T.config.modelAffected)}</div><div class="scroll"><table><tr><th>workflow</th><th>${esc(T.th.step)}</th><th>${esc(T.config.modelNow)}</th><th>${esc(T.config.model)}</th></tr>${cfgAffectedRows(p)}</table></div>` : `<p class="help">${esc(T.config.modelNoChange)}</p>`}
   ${p.target === 'routes' && (p.affected || []).length > 1 ? `<div class="warn">${esc(tt(T.dialog.model.common, { n: p.affected.length }))}</div>` : ''}
   ${p.warning ? `<div class="warn">${esc(p.warning)}</div>` : ''}
@@ -986,6 +986,7 @@ const cfgModelPreview = p => `<p>${esc(tt(T.dialog.model.body, { file: p.file })
   <dt>${esc(T.config.modelFile)}</dt><dd class="mono">${esc(p.file)}${p.git ? `<div class="help mono">${esc(p.git)}</div>` : ''}</dd>
   <dt>${esc(T.config.modelBackup)}</dt><dd class="help">${esc(T.dialog.model.backupNote)}</dd></dl>
   <div class="help">${esc(T.help.configModelUncommitted)}</div>`;
+}
 /* 編集の欄。値は API が返した保存値（s.model / s.model_class）と経路表（d.routes）をそのまま入れる */
 function cfgModelEdit(w, s, d) {
   const m = s.model_resolved, e = d.model_edit || {}, ch = e.choices || [], route = m.route_key || 'MODEL_default';
