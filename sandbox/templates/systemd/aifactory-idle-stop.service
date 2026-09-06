@@ -1,4 +1,4 @@
-# aifactory sandbox: 貸出されていないプール VM を止めて CPU / メモリを空ける（既定 3 時間未使用。252）。timer が 15 分ごとに起動する
+# aifactory sandbox: 貸出されていないプール VM を止めて CPU / メモリを空ける（最終利用から 24 時間で候補、候補が 10 台を超えた分だけ古い順に停止。252 / ADR-0035）。timer が 15 分ごとに起動する
 # 止めた VM は次の take が自動で起動する（+30〜60 秒）。常時起動にしたい PJ は pj/<pj>.env に SB_IDLE_STOP_HOURS=0
 # sandbox/bin/install.sh --systemd が @@USER@@ / @@HOME@@ / @@PATH@@ を埋めて置く
 [Unit]

@@ -68,9 +68,91 @@ func TestLogChunksPreserveUnicodeAndBoundSize(t *testing.T) {
 	if out.String() != text {
 		t.Fatal("unicode corrupted")
 	}
-	w.size = maxLog
-	if _, err := w.Write([]byte("too much")); err == nil {
-		t.Fatal("log quota ignored")
+}
+
+// A screenshot tool_result carries about a megabyte of base64 per line. The log keeps the
+// line as valid JSON but replaces the payload with its decoded size; the image itself stays
+// in the guest as a file.
+func TestLogReplacesImageBase64(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	j.begin("op")
+	w := &logWriter{j: j, id: "op"}
+	data := strings.Repeat("QUJD", 300000) // 1,200,000 base64 chars => 900,000 bytes
+	line := `{"type":"user","message":{"content":[{"type":"tool_result","content":[` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + data + `"}},` +
+		`{"type":"text","text":"screenshot taken"}]}]}}` + "\n"
+	b := []byte(line)
+	for i := 0; i < len(b); i += 7 {
+		if n, err := w.Write(b[i:min(i+7, len(b))]); err != nil || n != len(b[i:min(i+7, len(b))]) {
+			t.Fatal(n, err)
+		}
+	}
+	if err := w.flush(); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for n := 0; n < w.seq; n++ {
+		raw, _ := os.ReadFile(j.event("op", n))
+		var s string
+		json.Unmarshal(raw, &s)
+		out.WriteString(s)
+	}
+	got := out.String()
+	if strings.Contains(got, data[:4096]) {
+		t.Fatal("image base64 kept in the operation log")
+	}
+	if !strings.Contains(got, `"data":"[image 900000 bytes]"`) {
+		t.Fatalf("no size marker: %.400s", got)
+	}
+	if !strings.Contains(got, "screenshot taken") {
+		t.Fatal("surrounding stream-json text lost")
+	}
+	if len(got) > 4096 || w.size != len(got) {
+		t.Fatal(len(got), w.size)
+	}
+	// The runner parses each stream-json line, so the replacement must stay valid JSON.
+	var event any
+	if err := json.Unmarshal([]byte(strings.TrimSuffix(got, "\n")), &event); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Reaching the limit truncates the log; it is not an error and must not fail the operation.
+func TestLogLimitTruncatesWithoutError(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	j.begin("op")
+	w := &logWriter{j: j, id: "op"}
+	w.size = maxLog - 100
+	b := []byte(strings.Repeat("x", 1024) + "\n")
+	if n, err := w.Write(b); err != nil || n != len(b) {
+		t.Fatal(n, err)
+	}
+	if !w.truncated {
+		t.Fatal("truncation not recorded")
+	}
+	if w.seq != 1 {
+		t.Fatal("expected exactly the truncation marker", w.seq)
+	}
+	raw, _ := os.ReadFile(j.event("op", 0))
+	var marker string
+	json.Unmarshal(raw, &marker)
+	if !strings.Contains(marker, "truncated") {
+		t.Fatal(marker)
+	}
+	if w.size > maxLog {
+		t.Fatal("log exceeded the quota", w.size)
+	}
+	// Later output is discarded without a second marker and without an error.
+	if n, err := w.Write([]byte("more\n")); err != nil || n != 5 {
+		t.Fatal(n, err)
+	}
+	if err := w.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if w.seq != 1 {
+		t.Fatal("wrote past the truncation marker", w.seq)
 	}
 }
 
@@ -238,5 +320,56 @@ func TestTLSRefusesUnknownCertificateAndRedirect(t *testing.T) {
 	os.WriteFile(caFile, []byte("invalid"), 0600)
 	if _, err := newWorker(w.c); err == nil {
 		t.Fatal("invalid trust root accepted")
+	}
+}
+
+// #280: a guest command whose output exceeds the log limit used to break the tart exec pipe
+// and report uncertain while the guest kept running. The exit code now decides the result.
+func TestGuestExecutionSurvivesLogLimit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Tart backend")
+	}
+	for _, tc := range []struct {
+		name   string
+		script string
+		status string
+		code   int
+	}{
+		{"success", "yes | head -c 20000000; exit 0", "succeeded", 0},
+		{"failure", "yes | head -c 20000000; exit 3", "failed", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, _ := newJournal(t.TempDir())
+			defer j.lock.Close()
+			j.begin("guest-op")
+			w := &worker{c: config{Tart: "/approved/tart", GuestVM: "isolated"}, j: j, done: make(chan struct{})}
+			w.lastOK.Store(time.Now().UnixNano())
+			w.command = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+				return exec.CommandContext(ctx, "/bin/sh", "-c", tc.script)
+			}
+			op := operation{ID: "guest-op", Kind: "guest-exec"}
+			op.Payload.Command = tc.script
+			op.Payload.Timeout = 120
+			w.execute(context.Background(), op)
+			b, _ := os.ReadFile(filepath.Join(j.dir(op.ID), "result.json"))
+			var r result
+			json.Unmarshal(b, &r)
+			if r.Status != tc.status || r.ExitCode == nil || *r.ExitCode != tc.code {
+				t.Fatal(string(b))
+			}
+			if !r.Truncated {
+				t.Fatal("truncation not reported in the result", string(b))
+			}
+			total := 0
+			for n := 0; n < r.Events; n++ {
+				raw, _ := os.ReadFile(j.event(op.ID, n))
+				var s string
+				json.Unmarshal(raw, &s)
+				total += len(s)
+			}
+			if total > maxLog {
+				t.Fatal("log exceeded the quota", total)
+			}
+		})
 	}
 }

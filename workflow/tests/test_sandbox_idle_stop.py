@@ -4,7 +4,9 @@ sandbox/bin/sandbox から state の区画と idle-stop の区画だけを切り
 止める / 起動する API（pve_shutdown / pve_stop / pve_start）は呼ばれた順に $CALLS へ書くだけにする。
 
 - 貸出中（state.json に vmid がある）VM は止めない
-- 最終利用（last-used.json）から N 時間経っていなければ止めない。超えていれば shutdown
+- 最終利用（last-used.json）から N 時間（既定 24）経っていなければ候補にしない。超えていれば候補
+- 候補は最終利用の古い順に並べ、新しい方から K 台（既定 10。SB_IDLE_STOP_KEEP / --keep）を残し、それより古いものだけ shutdown
+  （SandboxIdleStopKeepTest。この上の SandboxIdleStopTest はプール 2 台なので --keep 0 で足切りを外して判定だけを見る）
 - 記録が無ければ uptime で代用し、uptime も取れなければ止めない（安全側）
 - --dry-run は止めず idle-stop.json も書かない / SB_IDLE_STOP_HOURS=0 は何もしない
 - ctl / gw / テンプレート / 別テナントの VM は対象外
@@ -72,6 +74,8 @@ class SandboxIdleStopTest(unittest.TestCase):
 
     def run_idle_stop(self, *args, fakes=FAKES, **env):
         script = self.script(fakes)
+        # プール 2 台の判定を見るテストなので、足切り（既定 10 台）は外す。足切りは SandboxIdleStopKeepTest で見る
+        env = {'SB_IDLE_STOP_KEEP': '0', **env}
         return subprocess.run(['bash', '-c', script, 'sandbox', *args], text=True,
                               env=dict(os.environ, CALLS=self.calls_file, **env),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -98,28 +102,29 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertIn('貸出中 1', r.stdout)
 
     def test_recent_use_is_kept_and_old_use_is_stopped(self):
-        """最終利用から 2 時間なら止めず、4 時間なら止める（既定 3 時間）"""
-        self.write_last_used(v9201=iso(2), v9202=iso(4))
+        """最終利用から 20 時間なら止めず、30 時間なら止める（既定 24 時間）"""
+        self.write_last_used(v9201=iso(20), v9202=iso(30))
         r = self.run_idle_stop()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), ['shutdown', '9202'])
         self.assertIn('sb-t-pj-02 (9202): shutdown', r.stdout)
-        self.assertIn('最終利用 4h00m 前', r.stdout)
-        self.assertIn('対象 2 台: 停止 1 / 貸出中 0 / 未経過 1 / 不明 0', r.stdout)
+        self.assertIn('最終利用 30h00m 前', r.stdout)
+        self.assertIn('24h 超', r.stdout)
+        self.assertIn('対象 2 台: 候補 1（停止 1 / 残す 0。足切り 0 台）/ 貸出中 0 / 未経過 1 / 不明 0', r.stdout)
 
     def test_hours_option_overrides_the_default(self):
         self.write_last_used(v9201=iso(2), v9202=iso(4))
         self.assertEqual(self.run_idle_stop('--hours', '5').returncode, 0)
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.run_idle_stop('--hours', '1').returncode, 0)
-        self.assertEqual(self.calls(), ['shutdown', '9201', 'shutdown', '9202'])
+        self.assertEqual(self.calls(), ['shutdown', '9202', 'shutdown', '9201'])      # 古い順（9202 が 4h、9201 が 2h）
 
     def test_uptime_stands_in_when_there_is_no_record(self):
         """last-used.json に記録が無い VM は「起動からの時間」で判断する"""
-        r = self.run_idle_stop(UPTIME=str(4 * 3600))
+        r = self.run_idle_stop(UPTIME=str(30 * 3600))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), ['shutdown', '9201', 'shutdown', '9202'])
-        self.assertIn('起動から 4h00m 前', r.stdout)
+        self.assertIn('起動から 30h00m 前', r.stdout)
 
     def test_unknown_age_is_left_running(self):
         """記録も uptime も無ければ止めない（安全側）。理由を 1 行出す"""
@@ -130,13 +135,13 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertIn('不明 2', r.stdout)
 
     def test_dry_run_touches_nothing(self):
-        self.write_last_used(v9201=iso(4), v9202=iso(4))
+        self.write_last_used(v9201=iso(30), v9202=iso(30))
         r = self.run_idle_stop('--dry-run')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), [])
         self.assertFalse(os.path.exists(self.idle_file))
         self.assertIn('--dry-run なので止めない', r.stdout)
-        self.assertIn('停止 2', r.stdout)
+        self.assertIn('候補 2（停止 2', r.stdout)
 
     def test_zero_hours_disables_idle_stop(self):
         self.write_last_used(v9201=iso(99), v9202=iso(99))
@@ -161,6 +166,12 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn('0 以上の整数', r.stderr)
 
+    def test_bad_keep_is_refused(self):
+        r = self.run_idle_stop('--keep', 'ten')
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('残す台数', r.stderr)
+        self.assertIn('0 以上の整数', r.stderr)
+
     # ---------- 対象の絞り込み
 
     def test_only_pool_vms_of_this_tenant_are_considered(self):
@@ -174,7 +185,7 @@ class SandboxIdleStopTest(unittest.TestCase):
 
     def test_already_stopped_vms_are_not_counted(self):
         fakes = FAKES.replace('echo "9202 sb-t-pj-02 running"', 'echo "9202 sb-t-pj-02 stopped"')
-        r = self.run_idle_stop(UPTIME=str(4 * 3600), fakes=fakes)
+        r = self.run_idle_stop(UPTIME=str(30 * 3600), fakes=fakes)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), ['shutdown', '9201'])
         self.assertIn('対象 1 台', r.stdout)
@@ -182,7 +193,7 @@ class SandboxIdleStopTest(unittest.TestCase):
     # ---------- shutdown が効かないとき
 
     def test_stop_is_used_when_shutdown_times_out(self):
-        self.write_last_used(v9201=iso(4), v9202=iso(1))
+        self.write_last_used(v9201=iso(30), v9202=iso(1))
         r = self.run_idle_stop(SHUTDOWN_RC='1')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), ['shutdown', '9201', 'stop', '9201'])
@@ -190,7 +201,7 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertEqual([v['vmid'] for v in self.idle_json()['stopped']], [9201])
 
     def test_a_vm_that_refuses_both_is_reported_and_not_recorded(self):
-        self.write_last_used(v9201=iso(4), v9202=iso(1))
+        self.write_last_used(v9201=iso(30), v9202=iso(1))
         r = self.run_idle_stop(SHUTDOWN_RC='1', STOP_RC='1')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('stop も失敗', r.stderr)
@@ -199,12 +210,14 @@ class SandboxIdleStopTest(unittest.TestCase):
 
     # ---------- idle-stop.json と ls の脚注
 
-    def test_result_file_records_hours_last_run_and_stopped(self):
-        used = iso(4)
+    def test_result_file_records_hours_keep_last_run_and_stopped(self):
+        used = iso(30)
         self.write_last_used(v9201=used, v9202=iso(1))
         self.assertEqual(self.run_idle_stop().returncode, 0)
         d = self.idle_json()
-        self.assertEqual(d['hours'], 3)
+        self.assertEqual(d['hours'], 24)
+        self.assertEqual(d['keep'], 0)
+        self.assertEqual(d['candidates'], [])
         self.assertRegex(d['last_run'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$')   # ADR-0026
         self.assertEqual(len(d['stopped']), 1)
         self.assertEqual(d['stopped'][0]['vmid'], 9201)
@@ -242,6 +255,143 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertIn('2026-09-08T04:00:00+09:00', r.stdout)
         rows = [l for l in r.stdout.splitlines() if l and not l.startswith(('TASK', '['))]
         self.assertEqual(len(rows), 1, r.stdout)       # 脚注は `[` 始まりで、console の parse_ls が捨てる
+
+    def test_ls_footnote_counts_the_candidates_still_running(self):
+        """候補のまま残した（足切りの内の）VM も脚注に出す。停止 0 台でも候補があれば出る"""
+        text = SCRIPT.read_text()
+        ls = text[text.index('cmd_ls() {'):text.index('case "${1:-}" in')]
+        head = ('set -euo pipefail\nSTATE=%s\nSB_PREFIX=sb-t\nCONF_DIR=%s\n'
+                'die() { echo "[error] $*" >&2; exit 1; }\n' % (self.state, self.dir))
+        state = text[text.index('# ---------- state（台帳とロック）'):text.index('mask() {')]
+        pathlib.Path(self.idle_file).write_text(json.dumps(
+            {"hours": 24, "keep": 10, "last_run": "2026-09-08T04:00:00+09:00", "stopped": [],
+             "candidates": [{"vmid": 9201, "name": "sb-t-pj-01", "last_used": "2026-09-06T04:00:00+09:00"}]}))
+        script = (head + state + 'pve_vms() { echo "9201 sb-t-pj-01 running"; }\npool_ip() { echo 10.77.1.1; }\n'
+                  + ls + 'cmd_ls\n')
+        r = subprocess.run(['bash', '-c', script], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('節電で停止中', r.stdout)
+        self.assertIn('[idle-stop] 1 台が停止候補（最終利用から 24h 超。10 台までは起動したまま残す）', r.stdout)
+        rows = [l for l in r.stdout.splitlines() if l and not l.startswith(('TASK', '['))]
+        self.assertEqual(len(rows), 1, r.stdout)
+
+
+POOL12_FAKES = '''
+SB_PREFIX=sb-t
+load_pj() { CUR_PJ=$1; }
+pve_vms() {
+  local i; for i in $(seq 1 12); do printf '%d sb-t-pj-%02d running\\n' $(( 9200 + i )) "$i"; done
+  echo "9001 sb-t-ctl running"
+}
+pve_uptime() { echo "${UPTIME:-}"; }
+pve_shutdown() { echo "shutdown $1" >> "$CALLS"; return "${SHUTDOWN_RC:-0}"; }
+pve_stop() { echo "stop $1" >> "$CALLS"; return "${STOP_RC:-0}"; }
+'''
+
+
+@unittest.skipUnless(shutil.which('jq'), 'jq required by sandbox CLI')
+class SandboxIdleStopKeepTest(unittest.TestCase):
+    """足切り: 候補（24h 超）を古い順に並べ、新しい方から K 台（既定 10）を残して、それより古いものだけ止める（2026-09-09）"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.state = os.path.join(self.dir, 'state.json')
+        self.last_used = os.path.join(self.dir, 'last-used.json')
+        self.idle_file = os.path.join(self.dir, 'idle-stop.json')
+        self.calls_file = os.path.join(self.dir, 'calls')
+        pathlib.Path(self.state).write_text('{}')
+
+    script = SandboxIdleStopTest.script
+    calls = SandboxIdleStopTest.calls
+    idle_json = SandboxIdleStopTest.idle_json
+
+    def run_idle_stop(self, *args, **env):
+        return subprocess.run(['bash', '-c', self.script(POOL12_FAKES), 'sandbox', *args], text=True,
+                              env=dict(os.environ, CALLS=self.calls_file, **env),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def write_ages(self, hours_by_vmid):
+        pathlib.Path(self.last_used).write_text(json.dumps({str(v): iso(h) for v, h in hours_by_vmid.items()}))
+
+    def test_candidates_within_the_cutoff_are_all_kept(self):
+        """候補が 10 台以下なら、どれだけ古くても 1 台も止めない"""
+        self.write_ages({9200 + i: 100 + i for i in range(1, 11)})     # 10 台が 24h 超、2 台は記録なし・uptime 不明
+        r = self.run_idle_stop()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertIn('候補 10（停止 0 / 残す 10。足切り 10 台）', r.stdout)
+        self.assertIn('不明 2', r.stdout)
+        self.assertEqual(r.stdout.count('候補だが残す'), 10)
+        d = self.idle_json()
+        self.assertEqual(d['keep'], 10)
+        self.assertEqual(d['stopped'], [])
+        self.assertEqual(sorted(v['vmid'] for v in d['candidates']), list(range(9201, 9211)))
+
+    def test_only_the_oldest_beyond_the_cutoff_are_stopped(self):
+        """候補 12 台なら、最終利用が古い順に 2 台だけ止める（新しい 10 台は残す）"""
+        # 9212 が最古（60h）、9211 が次（50h）、残りは 25〜34h
+        ages = {9200 + i: 24 + i for i in range(1, 11)}; ages[9211] = 50; ages[9212] = 60
+        self.write_ages(ages)
+        r = self.run_idle_stop()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), ['shutdown', '9212', 'shutdown', '9211'])      # 古い順
+        self.assertIn('候補 12（停止 2 / 残す 10。足切り 10 台）', r.stdout)
+        self.assertEqual([v['vmid'] for v in self.idle_json()['stopped']], [9212, 9211])
+        self.assertEqual(sorted(v['vmid'] for v in self.idle_json()['candidates']), list(range(9201, 9211)))
+
+    def test_fresh_and_lent_vms_do_not_count_toward_the_cutoff(self):
+        """24h 未満の VM と貸出中の VM は候補ではないので、足切りの数にも入らない"""
+        ages = {9200 + i: 30 + i for i in range(1, 13)}
+        ages[9201] = 1; ages[9202] = 23                                              # 未経過 2 台
+        self.write_ages(ages)
+        pathlib.Path(self.state).write_text(json.dumps(
+            {"301": {"vmid": 9212, "name": "sb-t-pj-12", "ip": "10.77.1.12", "pj": "pj", "since": "x"}}))  # 最古は貸出中
+        r = self.run_idle_stop()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), [])                                             # 候補は 9 台 ≦ 10
+        self.assertIn('候補 9（停止 0 / 残す 9。足切り 10 台）/ 貸出中 1 / 未経過 2', r.stdout)
+
+    def test_keep_option_and_env_override_the_default(self):
+        ages = {9200 + i: 24 + i for i in range(1, 13)}
+        self.write_ages(ages)
+        r = self.run_idle_stop('--keep', '11')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), ['shutdown', '9212'])
+        pathlib.Path(self.calls_file).unlink()
+        r = self.run_idle_stop(SB_IDLE_STOP_KEEP='0')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.calls()), 24)                                        # 全 12 台（shutdown + vmid）
+        pathlib.Path(self.calls_file).unlink()
+        r = self.run_idle_stop('--keep', '3', SB_IDLE_STOP_KEEP='0')                   # --keep が env に勝つ
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls()[1::2], ['9212', '9211', '9210', '9209', '9208', '9207', '9206', '9205', '9204'])
+
+    def test_dry_run_reports_what_would_be_stopped(self):
+        ages = {9200 + i: 24 + i for i in range(1, 13)}
+        self.write_ages(ages)
+        r = self.run_idle_stop('--dry-run')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(os.path.exists(self.idle_file))
+        self.assertEqual(r.stdout.count('--dry-run なので止めない'), 2)
+        self.assertIn('候補 12（停止 2 / 残す 10。足切り 10 台）', r.stdout)
+
+    def test_a_vm_lent_between_the_two_passes_is_not_stopped(self):
+        """候補を集めてから止めるまでの間に take されたら、ロックの中の判定し直しで見送る"""
+        ages = {9200 + i: 24 + i for i in range(1, 13)}
+        self.write_ages(ages)
+        # state_lock_acquire を差し替えて、ロックを取った瞬間に 9212 が貸し出されたことにする
+        fakes = POOL12_FAKES + (
+            'state_lock_acquire() { echo \'{"401":{"vmid":9212,"name":"sb-t-pj-12","ip":"x","pj":"pj","since":"x"}}\' > "$STATE"; }\n'
+            'state_lock_release() { :; }\n')
+        r = subprocess.run(['bash', '-c', self.script(fakes), 'sandbox'], text=True,
+                           env=dict(os.environ, CALLS=self.calls_file),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), ['shutdown', '9211'])
+        self.assertIn('sb-t-pj-12 (9212): 見送り（判定のあとに状態が変わった: lent）', r.stdout)
+        self.assertIn('候補 11（停止 1 / 残す 10。足切り 10 台）/ 貸出中 1', r.stdout)
 
 
 # rollback() が停止中の VM を掴んだときの経路（idle-stop で止まった VM を take が起動し直す）
@@ -330,7 +480,7 @@ dns_del() { return 0; }
         self.assertRegex(self.last()['9201'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$')
 
     def test_release_records_the_vm_so_it_is_not_stopped_at_once(self):
-        """返却直後の VM は「今使った」ことにする（3 時間は起動したまま残す）"""
+        """返却直後の VM は「今使った」ことにする（最終利用から 24 時間は候補にもならない）"""
         pathlib.Path(self.state).write_text(
             '{"101":{"vmid":9201,"name":"sb-t-pj-01","ip":"10.77.1.1","pj":"pj","since":"x"}}')
         r = self.run_cmd('release', '101')

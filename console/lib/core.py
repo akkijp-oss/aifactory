@@ -505,9 +505,13 @@ def idle_stop_view():
     except Exception: return None
     if not isinstance(d, dict): return None
     stopped = [v for v in (d.get("stopped") or []) if isinstance(v, dict)]
-    return {"hours": d.get("hours"), "last_run": ts_aware(d.get("last_run")) if d.get("last_run") else None,
+    # candidates = 最終利用から hours 経ったが、足切り（keep 台）の内なので起動したまま残している VM（2026-09-09）
+    candidates = [v for v in (d.get("candidates") or []) if isinstance(v, dict)]
+    return {"hours": d.get("hours"), "keep": d.get("keep"),
+            "last_run": ts_aware(d.get("last_run")) if d.get("last_run") else None,
             "stopped": [{"vmid": str(v.get("vmid")), "name": v.get("name"),
-                         "at": ts_aware(v["at"]) if v.get("at") else None, "last_used": v.get("last_used")} for v in stopped]}
+                         "at": ts_aware(v["at"]) if v.get("at") else None, "last_used": v.get("last_used")} for v in stopped],
+            "candidates": [{"vmid": str(v.get("vmid")), "name": v.get("name"), "last_used": v.get("last_used")} for v in candidates]}
 
 
 def sandbox_view():

@@ -991,6 +991,17 @@ class SandboxIdleStopTest(unittest.TestCase):
         self.assertEqual(d["stopped"], [{"vmid": "9204", "name": "sb-kumitate-01",
                                          "at": "2026-09-08T04:00:00+09:00", "last_used": "2026-09-08T00:30:00+09:00"}])
 
+    def test_keep_and_candidates_are_passed_through(self):
+        """足切り（keep）と、候補のまま起動している VM（candidates）も画面に渡す（2026-09-09）。古い記録には無いので None / []"""
+        self.write(self.RESULT)
+        d = self.m.core.sandbox_view()["idle_stop"]
+        self.assertIsNone(d["keep"]); self.assertEqual(d["candidates"], [])
+        self.write({**self.RESULT, "keep": 10,
+                    "candidates": [{"vmid": 9205, "name": "sb-kumitate-02", "last_used": "2026-09-07T00:30:00+09:00"}, "ごみ"]})
+        d = self.m.core.sandbox_view()["idle_stop"]
+        self.assertEqual(d["keep"], 10)
+        self.assertEqual(d["candidates"], [{"vmid": "9205", "name": "sb-kumitate-02", "last_used": "2026-09-07T00:30:00+09:00"}])
+
     def test_vmid_is_a_string_so_the_screen_can_match_the_ls_table(self):
         """台帳は数値、`sandbox ls` は文字列。突き合わせる側で取り違えないよう str に揃える（leases_by_vmid と同じ）"""
         self.write(self.RESULT)
@@ -1010,7 +1021,8 @@ class SandboxIdleStopTest(unittest.TestCase):
         """画面は idle_stop の vmid だけ「節電で停止中」にし、次の貸出で起きることを添える（JS は動かせないのでソースを検査する）"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
-        for key in ("d.idle_stop", "T.power.idle", "T.help.idleStop", "T.help.idleStopAxes"):
+        for key in ("d.idle_stop", "T.power.idle", "T.help.idleStop", "T.help.idleStopAxes",
+                    "idle.candidates", "T.power.candidate", "T.help.idleCandidate"):
             self.assertIn(key, body, key)
         self.assertIn("power(v.status, v.vmid)", body)                  # 停止中かどうかだけでなく vmid で見分ける
 
