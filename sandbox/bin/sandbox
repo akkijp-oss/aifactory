@@ -105,18 +105,18 @@ ghapp_api() { # method path [json]
   curl -sS -X "$m" -H "Authorization: Bearer $(ghapp_jwt)" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
     ${body:+-d "$body"} "https://api.github.com$path"
 }
-# ghapp_token <owner/repo> -> ghs_...（1 時間有効。そのリポジトリだけ・contents/pull_requests write）
+# ghapp_token <owner/repo> -> ghs_...（1 時間有効。そのリポジトリだけ・contents/pull_requests/workflows write）
 ghapp_token() {
   local repo=$1 owner=${1%%/*} name=${1##*/} inst
   inst="$(ghapp_api GET "/repos/$repo/installation" | jq -r '.id // empty')"
   [[ -n "$inst" ]] || { echo "[error] GitHub App が $repo に install されていない（sandbox gh-app status で install リンクを表示）" >&2; return 1; }
   # 要求する権限 = 欲しい権限のうち App が持っているもの（App 側で権限を足して installation が承認すれば、自動でトークンに乗る）
-  #   contents/pull_requests write（push と PR）、metadata read、actions read（CI 履歴: gh run list）、checks read（gh pr checks）
+  #   contents/pull_requests write（push と PR）、workflows write（.github/workflows を含む push。無いと GitHub が拒否する）、metadata read、actions read（CI 履歴: gh run list）、checks read（gh pr checks）
   local have want
   have="$(ghapp_api GET /app | jq -c '.permissions // {}')"
-  want="$(jq -nc --argjson h "$have" '{contents:"write",pull_requests:"write",metadata:"read",actions:"read",checks:"read"} | with_entries(select($h[.key] != null))')"
-  local missing; missing="$(jq -nc --argjson h "$have" '["actions","checks"] | map(select($h[.] == null)) | join(",")' -r)"
-  [[ -n "$missing" ]] && echo "[gh] 注意: App に $missing 権限が無い（actions=CI 履歴に必要 / checks=gh pr checks に任意。sandbox gh-app status に変更 URL）" >&2
+  want="$(jq -nc --argjson h "$have" '{contents:"write",pull_requests:"write",workflows:"write",metadata:"read",actions:"read",checks:"read"} | with_entries(select($h[.key] != null))')"
+  local missing; missing="$(jq -nc --argjson h "$have" '["actions","checks","workflows"] | map(select($h[.] == null)) | join(",")' -r)"
+  [[ -n "$missing" ]] && echo "[gh] 注意: App に $missing 権限が無い（actions=CI 履歴に必要 / checks=gh pr checks に任意 / workflows=.github/workflows を触る push に必要。sandbox gh-app status に変更 URL）" >&2
   ghapp_api POST "/app/installations/$inst/access_tokens" "$(jq -nc --arg r "$name" --argjson p "$want" '{repositories:[$r],permissions:$p}')" | jq -r '.token // empty'
 }
 # resolve_gh_token <pj>: App があれば払い出し、無ければ静的 GH_TOKEN。結果を GH_TOKEN に入れる
