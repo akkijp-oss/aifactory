@@ -1,0 +1,2 @@
+### Added
+- **MCP から PJ 定義（`project.yml` / `gates.sh` / `provision.sh` / `prepare.sh`）を読み書きできるようにしました**（`project_show` / `project_read` / `project_write`）。backend の切替・`facts` の追記・`gates.sh` の差し替えに、制御系への ssh と scp が要らなくなります。書けるのは `$AIFACTORY_WORKSPACE/projects/<pj>/` だけで、同梱の `examples/projects/` は読むだけです。書く前に検証し（`project.yml` は schema、`*.sh` は `bash -n`）、通らなければ何も書きません。更新前のファイルは `<file>.bak-<timestamp>` に残り、`*.sh` には実行ビットが立ちます。PJ が `examples/` 側にしか無ければ、直下のファイルを一度だけ workspace 側へ複製してから書きます（ADR-0052）

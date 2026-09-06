@@ -136,6 +136,8 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `run_wait` | run の工程が変わる（`until: step`、既定）か run が終わる（`until: result`）まで待ちます（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返します。ログ本文は含みません |
 | `run_action` | 人間が run の後始末（wip ブランチから PR を作ってマージ・打ち切り）をしたことを実行記録に書く（`kb run-note`）。`close` は決着（`done` / `abandoned`）と PR 番号を記録し、`note` は説明を書き直します |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task・VM 名・IP・貸出開始・稼働状態）/ 実機の状態確認（ジョブ）/ 返却（ジョブ） |
+| `project_show` / `project_read` | PJ 定義（`project.yml` / `gates.sh` / `provision.sh` / `prepare.sh`）の概況と 1 ファイル。`project_show` は `project.yml` の本文と読み取り結果・schema 検証（`valid` / `errors[]`）・直下のファイル一覧（退避は `backups[]`）・どちらの置き場から読んだか（`source`）・書き先（`writable_dir`）・sandbox の準備状態を返します。読みは `$AIFACTORY_WORKSPACE/projects/<pj>/` を先に見て、無ければ `examples/projects/<pj>/` に落ちます（`file` は 4 つのファイル名だけで、パス区切りは受け付けません） |
+| `project_write` | PJ 定義のファイルを 1 つ置きます（backend の切替・`facts` の追記・`gates.sh` の差し替え。ssh も scp も要りません）。書けるのは `$AIFACTORY_WORKSPACE/projects/<pj>/` だけで、同梱の `examples/projects/` は読むだけです。部分更新はしないので、`project_read` で全文を取り、直した全文を `content` に渡します（コメントとキーの順が保たれます）。書く前に検証し（`project.yml` は schema、`*.sh` は `bash -n`）、通らなければ何も書きません。更新前のファイルは `<file>.bak-<timestamp>` に残り、`*.sh` には実行ビット（0755）が立ちます。その PJ が `examples/` 側にしか無ければ、直下のファイルを一度だけ workspace へ複製してから書きます（`seeded_from` / `copied`）。書いた内容は次の run から効きます（ADR-0052） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | intake / dispatch のログ / ワークフロー・routes・プロジェクト・git |
 | `stats` | 工程ごとの消費統計（画面の「統計」と同じ集計。`days` / `pj` / `dry`） |
