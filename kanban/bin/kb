@@ -9,7 +9,8 @@
   kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
-  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
+  kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
+                                                 # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
   kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
   kb history <id>
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
@@ -271,6 +272,7 @@ def cmd_run(a):
         if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
         render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
+    if getattr(a, "wait", None): cmd.append(f"--wait={int(a.wait * 60)}")   # 人は分で言い、runner は秒で待つ（242）
     print("[kb] " + " ".join(cmd), flush=True)
     env = os.environ.copy()
     if a.resume and not a.dry_run:
@@ -301,6 +303,11 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
         if "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
         elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
         elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
+        elif result == "failed" and s.get("failure") == "wait_timeout":
+            # --wait で空きを待ったが出なかった run。直す所は無い（VM が空けば回る）ので、人間待ちにせず todo に戻す（242）
+            status = "todo"
+            note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
+                    "空きが出たら kb run --wait / dispatch --wait で再開")
         elif result == "failed":
             # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
@@ -343,6 +350,7 @@ def main():
     p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
+    p.add_argument("--wait", nargs="?", type=float, const=60, help="VM のプールに空きが無いとき、空くまで待つ上限（分。既定 60）")
     p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run"); p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
     p = sp.add_parser("history"); p.add_argument("id", type=int)
     sp.add_parser("render")
