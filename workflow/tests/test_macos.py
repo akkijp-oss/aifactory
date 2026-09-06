@@ -64,6 +64,22 @@ class MacBackendTest(unittest.TestCase):
         for backend in ('macos-pull','windows-pull'):
             jsonschema.validate({**project,'backend':backend,'worker':'test-worker','gates':'gates.ps1' if backend=='windows-pull' else 'gates.sh','app_dir':'C:/work/app' if backend=='windows-pull' else '/Users/admin/app'},schema)
 
+    def test_display_needs_the_mac_backend_and_a_complete_in_range_size(self):
+        import jsonschema
+        schema=json.loads((ROOT/'workflow/kit/schema/project.schema.json').read_text())
+        project={'name':'test','repo':'owner/repo','base_branch':'main','app_dir':'/Users/admin/app','gates':'gates.sh','worker':'test-worker'}
+        jsonschema.validate({**project,'backend':'macos-pull','display':{'width':1600,'height':1000}},schema)
+        jsonschema.validate({**project,'backend':'macos-pull'},schema)
+        # width/height が揃っていて schema の値域に収まるものだけ。scale はこの PR では受け付けない（ADR-0057）
+        for bad in ({'width':1600},{'height':1000},{'width':1600,'height':1000,'scale':2},
+                    {'width':640,'height':1000},{'width':2600,'height':1000},
+                    {'width':1600,'height':400},{'width':1600,'height':1000.5},{}):
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({**project,'backend':'macos-pull','display':bad},schema)
+        for other in ({},{'backend':'windows-pull','app_dir':'C:/work/app','gates':'gates.ps1'},{'backend':'linux-pull'}):
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({**project,**other,'display':{'width':1600,'height':1000}},schema)
+
     def test_bad_artifacts_never_release_guest(self):
         for name,checksum in [('../escape',hashlib.sha256(b'ok').hexdigest()),('report.md','bad')]:
             run=self.make_run()
@@ -235,6 +251,7 @@ class MacLeaseWaitTest(unittest.TestCase):
         self.acquired = []      # store.acquire の呼ばれ方
         self.logs = []          # runner の log 行
         self.seen = []          # workers() が呼ばれた時点の state.json の写し
+        self.executed = []      # client.execute に渡った (kind, payload)
 
     def since(self):
         return datetime.datetime.fromtimestamp(self.LEASE_CREATED).astimezone().isoformat(timespec='seconds')
@@ -261,8 +278,11 @@ class MacLeaseWaitTest(unittest.TestCase):
                      'operation': None}]
 
         store = types.SimpleNamespace(workers=workers, acquire=lambda w, l: self.acquired.append((w, l)))
-        client = types.SimpleNamespace(store=store, lease=None,
-                                       execute=lambda *a, **k: ('op-1', types.SimpleNamespace(returncode=0, stdout='')))
+        def execute(kind, payload=None, *a, **k):
+            self.executed.append((kind, payload))
+            return ('op-1', types.SimpleNamespace(returncode=0, stdout=''))
+
+        client = types.SimpleNamespace(store=store, lease=None, execute=execute)
         macos.Client = lambda *a, **k: client
         r.setup_project = lambda: None
         r.log = lambda m: self.logs.append(m)
@@ -283,6 +303,17 @@ class MacLeaseWaitTest(unittest.TestCase):
         self.assertTrue([m for m in self.logs if '2026-09-09-termarium-251 が使用中' in m], self.logs)
         # 二重 flock で落ちない（同じ run が take を呼び直す）
         self.assertIsNotNone(r.run_lock)
+
+    def test_a_pj_display_reaches_guest_prepare_and_absence_changes_nothing(self):
+        """project.yml の display だけが guest-prepare の payload に乗る（343）"""
+        r = self.build(343)
+        r.project = {**r.project, 'display': {'width': 1600, 'height': 1000}}
+        r.take()
+        self.assertEqual(self.executed, [('guest-prepare', {'width': 1600, 'height': 1000})])
+        self.executed.clear()
+        plain = self.build(344)
+        plain.take()
+        self.assertEqual(self.executed, [('guest-prepare', {})])
 
     def test_waiting_past_the_limit_stays_todo_with_the_holder_in_the_note(self):
         """上限まで待って空かなければ、lease は取らず wait_timeout で終わり、理由に使用中の run と開始時刻が残る（完了条件 2）"""
