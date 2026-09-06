@@ -482,3 +482,141 @@ func journalLog(t *testing.T, j *journal, id string) string {
 		sb.Write(b)
 	}
 }
+
+// startFake は guest-start のテスト用に tart をモックする。list が返す状態と、呼ばれた引数を記録する。
+func startFake(t *testing.T, exists, running *bool, calls *[][]string) func(context.Context, string, ...string) *exec.Cmd {
+	return func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		if path != "/approved/tart" {
+			t.Fatal(path)
+		}
+		*calls = append(*calls, append([]string{}, args...))
+		output := ""
+		switch args[0] {
+		case "list":
+			output = "[]"
+			if *exists {
+				state := "stopped"
+				if *running {
+					state = "running"
+				}
+				b, _ := json.Marshal([]map[string]string{{"Source": "local", "Name": "guest", "State": state}})
+				output = string(b)
+			}
+		case "run":
+			*running = true
+		case "clone", "delete":
+			t.Fatal("guest-start recreated or removed the retained guest", args)
+		case "stop":
+			*running = false
+		}
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' \"$FAKE_OUTPUT\"")
+		cmd.Env = append(os.Environ(), "FAKE_OUTPUT="+output)
+		return cmd
+	}
+}
+
+func startWorker(t *testing.T, lease string) (*worker, *journal) {
+	j, err := newJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &worker{c: config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+	if lease != "" {
+		if err := writeAtomic(w.leasePath(), []byte(lease)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w, j
+}
+
+func TestStartRestartsAStoppedOwnedGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, false
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("start")
+	op := operation{ID: "start", Kind: "guest-start"}
+	op.Payload.Lease = "lease-1"
+	r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID})
+	if r.Status != "succeeded" {
+		t.Fatal(r, calls)
+	}
+	booted, probed := false, false
+	for _, args := range calls {
+		if args[0] == "run" {
+			joined := strings.Join(args, " ")
+			for _, required := range []string{"--no-clipboard", "--no-audio", "--net-softnet-block="} {
+				if !strings.Contains(joined, required) {
+					t.Fatal(args)
+				}
+			}
+			for _, forbidden := range []string{"--dir", "--net-softnet-allow", "--net-bridged"} {
+				if strings.Contains(joined, forbidden) {
+					t.Fatal(args)
+				}
+			}
+			booted = true
+		}
+		if args[0] == "exec" && args[len(args)-1] == "/usr/bin/true" {
+			probed = true
+		}
+	}
+	if !booted || !probed || !running {
+		t.Fatal("stopped guest was not restarted", calls)
+	}
+	// 人が検査するために残した lease は、起動でも消さない。
+	if !w.ownsLease("lease-1") {
+		t.Fatal("start dropped the retained lease")
+	}
+}
+
+func TestStartIsIdempotentOnARunningGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, true
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("start")
+	op := operation{ID: "start", Kind: "guest-start"}
+	op.Payload.Lease = "lease-1"
+	if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "succeeded" {
+		t.Fatal(r, calls)
+	}
+	for _, args := range calls {
+		if args[0] == "run" {
+			t.Fatal("started an already running guest", calls)
+		}
+	}
+}
+
+func TestStartRefusesForeignLeaseOrMissingGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, false
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("foreign")
+	op := operation{ID: "foreign", Kind: "guest-start"}
+	op.Payload.Lease = "lease-2"
+	if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "uncertain" || len(calls) != 0 {
+		t.Fatal("another run's lease touched the VM", r, calls)
+	}
+
+	// ゲストが消えている＝起動し直せない。黙って作り直さず、明示的に failed で止まる。
+	exists = false
+	j.begin("missing")
+	op.ID, op.Payload.Lease = "missing", "lease-1"
+	r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID})
+	if r.Status != "failed" || r.ExitCode == nil || *r.ExitCode != 1 {
+		t.Fatal(r, calls)
+	}
+	for _, args := range calls {
+		if args[0] == "run" {
+			t.Fatal("recreated a missing guest", calls)
+		}
+	}
+	if !w.ownsLease("lease-1") {
+		t.Fatal("a failed start dropped the retained lease")
+	}
+}

@@ -32,7 +32,7 @@ const maxLogChunk = 16384
 // Output without a newline cannot buffer forever; beyond this the line is written as it is.
 const maxPendingLine = 8 * 1024 * 1024
 const truncationNotice = "\n[operation log truncated at 16 MiB; later output was discarded]\n"
-const version = "0.3.1"
+const version = "0.4.0"
 
 // 保全に与える時間。取り消し由来の停止を待たせすぎないための上限（テストから縮める）。
 var preserveTimeout = 120 * time.Second
@@ -418,7 +418,7 @@ func (w *worker) info() map[string]any {
 		cancel()
 		baseReady = err == nil && exists && !running
 	}
-	return map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": version, "protocol": 1, "mode": mode, "guest_vm": w.c.GuestVM, "lifecycle": w.c.BaseVM != "", "base_ready": baseReady, "network_ready": softnetReady(), "pid": os.Getpid()}
+	return map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": version, "protocol": 1, "mode": mode, "guest_vm": w.c.GuestVM, "lifecycle": w.c.BaseVM != "", "guest_start": w.c.BaseVM != "", "base_ready": baseReady, "network_ready": softnetReady(), "pid": os.Getpid()}
 }
 
 func (w *worker) stopGuest() bool {
@@ -532,7 +532,7 @@ func (w *worker) execute(ctx context.Context, op operation) {
 		r = w.executeWindows(ctx, op, lw)
 		return
 	}
-	if op.Kind == "guest-prepare" || op.Kind == "guest-release" {
+	if op.Kind == "guest-prepare" || op.Kind == "guest-release" || op.Kind == "guest-start" {
 		r = w.lifecycle(ctx, op, lw)
 		return
 	}
