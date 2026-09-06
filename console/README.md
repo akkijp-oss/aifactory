@@ -52,7 +52,7 @@ journalctl -u aifactory-console -f
 
 ## MCP（AI セッションからの読み書き）
 
-`console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
+`console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読んで、未設定の環境変数だけ補う。ssh 越し（`mcp-remote`）の非ログイン環境でも、systemd のコンソール（`EnvironmentFile`）と同じ secrets で子プロセスを起こすため（ADR-0029）。`GH_TOKEN` は GitHub App があれば空でよく、runner が `sandbox gh-app token <pj>` で払い出す。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
 
 ```bash
 claude mcp list                                   # aifactory が見える（プロジェクトスコープ）

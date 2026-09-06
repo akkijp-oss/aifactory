@@ -39,3 +39,5 @@
 
 - [0026: 記録する時刻はオフセット付き ISO 8601 にする](0026-timestamps-carry-utc-offset.md)
 - [0027: 起票・配車のログの表はコンソール側で導く](0027-logs-table-derived-in-console.md)
+- [0028: MCP の job_wait は読み取りスレッドから外して待つ](0028-mcp-job-wait-runs-off-the-reader-thread.md)
+- [0029: 制御系の gh トークンは GitHub App から都度払い出す／kind は種別、workflow は実行方法](0029-control-plane-gh-token-from-app.md)

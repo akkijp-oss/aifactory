@@ -88,7 +88,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 
 1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
 2. 状態を `in_progress` に、run ディレクトリ名（`<日付>-<pj>-<id>`。実体は `workspace/runs/` の下）を記録
-3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` を渡すと `kind` も書き換わる
+3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` は今回の実行方法だけを変え、`kind` は変わりません（履歴に `workflow → <名前>` が残り、`runs/<run>/state.json` の `workflow` が正。ADR-0029）。`--workflow` なしの `--resume` は、その `state.json` の `workflow` で再開します
 4. 終わったら `state.json` を読んで状態を進める（下表）
 
 | state.json | 状態 | メモ |

@@ -37,7 +37,7 @@ It is sequential. The next ticket does not start until the current one finishes.
 
 ```bash
 kanban/bin/kb run 204                    # with the workflow matching the kind
-kanban/bin/kb run 204 --workflow chore   # a different workflow (the kind is updated too)
+kanban/bin/kb run 204 --workflow chore   # run once with a different workflow (the kind is left alone)
 kanban/bin/kb run 204 --dry-run          # validate definitions and assemble prompts only
 kanban/bin/kb run 204 --keep             # do not release the VM afterwards (to look inside)
 kanban/bin/kb run 204 --resume           # continue from the next step in state.json on the VM already lent
