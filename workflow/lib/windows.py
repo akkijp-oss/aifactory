@@ -156,21 +156,21 @@ def backend(Run):
             self.write_remote(self.work+'/pr_url', urls[-1]+'\n')
             return True, urls[-1]
 
-        def release(self):
-            if self.dry: return
-            script = f"$root={quote(self.work)}; " + r'''
-$out=@{}; $total=0
-foreach($f in Get-ChildItem -LiteralPath $root -Force) {
+        def collect(self):
+            # Mac 側と同じ manifest 形（files / skipped）。回収対象外は throw せずに飛ばして名前を返す（チケット 277）
+            return self.sb(f"$root={quote(self.work)}; " + r'''
+$out=@{}; $skipped=@(); $total=0
+foreach($f in Get-ChildItem -LiteralPath $root -Force | Sort-Object Name) {
  if($f.Name -eq 'runtime.env'){continue}
- if($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'non-regular artifact'}
+ if($f.PSIsContainer){$skipped+=@{name=$f.Name;reason='directory'}; continue}
+ if($f.Attributes -band [IO.FileAttributes]::ReparsePoint){$skipped+=@{name=$f.Name;reason='symlink'}; continue}
+ if($total + $f.Length -gt 4194304){$skipped+=@{name=$f.Name;reason='size'}; continue}
  $total += $f.Length
- if($total -gt 4194304){throw 'artifact limit exceeded'}
  $b=[IO.File]::ReadAllBytes($f.FullName)
  $hash=[Security.Cryptography.SHA256]::Create()
  try {$digest=([BitConverter]::ToString($hash.ComputeHash($b))).Replace('-','').ToLowerInvariant()} finally {$hash.Dispose()}
  $out[$f.Name]=@{data=[Convert]::ToBase64String($b); sha256=$digest}
 }
-ConvertTo-Json -InputObject $out -Compress -Depth 4
-'''
-            self.accept_artifacts(json.loads(self.sb(script)))
+ConvertTo-Json -InputObject @{files=$out; skipped=@($skipped)} -Compress -Depth 5
+''')
     return WindowsRun

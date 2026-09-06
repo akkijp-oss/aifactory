@@ -3,6 +3,8 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -51,14 +53,14 @@ class MacBackendTest(unittest.TestCase):
     def test_bad_artifacts_never_release_guest(self):
         for name,checksum in [('../escape',hashlib.sha256(b'ok').hexdigest()),('report.md','bad')]:
             run=self.make_run()
-            run.sb=lambda _:json.dumps({name:{'data':base64.b64encode(b'ok').decode(),'sha256':checksum}})
+            run.sb=lambda _:json.dumps({'files':{name:{'data':base64.b64encode(b'ok').decode(),'sha256':checksum}}})
             run.client.execute=lambda *a,**k:self.fail('released without verifying artifacts')
             with self.assertRaises(RuntimeError):run.release()
             self.assertNotIn('artifacts_received',run.state)
 
     def test_artifacts_received_before_guest_release(self):
         run=self.make_run();content=b'# Report\n'
-        run.sb=lambda _:json.dumps({'report.md':{'data':base64.b64encode(content).decode(),'sha256':hashlib.sha256(content).hexdigest()}})
+        run.sb=lambda _:json.dumps({'files':{'report.md':{'data':base64.b64encode(content).decode(),'sha256':hashlib.sha256(content).hexdigest()}},'skipped':[]})
         def execute(kind):
             self.assertEqual(kind,'guest-release')
             self.assertTrue(run.state['artifacts_received'])
@@ -70,6 +72,74 @@ class MacBackendTest(unittest.TestCase):
         self.assertTrue(run.state['released'])
         self.assertEqual(calls,[('mac1','lease-1','release-op')])
 
+    def collect(self, tmp):
+        """作業ディレクトリを実際に列挙させて、ゲスト側スクリプトの生の出力を返す。"""
+        return subprocess.run([sys.executable, '-c', macos.COLLECT_SCRIPT, str(tmp)],
+                              text=True, capture_output=True)
+
+    def work_tree(self):
+        """回収対象外（ディレクトリ・symlink・4 MiB 超）を全部含む作業ディレクトリを作る。"""
+        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        root=pathlib.Path(tmp.name)
+        (root/'report.md').write_bytes(b'# Report\n')
+        (root/'runtime.env').write_bytes(b'export GH_TOKEN=secret\n')
+        (root/'shots').mkdir();(root/'shots'/'screen.png').write_bytes(b'png')
+        (root/'link').symlink_to(root/'report.md')
+        (root/'big.bin').write_bytes(b'x'*(4*1024*1024+1))
+        # 上限超過の「後ろ」に来る小さいファイル。飛ばした分を total に数えていれば回収される
+        (root/'zz-review.md').write_bytes(b'# Review\n')
+        return root
+
+    def test_non_regular_and_oversized_entries_are_skipped_not_fatal(self):
+        # チケット 277: shots/ のようなサブディレクトリ 1 つで run 全体が止まり lease が残っていた
+        root=self.work_tree()
+        result=self.collect(root)
+        self.assertEqual(result.returncode,0,result.stderr[-500:])
+        manifest=json.loads(result.stdout)
+        self.assertEqual(sorted(manifest['files']),['report.md','zz-review.md'])
+        skipped={item['name']:item['reason'] for item in manifest['skipped']}
+        for name,reason in (('shots','directory'),('link','symlink'),('big.bin','size')):
+            with self.subTest(name=name):
+                self.assertEqual(skipped.get(name),reason)
+        self.assertNotIn('runtime.env',manifest['files'])
+        self.assertNotIn('runtime.env',skipped)
+
+    def test_skipped_artifacts_are_recorded_and_guest_released(self):
+        run=self.make_run();content=b'# Report\n'
+        run.sb=lambda _:json.dumps({'files':{'report.md':{'data':base64.b64encode(content).decode(),
+                                                          'sha256':hashlib.sha256(content).hexdigest()}},
+                                    'skipped':[{'name':'shots','reason':'directory'}]})
+        released=[]
+        run.client.execute=lambda kind:(released.append(kind),('release-op',types.SimpleNamespace(returncode=0)))[1]
+        run.client.store=types.SimpleNamespace(release_lease=lambda *args:None)
+        run.release()
+        self.assertEqual(released,['guest-release'])
+        self.assertTrue(run.state['released'])
+        self.assertEqual(run.state['artifacts_skipped'],[{'name':'shots','reason':'directory'}])
+
+    def test_guest_reported_skips_are_quarantined_before_state(self):
+        run=self.make_run()
+        run.sb=lambda _:json.dumps({'files':{},'skipped':
+            [{'name':'a'*400,'reason':'; rm -rf /'},{'name':'shots','reason':'symlink'},'not-a-dict']
+            +[{'name':f'n{i}','reason':'size'} for i in range(200)]})
+        run.client.execute=lambda kind:('release-op',types.SimpleNamespace(returncode=0))
+        run.client.store=types.SimpleNamespace(release_lease=lambda *args:None)
+        run.release()
+        recorded=run.state['artifacts_skipped']
+        self.assertEqual(len(recorded),128)
+        self.assertEqual(len(recorded[0]['name']),255)
+        self.assertEqual(recorded[0]['reason'],'other')
+        self.assertEqual(recorded[1],{'name':'shots','reason':'symlink'})
+        self.assertTrue(all(set(item)=={'name','reason'} for item in recorded))
+
+    def test_manifest_without_files_key_is_refused(self):
+        for manifest in ({},{'report.md':{'data':'','sha256':''}},{'files':[]}):
+            run=self.make_run()
+            run.sb=lambda _,manifest=manifest:json.dumps(manifest)
+            run.client.execute=lambda *a,**k:self.fail('released on an unreadable manifest')
+            with self.assertRaises(RuntimeError):run.release()
+            self.assertNotIn('artifacts_received',run.state)
+
     def test_nonzero_gate_without_fail_line_is_failure(self):
         run=self.make_run();run.project_dir=pathlib.Path('/project');run.project['gates']='gates.sh'
         run.base='main';run.state['history']=[];run.set_current=lambda *args:None
@@ -78,7 +148,7 @@ class MacBackendTest(unittest.TestCase):
         self.assertEqual(run.run_code({'id':'gates','code':'gates.sh'}),(False,'tool crashed\n'))
 
     def test_keep_retains_guest_after_receiving_artifacts(self):
-        run=self.make_run();run.keep=True;run.sb=lambda _: '{}'
+        run=self.make_run();run.keep=True;run.sb=lambda _: '{"files":{}}'
         run.client.execute=lambda *args,**kwargs:self.fail('keep released guest')
         run.release()
         self.assertTrue(run.state['artifacts_received'])
