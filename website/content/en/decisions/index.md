@@ -63,3 +63,5 @@ Kept under "things we want" in `docs/ledger.md`. They become ADRs once work star
 - [ADR 0026: Timestamps carry a UTC offset](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0026-timestamps-carry-utc-offset.md)
 
 - [ADR 0030: Control-plane gh tokens come from the GitHub App; kind is the type, workflow is how it ran](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0030-control-plane-gh-token-from-app.md)
+
+- [ADR 0031: Waiting for a free VM happens in the runner; a timeout puts the ticket back to todo](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0031-wait-for-a-free-vm-in-the-runner.md)
