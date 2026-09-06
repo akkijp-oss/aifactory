@@ -6,6 +6,7 @@ VM も claude も使わない。偽 `sandbox` の take を失敗させて短く�
 - kb が runner を `--from=<step>` `--branch=<名前>` と `AIFACTORY_FROM_RUN=<記録の run>` で呼ぶ（runner の環境変数は偽 sandbox から覗く）
 - `--from` と `--resume` は併用できない
 - human で止まった run を `kb sync` すると、メモに `kb run <id> --from <step> --branch <wip>` が入る
+- 同じチケットの二重再開を断る（実行中の run があるうちは `--from` を拒否。`--force` で通す。チケット 352）
 """
 import datetime
 import json
@@ -115,6 +116,56 @@ class KbRunFromTest(unittest.TestCase):
         self.assertIn(self.prev, show)                                         # 前回の run に戻っている
         self.assertNotIn(self.today, show)
         self.assertIn("kb run 905 --from implement --branch sandbox/905-feature-wip", self.note())
+
+    # ---------- 二重再開の抑止（チケット 352 / ADR-0053）
+    def running_run(self, name):
+        """まだ終わっていない run（state.json に finished が無い）を置き、台帳も実行中にする"""
+        self.stopped_run(name)
+        st = self.ws / "runs" / name / "state.json"
+        s = json.loads(st.read_text(encoding="utf-8"))
+        for k in ("finished", "result", "elapsed_s"): s.pop(k, None)
+        st.write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.kb("set", "905", "--status", "in_progress").returncode, 0)
+        return name
+
+    def test_a_second_resume_of_the_same_ticket_is_refused(self):
+        """wip ブランチは task + workflow で決まるので、2 本同時に再開すると後勝ちで上書きされる（ADR-0036）"""
+        self.running_run(self.prev)
+        r = self.kb("run", "905", "--from", "implement")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(self.prev, r.stdout + r.stderr)                          # どの run が実行中かが分かる
+        self.assertIn("--force", r.stdout + r.stderr)
+        self.assertFalse(self.calls.exists(), "runner を呼ぶ前に止まること")
+
+    def test_force_lets_the_second_resume_through(self):
+        self.running_run(self.prev)
+        r = self.kb("run", "905", "--from", "implement", "--force")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)                 # take が失敗して終わる（= runner まで届いた）
+        self.assertIn("--from=implement", next(l for l in r.stdout.splitlines() if l.startswith("[kb] ")))
+        self.assertIn(f"FROM_RUN: {self.prev}", self.calls.read_text(encoding="utf-8"))
+
+    def test_a_finished_run_does_not_block_the_resume(self):
+        """台帳が in_progress のまま古い（run は終わっている）だけなら通す。sync 漏れで再開できなくならない"""
+        self.stopped_run(self.prev)                                            # finished つき
+        self.assertEqual(self.kb("set", "905", "--status", "in_progress").returncode, 0)
+        r = self.kb("run", "905", "--from", "implement")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertTrue(self.calls.exists())
+
+    def test_a_ticket_that_is_not_in_progress_does_not_block_the_resume(self):
+        """板が todo / review に戻っている（利用枠で止まった run など）なら、記録の finished を問わず通す"""
+        self.running_run(self.prev)
+        self.assertEqual(self.kb("set", "905", "--status", "todo").returncode, 0)
+        r = self.kb("run", "905", "--from", "implement")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertTrue(self.calls.exists())
+
+    def test_a_plain_run_is_not_blocked(self):
+        """--from を使わない普通の実行は今までどおり（このガードは再開の経路だけ）"""
+        self.running_run(self.prev)
+        r = self.kb("run", "905")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertTrue(self.calls.exists())
 
     def test_a_human_run_without_a_wip_branch_keeps_the_old_note(self):
         """wip も resume_step も無い（古い）記録では、従来どおりのメモにする（打てないコマンドを出さない）"""

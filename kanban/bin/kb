@@ -395,6 +395,18 @@ def run_workflow(run_dir):
     except Exception: return None
 
 
+def run_in_progress(run_dir):
+    """その run はまだ runner が回している最中か（state.json に `finished` が無い）。human_note() と同じ見方。
+
+    台帳の status だけだと sync 漏れで古いままのことがあるので、run 側の記録と両方で見る。
+    記録がまだ無い（runner が書く前）run も「実行中」とみなす（打った直後の二重起動を止めるため）"""
+    if not run_dir: return False
+    f = paths.run_path(run_dir) / "state.json"
+    if not f.exists(): return True
+    try: return "finished" not in json.loads(f.read_text(encoding="utf-8"))
+    except Exception: return False      # 読めない記録で人を止めない（判断は人に返す）
+
+
 def attempt_no(run_dir):
     """runner が退避に使う番号（workflow/bin/run と同じ規則で数える）。runner が保証する値ではないのでメモの文言だけに使う"""
     p = paths.run_path(run_dir); n = 1
@@ -445,6 +457,11 @@ def cmd_run(a):
     # --from / --branch は「新しい VM で、記録の wip ブランチの続きから、指定の step をやり直す」（333）。run は新しく作る
     restarting = a.from_step is not None or a.from_branch is not None
     if restarting and a.resume: die("--from と --resume は一緒に使えない（--resume は貸出中の VM で続き、--from は新しい VM を取り直す）")
+    # 同じチケットを 2 本同時に `--from` で再開すると、wip ブランチ（task + workflow で決まる）が後勝ちで上書きされる（ADR-0036 / ADR-0053）。
+    # 台帳が実行中を指していて、その run の記録もまだ終わっていないときは断る（--force で明示的に許す）
+    if restarting and not a.dry_run and not a.force and r["status"] == "in_progress" and run_in_progress(r["run"]):
+        die(f"{a.id} は {r['run']} が実行中（--from の再開は 1 本ずつ）。"
+            f"終わっているなら kb sync {a.id} で台帳を合わせるか、承知の上なら --force を付ける")
     if resuming:
         run_dir = r["run"]
     # kind は「何の仕事か」、workflow は「今回どう回すか」。--workflow は kind を書き換えない（チケット 249）
@@ -786,6 +803,7 @@ def main():
     p.add_argument("--from", dest="from_step", nargs="?", const="", metavar="STEP",
                    help="human で止まった run を新しい VM でこの step からやり直す（既定は記録の resume_step）")
     p.add_argument("--branch", dest="from_branch", metavar="B", help="--from のとき続きに使うブランチ（既定は記録の wip_branch）")
+    p.add_argument("--force", action="store_true", help="実行中の run があるチケットでも --from の再開を通す（wip ブランチを上書きしうる）")
     p = sp.add_parser("sync"); p.add_argument("id", type=int, nargs="?"); p.add_argument("--run")
     p.add_argument("--all-review", action="store_true", help="review のチケット全件の PR を見る（id は取らない。345）")
     p.add_argument("--pj", help="--all-review のとき PJ を絞る（省略なら全 PJ）")
