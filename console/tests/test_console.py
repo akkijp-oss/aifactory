@@ -190,6 +190,24 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_nav_badges_say_which_scope_they_count(self):
+        """左ナビのバッジは全 PJ の数字（画面をまたぐので絞らない）。その対象範囲が画面で分かること。
+
+        ボードで PJ を選ぶと帯と列は絞られるのに、バッジだけ数が違って見える。
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function refreshNav")
+        nav = app[i:app.index("\n}", i)]
+        self.assertIn("T.nav.badgeScope", nav, "バッジが何を数えているかを画面が言っていない")
+        for el in ("n-board", "n-runs"):
+            self.assertRegex(nav, r"\$\('%s'\)\.title" % el, f"{el} のバッジに対象範囲の説明（title）が無い")
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertIn("PJ", T["nav"]["badgeScope"])
+        self.assertIn("PJ", T["board"]["scopePj"])
+        self.assertNotEqual(T["board"]["scopePj"], T["board"]["scopeAll"])
+
     def test_done_overflow_leads_to_ticket_list(self):
         """ボードの完了列からあふれた分が、CLI ではなく画面（#/tickets）に続く。
 

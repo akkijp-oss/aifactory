@@ -119,6 +119,7 @@ async function refreshNav() {
     const o = await api('overview');
     const c = o.counts; $('n-board').textContent = (c.todo + c.in_progress + c.review + c.blocked) || '';
     $('n-runs').textContent = (o.runs_active_n != null ? o.runs_active_n : o.runs_active.length) || '';
+    $('n-board').title = $('n-runs').title = T.nav.badgeScope;                  /* バッジは全 PJ。ボードで PJ を選んでも変わらない */
     $('n-sandbox').textContent = o.vms_lent || '';
     $('n-jobs').textContent = o.jobs_running || '';
     $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6), tz: tzLabel() });
