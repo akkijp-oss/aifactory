@@ -4,6 +4,7 @@
 
 | やりたいこと | ページ |
 |---|---|
+| MacのmacOS VMでチケットを実行する。導入・監視・復旧を確認する | [Mac ワーカーの導入と運用](macos-worker.md) |
 | 依頼をチケットにする（自由文から / 整った本文から） | [チケットを作る](tickets.md) |
 | チケットを実行する（1 件ずつ / まとめて / dry-run） | [実行する](running.md) |
 | PR・ログ・成果物・状態を読む | [結果を読む](results.md) |
@@ -12,8 +13,8 @@
 | hotfix / bug / feature / chore / research / merge-pr の使い分け | [ワークフローの選び方](workflows.md) |
 | トークン更新、プール、テンプレート更新、障害対応 | [日々の運用](operations.md) |
 | 複数の AI セッションや人が同時に触るときの約束 | [複数セッションで作業する](multi-session.md) |
-
 | 別の組織に貸し出す。網・VM・権限・秘密情報を分け、console / docs も Proxmox 上で完結させる | [貸出先ごとの環境（テナント）](tenants.md) |
+
 ## 1 日の流れの例
 
 ```mermaid

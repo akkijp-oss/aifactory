@@ -109,6 +109,7 @@ aifactory/
 
 ## Documentation
 
+- [Mac worker setup and operations (Japanese)](docs/macos-worker.md): macOS VM setup, MCP execution, artifact collection, recovery, and the scope of hardware verification
 - Documentation site (`website/`): getting started, guides, concepts, CLI reference, FAQ. Build locally with `cd website && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/mkdocs serve`
 - `docs/adr/`: one file per design decision. Existing ADRs are never edited; a new decision gets a new number
 - `docs/aifactory-how-it-works.html`, `docs/sandbox-architecture.html`: single-page illustrated explanations (open in a browser)

@@ -88,6 +88,7 @@ plugins:
             日々の運用: Day-to-day operations
             複数セッションで作業する: Working with multiple sessions
             貸出先ごとの環境（テナント）: Tenants (per-organization environments)
+            Mac ワーカーの導入と運用: Mac worker setup and operations
             仕組み: Concepts
             全体の構成: Architecture
             チケットの作成から完了まで: Ticket lifecycle
@@ -159,6 +160,7 @@ nav:
       - 日々の運用: guides/operations.md
       - 複数セッションで作業する: guides/multi-session.md
       - 貸出先ごとの環境（テナント）: guides/tenants.md
+      - Mac ワーカーの導入と運用: guides/macos-worker.md
   - 仕組み:
       - concepts/index.md
       - 全体の構成: concepts/architecture.md

@@ -125,6 +125,7 @@ aifactory/
 
 ## 資料
 
+- [Macワーカーの導入と運用](docs/macos-worker.md): macOS VMの構成・セットアップ・MCPからの実行・成果物回収・復旧手順と実機確認の範囲
 - ドキュメントサイト（`website/`）: 導入・使い方・仕組み・CLI リファレンス・FAQ。ローカルで見るには `cd website && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/mkdocs serve`
 - `docs/adr/`: 1 判断 1 ファイル。既存は書き換えず、新しい判断は新しい番号で
 - `docs/aifactory-how-it-works.html`、`docs/sandbox-architecture.html`: 図つきの 1 枚解説（ブラウザで開く）

@@ -1,5 +1,7 @@
 # Set up the Mac
 
+To use a macOS VM as a ticket execution environment, see [Mac worker setup and operations](../guides/macos-worker.md). This page covers setup of the operator's computer.
+
 What this page tells you: from cloning the repository to having the five Mac-side CLIs working. You can get this far even before the sandbox exists.
 
 ## 1. Clone the repository
