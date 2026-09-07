@@ -1,0 +1,13 @@
+# Optional user unit for an existing dedicated X11 login session.
+# Import DISPLAY and XAUTHORITY with systemctl --user import-environment first.
+[Unit]
+Description=AIFactory X11 desktop agent
+PartOf=graphical-session.target
+After=graphical-session.target
+[Service]
+ExecStart=/usr/local/lib/aifactory-computer/aifactory-computer -mode serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+[Install]
+WantedBy=graphical-session.target

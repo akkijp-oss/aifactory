@@ -263,16 +263,36 @@ class Run:
             body = self.vm_read(a) if not self.dry else f"（dry-run: {a} の内容）"
             parts += [f"## 入力: {a}", "", "```", body.strip() if body.strip() else "（無し）", "```", ""]
         if step["role"] in ("reviewer",):
-            diff = self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False) if not self.dry else "（dry-run: 差分）"
+            diff = self.diff_summary() if not self.dry else "（dry-run: 差分）"
             parts += ["## 差分（origin/%s...HEAD）" % self.base, "", "```", diff.strip(), "```", "",
                       f"差分の中身は `git diff origin/{self.base}...HEAD` で読むこと。", ""]
+        if p.get('computer_use'):
+            parts += ["## VMの画面操作", "", "computer MCPツールで、この専用VMの画面取得・クリック・キー入力ができます。操作前にscreenshotで画面を確認し、その画像のピクセル座標を使ってください。typeは日本語対応、keyはWindowsのWINまたはMacのCMDとENTERなどを組み合わせます。操作後もscreenshotで結果を確認し、必要な画像を成果物として残してください。個人のデスクトップや他のVMは操作しません。", ""]
         if retry_note: parts += ["## 前回の結果（直すこと）", "", retry_note, ""]
         outs = [a for a in step.get("outputs", []) if a not in ("git", "pr_url")]
         parts += ["## 出力（必須）", ""]
         parts += [f"- `{self.work}/{a}` に書く" for a in outs]
         if "git" in step.get("outputs", []): parts += ["- 変更は作業ブランチにコミットする（push はしない）"]
         parts += ["", "終わったら、何をしたかを 5 行以内で標準出力に報告して終了する。"]
-        return "\n".join(parts)
+        return "\n".join(parts).replace("~/work/<task>/", self.work + "/")
+
+    def diff_summary(self):
+        return self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False)
+
+    def agent_command(self, prompt_path, model, timeout_min):
+        computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
+        return (f"cd $SANDBOX_APP_DIR && timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
+                "--dangerously-skip-permissions --output-format stream-json --verbose" + computer + " 2>&1 < /dev/null")
+
+    def save_agent_changes(self):
+        self.sb("cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m 'sandbox: uncommitted changes by agent')", check=False)
+        return self.sb("cd $SANDBOX_APP_DIR && git status --porcelain | grep '^??' | head -20", check=False).strip()
+
+    def output_exists(self, name):
+        return bool(self.sb(f"test -s {self.work}/{shlex.quote(name)} && echo ok", check=False).strip())
+
+    def has_changes(self):
+        return bool(self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline origin/{self.base}..HEAD", check=False).strip())
 
     def run_agent(self, step, retry_note=""):
         model, cls = self.model_for(step)
@@ -285,8 +305,7 @@ class Run:
         self.scp_to(pf, prompt_path)
         # stream-json で 1 行 1 イベントを受け、人が読める形を agent-<step>-<n>.log に、生の JSON を .jsonl（git 追跡外）に流す。
         # console が step の途中でも追い読みできる（2026-09-06）。--verbose は -p + stream-json の必須オプション
-        cmd = (f"cd $SANDBOX_APP_DIR && timeout {step.get('timeout_min', 60)}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
-               f"--dangerously-skip-permissions --output-format stream-json --verbose 2>&1 < /dev/null")
+        cmd = self.agent_command(prompt_path, model, step.get("timeout_min", 60))
         n = len(self.state["history"]); log_path = self.run_dir / f"agent-{step['id']}-{n}.log"
         self.set_current(step["id"], "agent", log_path.name)
         t = time.time(); r = EventRenderer(t)
@@ -295,13 +314,11 @@ class Run:
         print("\n".join(out.strip().splitlines()[-8:]))
         self.log(f"agent done in {int(time.time()-t)}s (rc={rc})")
         if rc != 0: return False, f"agent exited {rc}: {out[-3000:]}"
-        # 追跡済みの未コミット変更だけ拾う。未追跡は記録のみ
-        self.sb("cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m 'sandbox: uncommitted changes by agent')", check=False)
-        untracked = self.sb("cd $SANDBOX_APP_DIR && git status --porcelain | grep '^??' | head -20", check=False).strip()
+        untracked = self.save_agent_changes()
         if untracked: print(f"[run] 未追跡ファイル（push 対象外）:\n{untracked}")
         # outputs の存在確認
-        missing = [a for a in step.get("outputs", []) if a not in ("git", "pr_url") and not self.sb(f"test -s {self.work}/{a} && echo ok", check=False).strip()]
-        if "git" in step.get("outputs", []) and not self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline origin/{self.base}..HEAD", check=False).strip():
+        missing = [a for a in step.get("outputs", []) if a not in ("git", "pr_url") and not self.output_exists(a)]
+        if "git" in step.get("outputs", []) and not self.has_changes():
             missing.append("git(コミットなし)")
         if missing: return False, f"出力が無い: {', '.join(missing)}"
         if step["role"] == "reviewer":
@@ -371,8 +388,13 @@ if __name__ == "__main__":
     pd = paths.project_dir(args[0])
     project = load_yaml(pd / "project.yml") if pd and (pd / "project.yml").exists() else {}
     runner = Run
-    if project.get("backend") == "macos-pull":
+    if project.get("backend") in ("macos-pull", "windows-pull", "linux-pull"):
         sys.path.insert(0, str(HERE / "lib"))
-        from macos import backend
+        if project["backend"] == "macos-pull":
+            from macos import backend
+        elif project["backend"] == "windows-pull":
+            from windows import backend
+        else:
+            from linux import backend
         runner = backend(Run)
     sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags).main())

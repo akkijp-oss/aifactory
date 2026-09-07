@@ -21,6 +21,9 @@
 | `workflow_overrides` | object | | workflow name → overrides (v1: `base_branch` only) | Base decision |
 | `known_red_gates` | array | | Names of gates already red on the base branch (names from `gates.sh`) | The runner downgrades FAIL to INFO and does not send the agent back to "fix it" |
 
+
+For Windows, set `backend: windows-pull`, a registered `worker`, `app_dir: <work_root>/app`, and a `.ps1` gate. See [Windows worker setup](../guides/windows-worker.md).
+
 ## Example (kumitate)
 
 The bundled `examples/projects/kumitate/project.yml`. The file itself is written in Japanese; the strings are shown as they are, with the meaning in brackets where it helps.
@@ -79,3 +82,7 @@ INFO audit-gate red (known on base; not a gate)
 | `INFO <name> …` | Informational (from `known_red_gates`, or made informational by the script) |
 
 How to write it: [Add a project](../guides/add-project.md#gates-sh).
+
+`computer_use: true` enables the VM-local computer MCP on `macos-pull` / `windows-pull`. It defaults to disabled. See [setup](../guides/computer-use.md).
+
+`backend: linux-pull` uses a standalone Linux instance. Set `app_dir` to `<work_root>/app` and use a `.sh` gate. Supports `computer_use: true`. See [Linux setup](../guides/linux-worker.md).

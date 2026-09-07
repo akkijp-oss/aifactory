@@ -5,6 +5,7 @@
 | やりたいこと | ページ |
 |---|---|
 | MacのmacOS VMでチケットを実行する。導入・監視・復旧を確認する | [Mac ワーカーの導入と運用](macos-worker.md) |
+| Windows VMでチケットを実行する。サービス導入と復旧 | [Windowsワーカーの導入と運用](windows-worker.md) |
 | 依頼をチケットにする（自由文から / 整った本文から） | [チケットを作る](tickets.md) |
 | チケットを実行する（1 件ずつ / まとめて / dry-run） | [実行する](running.md) |
 | PR・ログ・成果物・状態を読む | [結果を読む](results.md) |
@@ -28,3 +29,7 @@ flowchart LR
 - チケット化は数十秒、実行は 1 件 5〜60 分。実行中は別のことをしていてよい
 - 状態は `workspace/kanban/BOARD.md` に常に出ている。`kb list` でも同じ。ブラウザなら [Web コンソール](console.md)
 - 人間が触るのは PR のレビューと、`blocked`（人間待ち）になったものだけ
+
+- [Mac・Windowsの画面操作](computer-use.md): MCPやチケットから専用VMのGUIを操作する。
+
+- [単体Linuxワーカー](linux-worker.md): Proxmoxに依存せず、CLIと専用X11画面を操作する。

@@ -20,7 +20,7 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: bash -n
         run: |
-          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh console/bin/mcp-remote; do
+          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh console/bin/mcp-remote workers/install.sh workers/templates/install-linux-worker.sh workers/computer/*.sh; do
             bash -n "$f" || exit 1
             echo "ok $f"
           done
@@ -47,6 +47,60 @@ jobs:
         working-directory: workers
       - run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/aifactory-worker ./cmd/aifactory-worker
         working-directory: workers
+
+  linux-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go.mod
+          cache: false
+      - run: sudo apt-get update && sudo apt-get install -y python3-pil python3-tk xvfb xauth xdotool xclip
+      - run: go test -c -o /tmp/aifactory-worker.test ./cmd/aifactory-worker
+        working-directory: workers
+      - run: sudo env -u INVOCATION_ID AIFACTORY_LINUX_SYSTEMD_TEST=1 /tmp/aifactory-worker.test -test.run TestLinux -test.v
+      - run: AIFACTORY_X11_TEST=1 xvfb-run -a /usr/bin/python3 -m unittest discover -s workers/tests -p test_linux_desktop.py -v
+      - run: go build -trimpath -o /tmp/aifactory-computer ./cmd/aifactory-computer
+        working-directory: workers
+
+  windows-worker:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go.mod
+          cache: false
+      - name: Parse PowerShell installers
+        shell: pwsh
+        run: |
+          Get-ChildItem workers -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens=$null; $errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
+            if($errors){throw ($errors | Out-String)}
+          }
+      - run: go test ./...
+        working-directory: workers
+      - run: |
+          go build -trimpath -o aifactory-worker.exe ./cmd/aifactory-worker
+          go build -trimpath -o aifactory-computer.exe ./cmd/aifactory-computer
+          go build -trimpath -ldflags=-H=windowsgui -o aifactory-desktop.exe ./cmd/aifactory-computer
+        working-directory: workers
+
+  mac-computer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go.mod
+          cache: false
+      - run: go test ./cmd/aifactory-computer
+        working-directory: workers
+      - run: go build -trimpath -o /tmp/aifactory-computer ./cmd/aifactory-computer
+        working-directory: workers
+      - run: swiftc -parse-as-library -O workers/computer/macos.swift -o /tmp/desktop-native
 
   secrets:
     # 秘密情報の漏えい検査（全履歴）。gitleaks の CLI を直接使う（gitleaks-action は org で license が要る）

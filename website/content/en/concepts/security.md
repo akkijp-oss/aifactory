@@ -2,6 +2,14 @@
 
 What this page tells you: the isolation boundary, where secrets live and how long they last, the rules imposed on agents, and what not to do.
 
+## Windows worker protection
+
+The service runs as LocalSystem inside a dedicated Windows VM; tasks use a separate ordinary account. ACLs prevent tasks from reading the service token, journal, and task-account password. Only project credentials are temporarily provided to tasks.
+
+Apply network restrictions at Proxmox. Release deletes the run workspace and temporary profile, without rolling back the operating system. Use a dedicated VM for trusted projects under the same administrator. See [Windows worker setup and operations](../guides/windows-worker.md) for termination, artifact collection, and recovery.
+
+The `clean` snapshot and tmpfs descriptions below apply to the existing Linux VM backend.
+
 ## Trust boundary
 
 ```mermaid
@@ -84,3 +92,7 @@ The planner writes **STOP** at the top of the plan if the request is unclear, co
 | The Claude token is readable by processes inside the VM | Unavoidable: it is the agent's own credential. Mitigated by per-project scoping and the short tmpfs lifetime |
 | Physical power of the Proxmox host | Without a remote power-on path (WoL / IPMI), an outage means a trip to the machine |
 | VM rebuilds by concurrent sessions | Handled by the rules in [Working with multiple sessions](../guides/multi-session.md) |
+
+### Standalone Linux boundary
+
+Worker credentials and journals remain root-only, while commands run as a separate ordinary user in systemd cgroups. Unverified shutdown retains the lease. Release removes the workspace without restoring OS or GUI state. Configure network restrictions with the instance firewall. See [scope and limits](../guides/linux-worker.md).

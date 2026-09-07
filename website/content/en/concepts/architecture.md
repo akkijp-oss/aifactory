@@ -2,6 +2,17 @@
 
 What this page tells you: the role and substance of the four sections, the contracts between them, and how data flows.
 
+## Mac and Windows execution backends
+
+The shared workflow runner supports `macos-pull` and `windows-pull`. Both workers retrieve operations over HTTPS and use run leases, streaming logs, and checksum-verified artifacts. Submit work through the same MCP `ticket_run` or `kb run` interface.
+
+| Backend | Service location | Task execution | Release |
+| --- | --- | --- | --- |
+| Mac | Mac host | A cloned Tart macOS VM | Stop and delete the VM |
+| Windows | Inside a dedicated Windows VM | PowerShell under a separate ordinary user | Delete the workspace and temporary profile; keep the VM running |
+
+See [Mac worker setup](../guides/macos-worker.md) and [Windows worker setup](../guides/windows-worker.md) for installation and recovery.
+
 ## Four sections
 
 Cutting the talk's structure by role gives three sections (where / what / how); discussion added a fourth, "the glue".
@@ -93,3 +104,7 @@ flowchart LR
 - A sandbox alone has no value, though, so a minimal workflow was run alongside it to draw out requirements
 
 Details in `docs/ledger.md` (the concept ledger) and ADR-0001 to 0004.
+
+### Standalone Linux worker
+
+`linux-pull` installs systemd services directly on a dedicated instance. It shares the HTTPS pull queue and leases, and runs commands as an ordinary task user. It does not call Proxmox APIs or clone/snapshot VMs. Computer use targets an existing X11 session or Xvfb. See [setup](../guides/linux-worker.md).

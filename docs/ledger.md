@@ -29,6 +29,9 @@
 - **テナントと Proxmox 上の制御系**（2026-09-06、ADR-0017）: 貸出先の組織ごとに網（別 SDN vnet と /16）・VMID 帯・firewall group・リソースプール・API トークン・制御系 LXC（`<prefix>-ctl`: console + `/docs/` + runner + kanban + workspace + 秘密情報。systemd 常駐）を分ける。`sandbox` CLI は API モード（プール限定）で動き、ホストの root を持たない。Mac 側は不要（ブラウザと ssh だけ）。既存環境は `default` テナントで従来どおり。実機での初回テナント構築は未
 - Web コンソール（ボード / 実行記録の工程トラック / sandbox / 取り込み / ジョブ）: `../console/`（2026-09-06、Python 標準ライブラリ、127.0.0.1 専用。状態は既存 CLI 経由でしか変えない。ADR-0013）。**メンテナの Mac で launchd 常駐（`com.aifactory.console`、http://127.0.0.1:8765/）**。コードを変えたら `launchctl kickstart -k gui/$(id -u)/com.aifactory.console`
 
+- **Windowsワーカー**（2026-09-07、[ADR-0022](adr/0022-windows-pull-worker.md)）: 専用Windows VM内のサービスが共通pull queueを利用。一般ユーザーでPowerShellを実行し、MCPから調査・要約・成果物回収・workspace返却まで実機確認済み。OS全体の巻き戻しは対象外。[導入と運用](windows-worker.md)を参照。
+- **Mac・Windowsの画面操作**（2026-09-07、[ADR-0023](adr/0023-computer-use.md)）: 専用VMにcomputer MCPを追加。画面取得・クリック・日本語入力を両OSの実機で確認。チケットでは `computer_use: true` を指定する。[導入と制限](computer-use.md)を参照。
+
 ## 現在の方針（2026-09-05 確定分）
 
 ### 全体の分割（メンテナ案 + 議論で1つ追加）
@@ -112,3 +115,5 @@
 - **2026-09-05（深夜）**: この台帳を外部の個人メモから aifactory `docs/` へ移動して整理（メンテナの判断）。動画・音声・文字起こしはリポジトリ外に置く
 - **2026-09-05（夜）**: 実装リポジトリ `akkijp/aifactory` を作成。Sandbox 区画の README / BUILD / STATUS / OPERATIONS / スクリプト / CLI / ADR 5本を書き切る（すべて未実行）。名前はメンテナが「わかりやすく aifactory」と決定。品質優先の指示
 - **2026-09-05**: 着想。動画を文字起こし → メンテナが「sandbox / kanban / AI engineering の3分割、sandbox が最も汎用」と提起 → 議論で「つなぎ」を追加。Sandbox v0 を Proxmox VM で設計（ネイティブ実行、使い回し+巻き戻し、(b) ゲートウェイ LXC の subnet router、setup-token 注入）。同日にクラスタへ大型ノードが空ノードとして再参加したため、v0 ホストを当初案の小型ノードから大型ノードへ変更
+
+- **単体Linuxワーカー**（[ADR-0024](adr/0024-standalone-linux-worker.md)）: systemdサービスでpull queueを利用し、専用一般ユーザーでCLI・X11の画面操作を行う。ProxmoxのAPIやVM操作に依存しない。[導入と検証範囲](linux-worker.md)。

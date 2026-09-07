@@ -108,6 +108,11 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 400)
         with self.assertRaises(urllib.error.HTTPError) as cm: post("/v1/submit", {"version": 1}, self.token)
         self.assertEqual(cm.exception.code, 404)
+        before = self.store.workers()
+        self.assertEqual(post("/v1/check", {"version": 1}, self.token), {"ok": True})
+        self.assertEqual(self.store.workers(), before)
+        with self.assertRaises(urllib.error.HTTPError) as cm: post("/v1/check", {"version": 1}, "wrong")
+        self.assertEqual(cm.exception.code, 401)
         self.assertEqual(post("/v1/poll", {"version": 1}, self.token), {"operation": None})
 
     def test_nonloopback_requires_tls(self):
@@ -169,7 +174,7 @@ class QueueTest(unittest.TestCase):
 
     def test_network_setup_must_be_ready_before_reservation(self):
         self.store.heartbeat("mac1", {"mode":"guest", "lifecycle":True, "base_ready":True, "network_ready":False})
-        with self.assertRaisesRegex(Error, "Softnet"):
+        with self.assertRaisesRegex(Error, "network setup"):
             self.store.acquire("mac1", "run-one")
         self.assertIsNone(self.store.workers()[0]['lease'])
         self.store.heartbeat("mac1", {"mode":"guest", "lifecycle":True, "base_ready":True, "network_ready":True})

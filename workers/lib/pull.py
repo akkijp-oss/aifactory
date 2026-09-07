@@ -122,7 +122,7 @@ class Store:
             if json.loads(w["info"]).get("base_ready") is False:
                 raise Error("worker base image not ready", 409)
             if json.loads(w["info"]).get("network_ready") is False:
-                raise Error("worker Softnet root/SUID setup not ready", 409)
+                raise Error("worker network setup not ready", 409)
             old = db.execute("SELECT id FROM leases WHERE worker=?", (worker,)).fetchone()
             if old:
                 if old[0] == lease: return
@@ -326,7 +326,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n))
             if not isinstance(data, dict) or data.pop("version", None) != VERSION:
                 raise Error("unsupported protocol version")
-            if self.path == "/v1/heartbeat":
+            if self.path == "/v1/check":
+                response = {"ok": True}
+            elif self.path == "/v1/heartbeat":
                 response = store.heartbeat(worker, data["info"])
             elif self.path == "/v1/poll":
                 response = store.poll(worker)

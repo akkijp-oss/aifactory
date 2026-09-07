@@ -76,12 +76,34 @@ def t_job_stop(a): return core.op_job_stop(a.get("id") or "")
 def t_logs(a): return core.logs_view()
 def t_config(a): return core.config_view()
 
+def desktop_api():
+    sys.path.insert(0, str(core.REPO / 'workers' / 'lib'))
+    from computer import Desktop
+    return Desktop()
+
+def desktop_call(method, *args):
+    try: return getattr(desktop_api(), method)(*args)
+    except Exception as e: raise core.ApiError(str(e))
+
+def t_computer_open(a): return desktop_call('open', a.get('worker', ''))
+def t_computer_close(a): return desktop_call('close', a.get('session', ''))
+def t_computer_action(a):
+    out = desktop_call('action', a.get('session', ''), {k:v for k,v in a.items() if k != 'session'})
+    image = out.pop('image', None)
+    content = [{'type': 'text', 'text': j(out)}]
+    if image: content.append({'type': 'image', 'mimeType': 'image/png', 'data': image})
+    return {'content': content, 'isError': False}
+
+
 
 def schema(props, required=()):
     return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
 
 STR = {"type": "string"}; INT = {"type": "integer"}; BOOL = {"type": "boolean"}
 TOOLS = [
+    ("computer_open", "専用Mac/Windows/Linux環境を画面操作用に予約・準備する。他のrunで使用中なら失敗する。返却はcomputer_close。", schema({"worker": STR}, ["worker"]), t_computer_open),
+    ("computer_action", "予約したVMの画面取得・入力。まずscreenshotで確認し、その画像のピクセル座標を使う。typeはUnicode、keyはCTRL/ALT/SHIFT/WINまたはCMDとENTER等、scrollは正で上。", schema({"session":STR,"action":{"type":"string","enum":["screenshot","click","move","type","key","scroll"]},"x":INT,"y":INT,"button":{"type":"string","enum":["left","right"]},"count":INT,"text":STR,"keys":{"type":"array","items":STR},"amount":INT},["session","action"]), t_computer_action),
+    ("computer_close", "画面操作用の予約を返却する。Macは専用VMを削除、Windows/Linuxはworkspaceを削除。保存済みスクリーンショットは保持する。",schema({"session":STR},["session"]),t_computer_close),
     ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数", schema({}), t_overview),
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
     ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ", schema({"id": INT}, ["id"]), t_ticket_show),
@@ -147,6 +169,7 @@ def handle(msg):
         if not fn: raise core.ApiError(f"未知のツール {name}", 404)
         try:
             res = fn(args)
+            if name == "computer_action": return res
             return {"content": [{"type": "text", "text": j(res) if not isinstance(res, str) else res}], "isError": False}
         except (core.ApiError, core.Conflict) as e:
             return {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True}

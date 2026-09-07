@@ -89,6 +89,10 @@ plugins:
             複数セッションで作業する: Working with multiple sessions
             貸出先ごとの環境（テナント）: Tenants (per-organization environments)
             Mac ワーカーの導入と運用: Mac worker setup and operations
+            Windows ワーカーの導入と運用: Windows worker setup and operations
+            単体Linuxワーカーの導入と運用: Standalone Linux worker
+            ワンライナーで導入: Install with one command
+            Mac・Windows・Linuxの画面操作: Mac, Windows, and Linux computer use
             仕組み: Concepts
             全体の構成: Architecture
             チケットの作成から完了まで: Ticket lifecycle
@@ -161,6 +165,10 @@ nav:
       - 複数セッションで作業する: guides/multi-session.md
       - 貸出先ごとの環境（テナント）: guides/tenants.md
       - Mac ワーカーの導入と運用: guides/macos-worker.md
+      - Windows ワーカーの導入と運用: guides/windows-worker.md
+      - 単体Linuxワーカーの導入と運用: guides/linux-worker.md
+      - ワンライナーで導入: guides/worker-install.md
+      - Mac・Windows・Linuxの画面操作: guides/computer-use.md
   - 仕組み:
       - concepts/index.md
       - 全体の構成: concepts/architecture.md

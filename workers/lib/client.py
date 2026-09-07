@@ -26,13 +26,13 @@ class Client:
                 seen = len(row["log"])
                 if row["state"] not in ("queued", "running"):
                     if row["state"] not in ("succeeded", "failed"):
-                        raise RuntimeError(f"Mac operation {op}: {row['state']}; lease retained")
+                        raise RuntimeError(f"Worker operation {op}: {row['state']}; lease retained")
                     rc = (row["result"] or {}).get("exit_code")
                     if rc is None or (row["state"] == "failed" and rc == 0):
-                        raise RuntimeError(f"Mac operation {op}: invalid exit result; lease retained")
+                        raise RuntimeError(f"Worker operation {op}: invalid exit result; lease retained")
                     return op, subprocess.CompletedProcess(kind, rc, row["log"], "")
                 if time.monotonic() > deadline:
-                    raise TimeoutError(f"Mac operation {op}: timeout; lease retained")
+                    raise TimeoutError(f"Worker operation {op}: timeout; lease retained")
                 time.sleep(1)
         except BaseException:
             self.store.cancel(op)

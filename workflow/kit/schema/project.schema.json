@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/akkijp-oss/aifactory/workflow/kit/schema/project.schema.json",
   "title": "aifactory project definition ($AIFACTORY_WORKSPACE/projects/<pj>/project.yml or examples/projects/<pj>/project.yml)",
-  "description": "PJ 固有の事実と方針。手順（workflow）は常備側にあり、ここには『どこに何があるか』『何を守るか』だけを書く。",
+  "description": "PJ \u56fa\u6709\u306e\u4e8b\u5b9f\u3068\u65b9\u91dd\u3002\u624b\u9806\uff08workflow\uff09\u306f\u5e38\u5099\u5074\u306b\u3042\u308a\u3001\u3053\u3053\u306b\u306f\u300e\u3069\u3053\u306b\u4f55\u304c\u3042\u308b\u304b\u300f\u300e\u4f55\u3092\u5b88\u308b\u304b\u300f\u3060\u3051\u3092\u66f8\u304f\u3002",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,7 @@
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$",
-      "description": "PJ slug。sandbox take <pj> と templates/<pj>/ に一致"
+      "description": "PJ slug\u3002sandbox take <pj> \u3068 templates/<pj>/ \u306b\u4e00\u81f4"
     },
     "display_name": {
       "type": "string"
@@ -27,52 +27,52 @@
     },
     "base_branch": {
       "type": "string",
-      "description": "通常の作業ブランチの元と PR の宛先"
+      "description": "\u901a\u5e38\u306e\u4f5c\u696d\u30d6\u30e9\u30f3\u30c1\u306e\u5143\u3068 PR \u306e\u5b9b\u5148"
     },
     "hotfix_base": {
       "type": "string",
-      "description": "hotfix の宛先（省略時は base_branch）"
+      "description": "hotfix \u306e\u5b9b\u5148\uff08\u7701\u7565\u6642\u306f base_branch\uff09"
     },
     "app_dir": {
       "type": "string",
-      "description": "VM 内のアプリのディレクトリ（リポジトリ直下と違うことがある）"
+      "description": "VM \u5185\u306e\u30a2\u30d7\u30ea\u306e\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\uff08\u30ea\u30dd\u30b8\u30c8\u30ea\u76f4\u4e0b\u3068\u9055\u3046\u3053\u3068\u304c\u3042\u308b\uff09"
     },
     "url": {
       "type": "string",
-      "description": "VM 内から見たアプリの URL（画面確認用）"
+      "description": "VM \u5185\u304b\u3089\u898b\u305f\u30a2\u30d7\u30ea\u306e URL\uff08\u753b\u9762\u78ba\u8a8d\u7528\uff09"
     },
     "gates": {
       "type": "string",
-      "description": "ゲートスクリプト。templates/<pj>/ からの相対パス。VM 内で app_dir を cwd に実行され、全緑なら 0"
+      "description": "\u30b2\u30fc\u30c8\u30b9\u30af\u30ea\u30d7\u30c8\u3002templates/<pj>/ \u304b\u3089\u306e\u76f8\u5bfe\u30d1\u30b9\u3002VM \u5185\u3067 app_dir \u3092 cwd \u306b\u5b9f\u884c\u3055\u308c\u3001\u5168\u7dd1\u306a\u3089 0"
     },
     "stack": {
       "type": "string",
-      "description": "1 行の技術スタック（依頼文の冒頭に出す）"
+      "description": "1 \u884c\u306e\u6280\u8853\u30b9\u30bf\u30c3\u30af\uff08\u4f9d\u983c\u6587\u306e\u5192\u982d\u306b\u51fa\u3059\uff09"
     },
     "facts": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "agent に毎回伝える事実（テストの走らせ方、既知の問題、生成物の置き場など）。1 項目 1 行"
+      "description": "agent \u306b\u6bce\u56de\u4f1d\u3048\u308b\u4e8b\u5b9f\uff08\u30c6\u30b9\u30c8\u306e\u8d70\u3089\u305b\u65b9\u3001\u65e2\u77e5\u306e\u554f\u984c\u3001\u751f\u6210\u7269\u306e\u7f6e\u304d\u5834\u306a\u3069\uff09\u30021 \u9805\u76ee 1 \u884c"
     },
     "review_points": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "reviewer が必ず見る観点（PJ 固有）"
+      "description": "reviewer \u304c\u5fc5\u305a\u898b\u308b\u89b3\u70b9\uff08PJ \u56fa\u6709\uff09"
     },
     "forbidden": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "agent がやってはいけないこと（PJ 固有）。共通の禁止事項は kit/roles/ にある"
+      "description": "agent \u304c\u3084\u3063\u3066\u306f\u3044\u3051\u306a\u3044\u3053\u3068\uff08PJ \u56fa\u6709\uff09\u3002\u5171\u901a\u306e\u7981\u6b62\u4e8b\u9805\u306f kit/roles/ \u306b\u3042\u308b"
     },
     "workflow_overrides": {
       "type": "object",
-      "description": "workflow 名 → 上書き（v1 は base_branch のみ）",
+      "description": "workflow \u540d \u2192 \u4e0a\u66f8\u304d\uff08v1 \u306f base_branch \u306e\u307f\uff09",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
@@ -88,18 +88,24 @@
       "items": {
         "type": "string"
       },
-      "description": "base ブランチで既に赤いゲート名（gates.sh の名前）。runner は FAIL を INFO に格下げし、agent に『直せ』と戻さない。直す PR がマージされたら消す"
+      "description": "base \u30d6\u30e9\u30f3\u30c1\u3067\u65e2\u306b\u8d64\u3044\u30b2\u30fc\u30c8\u540d\uff08gates.sh \u306e\u540d\u524d\uff09\u3002runner \u306f FAIL \u3092 INFO \u306b\u683c\u4e0b\u3052\u3057\u3001agent \u306b\u300e\u76f4\u305b\u300f\u3068\u623b\u3055\u306a\u3044\u3002\u76f4\u3059 PR \u304c\u30de\u30fc\u30b8\u3055\u308c\u305f\u3089\u6d88\u3059"
     },
     "backend": {
       "type": "string",
       "enum": [
         "proxmox",
-        "macos-pull"
+        "macos-pull",
+        "windows-pull",
+        "linux-pull"
       ]
     },
     "worker": {
       "type": "string",
       "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+    },
+    "computer_use": {
+      "type": "boolean",
+      "description": "Enable the dedicated VM desktop MCP tool for workflow agents. Requires preinstalled desktop helpers."
     }
   },
   "allOf": [
@@ -122,6 +128,86 @@
           "app_dir": {
             "type": "string",
             "pattern": "^/Users/[a-zA-Z0-9_-]+/app$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "windows-pull"
+          }
+        },
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "required": [
+          "worker"
+        ],
+        "properties": {
+          "app_dir": {
+            "type": "string",
+            "pattern": "^[A-Za-z]:/[^\\r\\n]*?/app$"
+          },
+          "gates": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+\\.ps1$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "computer_use": {
+            "const": true
+          }
+        },
+        "required": [
+          "computer_use"
+        ]
+      },
+      "then": {
+        "required": [
+          "backend"
+        ],
+        "properties": {
+          "backend": {
+            "enum": [
+              "macos-pull",
+              "windows-pull",
+              "linux-pull"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "linux-pull"
+          }
+        },
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "required": [
+          "worker"
+        ],
+        "properties": {
+          "app_dir": {
+            "type": "string",
+            "pattern": "^/[A-Za-z0-9_./-]+/app$"
+          },
+          "gates": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+\\.sh$"
           }
         }
       }

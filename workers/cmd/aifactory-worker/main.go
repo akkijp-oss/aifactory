@@ -1,5 +1,4 @@
-// aifactory-worker is an outbound-only macOS worker. Only the Go standard
-// library is used; deployment requires no Python, Go runtime or package manager.
+// aifactory-worker receives work over outbound HTTPS on dedicated execution machines.
 package main
 
 import (
@@ -17,32 +16,34 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode/utf8"
 )
 
 const maxLog = 16 * 1024 * 1024
-const version = "0.2.0"
+const version = "0.3.0"
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 type config struct {
-	Worker    string `json:"worker"`
-	URL       string `json:"url"`
-	TokenFile string `json:"token_file"`
-	CAFile    string `json:"ca_file"`
-	StateDir  string `json:"state_dir"`
-	GuestVM   string `json:"guest_vm"`
-	Tart      string `json:"tart"`
-	BaseVM    string `json:"base_vm"`
+	Worker           string `json:"worker"`
+	URL              string `json:"url"`
+	TokenFile        string `json:"token_file"`
+	CAFile           string `json:"ca_file"`
+	StateDir         string `json:"state_dir"`
+	GuestVM          string `json:"guest_vm"`
+	Tart             string `json:"tart"`
+	BaseVM           string `json:"base_vm"`
+	WorkRoot         string `json:"work_root"`
+	PowerShell       string `json:"powershell"`
+	TaskUser         string `json:"task_user"`
+	TaskPasswordFile string `json:"task_password_file"`
 }
 
 type operation struct {
@@ -88,15 +89,10 @@ func writeAtomic(path string, data []byte) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, path); err != nil {
+	if err = replaceFile(tmp, path); err != nil {
 		return err
 	}
-	d, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return syncDirectory(filepath.Dir(path))
 }
 
 func newJournal(root string) (*journal, error) {
@@ -110,7 +106,7 @@ func newJournal(root string) (*journal, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = lockFile(f); err != nil {
 		f.Close()
 		return nil, errors.New("another worker owns this state directory")
 	}
@@ -133,12 +129,7 @@ func (j *journal) begin(id string) (bool, error) {
 	if err = writeAtomic(filepath.Join(j.dir(id), "started"), []byte(id)); err != nil {
 		return false, err
 	}
-	d, err := os.Open(j.root)
-	if err != nil {
-		return false, err
-	}
-	defer d.Close()
-	return true, d.Sync()
+	return true, syncDirectory(j.root)
 }
 func (j *journal) event(id string, seq int) string {
 	return filepath.Join(j.dir(id), fmt.Sprintf("event-%08d.json", seq))
@@ -236,7 +227,12 @@ type worker struct {
 	command func(context.Context, string, ...string) *exec.Cmd
 }
 
-func newWorker(c config) (*worker, error) {
+func newWorker(c config) (*worker, error) { return configureWorker(c, true) }
+
+func configureWorker(c config, journalRequired bool) (*worker, error) {
+	if err := validatePlatformConfig(&c); err != nil {
+		return nil, err
+	}
 	if !nameRE.MatchString(c.Worker) || (c.GuestVM != "" && !nameRE.MatchString(c.GuestVM)) {
 		return nil, errors.New("invalid worker or guest VM name")
 	}
@@ -265,15 +261,18 @@ func newWorker(c config) (*worker, error) {
 	if !pool.AppendCertsFromPEM(ca) {
 		return nil, errors.New("invalid CA certificate")
 	}
-	if c.Tart == "" {
+	if runtime.GOOS != "windows" && c.WorkRoot == "" && c.Tart == "" {
 		c.Tart = "/opt/homebrew/bin/tart"
 	}
-	if !filepath.IsAbs(c.Tart) {
+	if runtime.GOOS != "windows" && c.WorkRoot == "" && !filepath.IsAbs(c.Tart) {
 		return nil, errors.New("tart must be an absolute path")
 	}
-	j, err := newJournal(c.StateDir)
-	if err != nil {
-		return nil, err
+	var j *journal
+	if journalRequired {
+		j, err = newJournal(c.StateDir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	client := &http.Client{Timeout: 10 * time.Second,
 		Transport:     &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
@@ -311,20 +310,10 @@ func (w *worker) post(ctx context.Context, endpoint string, data map[string]any,
 	return nil
 }
 
-func softnetReady() bool {
-	path, err := exec.LookPath("softnet")
-	if err != nil {
-		return false
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == 0 && info.Mode()&os.ModeSetuid != 0
-}
-
 func (w *worker) info() map[string]any {
+	if info := w.platformInfo(); info != nil {
+		return info
+	}
 	mode := "probe-only"
 	if w.c.GuestVM != "" {
 		mode = "guest"
@@ -398,6 +387,14 @@ func (w *worker) execute(ctx context.Context, op operation) {
 		r = result{Status: "succeeded", ExitCode: &zero}
 		return
 	}
+	if runtime.GOOS == "linux" && w.c.WorkRoot != "" {
+		r = w.executeLinux(ctx, op, lw)
+		return
+	}
+	if runtime.GOOS == "windows" {
+		r = w.executeWindows(ctx, op, lw)
+		return
+	}
 	if op.Kind == "guest-prepare" || op.Kind == "guest-release" {
 		r = w.lifecycle(ctx, op, lw)
 		return
@@ -422,8 +419,7 @@ func (w *worker) execute(ctx context.Context, op operation) {
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 	cmd.WaitDelay = 5 * time.Second
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	configureProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		return
 	}
@@ -562,6 +558,7 @@ func (w *worker) tick(ctx context.Context) error {
 func run() error {
 	configPath := flag.String("config", "", "absolute path to private worker JSON configuration")
 	showVersion := flag.Bool("version", false, "print version")
+	check := flag.Bool("check", false, "verify TLS and worker credentials without polling or changing state")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("aifactory-worker " + version + " " + runtime.GOOS + "/" + runtime.GOARCH)
@@ -577,12 +574,20 @@ func run() error {
 	if err = dec.Decode(&c); err != nil {
 		return err
 	}
-	w, err := newWorker(c)
+	w, err := configureWorker(c, !*check)
 	if err != nil {
 		return err
 	}
+	if *check {
+		var verified map[string]any
+		if err = w.post(context.Background(), "check", map[string]any{}, &verified); err != nil {
+			return err
+		}
+		fmt.Println("Worker TLS and authentication verified")
+		return nil
+	}
 	defer w.j.lock.Close()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := workerContext()
 	defer cancel()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -608,6 +613,9 @@ func run() error {
 }
 
 func main() {
+	if handled := platformMain(); handled {
+		return
+	}
 	if err := run(); err != nil {
 		log.Print(err)
 		os.Exit(1)
