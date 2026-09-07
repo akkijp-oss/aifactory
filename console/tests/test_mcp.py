@@ -56,7 +56,7 @@ class McpTest(unittest.TestCase):
     def test_02_tools_list(self):
         tools = self.c.call("tools/list")["result"]["tools"]
         names = {t["name"] for t in tools}
-        for n in ("overview", "ticket_list", "ticket_show", "ticket_new", "ticket_action", "ticket_run", "intake", "dispatch", "run_list", "run_show", "read_file", "sandbox_status", "job_wait", "job_stop"):
+        for n in ("overview", "ticket_list", "ticket_show", "ticket_new", "ticket_action", "ticket_run", "intake", "dispatch", "run_list", "run_show", "read_file", "sandbox_status", "job_wait", "job_stop", "computer_open", "computer_action", "computer_close"):
             self.assertIn(n, names)
         for t in tools: self.assertEqual(t["inputSchema"]["type"], "object"); self.assertTrue(t["description"])
 

@@ -23,6 +23,31 @@ class MacBackendTest(unittest.TestCase):
         run.client=types.SimpleNamespace(lease='lease-1')
         return run
 
+    def test_computer_configuration_is_opt_in_and_uses_guest_path(self):
+        run=self.make_run()
+        run.scp_to=lambda *args:self.fail('disabled project transferred MCP config')
+        run.configure_computer()
+        run.project.update(computer_use=True,app_dir='/Users/admin/app')
+        run.state['backend']='macos-pull'
+        sent=[];run.scp_to=lambda *args:sent.append(args)
+        run.configure_computer()
+        config=json.loads(sent[0][0].read_text())['mcpServers']['computer']
+        self.assertEqual(config['command'],'/Users/admin/.local/lib/aifactory-computer/aifactory-computer')
+        self.assertEqual(config['args'],['-mode','mcp','-artifacts',run.work])
+        self.assertEqual(sent[0][1],run.work+'/computer-mcp.json')
+        run.state['backend']='windows-pull'
+        run.configure_computer()
+        config=json.loads(sent[-1][0].read_text())['mcpServers']['computer']
+        self.assertEqual(config['command'],r'C:\ProgramData\AIFactoryWorker\bin\aifactory-computer.exe')
+
+    def test_computer_use_rejects_non_desktop_backends(self):
+        import jsonschema
+        schema=json.loads((ROOT/'workflow/kit/schema/project.schema.json').read_text())
+        project={'name':'test','repo':'owner/repo','base_branch':'main','app_dir':'/Users/admin/app','gates':'gates.sh','computer_use':True}
+        with self.assertRaises(jsonschema.ValidationError):jsonschema.validate(project,schema)
+        for backend in ('macos-pull','windows-pull'):
+            jsonschema.validate({**project,'backend':backend,'worker':'test-worker','gates':'gates.ps1' if backend=='windows-pull' else 'gates.sh','app_dir':'C:/work/app' if backend=='windows-pull' else '/Users/admin/app'},schema)
+
     def test_bad_artifacts_never_release_guest(self):
         for name,checksum in [('../escape',hashlib.sha256(b'ok').hexdigest()),('report.md','bad')]:
             run=self.make_run()

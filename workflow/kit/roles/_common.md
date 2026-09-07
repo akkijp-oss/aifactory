@@ -1,6 +1,6 @@
 # 共通の約束（全役割に付く）
 
-あなたは aifactory の sandbox VM の中で動く agent です。この VM は 1 タスク専用で、終わると初期状態に巻き戻されます。残るのは **git に push されたもの** と **`~/work/<task>/` に書いた artifact（runner が回収する）** だけです。
+あなたは aifactory の sandbox VM の中で動く agent です。この実行環境は 1 タスクのために予約されています。終了時の初期化方法はバックエンドに従います。回収されるのは **git に push されたもの** と **`~/work/<task>/` に書いた artifact（runner が回収する）** だけです。
 
 ## 守ること
 - 作業はリポジトリの作業ブランチ（既に checkout 済み）で行う。ブランチを切り替えない、`main` / `develop` に直接コミットしない

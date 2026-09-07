@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -184,6 +185,9 @@ func TestRestartReportsUncertainWithoutRunningCommand(t *testing.T) {
 }
 
 func TestGuestExecutionUsesOnlyConfiguredVM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Tart backend")
+	}
 	j, _ := newJournal(t.TempDir())
 	defer j.lock.Close()
 	j.begin("guest-op")

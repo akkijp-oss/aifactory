@@ -24,10 +24,11 @@ from client import Client
 
 def backend(Run):
     class MacRun(Run):
+        backend_label = "Mac VM"
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh"}
-            if unsupported: raise ValueError("unsupported Mac code steps: " + ", ".join(sorted(unsupported)))
+            if unsupported: raise ValueError("unsupported pull-worker code steps: " + ", ".join(sorted(unsupported)))
             self.work = str(pathlib.PurePosixPath(self.project["app_dir"]).parent / "work" / self.task)
             self.env_file = str(pathlib.PurePosixPath(self.work) / "runtime.env")
             self.client = None
@@ -46,11 +47,12 @@ def backend(Run):
                 self.state.update(result="human", error=str(e),
                                   finished=datetime.datetime.now().isoformat(timespec="seconds"))
                 self.save()
-                self.log(f"Mac execution failed: {e}; existing lease retained for inspection")
+                self.log(f"{self.backend_label} execution failed: {e}; existing lease retained for inspection")
                 return 2
 
         def run_agent(self, step, retry_note=""):
             self.refresh_token()
+            self.configure_computer()
             return super().run_agent(step, retry_note)
 
         def command(self, cmd):
@@ -156,10 +158,19 @@ def backend(Run):
             ref = self.branch if self.pr_number else self.base
             self.sb(f"cd {app} && git fetch -q origin {shlex.quote(ref)} && git checkout -q -b {shlex.quote(self.branch)} origin/{shlex.quote(ref)} && git config user.name 'aifactory' && git config user.email 'aifactory@users.noreply.github.com'")
             self.sb(f"cat > {shlex.quote(self.work + '/ticket.md')}", input_text=self.ticket)
-            self.log("Mac VM ready")
+            self.log(f"{self.backend_label} ready")
 
-        def refresh_token(self):
-            if self.dry: return
+        def configure_computer(self):
+            if not self.project.get('computer_use') or self.dry: return
+            executable = (r'C:\ProgramData\AIFactoryWorker\bin\aifactory-computer.exe' if self.state['backend']=='windows-pull'
+                          else '/usr/local/lib/aifactory-computer/aifactory-computer' if self.state['backend']=='linux-pull'
+                          else str(pathlib.PurePosixPath(self.project['app_dir']).parent / '.local/lib/aifactory-computer/aifactory-computer'))
+            config = {'mcpServers': {'computer': {'command': executable, 'args': ['-mode', 'mcp', '-artifacts', self.work]}}}
+            local = self.run_dir / 'computer-mcp.json'
+            local.write_text(json.dumps(config), encoding='utf-8')
+            self.scp_to(local, self.work + '/computer-mcp.json')
+
+        def credentials(self):
             r = subprocess.run([str(ROOT / "sandbox" / "bin" / "sandbox"), "gh-app", "token", self.pj], text=True, capture_output=True)
             token = r.stdout.strip()
             if r.returncode or not token.startswith("ghs_") or "\n" in token:
@@ -172,7 +183,12 @@ def backend(Run):
             r = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
             oauth = r.stdout.strip()
             if r.returncode or not oauth: raise RuntimeError("Claude OAuth token not configured for project")
-            data = f"export GH_TOKEN={shlex.quote(token)}\nexport CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth)}\n"
+            return {"GH_TOKEN": token, "CLAUDE_CODE_OAUTH_TOKEN": oauth}
+
+        def refresh_token(self):
+            if self.dry: return
+            values = self.credentials()
+            data = "".join(f"export {key}={shlex.quote(value)}\n" for key, value in values.items())
             # stdin is a private, transient spool file; never in command, ticket, operation_show or logs.
             self.sb(f"umask 077; cat > {shlex.quote(self.env_file)}", input_text=data)
 
@@ -200,7 +216,7 @@ def backend(Run):
             self.refresh_token()
             commits = self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline origin/{shlex.quote(self.base)}..HEAD").strip()
             if not commits: return False, "no commits to publish"
-            parts = ["aifactoryのmacOS VMで実装・検証した変更です。", ""]
+            parts = [f"aifactoryの{self.backend_label}で実装・検証した変更です。", ""]
             for file in ("report.md", "review.md", "gates.txt"):
                 value = self.vm_read(file).strip()
                 if value: parts += ["## " + file, "", value, ""]
@@ -233,7 +249,9 @@ for f in p.iterdir():
  out[f.name]={'data':base64.b64encode(b).decode(),'sha256':hashlib.sha256(b).hexdigest()}
 print(json.dumps(out))'''
             raw = self.sb(f"python3 -c {shlex.quote(script)} {shlex.quote(self.work)}")
-            files = json.loads(raw)
+            self.accept_artifacts(json.loads(raw))
+
+        def accept_artifacts(self, files):
             if not isinstance(files, dict) or len(files) > 128:
                 raise RuntimeError("invalid artifact manifest; lease retained")
             dest = self.run_dir / "work"
@@ -256,10 +274,10 @@ print(json.dumps(out))'''
             (self.run_dir / "artifacts.json").write_text(json.dumps({k:v["sha256"] for k,v in files.items()}, indent=2))
             self.state["artifacts_received"] = True; self.save()
             if self.keep:
-                self.log("Mac lease retained (--keep)"); return
+                self.log(f"{self.backend_label} lease retained (--keep)"); return
             op, r = self.client.execute("guest-release")
-            if r.returncode: raise RuntimeError("Mac release failed; lease retained")
+            if r.returncode: raise RuntimeError(f"{self.backend_label} release failed; lease retained")
             self.client.store.release_lease(self.project["worker"], self.client.lease, op)
             self.state["released"] = True; self.save()
-            self.log("Mac VM released after artifact verification")
+            self.log(f"{self.backend_label} released after artifact verification")
     return MacRun

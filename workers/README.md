@@ -1,6 +1,11 @@
 # Pull workers
 
-Macから制御系へ仕事を取りに来る実行バックエンド。MacにはGo標準ライブラリのみでビルドした `aifactory-worker` を1本配布する。Python、Go、Homebrewはワーカーの実行には不要。macOS VMを実行する場合は別途Tartとゲストイメージが必要。
+Mac・Windows・Linuxの導入は [ワンライナー導入ガイド](../docs/worker-install.md) を参照。
+
+Macまたは専用Windows VMから制御系へ仕事を取りに来る実行バックエンド。Go製の `aifactory-worker` を1本配布する（Windowsは `.exe`）。Python、Go、Homebrewはワーカーの実行には不要。macOS VMを実行する場合は別途Tartとゲストイメージが必要。
+
+Windowsは [Windowsワーカーの導入と運用](../docs/windows-worker.md) を参照。`windows-pull` は専用Windows VM内でサービスを動かし、一般ユーザーでPowerShellを実行する。返却時はworkspaceを削除し、VM自体は稼働を続ける。
+- [単体Linuxワーカー](../docs/linux-worker.md)
 
 ## 現在の範囲
 
@@ -12,7 +17,7 @@ Macから制御系へ仕事を取りに来る実行バックエンド。Macに�
 - 同時1操作。停止・切断・異常終了で結果が不明なら `uncertain` として再割当を止める。クラッシュ後に同じコマンドを自動再実行しない。
 - `backend: macos-pull` のプロジェクトを通常の `ticket_run` / `kb run` から実行する。制御系がrun単位のleaseを保持し、step間も他のrunを割り込ませない。
 - `base_vm` を設定すると、prepareで専用ゲストをcloneし、成果物の受領・SHA-256照合後にreleaseでゲストを停止・削除する。失敗時はleaseと記録を保持する。既存VMは引き取らない。
-- 対応するcode stepは `gates.sh` と `pr-create.sh`。`merge-pr` は未対応として失敗させる。プロジェクトをまたぐ自動リソース調整やGUI配信は対象外。
+- 対応するcode stepは `gates.sh` と `pr-create.sh`。`merge-pr` は未対応として失敗させる。プロジェクトをまたぐ自動リソース調整や画面の動画配信は対象外。
 
 設計: [macOS連携の検討](../docs/macos-worker-study.md)。制御系からMacへの接続開始、Macホスト上での任意コマンド実行、ホストのホーム共有は使わない。
 
@@ -120,3 +125,7 @@ app_dir: /Users/admin/app
 成果物はrunの作業ディレクトリ直下の通常ファイルに限定し、合計4 MiB、個別入力は350 KBまで。認証情報 `runtime.env` は回収しない。`runs/<run>/worker-operations.log` で操作IDを追い、`artifacts.json` に回収したファイルのハッシュ、`state.json` にbackend、worker、lease、回収・返却状態を記録する。転送失敗時にVMを削除しない。
 
 `--keep` は回収後もVMとleaseを保持する。`--resume` は記録されたleaseを所有している場合だけ継続する。認証注入・リポジトリ作成前のprovision失敗は、同じ稼働中ゲストで再試行できるため、provision.shは再実行可能にする。途中まで作られたリポジトリや停止したゲストは自動で引き取らない。`kb run --resume` は日付が変わっていてもチケットに記録されたrunを使う。失敗後の再実行で新たなVMを自動割当しない。状態不明なら既存の `control show` / `resolve` で操作を確認し、専用ゲストの状態を確定してから復旧する。成功した `guest-release` 操作を指定した `control release-lease <worker> <lease> --operation <id>` だけが制御系の予約を解放する。
+
+## VMの画面操作
+
+Mac・Windowsの専用VMで画面取得、クリック、Unicode入力、キー、スクロールを実行できる。チケットでは `computer_use: true`、直接操作では `computer_open` / `computer_action` / `computer_close` を使う。[導入・操作・制限](../docs/computer-use.md)。

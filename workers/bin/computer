@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Control-plane desktop sessions; operations use the authenticated worker queue."""
+import argparse,json,pathlib,sys
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'lib'))
+from computer import Desktop
+ap=argparse.ArgumentParser(description=__doc__);sub=ap.add_subparsers(dest='command',required=True)
+p=sub.add_parser('open');p.add_argument('worker')
+p=sub.add_parser('action');p.add_argument('session');p.add_argument('--file',help='JSON request file; defaults to stdin')
+p=sub.add_parser('close');p.add_argument('session')
+a=ap.parse_args();d=Desktop()
+try:
+ if a.command=='open':out=d.open(a.worker)
+ elif a.command=='close':out=d.close(a.session)
+ else:
+  request=json.loads(pathlib.Path(a.file).read_text() if a.file else sys.stdin.read());out=d.action(a.session,request);out.pop('image',None)
+ print(json.dumps(out,ensure_ascii=False,indent=2))
+except Exception as e:print(str(e),file=sys.stderr);sys.exit(1)

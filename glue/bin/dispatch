@@ -72,13 +72,13 @@ def main():
             log(f"{tid} {pj} {t['kind']}: project.yml 無し → blocked"); skip.add(tid); continue
         import yaml
         project = yaml.safe_load((pd / "project.yml").read_text())
-        if not a.dry_run and project.get("backend") == "macos-pull":
+        if not a.dry_run and project.get("backend") in ("macos-pull", "windows-pull", "linux-pull"):
             sys.path.insert(0, str(REPO / "workers" / "lib"))
             from pull import Store
             workers = Store(os.environ.get("AIFACTORY_WORKER_DB") or paths.WORKSPACE / "workers" / "queue.sqlite3").workers()
             worker = next((w for w in workers if w["id"] == project.get("worker")), {})
             if not worker.get("online") or not worker.get("info", {}).get("lifecycle") or worker.get("info", {}).get("base_ready") is False or worker.get("info", {}).get("network_ready") is False or worker.get("lease") or worker.get("operation"):
-                log(f"{tid} {pj}: Mac worker unavailable → skip"); skip.add(tid); continue
+                log(f"{tid} {pj}: Pull worker unavailable → skip"); skip.add(tid); continue
         if not a.dry_run and pj in busy_pj: skip.add(tid); continue
         if not a.dry_run and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
             log(f"{tid} {pj}: プール {POOL_PER_PJ} 台すべて貸出中 → この PJ は飛ばす"); busy_pj.add(pj); skip.add(tid); continue
