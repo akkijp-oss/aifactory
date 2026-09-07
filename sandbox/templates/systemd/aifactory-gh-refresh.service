@@ -1,0 +1,12 @@
+# aifactory sandbox: 貸出中の VM の GH_TOKEN（GitHub App installation token, 1 時間有効）を払い出し直す（ADR-0008）。timer が 45 分ごとに起動する
+# sandbox/bin/install.sh --systemd が @@USER@@ / @@HOME@@ / @@PATH@@ を埋めて置く
+[Unit]
+Description=aifactory sandbox: refresh GitHub App tokens in lent VMs
+
+[Service]
+Type=oneshot
+User=@@USER@@
+Environment=HOME=@@HOME@@
+Environment=PATH=@@PATH@@
+EnvironmentFile=-@@HOME@@/.config/aifactory/ctl.env
+ExecStart=@@HOME@@/.local/bin/sandbox gh-app refresh

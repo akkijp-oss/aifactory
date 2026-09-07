@@ -45,6 +45,8 @@ Principle: **keep code and agents separate**. Code runs the tests and hands the 
 
 On top: a local **Web console** (`console/bin/console`, Python stdlib, 127.0.0.1 only) and an **MCP server** (`console/bin/mcp`) so AI sessions can read and drive the factory with typed tools. Both share one core (`console/lib/core.py`).
 
+The control plane (console, docs site, runner, kanban, workspace) can also live in an LXC **on the Proxmox host itself**, one per **tenant** (an organization you lend the factory to), each with its own network, VM pool, pool-scoped API token and secrets. See the *Tenants* guide on the documentation site and ADR-0017.
+
 ## Requirements
 
 - Operator machine: macOS (Linux should work for everything except the launchd helpers), Python 3.11+, `jq`, `gh`, `ssh`, and `pip install pyyaml jsonschema`

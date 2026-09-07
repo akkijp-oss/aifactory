@@ -13,6 +13,7 @@ Everyday operations, ordered by what you want to do. Every command option is in 
 | Refresh tokens, manage the pool, update templates, handle failures | [Day-to-day operations](operations.md) |
 | Work alongside other AI sessions or people | [Working with multiple sessions](multi-session.md) |
 
+| Lend the factory to another organization: separate network, VMs, permissions and secrets, console and docs on Proxmox itself | [Tenants (per-organization environments)](tenants.md) |
 ## A typical day
 
 ```mermaid

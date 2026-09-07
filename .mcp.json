@@ -1,9 +1,21 @@
 {
   "mcpServers": {
-    "aifactory": {
+    "aifactory-local": {
       "type": "stdio",
       "command": "bash",
-      "args": ["-c", "exec \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/console/bin/mcp\""],
+      "args": [
+        "-c",
+        "exec \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/console/bin/mcp\""
+      ],
+      "timeout": 600000
+    },
+    "aifactory-ctl": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec \"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/console/bin/mcp-remote\""
+      ],
       "timeout": 600000
     }
   }

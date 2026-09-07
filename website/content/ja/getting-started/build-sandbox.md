@@ -30,7 +30,9 @@ flowchart TB
 |---|---|---|---|
 | 0 | 事前確認、Mac 側の鍵と設定、GitHub App | 構築前に環境の正常性を確認し、認証情報の保存先を決める | 🤖 → 🧑（App の作成・インストール） |
 | 1 | SDN `sb` / vnet `sbnet`（10.77.0.0/16、SNAT） | VM に専用 IP 空間を与え、外向きは NAT で出す | 🤖 |
+| 0c | テナントの器（リソースプール・ロール・ユーザー） | 制御系に渡す権限を自分のプールだけに限る（ADR-0017）。貸出先のテナントでは必須 | 🤖 |
 | 2 | ゲートウェイ LXC `sb-gw`（dnsmasq + Tailscale） | Mac から VM に名前で届く経路。VM 側に Tailscale を入れない | 🤖 → 🧑（Tailscale の認証・ルート承認・split DNS）→ 🤖 |
+| 2d | 制御系 LXC `sb-ctl`（console + `/docs/` + runner + workspace） | console / docs / runner を Proxmox 上に置き、Mac 側を不要にする（ADR-0017）。貸出先のテナントでは必須、`default` では任意 | 🤖 → 🧑（secrets を入れる） |
 | 3 | ベーステンプレート `sb-base` | 全プロジェクトに共通する OS・ツール・DB・Claude Code を用意する | 🤖 |
 | 4 | プロジェクトテンプレート `sb-tpl-{pj}` | プロジェクトに合わせて Ruby / Node、依存パッケージ、初期データ、アプリの常駐設定を用意する | 🤖（clone 用トークンは 🧑 から） |
 | 5 | プール（clone × 3）+ スナップショット `clean` + CLI | 貸し出す実体。巻き戻しの基準点 | 🤖 |
@@ -38,6 +40,8 @@ flowchart TB
 | 6 | 最小ワークフローで 1 周 | sandbox の基本操作でワークフローを最後まで実行できるか確認する | 🤖 + 🧑（PR レビュー） |
 
 ## 各ステップの要点
+
+Step 0c（`05-tenant.sh`）と 2d（`25-control-lxc.sh`）の詳細はリポジトリの `sandbox/BUILD.md` と [貸出先ごとの環境（テナント）](../guides/tenants.md)。以下は従来どおりの Step 1〜6。
 
 ### Step 1. ネットワーク
 

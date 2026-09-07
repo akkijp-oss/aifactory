@@ -69,7 +69,7 @@ flowchart LR
   GH --> CI[PJ の CI<br>GitHub Actions]
 ```
 
-- 制御系（kanban / glue / runner）は Mac 上。軽いので専用サーバーは置かない
+- 制御系（kanban / glue / runner / console）は Mac 上でも、**Proxmox 上の制御系 LXC（`sb-ctl`）** でもよい（ADR-0017）。LXC なら Mac は不要で、ブラウザと ssh だけで工場を使える。貸出先の組織ごとに網・VM プール・権限・秘密情報を分けた環境（テナント）を並べられる。[貸出先ごとの環境（テナント）](../guides/tenants.md)
 - 実行系（VM）は Proxmox ホスト 1 台。VM 1 台 8 GB なので、RAM に余裕があれば 20 台以上入る
 - CI はプロジェクト側の既存のもの（GitHub Actions）に任せる。工場は CI を新設しない
 

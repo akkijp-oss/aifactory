@@ -47,6 +47,8 @@ flowchart LR
 
 その上に、ローカルの **Web コンソール**（`console/bin/console`。Python 標準ライブラリ、127.0.0.1 専用）と **MCP サーバー**（`console/bin/mcp`。AI セッションが型付きツールで読み書きする）。どちらも正本は `console/lib/core.py` 1 つ。
 
+制御系（コンソール・ドキュメントサイト・runner・kanban・workspace）は **Proxmox ホスト上の LXC** にも置ける。貸出先の組織（**テナント**）ごとに 1 台で、網・VM プール・プール限定の API トークン・秘密情報がテナントごとに分かれる。ドキュメントサイトの「貸出先ごとの環境（テナント）」と ADR-0017。
+
 ## 前提
 
 - 操作側: macOS（launchd 以外は Linux でも動くはず）、Python 3.11+、`jq`、`gh`、`ssh`、`pip install pyyaml jsonschema`

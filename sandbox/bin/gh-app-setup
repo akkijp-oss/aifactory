@@ -58,7 +58,7 @@ EOF
 python3 "$W/callback.py" &
 CB=$!
 trap 'kill $CB 2>/dev/null || true' EXIT
-open "$W/create.html" 2>/dev/null || echo "ブラウザで開く: $W/create.html"
+(command -v open >/dev/null && open "$W/create.html" 2>/dev/null) || (command -v xdg-open >/dev/null && xdg-open "$W/create.html" 2>/dev/null) || echo "ブラウザで開く: $W/create.html（制御系 LXC なら scp で手元に持ってきて開く）"
 echo "[wait] GitHub で Create GitHub App を押すのを待っています（最大 30 分）..."
 for _ in $(seq 1 360); do [[ -s "$W/code.txt" ]] && break; sleep 5; done
 [[ -s "$W/code.txt" ]] || { echo "[error] コードを受け取れなかった" >&2; exit 1; }

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# console/bin/mcp-remote: Proxmox 上の制御系 LXC（<prefix>-ctl）で動く MCP サーバーに、ssh 越しの stdio で接続する（ADR-0017）。
+#   .mcp.json の "aifactory-ctl" がこれを起動する。MCP のプロセス自体は LXC の中（~/aifactory/console/bin/mcp）で動き、
+#   LXC の workspace・kanban・貸出状態を読み書きする。Mac 側の workspace は見ない。
+# 設定（環境変数 → ~/.config/aifactory/mcp-remote.env → 既定）:
+#   AIFACTORY_CTL       接続先        既定 aifactory@ctl.main.sb.internal（別テナントなら aifactory@ctl.<t>.sb.internal）
+#   AIFACTORY_CTL_KEY   秘密鍵        既定 ~/.ssh/conf.d/aifactory/sb_ed25519（制御系の authorized_keys に入っている鍵）
+#   AIFACTORY_CTL_JUMP  ProxyJump     既定 空（tailnet 未承認の間は Proxmox ホストの ssh エイリアス）
+#   AIFACTORY_CTL_REPO  LXC 内の checkout  既定 ~/aifactory
+set -euo pipefail
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/aifactory/mcp-remote.env"
+# shellcheck disable=SC1090
+[[ -f "$CONF" ]] && { set -a; source "$CONF"; set +a; }
+: "${AIFACTORY_CTL:=aifactory@ctl.main.sb.internal}"
+: "${AIFACTORY_CTL_KEY:=$HOME/.ssh/conf.d/aifactory/sb_ed25519}"
+: "${AIFACTORY_CTL_JUMP:=}"
+: "${AIFACTORY_CTL_REPO:=~/aifactory}"
+opts=(-i "$AIFACTORY_CTL_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=30 -o BatchMode=yes)
+[[ -n "$AIFACTORY_CTL_JUMP" ]] && opts+=(-J "$AIFACTORY_CTL_JUMP")
+# -T: tty 無し（stdio をそのまま通す）。stderr は Claude Code のログに出る
+exec ssh -T "${opts[@]}" "$AIFACTORY_CTL" "exec $AIFACTORY_CTL_REPO/console/bin/mcp"

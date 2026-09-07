@@ -5,7 +5,9 @@
 
 凡例: 🤖 = AI が単独で実行できる / 🧑 = 人間（メンテナ）の操作が必要。ここで止まって依頼する。
 
-スクリプトは `proxmox/` に番号順で置いてあり、`proxmox/run.sh <script> [args]` で `PVE_HOST` のホスト上で実行する（Mac の公開鍵を `SB_PUBKEY` として渡す。`PVE_HOST` 未設定なら止まる）。設計値（`SB_NODE` / `SB_NET` = 10.77 / `SB_GW_CT` = 9000 / `SB_BASE_VMID` = 9100 / `SB_POOL_BASE` = 9200）は環境変数で上書きでき、`run.sh` がそのままリモートへ渡す。本書は既定値で書く。手順書とスクリプトが食い違ったら **手順書を直してからスクリプトを直す**（手順書が仕様）。
+スクリプトは `proxmox/` に番号順で置いてあり、`proxmox/run.sh <script> [args]` で `PVE_HOST` のホスト上で実行する（Mac の公開鍵と、あれば制御系 LXC の鍵を `SB_PUBKEY` として渡す。`PVE_HOST` 未設定なら止まる）。設計値（`SB_TENANT` = main / `SB_NET` = 10.77 / `SB_VMID_BASE` = 9000、導出される名前 zone `sbmain` / vnet `vnmain` / `sb-main-*` / pool `sb-main` / `main.sb.internal`、番号 `SB_GW_CT` = 9000 / `SB_CTL_CT` = 9001 / `SB_BASE_VMID` = 9100 / `SB_POOL_BASE` = 9200 / `SB_NODE`）は環境変数で上書きでき、`run.sh` が `_tenant.sh` と一緒にリモートへ渡す。本書は既定値（`main` テナント）で書くが、**実機の名前は規則どおり `sb-main-…` / `main.sb.internal` に読み替える**（本文の `sb-gw` / `sbnet` / `sb.internal` は旧表記）。命名規則は `README.md` の「テナント」節。手順書とスクリプトが食い違ったら **手順書を直してからスクリプトを直す**（手順書が仕様）。
+
+**貸出先ごとの環境（テナント）を作るとき**（ADR-0017）: `~/.config/sandbox/tenants/<t>.env` に `PVE_HOST` / `SB_NET`（別の /16）/ `SB_VMID_BASE`（別の 1000 帯）を書き、以下のすべてのコマンドの前に `SB_TENANT=<t>` を付ける。名前（`sb-<t>-gw` 等）・zone / vnet・firewall group・プール・DNS ドメイン（`<t>.sb.internal`）は自動で別になる。本書の `9000` / `10.77` / `sb-gw` は、そのテナントの値に読み替える。Step 0c と Step 2d は貸出先のテナントでは必須、`main` では任意（Mac 運用のままでもよい）。
 
 ---
 
@@ -54,6 +56,16 @@ cp sandbox/templates/launchd/com.aifactory.sandbox.gh-refresh.plist ~/Library/La
 - [ ] `~/.config/sandbox/gh-app/app.env` と `private-key.pem`（600）
 - [ ] `sandbox gh-app status` で全 PJ が OK
 - [ ] `launchctl list | grep aifactory` に gh-refresh がある
+
+### Step 0c. テナントの器（リソースプール・権限。ADR-0017） 🤖
+```bash
+sandbox/proxmox/run.sh 05-tenant.sh            # SB_TENANT=<t> を付けると <t> の器。default は既存環境の取り込みにも使う
+sandbox/proxmox/run.sh 05-tenant.sh adopt      # この仕組みより前に作った VM / CT をプールに入れる（旧命名のままなら 07-migrate-naming.sh）
+sandbox/proxmox/run.sh 05-tenant.sh show
+```
+やること: リソースプール `sb-<t>`、ロール `AifactorySandbox`（VM.Audit / VM.PowerMgmt / VM.Snapshot / VM.Snapshot.Rollback / Pool.Audit）、ユーザー `sb-<t>@pve`、そのプールだけの ACL。API トークンは Step 2d が発行して制御系 LXC に直接書く（手元から API で使いたいときだけ `05-tenant.sh token`）。
+完了条件:
+- [ ] `05-tenant.sh show` にプールと ACL（`/pool/sb-<t>  sb-<t>@pve  AifactorySandbox`）が出る
 
 ---
 
@@ -130,6 +142,35 @@ ssh -i ~/.ssh/conf.d/aifactory/sb_ed25519 root@10.77.0.2 hostname   # sb-gw
 - [ ] Mac から root@sb-gw に ssh できる
 
 巻き戻し: `pct stop 9000; pct destroy 9000 --purge`。Tailscale 側は管理コンソールで machine を削除。
+
+### 2d. 制御系 LXC `sb-ctl`（VMID 9001 = `SB_CTL_CT`。ADR-0017） 🤖 → 🧑
+目的: console / docs / runner / kanban / workspace / 秘密情報を Proxmox 上に置き、Mac 側を不要にする。貸出先のテナントでは必須（貸出先はこの LXC しか触らない）。
+
+```bash
+sandbox/proxmox/run.sh 25-control-lxc.sh                # AIFACTORY_REPO_URL / AIFACTORY_REF で checkout 元を変えられる（既定 公開リポジトリの main）
+```
+前提: Step 2a の gw が **起動して dnsmasq が動いている**こと（制御系の名前解決は gw に向く。gw が止まっていると中の apt / curl が全部詰まる）。2d のあとに Step 5c（`50-firewall.sh`）を当てるまで、制御系への IN は group `sandbox-ctl` 未定義で全部落ちる（tailnet からもホストからも入れない）。
+やること: Debian 12 LXC（2GB / 2 vCPU / 16GB、eth0 = sbnet 10.77.0.3/16、LAN 側の足なし、firewall group `sandbox-ctl`、プールに所属）→ 中に python3 / pyyaml / jsonschema / gh / jq / git / claude を入れ、ユーザー `aifactory` を作り、`~/aifactory`（checkout）と `~/workspace` を置く → **Proxmox API トークン（Step 0c のユーザー、プール限定）を発行して `~/.config/sandbox/env` に直接書く**（ssh モードではなく API モード。ホストの root は持たない）→ `sandbox` CLI と gh-refresh timer、Web コンソール（`--host 10.77.0.3`、合言葉 `CONSOLE_TOKEN` を生成して `~/.config/aifactory/ctl.env` に）、docs（`mkdocs build` → コンソールが `/docs/` で配信）を systemd で常駐 → 制御系の ssh 鍵を生成し、gw の `authorized_keys` と DNS（`ctl.sb.internal`）に登録。
+
+完了条件:
+```bash
+ssh "$PVE_HOST" 'pct status 9001; pct exec 9001 -- systemctl is-active aifactory-console aifactory-gh-refresh.timer'
+ssh "$PVE_HOST" 'pct exec 9001 -- su - aifactory -c "sandbox ls"'            # API モードで一覧が出る（プールが空なら見出しだけ）
+ssh "$PVE_HOST" 'pct exec 9001 -- curl -s -o /dev/null -w "%{http_code}\n" http://10.77.0.3:8765/api/overview'   # 401（合言葉なし）
+```
+- [ ] `aifactory-console` と `aifactory-gh-refresh.timer` が active
+- [ ] `sandbox ls`（API モード）がエラーなく返る
+- [ ] コンソールが合言葉なしで 401 を返す
+- [ ] 🧑 貸出先（または自分）が LXC の中で secrets を入れる: `sandbox token set <pj>`、`sandbox/bin/gh-app-setup`（ブラウザ操作は手元で）、`~/.config/aifactory/ctl.env` の `CLAUDE_CODE_OAUTH_TOKEN`（intake 用）と `GH_TOKEN`（runner の `gh pr view` 用）
+- [ ] tailnet（Step 2b 承認後）から `http://ctl.sb.internal:8765/?token=<CONSOLE_TOKEN>` でコンソール、`/docs/` でサイトが開く
+
+注意: 制御系の ssh 鍵は **これ以降に作るプール**（`40-pool.sh` が cloud-init の sshkeys で入れる）と **これ以降に焼くテンプレート**に入る。既にプールがある環境で後から 2d を足したときは、テンプレートを焼き直さずに `45-pool-keys.sh` で既存のプール VM に鍵を入れる（guest agent で `authorized_keys` に追記 → `clean` を取り直す。貸出中は `LENT` で除外）:
+```bash
+LENT="$(jq -r '.[].vmid' ~/.config/sandbox/state.json | tr '\n' ' ')" sandbox/proxmox/run.sh 45-pool-keys.sh [pj]
+```
+実績（2026-09-06、main テナント。当時の名前は `sb-ctl` / `sb.internal`）: 2d のあと 23 台に `45-pool-keys.sh` を当てて、制御系から `sandbox take` が通ることを確認した。API の証明書は SAN がノード名なので、制御系の env は `PVE_API_URL=https://<node>:8006` + `PVE_API_RESOLVE=<node>:8006:10.77.0.1` の形（25 が書く）。手元の未 push の変更で制御系を作るときは `AIFACTORY_LOCAL_TREE=1`（`run.sh` が作業ツリーを tar で送る）。
+
+巻き戻し: `pct stop 9001; pct destroy 9001 --purge; pveum user token remove aifactory@pve ctl`
 
 ---
 
@@ -233,6 +274,7 @@ TPL_VMID=9100 APP_WAIT_TRIES=0 sandbox/proxmox/run.sh 40-pool.sh generic 3
 sandbox/bin/install.sh   # ~/.local/bin/sandbox に実体コピー（シンボリックリンクだと launchd の gh-refresh が TCC で読めない）。CLI を更新したら再実行
 sandbox ls
 ```
+制御系 LXC（Step 2d）ではこの配置は済んでいる（`sandbox/bin/install.sh --systemd`）。以下の完了条件は Mac からでも制御系の中（`ssh aifactory@ctl.sb.internal`）からでも同じ。
 
 完了条件:
 ```bash
@@ -254,7 +296,7 @@ sandbox release 001 && sandbox ls
 ```bash
 LENT="$(jq -r '.[].vmid' ~/.config/sandbox/state.json | tr '\n' ' ')" sandbox/proxmox/run.sh 50-firewall.sh   # 貸出中は飛ばす。release 後に再実行
 ```
-やること: datacenter firewall 有効化（ホスト側は ACCEPT）→ group `sandbox` → sb-* 全 VM とテンプレートに net0 firewall=1 と .fw → プールの clean を取り直し → sb-gw の FORWARD DROP。
+やること: datacenter firewall 有効化（ホスト側は ACCEPT）→ group `sandbox`（VM 用）と `sandbox-ctl`（制御系用。`cluster.fw` の自分の節だけ書き換えるので他テナントの節は残る）→ このテナントのプールにある全 VM とテンプレートに net0 firewall=1 と .fw → プールの clean を取り直し → 制御系 LXC に `sandbox-ctl` → sb-gw の FORWARD DROP。
 **貸出中の VM を `LENT` で必ず除外する**。含めると、その VM の作業状態が `clean` に写り込む（実機で踏んだ。汚れた VM は破棄してテンプレートから作り直すしかない）。
 完了条件（汎用 VM を take して中から）: LAN（Proxmox ホストの属するネットワーク）・ホスト 10.77.0.1・隣 VM・tailnet（CGNAT 範囲）へ **届かない**、GitHub と DNS へ **届く**。Mac から `sandbox ssh` と `url` が **届く**。
 

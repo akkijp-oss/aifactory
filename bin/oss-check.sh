@@ -6,7 +6,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 rc=0
 # パターン（自分自身の本文に一致しないように分割して組み立てる）
-SECRET_PAT="ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9-]{10,}|PVEAPIToken""=[^ ]+|BEGIN (RSA|OPENSSH|EC) PRIVATE"" KEY"
+SECRET_PAT="ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9-]{10,}|PVEAPIToken""=[^ ]+=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|BEGIN (RSA|OPENSSH|EC) PRIVATE"" KEY"
 # ALLOW: kumitate / akkijp/kumitate は公開許可済みのサンプル、akkijp-oss/aifactory はこのリポジトリ、10.77.x は文書上の既定例、100.64.0.0/10 は Tailscale の CGNAT 範囲（固有情報ではない）
 PAT='秋月|akki-pve|a1pve|a1mpve|pvexf|hokenss|kosuke19952000|marugoto|devboard|pcbcad|companyhub|granthub|zenkoku|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|iDRAC|homelab|mytask|オーナー指示'
 ALLOW='100\.64\.0\.0/10|192\.168\.0\.0/16'

@@ -4,6 +4,17 @@
 
 以下、`"$PVE_HOST"` は `~/.config/sandbox/env` に書いた Proxmox ホストの ssh エイリアス（例: `pve1`）。手打ちするときは `set -a; . ~/.config/sandbox/env; set +a` で読み込んでおく。
 
+## どこから操作するか（ADR-0017）
+
+| 立場 | どこで | Proxmox への口 |
+|---|---|---|
+| 貸出先（テナントの利用者） | 制御系 LXC の中（`ssh aifactory@ctl.<t>.sb.internal`）か、そのコンソール `http://ctl.<t>.sb.internal:8765/`（docs は `/docs/`） | API モード（`PVE_API_TOKEN`。自分のプールだけ） |
+| メンテナ（ホスト管理者） | 手元の Mac。別テナントは `SB_TENANT=<t>` を付ける（`~/.config/sandbox/tenants/<t>.env`） | ssh モード（`PVE_HOST` に root）。構築スクリプト（`proxmox/run.sh`）はこちらだけ |
+
+**1 テナントに制御系は 1 つ**。貸出台帳（`~/.config/sandbox/state.json`）は制御系ごとに別なので、Mac と制御系 LXC の両方から同じプールに `take` すると二重貸出になる。制御系 LXC に寄せたら Mac 側では `take` しない（`ls` は読むだけなので可）。
+
+制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer`、ログは `journalctl -u aifactory-console -f`。コードを更新したら LXC の中で `cd ~/aifactory && git pull && sandbox/bin/install.sh && (cd website && .venv/bin/mkdocs build -q) && sudo systemctl restart aifactory-console`。
+
 ## 日常の5操作
 
 ```bash
@@ -79,6 +90,16 @@ base を直したら PJ 層も作り直しになる。`30-base-template.sh` → 
 | Mac から VM に届かない（firewall 有効化後） | VM の `/etc/pve/firewall/<vmid>.fw` と `qm config <vmid> | grep firewall` | `sandbox/proxmox/run.sh 50-firewall.sh` を再実行。プールは clean スナップショットに firewall=1 が含まれている必要がある |
 | Claude Code が認証エラー | VM 内 `env | grep CLAUDE_CODE_OAUTH_TOKEN` | Mac で `sandbox token set <pj>` を更新して `sandbox reinject`（トークン期限切れは `claude setup-token` 再実行） |
 | Proxmox ノードが落ちた | `ssh "$PVE_HOST"` 不可、`pvecm nodes` | ノードの電源投入（遠隔でできるかは環境次第。できない環境では人間の物理操作）。プールは onboot=0 なので手で `qm start` |
+
+## テナントの運用（ADR-0017）
+
+- 名前はすべて規則（`sandbox/README.md` の「テナント」節）。2026-09-06 以前の名前で作った環境は `07-migrate-naming.sh` で移す
+- 新しい貸出先: `BUILD.md` の Step 0c → 1 → 2a → 2d → 2b（貸出先の tailnet で `tailscale up`）→ 3 → 4 → 5 → 5c を `SB_TENANT=<t>` で。所要は 1 テナントあたり数時間（テンプレート焼き込みが大半）
+- 貸出先に渡すもの: 制御系 LXC への ssh（鍵を `authorized_keys` に足す）、コンソールの合言葉（`ctl.env` の `CONSOLE_TOKEN`。貸出先が自分で変えてよい）、docs の URL。渡さないもの: ホストの root、他テナントの何か
+- API トークンの作り直し（漏えい・紛失）: `SB_TENANT=<t> sandbox/proxmox/run.sh 25-control-lxc.sh`（再実行で発行し直して LXC に書く）
+- 貸出先が壊した制御系: LXC を `pct destroy` して `25-control-lxc.sh`。workspace（チケット・記録）は LXC の中なので、必要なら先に `pct exec … tar` で退避
+- テナントの片付け: プール VM を `release` → `qm destroy` → テンプレート → `25` / `20` の LXC → `pveum user delete` / `pveum pool delete` → SDN（`10-sdn.sh` の巻き戻し）。まだスクリプト化していない（ADR-0017 の未決）
+- 症状「制御系から `sandbox ls` が `Proxmox API … が失敗`」: LXC から `curl -k https://<SB_NET>.0.1:8006/api2/json/version` が通るか（firewall group `<group>-ctl` の OUT が自テナントの /16 を許可しているか）、トークンの有効期限（`pveum user token list`）
 
 ## 定期メンテ
 - 月1回: base テンプレートの OS 更新（上記「base 層」）。頻繁にやると PJ 層の作り直しが負担なので月1

@@ -50,6 +50,8 @@ sed -i -E 's/^(local\s+all\s+all\s+)\S+/\1trust/; s/^(host\s+all\s+all\s+127\.0\
 systemctl enable --now postgresql redis-server >/dev/null
 systemctl restart postgresql
 sudo -u postgres psql -tAc "select 1 from pg_roles where rolname='$DEV'" | grep -q 1 || sudo -u postgres createuser -s "$DEV"
+# dev の既定 DB（psql の接続確認と、DB 名を指定しない PJ 用。無いと verify の psql が落ちる。2026-09-06 に踏んだ）
+sudo -u postgres psql -tAc "select 1 from pg_database where datname='$DEV'" | grep -q 1 || sudo -u postgres createdb -O "$DEV" "$DEV"
 
 # ---------- Chrome
 log "google chrome"

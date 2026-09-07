@@ -29,6 +29,8 @@ Inside the VM the agent runs arbitrary code (it runs tests, installs dependencie
 2. **Permissions**: the GitHub token is scoped to one repository and expires after an hour. Claude tokens are per project
 3. **Lifetime**: the VM is rolled back to `clean` on release. Tokens live in tmpfs and vanish with the rollback
 
+When the control plane runs in an LXC on Proxmox (ADR-0017), the "trusted side" moves from the Mac into that LXC. Towards Proxmox it holds only an **API token scoped to its own resource pool** (list, start, rollback), never the host's root. Each organization the factory is lent to gets its own network (a separate vnet and /16), pool and secrets; VMs and the control plane DROP all of RFC1918 and the tailnet range, so they cannot reach another organization's environment. The console refuses to bind outside 127.0.0.1 without a passphrase (`CONSOLE_TOKEN`). See [Tenants](../guides/tenants.md)
+
 ## Where secrets live and how long they last
 
 | Secret | Location (source of truth) | How it reaches the VM | Lifetime |

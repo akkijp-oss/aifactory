@@ -1,8 +1,13 @@
 # ~/.ssh/conf.d/aifactory/config
-# sandbox VM / gateway へ直接 ssh するとき用。通常は `sandbox ssh <task-id>` を使う。
-Host sb-gw
-    HostName 10.77.0.2
+# sandbox VM / gateway / 制御系へ直接 ssh するとき用。通常は `sandbox ssh <task-id>` を使う。
+# 名前は <t>.sb.internal の下（規則: gw. / ctl. / task-<id>. / <pj>-NN.）。10.77.* は main テナントの網（別テナントは行を足す）
+Host gw.*.sb.internal
     User root
+    IdentityFile ~/.ssh/conf.d/aifactory/sb_ed25519
+    StrictHostKeyChecking accept-new
+
+Host ctl.*.sb.internal
+    User aifactory
     IdentityFile ~/.ssh/conf.d/aifactory/sb_ed25519
     StrictHostKeyChecking accept-new
 

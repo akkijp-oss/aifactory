@@ -17,13 +17,24 @@
 #   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
 # 設定: ~/.config/sandbox/env（全体既定）→ ~/.config/sandbox/pj/<pj>.env（PJ 別上書き）→ SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN（一回限りの上書き）
 #   シェルに export された CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は無視する
+#   テナント（ADR-0017）: SB_TENANT=<t>（既定 main）。名前の既定は規則から導く（SB_PREFIX=sb-<t>、SB_DOMAIN=<t>.sb.internal、SB_POOL=sb-<t>）。
+#   別テナントの設定で動かす（ホスト管理者が複数テナントを手元から見るとき）: SB_TENANT=<t> で ~/.config/sandbox/tenants/<t>.env を読む
+#   か SANDBOX_ENV_FILE=<path>。このとき状態と PJ 別設定は同じ場所の <t>.state.json / <t>.pj/ になる
+# Proxmox への口（2 つ。ADR-0017）:
+#   ssh モード  PVE_HOST（root で ssh して qm を叩く。ホスト管理者向け）
+#   API モード  PVE_API_TOKEN + PVE_API_URL + SB_POOL（テナントのリソースプールだけに効く API トークン。制御系 LXC はこちら。
+#               PVE_API_CA にクラスタ CA を置くか PVE_API_INSECURE=1。PVE_API_RESOLVE=<node>:8006:<ip> で名前解決を SDN 側の IP に向ける）。
+#               PVE_API_TOKEN があれば API モード
 # 状態: ~/.config/sandbox/state.json
 set -euo pipefail
 
 CONF_DIR="$HOME/.config/sandbox"
-ENV_FILE="$CONF_DIR/env"
-PJ_DIR="$CONF_DIR/pj"
-STATE="$CONF_DIR/state.json"
+if [[ -n "${SANDBOX_ENV_FILE:-}" ]]; then ENV_FILE="$SANDBOX_ENV_FILE"
+elif [[ -n "${SB_TENANT:-}" && -f "$CONF_DIR/tenants/$SB_TENANT.env" ]]; then ENV_FILE="$CONF_DIR/tenants/$SB_TENANT.env"
+else ENV_FILE="$CONF_DIR/env"; fi
+if [[ "$ENV_FILE" == "$CONF_DIR/env" ]]; then PJ_DIR="$CONF_DIR/pj"; STATE="$CONF_DIR/state.json"
+else PJ_DIR="${ENV_FILE%.env}.pj"; STATE="${ENV_FILE%.env}.state.json"; fi
+PJ_DIR="${SANDBOX_PJ_DIR:-$PJ_DIR}"; STATE="${SANDBOX_STATE:-$STATE}"
 [[ -f "$ENV_FILE" ]] || { echo "[error] $ENV_FILE がありません（sandbox/templates/env.example をコピー）" >&2; exit 1; }
 # 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
 # シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
@@ -47,17 +58,26 @@ load_pj() {
   [[ -n "$_ovr_gh" ]] && { GH_TOKEN="$_ovr_gh"; _src_gh="SANDBOX_GH_TOKEN(一回限り)"; }
   return 0
 }
-# PVE_HOST（Proxmox ホストの ssh エイリアス）と GW_SSH（ゲートウェイ LXC への ssh 先）は環境ごとに違うので既定値を持たない
-[[ -n "${PVE_HOST:-}" ]] || { echo "[error] PVE_HOST が未設定。~/.config/sandbox/env に Proxmox ホストの ssh エイリアスを書く（sandbox/templates/env.example 参照）" >&2; exit 1; }
+# テナントの規則（_tenant.sh と同じ。env に明示があればそれが勝つ）
+: "${SB_TENANT:=main}"
+: "${SB_PREFIX:=sb-$SB_TENANT}"          # VM 名の接頭辞 → sb-<t>-<pj>-NN
+: "${SB_DOMAIN:=$SB_TENANT.sb.internal}" # DNS ドメイン → task-<id>.<t>.sb.internal
+: "${SB_POOL:=sb-$SB_TENANT}"            # リソースプール（API モード）
+# Proxmox への口: PVE_API_TOKEN があれば API モード（テナントのプール限定）、無ければ PVE_HOST に ssh（ホスト管理者）
+API_MODE=0; [[ -n "${PVE_API_TOKEN:-}" ]] && API_MODE=1
+if (( API_MODE )); then
+  [[ -n "${PVE_API_URL:-}" ]] || { echo "[error] PVE_API_URL が未設定（例: https://10.77.0.1:8006）" >&2; exit 1; }
+else
+  [[ -n "${PVE_HOST:-}" ]] || { echo "[error] PVE_HOST が未設定。~/.config/sandbox/env に Proxmox ホストの ssh エイリアスを書く（sandbox/templates/env.example 参照）。制御系 LXC なら PVE_API_TOKEN（API モード）" >&2; exit 1; }
+fi
 [[ -n "${GW_SSH:-}" ]] || { echo "[error] GW_SSH が未設定。~/.config/sandbox/env にゲートウェイ LXC の ssh 先（例: root@10.77.0.2）を書く（sandbox/templates/env.example 参照）" >&2; exit 1; }
 : "${SB_KEY:=$HOME/.ssh/conf.d/aifactory/sb_ed25519}"
-: "${SB_DOMAIN:=sb.internal}"
 : "${APP_PORT:=3000}"
 : "${SB_POOL_NET:=10.77.1}"   # プール VM が並ぶ /24 のプレフィックス（Proxmox 側 SB_NET.1 と揃える）
 : "${SB_POOL_BASE:=9200}"     # プール VM の VMID 起点（Proxmox 側 40-pool.sh の SB_POOL_BASE と揃える）
 : "${SB_JUMP:=}"     # 空なら tailnet 直結。Proxmox ホストの ssh エイリアス（例: pve1）を入れるとホスト経由（tailnet 未承認・不調時の代替）
 [[ -f "$STATE" ]] || echo '{}' > "$STATE"
-command -v jq >/dev/null || { echo "[error] jq が必要（brew install jq）" >&2; exit 1; }
+command -v jq >/dev/null || { echo "[error] jq が必要（brew install jq / apt install jq）" >&2; exit 1; }
 
 SSH_OPTS=(-i "$SB_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8)
 [[ -n "$SB_JUMP" ]] && SSH_OPTS+=(-J "$SB_JUMP")
@@ -66,6 +86,57 @@ gw()  { ssh "${SSH_OPTS[@]}" "$GW_SSH" "$@"; }
 vm()  { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "dev@$ip" "$@"; }
 
 die() { echo "[error] $*" >&2; exit 1; }
+
+# ---------- Proxmox の操作（ssh / API の 2 実装。呼ぶ側はこの 6 つだけ使う）
+api() { # method path [curl args...] → .data（JSON）
+  local m=$1 path=$2; shift 2
+  local ca=(); [[ -n "${PVE_API_CA:-}" ]] && ca=(--cacert "$PVE_API_CA"); [[ "${PVE_API_INSECURE:-}" == 1 ]] && ca=(-k)
+  # 証明書の SAN はノード名と LAN の IP だけで、SDN 側の IP（SB_NET.0.1）は入っていない。URL はノード名にして、名前解決だけ SDN 側の IP に向ける
+  [[ -n "${PVE_API_RESOLVE:-}" ]] && ca+=(--resolve "$PVE_API_RESOLVE")
+  local scheme="PVEAPIToken" out
+  out="$(curl -sS -f --connect-timeout 8 "${ca[@]}" -X "$m" -H "Authorization: $scheme=$PVE_API_TOKEN" "$PVE_API_URL/api2/json$path" "$@")" \
+    || die "Proxmox API $m $path が失敗（PVE_API_URL / PVE_API_TOKEN / プール $SB_POOL の権限を確認）"
+  jq -c '.data' <<< "$out"
+}
+_members=""
+members() { # プールの qemu メンバー（JSON 行）。1 回だけ取る
+  [[ -n "$_members" ]] || _members="$(api GET "/pools/$SB_POOL" | jq -c '.members[] | select(.type=="qemu")')"
+  printf '%s\n' "$_members"
+}
+pve_node() { members | jq -r --arg v "$1" 'select(.vmid==($v|tonumber)) | .node' | head -1; }
+api_wait() { # node upid → exitstatus OK なら 0
+  local node=$1 upid; upid="$(jq -rn --arg u "$2" '$u|@uri')"
+  local i st
+  for i in $(seq 1 120); do
+    st="$(api GET "/nodes/$node/tasks/$upid/status" | jq -r '"\(.status) \(.exitstatus // "")"')"
+    [[ "$st" == stopped* ]] && { [[ "$st" == "stopped OK" ]] && return 0 || { echo "[api] task: $st" >&2; return 1; }; }
+    sleep 2
+  done; return 1
+}
+pve_vms() { # → "vmid name status"（テンプレート除く。ls / take が使う）
+  if (( API_MODE )); then members | jq -r 'select((.template // 0) == 0) | "\(.vmid) \(.name) \(.status)"'
+  else pve "qm list" | awk -v p="^$SB_PREFIX-" -v lo="$SB_POOL_BASE" -v hi="$((SB_POOL_BASE + 100))" '$2 ~ p && $1 > lo && $1 < hi {print $1, $2, $3}'; fi   # このテナントのプール帯だけ（接頭辞が前方一致する別テナントを除く）
+}
+pve_has_clean() { # vmid
+  if (( API_MODE )); then api GET "/nodes/$(pve_node "$1")/qemu/$1/snapshot" | jq -e '.[] | select(.name=="clean")' >/dev/null
+  else pve "qm listsnapshot $1" | grep -q '`-> clean\|clean '; fi
+}
+pve_lock() { # vmid → lock 名か空
+  if (( API_MODE )); then api GET "/nodes/$(pve_node "$1")/qemu/$1/config" | jq -r '.lock // empty'
+  else pve "qm config $1" | sed -n 's/^lock: //p'; fi
+}
+pve_rollback() { # vmid
+  if (( API_MODE )); then local node; node="$(pve_node "$1")"; api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/snapshot/clean/rollback" | jq -r .)"
+  else pve "qm rollback $1 clean" >/dev/null 2>&1; fi
+}
+pve_status() { # vmid → running / stopped
+  if (( API_MODE )); then api GET "/nodes/$(pve_node "$1")/qemu/$1/status/current" | jq -r .status
+  else pve "qm status $1" | awk '{print $2}'; fi
+}
+pve_start() { # vmid
+  if (( API_MODE )); then local node; node="$(pve_node "$1")"; api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/status/start" | jq -r .)"
+  else pve "qm start $1" >/dev/null; fi
+}
 state_get() { jq -r --arg id "$1" '.[$id] // empty | tostring' "$STATE"; }
 state_field() { jq -r --arg id "$1" --arg f "$2" '.[$id][$f] // empty' "$STATE"; }
 state_set() { local tmp; tmp=$(mktemp); jq --arg id "$1" --argjson v "$2" '.[$id]=$v' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
@@ -74,7 +145,8 @@ state_del() { local tmp; tmp=$(mktemp); jq --arg id "$1" 'del(.[$id])' "$STATE" 
 wait_port() { # ip port tries
   local i; for i in $(seq 1 "${3:-40}"); do
     if [[ -n "$SB_JUMP" ]]; then ssh -o BatchMode=yes "$SB_JUMP" "timeout 2 bash -c '</dev/tcp/$1/$2'" 2>/dev/null && return 0
-    else nc -z -w 2 "$1" "$2" 2>/dev/null && return 0; fi
+    elif command -v nc >/dev/null; then nc -z -w 2 "$1" "$2" 2>/dev/null && return 0
+    else timeout 2 bash -c "</dev/tcp/$1/$2" 2>/dev/null && return 0; fi
     sleep 3
   done; return 1
 }
@@ -82,7 +154,7 @@ wait_port() { # ip port tries
 pool_ip() { echo "$SB_POOL_NET.$(( $1 - SB_POOL_BASE ))"; }   # プール VM の IP は VMID から一意に決まる（PJ 横断）
 pool_list() { # pj -> lines "vmid name ip status"
   local pj=$1
-  pve "qm list" | awk -v p="sb-$pj-" '$2 ~ "^"p {print $1, $2, $3}' | while read -r vmid name status; do
+  pve_vms | awk -v p="$SB_PREFIX-$pj-" '$2 ~ "^"p {print $1, $2, $3}' | while read -r vmid name status; do
     echo "$vmid $name $(pool_ip "$vmid") $status"
   done
 }
@@ -107,17 +179,22 @@ ghapp_api() { # method path [json]
 }
 # ghapp_token <owner/repo> -> ghs_...（1 時間有効。そのリポジトリだけ・contents/pull_requests/workflows write）
 ghapp_token() {
-  local repo=$1 owner=${1%%/*} name=${1##*/} inst
-  inst="$(ghapp_api GET "/repos/$repo/installation" | jq -r '.id // empty')"
+  local repo=$1 owner=${1%%/*} name=${1##*/} inst installation
+  installation="$(ghapp_api GET "/repos/$repo/installation")"
+  inst="$(jq -r '.id // empty' <<< "$installation")"
   [[ -n "$inst" ]] || { echo "[error] GitHub App が $repo に install されていない（sandbox gh-app status で install リンクを表示）" >&2; return 1; }
   # 要求する権限 = 欲しい権限のうち App が持っているもの（App 側で権限を足して installation が承認すれば、自動でトークンに乗る）
   #   contents/pull_requests write（push と PR）、workflows write（.github/workflows を含む push。無いと GitHub が拒否する）、metadata read、actions read（CI 履歴: gh run list）、checks read（gh pr checks）
   local have want
-  have="$(ghapp_api GET /app | jq -c '.permissions // {}')"
+  have="$(jq -c '.permissions // {}' <<< "$installation")"
   want="$(jq -nc --argjson h "$have" '{contents:"write",pull_requests:"write",workflows:"write",metadata:"read",actions:"read",checks:"read"} | with_entries(select($h[.key] != null))')"
   local missing; missing="$(jq -nc --argjson h "$have" '["actions","checks","workflows"] | map(select($h[.] == null)) | join(",")' -r)"
   [[ -n "$missing" ]] && echo "[gh] 注意: App に $missing 権限が無い（actions=CI 履歴に必要 / checks=gh pr checks に任意 / workflows=.github/workflows を触る push に必要。sandbox gh-app status に変更 URL）" >&2
-  ghapp_api POST "/app/installations/$inst/access_tokens" "$(jq -nc --arg r "$name" --argjson p "$want" '{repositories:[$r],permissions:$p}')" | jq -r '.token // empty'
+  local response token
+  response="$(ghapp_api POST "/app/installations/$inst/access_tokens" "$(jq -nc --arg r "$name" --argjson p "$want" '{repositories:[$r],permissions:$p}')")"
+  token="$(jq -r '.token // empty' <<< "$response")"
+  [[ -n "$token" ]] || { echo "[error] installation token: $(jq -r '.message // "empty response"' <<< "$response")" >&2; return 1; }
+  printf '%s\n' "$token"
 }
 # resolve_gh_token <pj>: App があれば払い出し、無ければ静的 GH_TOKEN。結果を GH_TOKEN に入れる
 resolve_gh_token() {
@@ -157,11 +234,11 @@ rollback() { # vmid ip
   # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする
   local i
   for i in $(seq 1 12); do
-    if ! pve "qm config $1" | grep -q '^lock:' && pve "qm rollback $1 clean" >/dev/null 2>&1; then break; fi
-    (( i < 12 )) || die "vm $1: qm rollback が通らない（ロック: $(pve "qm config $1" | grep '^lock:' || echo none)）"
+    if [[ -z "$(pve_lock "$1")" ]] && pve_rollback "$1"; then break; fi
+    (( i < 12 )) || die "vm $1: rollback が通らない（ロック: $(pve_lock "$1" || echo none)）"
     sleep 5
   done
-  pve "qm status $1" | grep -q running || pve "qm start $1" >/dev/null
+  [[ "$(pve_status "$1")" == running ]] || pve_start "$1"
   wait_port "$2" 22 || die "vm $1 ($2): ssh が上がらない"
 }
 
@@ -174,7 +251,7 @@ cmd_take() {
   local pick=""
   while read -r vmid name ip status; do
     [[ " $busy " == *" $vmid "* ]] && continue
-    pve "qm listsnapshot $vmid" | grep -q '`-> clean\|clean ' || { echo "[warn] $name: snapshot clean 無し、スキップ" >&2; continue; }
+    pve_has_clean "$vmid" || { echo "[warn] $name: snapshot clean 無し、スキップ" >&2; continue; }
     pick="$vmid $name $ip $status"; break
   done < <(pool_list "$pj")
   [[ -n "$pick" ]] || die "pj=$pj に空きなし（sandbox ls / proxmox/40-pool.sh $pj 1）"
@@ -255,7 +332,7 @@ cmd_token() {
       else
         echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")"
       fi
-      echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}"
+      echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
       [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
     *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token show [pj]" ;;
   esac
@@ -316,7 +393,7 @@ cmd_gh_app() {
 
 cmd_ls() {
   printf '%-8s %-14s %-6s %-12s %-9s %s\n' TASK VM VMID IP STATUS SINCE
-  local all; all="$(pve "qm list" | awk '$2 ~ /^sb-/ && $2 !~ /^sb-(base|tpl)/ {print $1, $2, $3}')"
+  local all; all="$(pve_vms | awk -v p="^$SB_PREFIX-" '$2 ~ p && $2 !~ /-(base|gw|ctl)$/ && $2 !~ /-tpl-/ {print $1, $2, $3}')"
   while read -r vmid name status; do
     [[ -n "$vmid" ]] || continue
     local ip; ip="$(pool_ip "$vmid")"

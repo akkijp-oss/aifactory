@@ -28,7 +28,9 @@ flowchart TB
 |---|---|---|---|
 | 0 | Pre-checks, Mac-side keys and config, GitHub App | Never build on a broken state. Decide where secrets live first | 🤖 → 🧑 (creating and installing the App) |
 | 1 | SDN `sb` / vnet `sbnet` (10.77.0.0/16, SNAT) | Give the VMs their own address space with NAT egress | 🤖 |
+| 0c | Tenant scaffolding (resource pool, role, user) | Limit what the control plane may touch to its own pool (ADR-0017). Required for a lent-out tenant | 🤖 |
 | 2 | Gateway LXC `sb-gw` (dnsmasq + Tailscale) | A named path from the Mac to the VMs, without Tailscale inside the VMs | 🤖 → 🧑 (Tailscale auth, route approval, split DNS) → 🤖 |
+| 2d | Control-plane LXC `sb-ctl` (console + `/docs/` + runner + workspace) | Put console, docs and runner on Proxmox so nothing is needed on a Mac (ADR-0017). Required for a lent-out tenant, optional for `default` | 🤖 → 🧑 (enter secrets) |
 | 3 | Base template `sb-base` | OS, tools, databases and Claude Code shared by every project | 🤖 |
 | 4 | Project templates `sb-tpl-{pj}` | Per-project Ruby / Node versions, dependencies, seed, app service | 🤖 (clone token comes from 🧑) |
 | 5 | Pool (clone × 3) + snapshot `clean` + CLI | The VMs actually lent out. The rollback baseline | 🤖 |
@@ -36,6 +38,8 @@ flowchart TB
 | 6 | One lap with a minimal workflow | Feel whether the five-operation contract is enough from the workflow's point of view | 🤖 + 🧑 (PR review) |
 
 ## Key points per step
+
+Steps 0c (`05-tenant.sh`) and 2d (`25-control-lxc.sh`) are described in `sandbox/BUILD.md` in the repository and in [Tenants](../guides/tenants.md). Steps 1 to 6 below are unchanged.
 
 ### Step 1. Network
 

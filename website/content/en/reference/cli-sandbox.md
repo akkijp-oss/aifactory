@@ -63,11 +63,12 @@ The permissions requested are "those we want that the App actually holds". Add a
 
 | File | Contents |
 |---|---|
-| `~/.config/sandbox/env` | `PVE_HOST` (ssh alias of the Proxmox host; required, no default) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`). Skeleton `sandbox/templates/env.example` |
+| `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`). Skeleton `sandbox/templates/env.example` |
+| `~/.config/sandbox/tenants/<t>.env` | Another tenant's settings on the maintainer's machine. `SB_TENANT=<t>` makes `sandbox` and `proxmox/run.sh` read it; state goes to `<t>.state.json`, per-project files to `<t>.pj/` |
 | `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, (fallback `GH_TOKEN`) |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App. Created by `sandbox/bin/gh-app-setup` |
 | `~/.config/sandbox/state.json` | Lending table. `{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
-| `~/.ssh/conf.d/aifactory/config` | ssh settings for `sb-gw` / `*.sb.internal` / `10.77.*`. Skeleton `ssh_config.example` |
+| `~/.ssh/conf.d/aifactory/config` | ssh settings for `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*`. Skeleton `ssh_config.example` |
 
 Read order: `env` (global default) → `pj/<pj>.env` (per-project override) → `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN` (one-off override). A `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` exported in the shell is **ignored** (it once silently overrode a project setting).
 
@@ -89,25 +90,31 @@ GH_TOKEN_EXPIRES_AT=2026-09-06T03:55:00Z
 
 ## Proxmox-side scripts {#proxmox}
 
-`sandbox/proxmox/run.sh <script> [args]` is the entry point: it sshes into the Proxmox host named by `PVE_HOST` (required) and streams the script to it. The Mac's public key is passed as `SB_PUBKEY`. The network and VMID design values can be passed as environment variables (each script's default applies when unset).
+`sandbox/proxmox/run.sh <script> [args]` is the entry point: it sshes into the Proxmox host named by `PVE_HOST` (required) and streams the script to it, prefixed with `_tenant.sh` (the derivation of tenant names and numbers). The Mac's public key, plus the control-plane LXC's key when one exists, is passed as `SB_PUBKEY`. `SB_TENANT=<t>` makes it read `~/.config/sandbox/tenants/<t>.env` and work on that tenant (ADR-0017).
+
+Design values can be passed as environment variables; unset means the `main` tenant.
 
 | Variable | Meaning | Default |
 |---|---|---|
+| `SB_TENANT` | Tenant slug (`[a-z0-9]{1,6}`); derives names, zone / vnet, firewall groups, pool and DNS domain (rule: every name carries `sb` and `<t>`) | `main` |
+| `SB_NET` | /16 prefix of the sandbox network (different per tenant) | `10.77` |
+| `SB_VMID_BASE` | First VMID of the tenant's block (gw = +0, ctl = +1, base = +100, project templates = +110…, pool = +200…; different per tenant) | `9000` |
 | `SB_NODE` | Proxmox node that hosts the SDN zone | The host's hostname |
-| `SB_NET` | /16 prefix of the sandbox network | `10.77` |
-| `SB_GW_CT` | CT id of the gateway LXC | `9000` |
-| `SB_BASE_VMID` | VMID of the base template | `9100` |
-| `SB_POOL_BASE` | First VMID of the pool (match `SB_POOL_BASE` on the Mac side) | `9200` |
+| `SB_GW_CT` / `SB_CTL_CT` / `SB_BASE_VMID` / `SB_TPL_BASE` / `SB_POOL_BASE` | Individual ids inside the block (normally derived) | `9000` / `9001` / `9100` / `9110` / `9200` |
+| `SB_ZONE` / `SB_VNET` / `SB_PREFIX` / `SB_FW_GROUP` / `SB_POOL` / `SB_DOMAIN` | Overrides for the derived names | `sbmain` / `vnmain` / `sb-main` / `sb-main` / `sb-main` / `main.sb.internal` |
 
 | Script | Creates |
 |---|---|
-| `10-sdn.sh` | SDN zone `sb` / vnet `sbnet` (10.77.0.0/16, SNAT) |
-| `20-gateway-lxc.sh` | `sb-gw` LXC 9000 (dnsmasq, tailscaled, a systemd unit dropping VM-originated forwards) |
+| `05-tenant.sh [create\|token\|adopt\|show]` | Resource pool `sb-<t>`, role `AifactorySandbox`, user `sb-<t>@pve`, an ACL limited to that pool. `adopt` puts existing VMs / CTs into the pool; `token` prints an API token for use from your own machine |
+| `10-sdn.sh` | SDN zone `sb<t>` / vnet `vn<t>` (`SB_NET.0.0/16`, SNAT) |
+| `20-gateway-lxc.sh` | `sb-<t>-gw` LXC (dnsmasq, tailscaled, a systemd unit dropping VM-originated forwards) |
+| `25-control-lxc.sh` | Control-plane LXC `sb-<t>-ctl` (checkout, workspace, `sandbox` CLI in API mode, console with `/docs/`, gh-refresh timer, the runner's tools; all under systemd). Issues the API token and writes it inside. Env: `AIFACTORY_REPO_URL` `AIFACTORY_REF` |
 | `30-base-template.sh create` | `sb-base` 9100 (cloud image + cloud-init → `31-provision-base.sh` → template) |
 | `31-provision-base.sh` | The base layer's contents (runs inside the VM) |
 | `32-pj-template.sh` | `sb-tpl-<pj>` 911x (clone from base → the project's `provision.sh` (`workspace/projects/<pj>/` → `examples/projects/<pj>/`) → template). Env: `GH_TOKEN` `TPL_VMID` `PJ` |
-| `40-pool.sh <pj> <n>` | Pool 92xx (linked clone × n → start → `clean` snapshot). Env: `TPL_VMID` |
-| `50-firewall.sh` | Datacenter firewall + group `sandbox` + firewall=1 on every VM + retake `clean` + FORWARD DROP on sb-gw. Env: `LENT` (VMIDs to skip) |
+| `40-pool.sh <pj> <n>` | Pool 92xx (linked clone × n → public keys (maintainer + control plane) via cloud-init → start → `clean` snapshot). Env: `TPL_VMID` |
+| `45-pool-keys.sh [pj]` | Add public keys to existing pool VMs afterwards (append to `authorized_keys` through the guest agent → retake `clean`). For a control plane added after the pool. Env: `LENT` |
+| `50-firewall.sh` | Datacenter firewall + groups `sb-<t>` (VMs) and `sb-<t>-ctl` (control plane; only this tenant's sections of `cluster.fw` are rewritten) + firewall=1 on every VM in the pool + retake `clean` + FORWARD DROP on sb-gw. Env: `LENT` (VMIDs to skip) |
 
 ## gh-app-setup
 

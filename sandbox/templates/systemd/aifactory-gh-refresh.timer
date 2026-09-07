@@ -1,0 +1,10 @@
+[Unit]
+Description=aifactory sandbox: refresh GitHub App tokens every 45 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=45min
+Unit=aifactory-gh-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -12,10 +12,12 @@
 |---|---|---|---|---|
 | 0 | 事前確認 | ⬜ 未着手 | | ノードの pveversion / quorate / 空き RAM / 9xxx 未使用。Mac 側に `sb_ed25519` と `~/.config/sandbox/env`（`PVE_HOST` `GW_SSH` 記入） |
 | 0b | GitHub App（ADR-0008） | ⬜ 未着手 | | App 名・install 先の所有アカウント。`sandbox gh-app status` で全 PJ OK |
+| 0c | テナントの器（プール・ロール・ユーザー。ADR-0017） | ⬜ 未着手 | | テナント名（slug。最初の環境は main）、`SB_NET` / `SB_VMID_BASE`。`05-tenant.sh show` |
 | 1 | SDN `sb` / `sbnet` / 10.77.0.0/16 | ⬜ 未着手 | | `sbnet` 10.77.0.1/16、SNAT → ホストの LAN アドレス |
 | 2a | `sb-gw` LXC 作成・dnsmasq・tailscaled | ⬜ 未着手 | | eth0 の DHCP アドレス（実機の値を書く）。外向き 200 |
 | 2b | 🧑 Tailscale 認証・route 承認・split DNS | ⬜ 未着手 | | 誰が承認したか。ACL（grants）に 10.77.0.0/16 を足したか。`sb-gw` の Tailscale IP |
 | 2c | Mac から 10.77.0.2 到達・名前解決 | ⬜ 未着手 | | ping / `dig sb-gw.sb.internal` / `ssh sb-gw`。`SB_JUMP` を使ったかどうか |
+| 2d | 制御系 LXC `sb-ctl`（9001。ADR-0017） | ⬜ 未着手 | | console / docs の URL、合言葉を渡した相手、`ctl.env` に入れた secrets の種類（値は書かない） |
 | 3 | `sb-base` テンプレート（9100） | ⬜ 未着手 | | 焼いた版（Ubuntu / mise / Node / Claude Code / gh / PostgreSQL / Redis / Chrome）。検証 clone を削除したか |
 | 4 | `sb-tpl-{pj}` テンプレート（911x） | ⬜ 未着手 | | PJ ごとの VMID（下表）。焼き込みスクリプトは `$AIFACTORY_WORKSPACE/projects/<pj>/provision.sh` |
 | 5a | プール N 台 + スナップショット `clean` | ⬜ 未着手 | | PJ ごとの台数と VMID 範囲。全台 running・RAM 込み `clean` あり |

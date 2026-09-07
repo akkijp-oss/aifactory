@@ -69,7 +69,7 @@ flowchart LR
   GH --> CI[The project's CI<br>GitHub Actions]
 ```
 
-- Control (kanban / glue / runner) lives on the Mac. It is light, so no dedicated server
+- Control (kanban / glue / runner / console) can live on the Mac or in a **control-plane LXC on Proxmox (`sb-ctl`)** (ADR-0017). With the LXC no Mac is needed: a browser and ssh are enough. Several tenants (organizations you lend the factory to), each with its own network, VM pool, permissions and secrets, can sit side by side. See [Tenants](../guides/tenants.md)
 - Execution (VMs) lives on one Proxmox host. At 8 GB per VM, a host with spare RAM holds more than 20 VMs
 - CI is left to whatever the project already has (GitHub Actions). The factory does not add its own CI
 

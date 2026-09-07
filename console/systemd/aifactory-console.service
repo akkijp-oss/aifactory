@@ -1,0 +1,23 @@
+# aifactory console: 制御系 LXC（または任意の Linux）で常駐させる systemd unit の雛形。console/bin/install.sh --systemd が埋めて /etc/systemd/system/ に置く。
+# @@PYTHON@@ / @@REPO@@ / @@USER@@ / @@HOME@@ / @@PATH@@ / @@HOST@@ / @@PORT@@ を埋める。secrets（CONSOLE_TOKEN 等）は ~/.config/aifactory/ctl.env（600）
+[Unit]
+Description=aifactory web console (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@USER@@
+WorkingDirectory=@@REPO@@
+Environment=HOME=@@HOME@@
+Environment=PATH=@@PATH@@
+Environment=LANG=ja_JP.UTF-8
+Environment=CONSOLE_HOST=@@HOST@@
+Environment=CONSOLE_PORT=@@PORT@@
+EnvironmentFile=-@@HOME@@/.config/aifactory/ctl.env
+ExecStart=@@PYTHON@@ @@REPO@@/console/bin/console --host ${CONSOLE_HOST} --port ${CONSOLE_PORT}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
