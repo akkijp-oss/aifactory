@@ -76,3 +76,12 @@ Git・gh・Claude CLI、一般作業ユーザー、Windowsサービス、画面�
 インストーラーはTLS・ワーカー認証を実際に確認してから設定を更新する。通信確認は操作の取得や予約変更を行わない。制御系の `control list` で `online: true` と予約が空であることを確認し、MCPの `computer_open` → `computer_action` → `computer_close` で試す。
 
 詳細は各OSの運用ガイドと [computer-use](computer-use.md) を参照する。
+
+
+## 実機検証
+
+公開URLからの取得・ビルド・更新をMac、Windows、Linuxで確認した。同じ登録済みワーカーへの再実行と、導入後のMCP画面取得・ポインター操作・予約返却が成功した。Macは権限設定済みの専用イメージから基準VMを複製して検証しており、未設定のTCC許可を自動化した試験ではない。
+
+WindowsとLinuxでは再起動後のサービス復帰、Windowsでは専用ユーザーの自動ログインと画面用タスクの起動も確認した。Windowsの一般ユーザーからGit・gh・Claude CLIを実行でき、Winlogonに平文パスワードは残らない。Linuxでは別IDへの上書き・予約中の更新を拒否し、既存設定を保持することを確認した。
+
+新規Windowsでの初回ログインや、Macの初回権限許可など、OSの対話操作が必要な条件は上記のとおり。検証済みの既存環境への更新と、まっさらなOSでの完全無人導入は区別する。

@@ -74,3 +74,12 @@ For a private CA, add `AIFACTORY_CA_B64='BASE64_PEM'` to the command. TLS verifi
 Rerunning for the same worker and endpoint rebuilds and updates it. An active lease or a different worker identity/endpoint is rejected. Journals, unrelated credentials, and the task-account password are retained. Resolve installation errors before retrying; do not delete leases or journals as recovery.
 
 TLS and worker authentication are checked before replacing configuration, without polling for work or changing reservations. Verify `online: true` and an empty lease with control-plane `control list`, then test MCP `computer_open` → `computer_action` → `computer_close`. See the individual OS guides and [computer use](computer-use.md) for operation and recovery.
+
+
+## Live verification
+
+Public-URL download, build, and update were tested on Mac, Windows, and Linux. Rerunning for the same enrolled worker and post-installation MCP screenshot, pointer movement, and release checks passed. The Mac test cloned a dedicated image with existing desktop permissions; it did not automate initial TCC consent.
+
+Windows and Linux services recovered after reboot. Windows also automatically logged in the dedicated user and started the desktop task. Git, gh, and Claude ran as the ordinary Windows task user, with no plaintext Winlogon password. Linux rejected identity replacement and active-lease updates while retaining configuration.
+
+Initial Windows login and first-time Mac consent still follow the interaction requirements above. Successful updates of existing environments do not establish completely unattended installation on every fresh OS.

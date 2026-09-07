@@ -91,6 +91,7 @@ plugins:
             Mac ワーカーの導入と運用: Mac worker setup and operations
             Windows ワーカーの導入と運用: Windows worker setup and operations
             単体Linuxワーカーの導入と運用: Standalone Linux worker
+            ワンライナーで導入: Install with one command
             Mac・Windows・Linuxの画面操作: Mac, Windows, and Linux computer use
             仕組み: Concepts
             全体の構成: Architecture
