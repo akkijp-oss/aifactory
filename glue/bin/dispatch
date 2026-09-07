@@ -6,19 +6,19 @@
 - `kb next --json [--pj P]` で最も古い todo を 1 件取り、`kb run <id>` を呼ぶ。終わったら次を取る。todo が無くなれば終了
 - 種別（kind）は kanban が持っているので、ここでの判断は「回せるか」だけ:
     - PJ に `project.yml` が無い（$AIFACTORY_WORKSPACE/projects/<pj>/ にも examples/projects/<pj>/ にも）→ `kb block`（メモに理由）して次へ
-    - その PJ のプールが全部貸出中（`sandbox ls`）→ その PJ は飛ばして次の PJ の todo を探す。全部詰まっていたら終了
+    - その PJ のプールが全部貸出中（sandbox の state.json。SANDBOX_POOL_PER_PJ 台、既定 3）→ その PJ は飛ばして次の PJ の todo を探す。全部詰まっていたら終了
 - 直列で回す（1 回に 1 run）。並列は runs の観察（ゲートが重い）を踏まえて後で
 - 記録は $AIFACTORY_WORKSPACE/logs/dispatch.log（1 行 1 run: 開始 / 終了 / id / pj / kind / 結果ステータス / 所要秒）
 - --once は 1 件だけ。--max N は N 件まで。--dry-run は kb run --dry-run（VM を触らない。状態も進まない）
 """
-import argparse, datetime, json, pathlib, subprocess, sys, time
+import argparse, datetime, json, os, pathlib, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # glue/
 REPO = HERE.parent
 sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
 KB = REPO / "kanban" / "bin" / "kb"
 LOG = paths.LOGS / "dispatch.log"
-POOL_PER_PJ = 3   # sandbox/STATUS.md: PJ ごとに 3 台
+POOL_PER_PJ = int(os.environ.get("SANDBOX_POOL_PER_PJ") or 3)   # PJ ごとの台数（既定 3。40-pool.sh で増やしたら SANDBOX_POOL_PER_PJ で合わせる）
 
 
 def sh(cmd, **kw):
@@ -43,12 +43,16 @@ def next_ticket(pj=None, skip=()):
     return None
 
 
+SANDBOX_STATE = pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config" / "sandbox" / "state.json"))
+
+
 def lent_per_pj():
+    """貸出中の台数を PJ ごとに。正本は sandbox CLI の state.json（take / release が書く）。VM 名の接頭辞に依存しない（テナントごとに違う。ADR-0017）"""
     out = {}
-    for l in sh(["sandbox", "ls"]).stdout.splitlines()[1:]:
-        c = l.split()
-        if len(c) >= 2 and c[0] != "-":
-            pj = c[1].removeprefix("sb-").rsplit("-", 1)[0]; out[pj] = out.get(pj, 0) + 1
+    try: st = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return out
+    for v in st.values():
+        if isinstance(v, dict) and v.get("pj"): out[v["pj"]] = out.get(v["pj"], 0) + 1
     return out
 
 
@@ -66,6 +70,15 @@ def main():
         if not (pd and (pd / "project.yml").exists()):
             sh([str(KB), "block", str(tid), "--note", f"dispatch: {pj} に project.yml が無く runner を回せない"])
             log(f"{tid} {pj} {t['kind']}: project.yml 無し → blocked"); skip.add(tid); continue
+        import yaml
+        project = yaml.safe_load((pd / "project.yml").read_text())
+        if not a.dry_run and project.get("backend") == "macos-pull":
+            sys.path.insert(0, str(REPO / "workers" / "lib"))
+            from pull import Store
+            workers = Store(os.environ.get("AIFACTORY_WORKER_DB") or paths.WORKSPACE / "workers" / "queue.sqlite3").workers()
+            worker = next((w for w in workers if w["id"] == project.get("worker")), {})
+            if not worker.get("online") or not worker.get("info", {}).get("lifecycle") or worker.get("info", {}).get("base_ready") is False or worker.get("info", {}).get("network_ready") is False or worker.get("lease") or worker.get("operation"):
+                log(f"{tid} {pj}: Mac worker unavailable → skip"); skip.add(tid); continue
         if not a.dry_run and pj in busy_pj: skip.add(tid); continue
         if not a.dry_run and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
             log(f"{tid} {pj}: プール {POOL_PER_PJ} 台すべて貸出中 → この PJ は飛ばす"); busy_pj.add(pj); skip.add(tid); continue

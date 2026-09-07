@@ -110,6 +110,15 @@ class EventRenderer:
         return None
 
 
+def run_name(pj, task, dry=False, resume=False):
+    recorded = os.environ.get("AIFACTORY_RESUME_RUN") if resume and not dry else None
+    if recorded:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}-" + re.escape(pj) + "-" + re.escape(task), recorded):
+            raise ValueError("invalid recorded resume run")
+        return recorded
+    return f"{datetime.date.today().isoformat()}-{pj}-{task}" + ("-dry" if dry else "")
+
+
 class Run:
     def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
@@ -143,7 +152,7 @@ class Run:
             else:
                 self.branch = f"(pr #{self.pr_number} head)"
         self.work = f"/home/dev/work/{task}"
-        self.run_dir = paths.RUNS / (f"{datetime.date.today().isoformat()}-{pj}-{task}" + ("-dry" if dry else ""))
+        self.run_dir = paths.RUNS / run_name(pj, task, dry, resume)
         if self.run_dir.exists() and not resume and not dry:
             # 同じ日の再実行で前回の記録を上書きしない。前回分は -attemptN に退避（2026-09-06 に kumitate 203 の 1 回目を消してしまった）
             n = 1
@@ -164,14 +173,22 @@ class Run:
         return r.stdout
     def vm_read(self, rel):
         return self.sb(f"cat {self.work}/{shlex.quote(rel)} 2>/dev/null", check=False)
+    # sandbox CLI と同じ置き場（~/.config/sandbox/state.json と鍵）。SANDBOX_STATE / SB_KEY で差し替えられる（テナント別の設定を使うとき。ADR-0017）
+    SANDBOX_STATE = pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config/sandbox/state.json"))
+    SB_KEY = pathlib.Path(os.environ.get("SB_KEY") or (pathlib.Path.home() / ".ssh/conf.d/aifactory/sb_ed25519")).expanduser()
     def vm_ip(self):
-        st = json.loads((pathlib.Path.home() / ".config/sandbox/state.json").read_text())
+        st = json.loads(self.SANDBOX_STATE.read_text())
         return st[self.task]["ip"]
+    def scp_opts(self):
+        o = ["-q", "-i", str(self.SB_KEY), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        if os.environ.get("SB_JUMP"): o += ["-J", os.environ["SB_JUMP"]]
+        return o
     def scp_to(self, local, remote):
         if self.dry: return
-        key = pathlib.Path.home() / ".ssh/conf.d/aifactory/sb_ed25519"
-        sh(["scp", "-q", "-i", str(key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR", str(local), f"dev@{self.vm_ip()}:{remote}"])
+        sh(["scp", *self.scp_opts(), str(local), f"dev@{self.vm_ip()}:{remote}"])
+
+    def run_remote(self, cmd, log_path, render=None, timeout=3600):
+        return stream(["sandbox", "ssh", self.task, cmd], log_path, render=render)
 
     # ---------- lifecycle
     def take(self):
@@ -187,9 +204,7 @@ class Run:
         if self.dry: return
         # artifact 回収
         try:
-            key = pathlib.Path.home() / ".ssh/conf.d/aifactory/sb_ed25519"
-            sh(["scp", "-q", "-r", "-i", str(key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR", f"dev@{self.vm_ip()}:{self.work}", str(self.run_dir / "work")], check=False)
+            sh(["scp", "-r", *self.scp_opts(), f"dev@{self.vm_ip()}:{self.work}", str(self.run_dir / "work")], check=False)
         except Exception as e: print(f"[run] artifact 回収に失敗: {e}")
         if self.keep: self.log("keep: release しない"); return
         self.log("release"); sh(["sandbox", "release", self.task], check=False)
@@ -266,18 +281,20 @@ class Run:
         pf.write_text(prompt, encoding="utf-8")
         self.log(f"agent {step['id']} ({step['role']} / {cls} → {model})")
         if self.dry: return True, "(dry-run)"
-        self.scp_to(pf, "/home/dev/prompt.md")
+        prompt_path = f"{self.work}/prompt.md"
+        self.scp_to(pf, prompt_path)
         # stream-json で 1 行 1 イベントを受け、人が読める形を agent-<step>-<n>.log に、生の JSON を .jsonl（git 追跡外）に流す。
         # console が step の途中でも追い読みできる（2026-09-06）。--verbose は -p + stream-json の必須オプション
-        cmd = (f"cd $SANDBOX_APP_DIR && timeout {step.get('timeout_min', 60)}m claude -p \"$(cat /home/dev/prompt.md)\" --model {model} "
+        cmd = (f"cd $SANDBOX_APP_DIR && timeout {step.get('timeout_min', 60)}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
                f"--dangerously-skip-permissions --output-format stream-json --verbose 2>&1 < /dev/null")
         n = len(self.state["history"]); log_path = self.run_dir / f"agent-{step['id']}-{n}.log"
         self.set_current(step["id"], "agent", log_path.name)
         t = time.time(); r = EventRenderer(t)
-        rc, out = stream(["sandbox", "ssh", self.task, cmd], log_path, render=r)
+        rc, out = self.run_remote(cmd, log_path, render=r, timeout=step.get('timeout_min', 60) * 60)
         (self.run_dir / f"agent-{step['id']}-{n}.jsonl").write_text("\n".join(r.raw) + ("\n" if r.raw else ""), encoding="utf-8")
         print("\n".join(out.strip().splitlines()[-8:]))
         self.log(f"agent done in {int(time.time()-t)}s (rc={rc})")
+        if rc != 0: return False, f"agent exited {rc}: {out[-3000:]}"
         # 追跡済みの未コミット変更だけ拾う。未追跡は記録のみ
         self.sb("cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m 'sandbox: uncommitted changes by agent')", check=False)
         untracked = self.sb("cd $SANDBOX_APP_DIR && git status --porcelain | grep '^??' | head -20", check=False).strip()
@@ -346,9 +363,16 @@ class Run:
         self.save()
         self.release()
         self.log(f"result: {result}  PR: {pr or 'なし'}{'  wip: origin/' + wip if wip else ''}  run: {self.run_dir}")
-        return 0 if result == "end" or pr else 2
+        return 0 if result == "end" or pr or (self.dry and all(h["ok"] for h in self.state["history"])) else 2
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]; flags = set(a for a in sys.argv[1:] if a.startswith("--"))
     if len(args) != 4: print(__doc__); sys.exit(1)
-    sys.exit(Run(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags).main())
+    pd = paths.project_dir(args[0])
+    project = load_yaml(pd / "project.yml") if pd and (pd / "project.yml").exists() else {}
+    runner = Run
+    if project.get("backend") == "macos-pull":
+        sys.path.insert(0, str(HERE / "lib"))
+        from macos import backend
+        runner = backend(Run)
+    sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags).main())

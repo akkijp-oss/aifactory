@@ -20,7 +20,7 @@ jobs:
       - run: pip install pyyaml jsonschema
       - name: bash -n
         run: |
-          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh; do
+          for f in sandbox/bin/sandbox sandbox/bin/install.sh sandbox/bin/gh-app-setup sandbox/proxmox/*.sh workflow/kit/steps/*.sh examples/projects/*/*.sh bin/*.sh console/bin/install.sh console/bin/mcp-remote; do
             bash -n "$f" || exit 1
             echo "ok $f"
           done
@@ -30,8 +30,23 @@ jobs:
         run: python3 -m unittest discover -s workflow/tests -v
       - name: unittest (console + mcp)
         run: python3 -m unittest discover -s console/tests -v
+      - name: unittest (pull control)
+        run: python3 -m unittest discover -s workers/tests -v
       - name: paths (fresh clone = workspace mode)
         run: python3 lib/aifactory_paths.py | tee /dev/stderr | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["legacy"] is False, d'
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go.mod
+          cache: false
+      - run: go test -race ./...
+        working-directory: workers
+      - run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/aifactory-worker ./cmd/aifactory-worker
+        working-directory: workers
 
   secrets:
     # 秘密情報の漏えい検査（全履歴）。gitleaks の CLI を直接使う（gitleaks-action は org で license が要る）

@@ -241,6 +241,15 @@ class JobStoreTest(unittest.TestCase):
         for j in self.JS.running():
             try: os.killpg(os.getpgid(j["pid"]), signal.SIGKILL)
             except OSError: pass
+        # _wait persists the final result after the process exits. Wait for that
+        # writer before deleting its directory, otherwise teardown races _flock.
+        deadline = time.monotonic() + 5
+        while True:
+            with self.JS.lock:
+                pending = bool(self.JS.procs)
+            if not pending: break
+            self.assertLess(time.monotonic(), deadline, "job result writers did not finish")
+            time.sleep(0.01)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_conflict_under_lock(self):

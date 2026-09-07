@@ -27,4 +27,5 @@
 | 0017 | 制御系（console / docs / runner / workspace）も Proxmox 上の LXC に置き、テナント（貸出先の組織）ごとに網・VMID 帯・firewall・リソースプール・API トークン・制御系を分ける。`sandbox` CLI は API モードでプール限定の権限だけを持つ | 採用（0013 を拡張、0004 の到達経路をテナントの tailnet に一般化） |
 | 0018 | MacはGo製の単一バイナリのpull workerとして接続する。workflowは制御系に集約し、個別認証・永続操作キューで受け渡す | 採用（初期通信基盤を実装） |
 | 0019 | コンソールの操作は危険性に比例した摩擦で守る（可逆は確認なし + 元に戻す、不可逆は番号入力）。文言は `console/static/strings.js` に集め、`console/UX.md` の約束を unittest で検査する | 採用（0013 を拡張） |
+| 0020 | 共通workflowからmacOS pull backendを使い、run単位のlease、専用ゲストのclone・削除、秘密stdinと成果物回収を扱う | 採用（0018を拡張） |
 | 0021 | コンソールは内側の網のアドレス（グローバルでない IP）には合言葉なしで bind できる。0.0.0.0 とグローバルは合言葉必須のまま | 採用（0017 の 5 を緩める） |

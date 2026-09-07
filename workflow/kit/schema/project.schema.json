@@ -89,6 +89,42 @@
         "type": "string"
       },
       "description": "base ブランチで既に赤いゲート名（gates.sh の名前）。runner は FAIL を INFO に格下げし、agent に『直せ』と戻さない。直す PR がマージされたら消す"
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "proxmox",
+        "macos-pull"
+      ]
+    },
+    "worker": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "macos-pull"
+          }
+        },
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "required": [
+          "worker"
+        ],
+        "properties": {
+          "app_dir": {
+            "type": "string",
+            "pattern": "^/Users/[a-zA-Z0-9_-]+/app$"
+          }
+        }
+      }
+    }
+  ]
 }

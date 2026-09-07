@@ -235,11 +235,18 @@ def cmd_run(a):
     path = ROOT / r["file"]
     if not path.exists(): die(f"本文が無い: {path}")
     run_dir = f"{datetime.date.today().isoformat()}-{r['pj']}-{r['id']}" + ("-dry" if a.dry_run else "")
+    if a.resume and not a.dry_run and r["run"]:
+        run_dir = r["run"]
     if not a.dry_run:
         update(c, a.id, status="in_progress", run=run_dir, kind=None if a.workflow is None else a.workflow); render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
     print("[kb] " + " ".join(cmd), flush=True)
-    rc = subprocess.run(cmd).returncode
+    env = os.environ.copy()
+    if a.resume and not a.dry_run:
+        env["AIFACTORY_RESUME_RUN"] = run_dir
+    else:
+        env.pop("AIFACTORY_RESUME_RUN", None)
+    rc = subprocess.run(cmd, env=env).returncode
     if a.dry_run: print(f"[kb] dry-run 終了 rc={rc}"); return rc
     rc = apply_result(c, a.id, run_dir, rc)
     print(f"[kb] {fmt(get(c, a.id))}")

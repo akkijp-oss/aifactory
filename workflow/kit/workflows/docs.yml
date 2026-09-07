@@ -1,0 +1,35 @@
+name: docs
+description: ドキュメント整備。実装確認と構成の計画 → 執筆 → 文書ゲート → レビュー → PR
+inputs: [ticket.md]
+steps:
+  - id: plan
+    role: planner
+    brief: |
+      対象読者と読後にできることを決め、現在の実装・設定・関連文書を確認して構成を計画する。
+      履歴上の記述と現行の仕様を区別する。文書変更のための不要な製品改修や実装を模倣するテストは計画しない。
+    outputs: [plan.md]
+    next: implement
+  - id: implement
+    role: implementer
+    brief: |
+      実装と照合しながら文書を書く。確認できない挙動を断定しない。
+      変更範囲をチケットに限定する。実行した検証と実行していない検証をreport.mdに区別して記録する。
+    inputs: [plan.md]
+    outputs: [git, report.md]
+    next: gates
+  - id: gates
+    code: gates.sh
+    outputs: [gates.txt]
+    on_pass: review
+    on_fail: {goto: implement, max_loops: 2, else: human}
+  - id: review
+    role: reviewer
+    inputs: [plan.md, report.md, gates.txt]
+    outputs: [review.md]
+    on_pass: pr
+    on_fail: {goto: implement, max_loops: 1, else: human}
+  - id: pr
+    code: pr-create.sh
+    inputs: [report.md, review.md, gates.txt]
+    outputs: [pr_url]
+    next: human
