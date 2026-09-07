@@ -92,10 +92,16 @@ if($env:AIFACTORY_SERVER_IP){
 $check=@{worker=$worker;url=$endpoint;token_file="$build\check.token";ca_file="$build\check.crt";state_dir="$build\check-state"}
 [IO.File]::WriteAllText("$build\check.json",($check | ConvertTo-Json),$utf8)
 Run-Checked "$build\aifactory-worker.exe" @('--config',"$build\check.json",'--check')
+try {
 if($old){
  Stop-Service AIFactoryWorker
  if(Test-Path "$($old.state_dir)\guest-lease"){Start-Service AIFactoryWorker;throw 'Worker acquired a lease during setup; retry after release'}
  if(Get-ScheduledTask AIFactoryDesktop -ErrorAction SilentlyContinue){Stop-ScheduledTask AIFactoryDesktop}
+ # Task Scheduler may return before its interactive process releases the executable.
+ foreach($process in @(Get-Process -Name aifactory-desktop -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq "$root\bin\aifactory-desktop.exe"})){
+  Stop-Process -Id $process.Id -Force
+  if(-not $process.WaitForExit(15000)){throw 'Desktop agent did not stop; binary update aborted'}
+ }
 }
 New-Item -ItemType Directory -Force "$root\private" | Out-Null
 $acl=[Security.AccessControl.DirectorySecurity]::new();$acl.SetAccessRuleProtection($true,$false)
@@ -116,3 +122,8 @@ Start-Service AIFactoryWorker
 if((Get-Service AIFactoryWorker).Status -ne 'Running'){throw 'Worker service failed to start'}
 Write-Output "Installed Windows worker $worker. Check control list for online status."
 Write-Output 'Computer use requires the dedicated task user to be logged in with an unlocked desktop. Autologon, if requested, takes effect after reboot.'
+
+} catch {
+ if($old){Start-Service AIFactoryWorker -ErrorAction SilentlyContinue}
+ throw
+}
