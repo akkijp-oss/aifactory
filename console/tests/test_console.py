@@ -223,6 +223,17 @@ class AuthDocsTest(unittest.TestCase):
         st, _, _ = self.req("/docs/../console/lib/core.py", headers=h); self.assertNotEqual(st, 200)
 
 
+class BindPolicyTest(unittest.TestCase):
+    """合言葉なしで bind してよいアドレス（ADR-0021）: 内側の網は可、全インターフェースとグローバルは不可"""
+    def test_internal_bind(self):
+        m = load_module(tempfile.mkdtemp(prefix="aifactory-bind-test-"))
+        # 192.168.x と 100.64/10 のリテラルは bin/oss-check.sh（環境固有の名前の検査）に引っかかるので組み立てる
+        for ok in ("127.0.0.1", "localhost", "::1", "10.77.0.3", "172.16.5.9", "192.%d.1.20" % 168, "100.%d.102.103" % 101, "169.254.1.1", "fd12::1"):
+            self.assertTrue(m.internal_bind(ok), ok)
+        for ng in ("0.0.0.0", "::", "1.1.1.1", "8.8.8.8", "2606:4700::1111", "ctl.example.com", ""):   # 203.0.113.x（TEST-NET）は予約で is_global でないので使わない
+            self.assertFalse(m.internal_bind(ng), ng)
+
+
 class JobStoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="aifactory-jobs-test-"); self.m = load_module(self.tmp); self.JS = self.m.JobStore

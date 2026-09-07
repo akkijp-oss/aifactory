@@ -25,12 +25,12 @@ plist には「今のシェルの python3」の絶対パスと、runner が使�
 Linux（テナントの制御系 LXC。ADR-0017）では systemd に登録する。`sandbox/proxmox/25-control-lxc.sh` が呼ぶので手で打つのは更新時だけ:
 
 ```bash
-CONSOLE_HOST=10.77.0.3 console/bin/install.sh --systemd   # /etc/systemd/system/aifactory-console.service。~/.config/aifactory/ctl.env の CONSOLE_TOKEN が必須
+CONSOLE_HOST=10.77.0.3 console/bin/install.sh --systemd   # /etc/systemd/system/aifactory-console.service。内側の網なので合言葉は任意（~/.config/aifactory/ctl.env の CONSOLE_TOKEN を置けばかかる）
 journalctl -u aifactory-console -f
 ```
 
 - Python 3 標準ライブラリだけ。npm も pip も要らない（runner と同じ python3 で動かすこと。`yaml` / `jsonschema` は runner が使う）
-- 既定は 127.0.0.1 専用・認証なし。**127.0.0.1 以外に bind するには環境変数 `CONSOLE_TOKEN`（合言葉）が必須**（無ければ起動を拒む）。合言葉があるときは、ブラウザは `/?token=<合言葉>` で 1 回入ると cookie（`aifactory_console`、HttpOnly、SameSite=Strict）に残る。API は `Authorization: Bearer <合言葉>` でも通る。合言葉なしのアクセスは 401
+- 既定は 127.0.0.1 専用・認証なし。**内側の網のアドレス**（10/8・172.16/12・192.168/16・100.64/10 の tailnet・リンクローカル・ULA。グローバルでないもの）には `--host <IP>` だけで合言葉なしで bind できる（ADR-0021。網の境界は tailnet / firewall が守る。制御系 LXC の 10.77.0.3 はこれ）。**0.0.0.0 / :: とグローバルアドレスに bind するには環境変数 `CONSOLE_TOKEN`（合言葉）が必須**（無ければ起動を拒む。ADR-0017）。合言葉を設定すればどのアドレスでも認証がかかる: ブラウザは `/?token=<合言葉>` で 1 回入ると cookie（`aifactory_console`、HttpOnly、SameSite=Strict）に残る。API は `Authorization: Bearer <合言葉>` でも通る。合言葉なしのアクセスは 401
 - `/docs/` はドキュメントサイト（`website/site/`、`mkdocs build` の出力）をそのまま配信する。未ビルドなら作り方を出す（503）
 - 止めるのは Ctrl-C。起動中のジョブ（`kb run` 等）はコンソールを止めても続く。記録は `console/jobs/`（git 追跡外。`CONSOLE_JOBS` で差し替え可）に残り、次に起動したときに一覧へ戻る
 
@@ -148,6 +148,7 @@ cp -r "$ws/kanban" /tmp/kb && KB_ROOT=/tmp/kb CONSOLE_JOBS=/tmp/jobs console/bin
 - 外部の入口（termboard / Notion）からの取り込み。intake に流す層ができれば、その起動ボタンを足すだけ
 
 ## 履歴
+- 2026-09-07（ADR-0021）: 内側の網のアドレス（10.x 等、グローバルでないもの）には合言葉なしで bind できるように。`CONSOLE_TOKEN` は任意（置けばかかる）。0.0.0.0 とグローバルアドレスは従来どおり必須。メンテナ「internal の場合、多分 localnet だと思うので、認証は不要にしたい」
 - 2026-09-07（UX・ADR-0019）: 操作を文脈・頻度・危険性・次の行動の 4 軸で見直し。状態変更は確認なし + 「元に戻す」、配車と本番 run は影響を見せるダイアログ（配車は次に回るチケットを先に出す。`GET /api/next`）、返却と停止は危険色 + 番号入力。ジョブ完了後の「次にすること」、頻度順のナビ、`g` + 頭文字の近道、切断の帯。文言を `static/strings.js` に集約し `tests/test_strings.py` で検査。`UX.md` を追加。サーバー側のエラー文も「何が起きたか + どうすればよいか」に
 - 2026-09-06（テナント・ADR-0017）: 合言葉 `CONSOLE_TOKEN`（cookie / Bearer / `?token=`）、`/docs/` でサイト配信、`install.sh --systemd`。Proxmox 上の制御系 LXC で tailnet 向けに常駐できるように。テスト 3 本追加
 - 2026-09-06（公開化）: 読む根と状態の置き場を `AIFACTORY_WORKSPACE` に合わせた（`KB_ROOT` / `CONSOLE_JOBS` は従来どおり）

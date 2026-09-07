@@ -3,8 +3,9 @@
 
   console/bin/console [--port 8765] [--host 127.0.0.1] [--open]
 
-- 既定は 127.0.0.1 専用・認証なし（ADR-0013）。制御系 LXC で tailnet に向けて出すとき（ADR-0017）は --host <IP> と
-  環境変数 CONSOLE_TOKEN（合言葉）を両方与える。合言葉が無いのに 127.0.0.1 以外へ bind しようとすると起動を拒む。
+- 既定は 127.0.0.1 専用・認証なし（ADR-0013）。制御系 LXC で内側の網（10/8・172.16/12・192.168/16・100.64/10 など、グローバルでない
+  アドレス）に向けて出すときは --host <IP> だけでよい（ADR-0021。網の境界は tailnet / firewall が守る）。環境変数 CONSOLE_TOKEN（合言葉）を
+  与えればその上で認証もかかる。0.0.0.0 / :: やグローバルアドレスへ bind するときは合言葉が必須（無ければ起動を拒む。ADR-0017）。
   ブラウザは /?token=<合言葉> で 1 回入ると cookie に残る。API は Authorization: Bearer <合言葉> でも通る
 - /docs/ はドキュメントサイトのビルド（website/site/、mkdocs build）をそのまま配信する（無ければ案内を出す）
 
@@ -17,7 +18,7 @@
 - 読み書きの正本は lib/core.py（bin/mcp と共有）。ここは HTTP の口だけ
 - 画面の文言は static/strings.js に集める。設計と文言の約束は console/UX.md（ADR-0019）。tests/test_strings.py が検査する
 """
-import argparse, http.cookies, http.server, json, mimetypes, os, pathlib, re, sys, threading, urllib.parse, webbrowser
+import argparse, http.cookies, http.server, ipaddress, json, mimetypes, os, pathlib, re, sys, threading, urllib.parse, webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
 import core
@@ -159,18 +160,28 @@ class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def internal_bind(host):
+    """合言葉なしで bind してよいアドレスか（ADR-0021）。ループバックと、グローバルでないアドレス（10/8・172.16/12・192.168/16・
+    100.64/10 の tailnet・リンクローカル・ULA）は内側の網とみなす。0.0.0.0 / ::（全インターフェース）とグローバルアドレスは合言葉が要る"""
+    if host in ("localhost",): return True
+    try: ip = ipaddress.ip_address(host)
+    except ValueError: return False          # ホスト名は判断できないので安全側
+    if ip.is_unspecified: return False
+    return not ip.is_global
+
+
 def main():
     ap = argparse.ArgumentParser(prog="console", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=int(os.environ.get("CONSOLE_PORT", 8765)))
-    ap.add_argument("--host", default=os.environ.get("CONSOLE_HOST", "127.0.0.1"), help="既定 127.0.0.1。他へ bind するには環境変数 CONSOLE_TOKEN（合言葉）が要る")
+    ap.add_argument("--host", default=os.environ.get("CONSOLE_HOST", "127.0.0.1"), help="既定 127.0.0.1。内側の網のアドレス（10.x 等）はそのまま bind できる。0.0.0.0 やグローバルアドレスには環境変数 CONSOLE_TOKEN（合言葉）が要る")
     ap.add_argument("--open", action="store_true", help="起動後にブラウザで開く")
     a = ap.parse_args()
-    if a.host not in ("127.0.0.1", "localhost", "::1") and not TOKEN:
-        print("[console] 127.0.0.1 以外に bind するには CONSOLE_TOKEN（合言葉）が要る（無認証で外に出さない。ADR-0013 / 0017）", file=sys.stderr); sys.exit(1)
+    if not TOKEN and not internal_bind(a.host):
+        print(f"[console] {a.host} に合言葉なしでは bind しません。内側の網のアドレス（10.x / 192.168.x / 100.64.x など）を --host に指定するか、CONSOLE_TOKEN（合言葉）を設定してください（ADR-0017 / 0021）", file=sys.stderr); sys.exit(1)
     JOBS.mkdir(exist_ok=True); JobStore.reconcile()
     srv = Server((a.host, a.port), Handler)
     url = f"http://{a.host}:{a.port}/"
-    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}  docs={'yes' if DOCS.is_dir() else 'not built'}  auth={'token' if TOKEN else 'none (loopback)'}", flush=True)
+    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}  docs={'yes' if DOCS.is_dir() else 'not built'}  auth={'token' if TOKEN else ('none (loopback)' if a.host in ('127.0.0.1', 'localhost', '::1') else 'none (internal network)')}", flush=True)
     if a.open: threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\n[console] 停止（起動中のジョブは続く。console/jobs/ に記録）")

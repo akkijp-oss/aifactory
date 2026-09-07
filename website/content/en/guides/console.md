@@ -10,7 +10,7 @@ console/bin/console --port 9000   # change the port
 ```
 
 - Runs on the Python 3 standard library alone. No npm, no pip (use the same `python3` as the runner)
-- Binds to 127.0.0.1 only. There is no authentication, so it cannot be opened to other hosts
+- By default it binds to 127.0.0.1 only, with no authentication. On an internal network address (10.x / 192.168.x / 100.64.x and other non-global addresses, such as the control-plane LXC) `--host <IP>` (or `CONSOLE_HOST`) is enough and no passphrase is needed; the tailnet and the firewall are the boundary. To require one anyway, set `CONSOLE_TOKEN` (one visit to `/?token=<passphrase>` sets a cookie). Binding to 0.0.0.0 or a global address requires the passphrase
 - Stop it with ++ctrl+c++. Jobs it started (such as `kb run`) keep running, and reappear in the list the next time the console starts
 
 To keep it running, register it with launchd. It starts at login and restarts if it dies.

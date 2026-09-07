@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Console: binding to an internal (non-global) address such as `10.77.0.3`, `192.168.x`, or a tailnet `100.64/10` address no longer requires `CONSOLE_TOKEN` (ADR-0021); the tailnet and firewall are the boundary. The passphrase is still enforced when set, and still required for `0.0.0.0` / `::` and global addresses. `install.sh --systemd` applies the same rule
+
 ### Added
 - **Console UX pass (ADR-0019)**. Friction now scales with risk: state changes apply immediately with an *Undo* in the toast (`kb set --status <previous>`), real runs and dispatch open an in-page dialog that shows what will happen (dispatch previews the ticket `kb next` will pick, via the new `GET /api/next`), VM release and job stop use a danger-styled dialog that focuses *Cancel* and, when a run is active on that VM, requires typing the ticket number. Finished jobs show a *What to do next* panel (intake → open the created ticket, stopped run → sync the ticket state, release → sandbox). Navigation is ordered by frequency (board / file / runs / jobs / sandbox / logs / settings), dispatch moved from the intake page to a dialog on the board, and `g` + a letter jumps between screens (`?` lists them). An offline banner replaces the bare "disconnected" label
 - All UI strings live in `console/static/strings.js`; `console/tests/test_strings.py` (stdlib only, runs in CI) rejects forbidden spellings, non-verb button labels, non-polite sentences, developer vocabulary, glossary drift and any key that is undefined or unused. `console/UX.md` is the one-page voice & tone guide, glossary and per-feature design table; `docs/ui-ux-writing-guide.md` holds the general know-how it applies. Server-side error messages (`core.py`, `bin/console`, `bin/mcp`) now say what happened and what to do
