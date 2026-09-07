@@ -95,6 +95,7 @@ def json_url(url):
 
 
 def go_tool(tmp):
+    print('Downloading and verifying the Go build toolchain...', flush=True)
     system = platform.system().lower()
     arch = {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}[platform.machine()]
     releases = json_url('https://go.dev/dl/?mode=json')
@@ -262,6 +263,7 @@ def mac(c, ca):
         log = (tmp / 'tart.log').open('w')
         vm = subprocess.Popen([tart, 'run', '--no-clipboard', '--net-softnet',
              '--net-softnet-block=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16', base], stdout=log, stderr=log)
+        prepared = False
         try:
             for _ in range(120):
                 if subprocess.run([tart, 'exec', base, '/usr/bin/true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
@@ -272,7 +274,7 @@ def mac(c, ca):
             run(tart, 'exec', base, '/bin/bash', '-lc', 'sudo networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8 && sudo networksetup -setv6off Ethernet')
             # Tool installation contains no worker token; token stays on the host.
             run(tart, 'exec', base, '/bin/bash', '-lc',
-                'export PATH=/opt/homebrew/bin:$PATH; brew install python gh coreutils; command -v claude >/dev/null || (curl -fsSL https://claude.ai/install.sh | bash)')
+                'export PATH=/opt/homebrew/bin:$HOME/.local/bin:$PATH; brew install python gh coreutils; command -v claude >/dev/null || (curl -fsSL https://claude.ai/install.sh | bash)')
             for name in ('aifactory-computer', 'desktop-native'):
                 script = "import pathlib,sys; p=pathlib.Path.home()/'.local/lib/aifactory-computer'/sys.argv[1]; p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read()); p.chmod(0o755)"
                 run(tart, 'exec', '-i', base, '/opt/homebrew/bin/python3', '-c', script, name, input=(binaries / name).read_bytes())
@@ -286,10 +288,13 @@ def mac(c, ca):
                     ok = False
                 if not ok:
                     raise ValueError('Mac guest needs Screen Recording / Accessibility permission. Open the dedicated base VM, grant permissions to the responsible app (Tart Guest Agent / desktop-native), stop it and rerun. Worker not installed yet.')
+            prepared = True
         finally:
             run(tart, 'stop', base)
             vm.wait(timeout=30)
             log.close()
+            if old and not prepared:
+                run('launchctl', 'bootstrap', 'gui/' + uid, plist_path)
         endpoint_hosts(c)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         private_write(root / 'worker.token', c['TOKEN'].strip().encode())
