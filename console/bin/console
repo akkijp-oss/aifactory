@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
-"""console/bin/console: aifactory の Web コンソール（Mac ローカル専用、Python 3 標準ライブラリのみ）。
+"""console/bin/console: aifactory の Web コンソール（Python 3 標準ライブラリのみ）。
 
   console/bin/console [--port 8765] [--host 127.0.0.1] [--open]
+
+- 既定は 127.0.0.1 専用・認証なし（ADR-0013）。制御系 LXC で tailnet に向けて出すとき（ADR-0017）は --host <IP> と
+  環境変数 CONSOLE_TOKEN（合言葉）を両方与える。合言葉が無いのに 127.0.0.1 以外へ bind しようとすると起動を拒む。
+  ブラウザは /?token=<合言葉> で 1 回入ると cookie に残る。API は Authorization: Bearer <合言葉> でも通る
+- /docs/ はドキュメントサイトのビルド（website/site/、mkdocs build）をそのまま配信する（無ければ案内を出す）
 
 - 見る: kanban のボード（kanban.db を読み取り専用で開く）/ workflow/runs/ の実行記録と各ログ / sandbox の貸出状況 / glue のログ
 - 動かす: kb（状態変更・起票・kb run）/ glue/bin/intake / glue/bin/dispatch / sandbox ls・release を **ジョブ**として起動し、標準出力を
   console/jobs/<id>/log に流す。画面はそれを追い読みする。長い run（60 分超）もブラウザを閉じて構わない
 - 状態を変えるのは必ず CLI 経由（kb / sandbox）。コンソールが DB や state.json に直接書くことはない（他セッションとの整合を kb に集約する）
-- 127.0.0.1 にしか bind しない。認証は無い。POST は X-Console ヘッダを要求する（ブラウザの他サイトからは送れない）
+- POST は X-Console ヘッダを要求する（ブラウザの他サイトからは送れない）
 - 置き場は AIFACTORY_WORKSPACE（lib/aifactory_paths.py）。KB_ROOT / CONSOLE_JOBS で個別に差し替えられる（テスト用: console/tests/）
 - 読み書きの正本は lib/core.py（bin/mcp と共有）。ここは HTTP の口だけ
+- 画面の文言は static/strings.js に集める。設計と文言の約束は console/UX.md（ADR-0019）。tests/test_strings.py が検査する
 """
-import argparse, http.server, json, mimetypes, os, pathlib, re, sys, threading, urllib.parse, webbrowser
+import argparse, http.cookies, http.server, json, mimetypes, os, pathlib, re, sys, threading, urllib.parse, webbrowser
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
 import core
 from core import *   # noqa: F401,F403  読み書きの正本は lib/core.py。ここは HTTP の口だけ
 
 STATIC = core.HERE / "static"
+DOCS = core.REPO / "website" / "site"          # mkdocs build の出力。/docs/ で配信
+TOKEN = os.environ.get("CONSOLE_TOKEN") or ""   # 空なら認証なし（127.0.0.1 専用）
+COOKIE = "aifactory_console"
 
 
 # ---------- HTTP
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "aifactory-console/0.2"
+    server_version = "aifactory-console/0.3"
 
     def log_message(self, fmt, *args):
         if os.environ.get("CONSOLE_VERBOSE"): super().log_message(fmt, *args)
@@ -40,6 +49,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
+    def authed(self):
+        """合言葉（CONSOLE_TOKEN）が設定されているとき: cookie か Authorization: Bearer か ?token= のどれかが一致すれば通す。
+        ?token= で来たら cookie を焼いて同じパスへ 302（URL からは消える）"""
+        if not TOKEN: return True
+        if self.headers.get("Authorization", "") == f"Bearer {TOKEN}": return True
+        c = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        if COOKIE in c and c[COOKIE].value == TOKEN: return True
+        u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
+        if q.get("token") == TOKEN:
+            q.pop("token"); dest = u.path + (("?" + urllib.parse.urlencode(q)) if q else "") + (("#" + u.fragment) if u.fragment else "")
+            self.send_response(302); self.send_header("Location", dest or "/")
+            self.send_header("Set-Cookie", f"{COOKIE}={TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"); self.end_headers()
+            return False
+        self.send_json({"error": "合言葉が必要です。/?token=<CONSOLE_TOKEN> で開くか、Authorization: Bearer <CONSOLE_TOKEN> を付けてください"}, 401); return False
+
+    def send_docs(self, path):
+        """/docs/... → website/site/... （mkdocs build の出力）。ディレクトリは index.html。無ければ作り方の案内"""
+        rel = path[len("/docs"):].lstrip("/")
+        if not DOCS.is_dir():
+            body = ("<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>docs</title><body style=\"font-family:sans-serif;padding:2em\">"
+                    "<h1>ドキュメントサイトはまだビルドされていない</h1><p>リポジトリの <code>website/</code> で:</p>"
+                    "<pre>python3 -m venv .venv &amp;&amp; .venv/bin/pip install -r requirements.txt &amp;&amp; .venv/bin/mkdocs build -f mkdocs.yml</pre>"
+                    "<p>出力 <code>website/site/</code> をこのパス（/docs/）で配信する。</p></body></html>").encode()
+            self.send_response(503); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        p = (DOCS / rel).resolve()
+        if not p.is_relative_to(DOCS.resolve()): return self.send_json({"error": "not found"}, 404)
+        if p.is_dir():
+            if not path.endswith("/"): self.send_response(301); self.send_header("Location", path + "/"); self.end_headers(); return
+            p = p / "index.html"
+        if p.is_file(): return self.send_file(p)
+        self.send_json({"error": "not found"}, 404)
+
     def body_json(self):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b""
@@ -47,10 +88,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception: return {}
 
     def do_GET(self):
+        if not self.authed(): return
         u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         path = u.path
         try:
             if path.startswith("/api/"): return self.send_json(*self.api_get(path[5:], q))
+            if path == "/docs" or path.startswith("/docs/"): return self.send_docs(path)
             if path == "/": path = "/index.html"
             p = (STATIC / path.lstrip("/")).resolve()
             if p.is_file() and p.is_relative_to(STATIC.resolve()): return self.send_file(p)
@@ -63,13 +106,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """戻り: (obj, code)"""
         if ep == "overview": return overview(), 200
         if ep == "tickets": return tickets_list(pj=q.get("pj")), 200
+        if ep == "next": return ticket_next(pj=q.get("pj")), 200
         m = re.match(r"^tickets/(\d+)$", ep)
         if m: return ticket_detail(int(m.group(1))), 200
         if ep == "runs": return {"runs": list_runs()}, 200
         m = re.match(r"^runs/(.+)$", ep)
         if m:
             d = run_detail(urllib.parse.unquote(m.group(1)))
-            if not d: raise ApiError("run が無い", 404)
+            if not d: raise ApiError(f"実行記録 {urllib.parse.unquote(m.group(1))} は見つかりません", 404)
             return d, 200
         if ep == "file":
             tail = int(q["tail"]) if q.get("tail") else None
@@ -86,7 +130,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         raise ApiError("not found", 404)
 
     def do_POST(self):
-        if self.headers.get("X-Console") != "1": return self.send_json({"error": "X-Console ヘッダが無い"}, 403)
+        if not self.authed(): return
+        if self.headers.get("X-Console") != "1": return self.send_json({"error": "X-Console: 1 ヘッダを付けて送ってください（ブラウザの他サイトからの誤操作を防ぐためです）"}, 403)
         u = urllib.parse.urlsplit(self.path); ep = u.path[5:] if u.path.startswith("/api/") else ""
         b = self.body_json()
         try: return self.send_json(self.api_post(ep, b))
@@ -117,15 +162,15 @@ class Server(http.server.ThreadingHTTPServer):
 def main():
     ap = argparse.ArgumentParser(prog="console", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=int(os.environ.get("CONSOLE_PORT", 8765)))
-    ap.add_argument("--host", default="127.0.0.1", help="既定 127.0.0.1。他のホストに開けない")
+    ap.add_argument("--host", default=os.environ.get("CONSOLE_HOST", "127.0.0.1"), help="既定 127.0.0.1。他へ bind するには環境変数 CONSOLE_TOKEN（合言葉）が要る")
     ap.add_argument("--open", action="store_true", help="起動後にブラウザで開く")
     a = ap.parse_args()
-    if a.host not in ("127.0.0.1", "localhost", "::1"):
-        print("[console] 認証が無いので 127.0.0.1 以外には bind しない", file=sys.stderr); sys.exit(1)
+    if a.host not in ("127.0.0.1", "localhost", "::1") and not TOKEN:
+        print("[console] 127.0.0.1 以外に bind するには CONSOLE_TOKEN（合言葉）が要る（無認証で外に出さない。ADR-0013 / 0017）", file=sys.stderr); sys.exit(1)
     JOBS.mkdir(exist_ok=True); JobStore.reconcile()
     srv = Server((a.host, a.port), Handler)
     url = f"http://{a.host}:{a.port}/"
-    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}", flush=True)
+    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}  docs={'yes' if DOCS.is_dir() else 'not built'}  auth={'token' if TOKEN else 'none (loopback)'}", flush=True)
     if a.open: threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\n[console] 停止（起動中のジョブは続く。console/jobs/ に記録）")

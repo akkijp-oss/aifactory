@@ -26,6 +26,7 @@
 - 仕組みの解説 HTML（図つき）: `aifactory-how-it-works.html`（2026-09-06）。sandbox の物理側は `sandbox-architecture.html`
 - ドキュメントサイト（ja / en、37 ページずつ）: `../website/`（2026-09-06、MkDocs Material + static-i18n。デプロイ先は未決、GitHub Pages 用の手動ワークフローだけ用意）
 - MCP サーバー（AI セッションから同じ読み書き）: `../console/bin/mcp` + `../.mcp.json`（2026-09-06、ADR-0015）
+- **テナントと Proxmox 上の制御系**（2026-09-06、ADR-0017）: 貸出先の組織ごとに網（別 SDN vnet と /16）・VMID 帯・firewall group・リソースプール・API トークン・制御系 LXC（`<prefix>-ctl`: console + `/docs/` + runner + kanban + workspace + 秘密情報。systemd 常駐）を分ける。`sandbox` CLI は API モード（プール限定）で動き、ホストの root を持たない。Mac 側は不要（ブラウザと ssh だけ）。既存環境は `default` テナントで従来どおり。実機での初回テナント構築は未
 - Web コンソール（ボード / 実行記録の工程トラック / sandbox / 取り込み / ジョブ）: `../console/`（2026-09-06、Python 標準ライブラリ、127.0.0.1 専用。状態は既存 CLI 経由でしか変えない。ADR-0013）。**メンテナの Mac で launchd 常駐（`com.aifactory.console`、http://127.0.0.1:8765/）**。コードを変えたら `launchctl kickstart -k gui/$(id -u)/com.aifactory.console`
 
 ## 現在の方針（2026-09-05 確定分）
@@ -99,6 +100,7 @@
 - ゲートの差分実行 / dispatch の PJ 単位並列
 
 ## 方針の履歴（新しい順）
+- **2026-09-07（コンソール UX）**: メンテナ提供の SaaS UI/UX・UX ライティングのノウハウを `docs/ui-ux-writing-guide.md` に取り込み、コンソールに適用（ADR-0019）。メンテナ「このノウハウを元にして console の UI/UX を改善してほしい。コストよりも品質を求める」。操作を文脈・頻度・危険性・次の行動の 4 軸で見直し、可逆な状態変更は確認なし + 「元に戻す」、配車と本番 run は影響を見せるダイアログ（配車は次に回るチケットを先に表示）、返却と停止は危険色 + 番号入力。ジョブ完了後の「次にすること」、頻度順のナビと `g` + 頭文字の近道。文言は `console/static/strings.js` に集約し、`console/UX.md`（1 ページのボイス&トーン・用語集・4 軸の表）の約束を `tests/test_strings.py` が CI で検査。unittest 31 本、複製 workspace でブラウザ確認
 - **2026-09-06（公開化）**: 公開リポジトリ（Apache-2.0）として整備。運用データ（PJ 定義・kanban.db・tickets・runs・logs）を `AIFACTORY_WORKSPACE`（既定 `workspace/`、git 追跡外）へ出し、`sandbox/templates/` は枠組み（base / env.example / ssh_config.example / launchd）だけに。`examples/projects/kumitate/` を同梱サンプルに。実機台帳・文字起こし・この台帳の私有版は private workspace へ。ADR・解説 HTML・各 README の人名と私設インフラ名を一般化（判断は変えない）
 - **2026-09-06（夜・3）**: MCP サーバー（ADR-0015）。メンテナ「MCP で操作で読み書き操作できるようにしてほしい」。読み書きの本体を `console/lib/core.py` に切り出し、HTTP（console）と stdio（mcp）の 2 口に。ツール 20 本 + resources 3 種、`.mcp.json` で登録。unittest 6 本、実 Claude Code（Haiku）から呼べることを確認
 - **2026-09-06（夜・2）**: コンソールを実運用に。unittest（console 14 本 / runner 7 本）、`console/bin/install.sh --launchd` で常駐登録（メンテナの Mac、port 8765）。コンソールだけで intake → チケット 206（kumitate research）→ 実行 → 実機 VM（sb-kumitate-02）で research 18 分 + judge 1 分 → 完了・返却まで通した（合計 19 分、$2.63）。逐次ログは 25 KB、生 JSONL は 660 KB（git 外にした判断が妥当だった）

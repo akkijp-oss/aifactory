@@ -29,7 +29,9 @@ launchd's PATH is minimal, so the installer writes the absolute path of the curr
 flowchart LR
   B[Board<br>pipeline strip + 5 columns] --> T[Ticket<br>body, history, run]
   T --> R[Runs<br>step track + logs]
-  B --> I[Intake<br>intake / kb new / dispatch]
+  B --> I[File<br>intake / kb new]
+  B --> D[Dispatch<br>dialog → dispatch]
+  D --> J
   I --> J[Jobs<br>follow CLI output]
   T --> J
   S[sandbox<br>lending and projects]
@@ -37,12 +39,12 @@ flowchart LR
 
 | Screen | What you see | What you can press |
 |---|---|---|
-| Board | The pipeline strip (todo → in progress → review → done, with "waiting for a human" to the side) and five columns of cards. Running runs appear under "in progress" with the current step and elapsed time | File a ticket (goes to Intake), dispatch one ticket |
-| Ticket | Body (Markdown), state history, related runs and jobs | `kb run` (dry run / workflow override / `--keep` / `--resume`), move the state (start / review / done / back to todo / waiting for a human), fix the kind and PR number, sync the state from the run record |
+| Board | The pipeline strip (todo → in progress → review → done, with "waiting for a human" to the side) and five columns of cards. Running runs appear under "in progress" with the current step and elapsed time | File a ticket (goes to File), dispatch (a dialog to pick project, count and dry run; it shows the ticket that will be picked before you confirm, and cannot be pressed when there is no todo) |
+| Ticket | Body (Markdown), state history, related runs and jobs | `kb run` (a dialog shows project, workflow and expected duration first; dry run / `--keep` / `--resume`), move the state (start / review / done / back to todo / waiting for a human; no confirmation, the toast offers *Undo*), fix the kind, PR number and note, sync the state from the run record |
 | Runs | The list of `workspace/runs/` and, per run, the step track (pass / fail and duration per step, loops ↺, terminal end / human). File list and logs | — |
-| sandbox | Lent VMs (task, VM name, IP, project, time since lending, app URL) and the project list (whether project.yml and the token file exist, pool usage) | `sandbox ls` (ssh to Proxmox, a few seconds), `sandbox release` |
-| Intake | — | Free text → `intake`, a well-formed body → `kb new`, todo → `dispatch` (project, count, dry run) |
-| Jobs | The CLI processes this console started. Output is followed every 2 seconds | Stop (SIGTERM to the process group) |
+| sandbox | Lent VMs (task, VM name, IP, project, time since lending, app URL) and the project list (whether project.yml and the token file exist, pool usage) | `sandbox ls` (ssh to Proxmox, a few seconds), `sandbox release` (if a run is active on that VM you must type the ticket number first) |
+| File | — | Free text → `intake`, a well-formed body → `kb new`. Dispatch lives on the board |
+| Jobs | The CLI processes this console started. Output is followed every 2 seconds. A finished job shows *What to do next* (open the created ticket, sync the state of a stopped run, and so on) | Stop (SIGTERM to the process group) |
 | Logs | `workspace/logs/intake.log` / `workspace/logs/dispatch.log` | — |
 | Settings | Workflow steps, the model routes (`routes.env`), `git status` | — |
 
@@ -68,7 +70,9 @@ While a run is in progress its screen refreshes every 5 seconds and automaticall
 - **Long operations are jobs.** `kb run` can take more than an hour, so the console detaches it as a child process and streams its output to `console/jobs/<id>/log` (not tracked by git)
 - **Duplicates are rejected.** A second `kb run` for the same ticket, a second `dispatch`, or a `release` for a task with a running job is refused inside a lock
 - **Readable files are limited** to the workspace (`runs/`, `kanban/tickets/`, `logs/`, `projects/`), `examples/projects/`, `workflow/kit/` and `console/jobs/`. Token contents are never shown
-- Real runs, releases and stops ask for confirmation
+- **Confirmation scales with risk.** Moving a ticket's state applies immediately and the toast offers *Undo*. Real runs and dispatch open a dialog that shows what will happen (the ticket to be picked, the project, the expected duration). Releasing a VM and stopping a job use a danger-styled dialog, and when a run is active on that VM you must type the ticket number
+- Navigation is ordered by how often each screen is used (board / file / runs / jobs / sandbox / logs / settings). Press ++g++ then a letter (++b++ board, ++i++ file, ++r++ runs, ++j++ jobs, ++s++ sandbox, ++l++ logs, ++c++ settings) to jump; ++question++ lists the shortcuts
+- The rules for UI text (buttons are verbs, sentences are polite, one glossary) live in `console/UX.md` in the repository. The decision record is ADR-0019
 
 ## API
 
@@ -84,6 +88,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 |---|---|
 | `GET /api/overview` | Counts per state, running runs and jobs, number of lent VMs |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | List / body, history, runs, jobs |
+| `GET /api/next[?pj=]` | The todo `kb next` would pick for dispatch, or `null` |
 | `POST /api/tickets` | `kb new` |
 | `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr}` |
 | `POST /api/tickets/<id>/run` | `kb run` as a job. `{dry_run, workflow, keep, resume}` |
@@ -95,6 +100,8 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/logs` / `GET /api/config` | intake / dispatch logs / workflows, routes and git |
 
 ## Using it from an AI session (MCP)
+
+`.mcp.json` carries two servers: **`aifactory-local`** (the workspace on this machine) and **`aifactory-ctl`** (the control plane on Proxmox). With the control plane in an LXC on Proxmox ([Tenants](tenants.md)), use `aifactory-ctl`, or register it at user scope so it works from any directory (`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`). Codex CLI: `codex mcp add aifactory -- <repo>/console/bin/mcp-remote`. Any client that speaks stdio MCP can use the same entry point. `console/bin/mcp-remote` starts the MCP server inside the LXC over ssh, so the AI session reads and writes the LXC's workspace and lending state directly. The target comes from `~/.config/aifactory/mcp-remote.env`: `AIFACTORY_CTL` (default `aifactory@ctl.main.sb.internal`; another tenant is `aifactory@ctl.<tenant>.sb.internal`) and, while the tailnet route is not yet approved, `AIFACTORY_CTL_JUMP=<ssh alias of the Proxmox host>`. Run `claude mcp reset-project-choices` once to approve the new server.
 
 `console/bin/mcp` exposes the same reads and writes as MCP tools. It is registered in `.mcp.json` at the repository root, so opening Claude Code in this repository asks for approval once and then offers the tools as `mcp__aifactory__*`.
 

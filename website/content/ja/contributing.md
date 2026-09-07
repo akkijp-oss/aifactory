@@ -47,6 +47,7 @@ aifactory は Apache-2.0 ライセンスで公開されており、[GitHub の�
 | `sandbox/bin/sandbox` | `bash -n` | `sandbox/bin/install.sh` で PATH のコピーを更新 |
 | runner（`workflow/bin/run`） | 実行中の run がないことを確認（Python なので実行中の編集は安全だが、挙動の差が混ざる） | `python3 -m unittest discover -s workflow/tests` と `--dry-run` で確認 |
 | console / mcp | `python3 -m unittest discover -s console/tests` | launchd 常駐なら `launchctl kickstart -k gui/$(id -u)/com.aifactory.console` |
+| console の画面の文言 | `console/UX.md`（1 ページ: 摩擦の段階・ボイス・用語集）を読む。文言は `console/static/strings.js` に置き、`app.js` に直書きしない | `python3 -m unittest discover -s console/tests -p 'test_strings.py'` |
 | Proxmox 側スクリプト | `sandbox ls` で貸出中がないことを確認 | `STATUS.md` を更新 |
 | kanban / glue | `AIFACTORY_WORKSPACE=<別ディレクトリ>`（または `KB_ROOT`）でテスト | |
 | このサイト | `website/content/ja/` を直し `en/` に訳す | `mkdocs build --strict` が通ること |

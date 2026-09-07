@@ -1,37 +1,85 @@
-/* aifactory console: 素の JS。ビルド無し。hash ルーティング + 定期取得。 */
+/* aifactory console: 素の JS。ビルド無し。hash ルーティング + 定期取得。
+   画面の文言はすべて strings.js の T に置く（console/UX.md の約束。tests/test_strings.py が表記と鍵の対応を検査する）。
+   摩擦の段階: 可逆 → 確認なし + 元に戻す / 半可逆・影響大 → ダイアログで影響を見せる / 不可逆・影響大 → 危険色 + 番号の入力 */
 'use strict';
 const main = document.getElementById('main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const LABEL = { todo: '未着手', in_progress: '実行中', review: 'レビュー待ち', blocked: '人間待ち', done: '完了' };
-const JOB_LABEL = { running: '実行中', done: '終了', failed: '失敗', stopped: '止めた', lost: '記録なし', ended: '終了（コード不明）' };
+const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
+const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
+const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '';
 
+/* ---------- 通信・通知 */
 async function api(path, body) {
   const opts = body ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Console': '1' }, body: JSON.stringify(body) } : {};
   let r;
   try { r = await fetch('/api/' + path, opts); }
-  catch (e) { setConn(false); throw new Error('サーバーに届かない。console/bin/console は動いている?'); }
+  catch (e) { setConn(false); throw new Error(T.err.unreachable); }
   setConn(true);
-  const j = await r.json().catch(() => ({ error: 'JSON が壊れている' }));
+  const j = await r.json().catch(() => ({ error: T.err.badJson }));
   if (!r.ok) throw new Error(j.error || (j.stderr ? j.stderr.trim() : `HTTP ${r.status}`));
   return j;
 }
-function setConn(ok) { const c = document.getElementById('conn'); c.classList.toggle('off', !ok); c.textContent = ok ? '接続中' : '切断'; }
-function toast(msg, err) {
-  const t = document.getElementById('toast'); t.innerHTML = msg; t.classList.toggle('err', !!err); t.hidden = false;
-  clearTimeout(toast._h); toast._h = setTimeout(() => { t.hidden = true; }, err ? 8000 : 4500);
+function setConn(ok) {
+  const c = $('conn'); c.classList.toggle('off', !ok); c.textContent = ok ? T.conn.on : T.conn.off;
+  $('offline').hidden = ok;
 }
+/* トースト。可逆な操作のあとは action に「元に戻す」を渡す（確認ダイアログより取り消し可能性を優先する） */
+function toast(msg, opt) {
+  opt = opt || {};
+  const t = $('toast');
+  t.innerHTML = `<span class="toast-msg">${msg}</span>${opt.action ? `<button type="button" class="toast-act">${esc(opt.action.label)}</button>` : ''}`;
+  t.classList.toggle('err', !!opt.err); t.hidden = false;
+  if (opt.action) t.querySelector('.toast-act').onclick = async () => { t.hidden = true; clearTimeout(toast._h); try { await opt.action.run(); } catch (e) { toast(esc(e.message), { err: true }); } };
+  clearTimeout(toast._h); toast._h = setTimeout(() => { t.hidden = true; }, (opt.err || opt.action) ? 8000 : 4500);
+}
+/* 確認ダイアログ。影響を文で見せ、既定フォーカスはキャンセル。typed を渡すと同じ文字列を打つまで実行できない（不可逆・影響大の操作） */
+function ask(o) {
+  return new Promise(resolve => {
+    const dlg = $('dlg');
+    dlg.innerHTML = `<form class="dlg ${o.danger ? 'danger' : ''}">
+      <h2>${esc(o.title)}</h2>
+      <div class="dlg-body">${o.body || ''}</div>
+      ${o.typed ? `<label class="field dlg-typed">${esc(tt(T.dialog.typeToConfirm, { v: o.typed }))}<input type="text" id="dlg-typed" autocomplete="off" inputmode="numeric" placeholder="${esc(o.typed)}"></label>` : ''}
+      <div class="err dlg-err" id="dlg-err" hidden></div>
+      <div class="actions dlg-actions"><button type="button" id="dlg-cancel">${esc(T.btn.cancel)}</button><button type="submit" id="dlg-ok" class="${o.danger ? 'danger solid' : 'primary'}" ${o.typed ? 'disabled' : ''}>${esc(o.ok)}</button></div>
+    </form>`;
+    let settled = false;
+    const done = v => { if (settled) return; settled = true; dlg.close(); resolve(v); };
+    dlg.querySelector('#dlg-cancel').onclick = () => done(false);
+    dlg.oncancel = e => { e.preventDefault(); done(false); };
+    dlg.querySelector('form').onsubmit = e => {
+      e.preventDefault();
+      const why = o.validate ? o.validate(dlg) : '';
+      const eb = dlg.querySelector('#dlg-err');
+      if (why) { eb.textContent = why; eb.hidden = false; return; }
+      done(true);
+    };
+    if (o.typed) { const inp = dlg.querySelector('#dlg-typed'); inp.oninput = () => { dlg.querySelector('#dlg-ok').disabled = inp.value.trim() !== String(o.typed); }; }
+    dlg.showModal();
+    if (o.onOpen) o.onOpen(dlg);
+    const f = o.focus === 'first' ? dlg.querySelector('input, select, textarea') : null;
+    (f || dlg.querySelector('#dlg-cancel')).focus();
+  });
+}
+const dlgOpen = () => $('dlg').open || $('help').open;
+
+/* ---------- 表示の部品 */
 const pad = n => String(n).padStart(2, '0');
 function fmtT(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d)) return iso; return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-function fmtDur(s) { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); if (s < 60) return `${s}秒`; const m = Math.floor(s / 60); if (m < 60) return `${m}分`; return `${Math.floor(m / 60)}時間${m % 60}分`; }
+function fmtDur(s) { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); if (s < 60) return tt(T.time.sec, { n: s }); const m = Math.floor(s / 60); if (m < 60) return tt(T.time.min, { n: m }); return tt(T.time.hourMin, { h: Math.floor(m / 60), m: m % 60 }); }
 function since(iso) { return iso ? fmtDur((Date.now() - new Date(iso)) / 1000) : ''; }
 function sec(a, b) { return (new Date(b || Date.now()) - new Date(a)) / 1000; }
-function st(s) { return `<span class="st ${esc(s)}">${esc(LABEL[s] || s)}</span>`; }
-function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'running' ? '<span class="dot pulse"></span>' : ''}${esc(JOB_LABEL[j.state] || j.state)}</span>`; }
-function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${t.pr}</a>` : `#${t.pr}`; }
+function st(s) { return `<span class="st ${esc(s)}">${esc(T.status[s] || s)}</span>`; }
+function rst(r) { return `<span class="st ${esc(r)}">${esc(T.result[r] || r)}</span>`; }
+function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'running' ? '<span class="dot pulse"></span>' : ''}${esc(T.jobState[j.state] || j.state)}</span>`; }
+function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${esc(t.pr)}</a>` : `#${esc(t.pr)}`; }
 function runLink(run) { if (!run) return ''; const n = run.replace(/^workflow\/runs\//, ''); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
-function editing() { const a = document.activeElement; return a && main.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
+function editing() { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
+const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}<span class="spacer"></span>${right || ''}</div>`;
+const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
+const link = (href, label, primary) => `<a class="btn ${primary ? 'primary' : ''}" href="${href}">${esc(label)}</a>`;
 
 /* 最小限の Markdown（見出し・箇条書き・コードフェンス・インラインコード・リンク・罫線） */
 function md(text) {
@@ -60,75 +108,105 @@ function md(text) {
 async function refreshNav() {
   try {
     const o = await api('overview');
-    const c = o.counts; document.getElementById('n-board').textContent = (c.todo + c.in_progress + c.review + c.blocked) || '';
-    document.getElementById('n-runs').textContent = o.runs_active.length || '';
-    document.getElementById('n-sandbox').textContent = o.lent || '';
-    document.getElementById('n-jobs').textContent = o.jobs_running || '';
-    document.getElementById('clock').textContent = '更新 ' + fmtT(o.now).slice(6);
+    const c = o.counts; $('n-board').textContent = (c.todo + c.in_progress + c.review + c.blocked) || '';
+    $('n-runs').textContent = o.runs_active.length || '';
+    $('n-sandbox').textContent = o.lent || '';
+    $('n-jobs').textContent = o.jobs_running || '';
+    $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6) });
     return o;
   } catch (e) { return null; }
 }
-function schedule(fn, ms) { clearInterval(timer); timer = setInterval(async () => { if (location.hash === lastRoute && !editing()) await fn(); }, ms); }
-function render(html) {
-  const y = window.scrollY; main.innerHTML = html; window.scrollTo(0, y);
-}
+function schedule(fn, ms) { clearInterval(timer); timer = setInterval(async () => { if (location.hash === lastRoute && !editing() && !dlgOpen()) await fn(); }, ms); }
+function render(html) { const y = window.scrollY; main.innerHTML = html; window.scrollTo(0, y); }
 
 /* ---------- ボード */
 async function viewBoard() {
   const pj = localStorage.getItem('pj') || '';
   const [o, t] = await Promise.all([refreshNav(), api('tickets' + (pj ? `?pj=${encodeURIComponent(pj)}` : ''))]);
-  if (!o) return render(`<div class="err">サーバーから状態を取れない</div>`);
-  const by = {}; STATUSES.forEach(s => by[s] = []); t.tickets.forEach(x => by[x.status].push(x));
+  if (!o) return render(`<div class="err">${esc(T.err.noOverview)}</div>`);
+  const by = {}; STATUSES.forEach(s => by[s] = []); t.tickets.forEach(x => (by[x.status] || by.todo).push(x));
   by.done.sort((a, b) => b.updated.localeCompare(a.updated));
-  const live = o.runs_active.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? `${esc(r.current.step)} を実行中 ${since(r.current.since)}` : `次は ${esc(r.next)}`}（開始から ${since(r.started)}）</div>`).join('')
-    + (o.jobs_running ? `<div><a href="#/jobs">ジョブ ${o.jobs_running} 件が実行中</a></div>` : '');
-  const cell = s => `<div class="cell s-${s}"><div class="k">${LABEL[s]}</div><div class="n">${o.counts[s]}</div>${s === 'in_progress' ? `<div class="live">${live || '動いている run は無い'}</div>` : ''}</div>`;
+  const live = o.runs_active.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
+    + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
+  const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${o.counts[s]}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
   const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
-    <span class="meta">${x.pr ? `<span>PR #${x.pr}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
-  const col = (s, list, cap) => `<section class="col s-${s}"><h2>${LABEL[s]}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${{ todo: '取り込みで起票すると、ここに並ぶ', in_progress: 'runner が回っているチケットが出る', review: 'PR を人間がレビューする段', blocked: '人間の判断を待っている', done: '' }[s]}</div>`}${cap && list.length > cap ? `<div class="empty">ほか ${list.length - cap} 件（kb list --all）</div>` : ''}</section>`;
-  render(`<div class="head"><h1>ボード</h1><span class="sub">todo → in_progress → review → done。人間待ちは横に置く</span><span class="spacer"></span>
-      <label class="help">PJ <select data-act="pj-filter"><option value="">すべて</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
-      <a class="btn" href="#/intake">起票する</a><button data-act="dispatch-once">配車する（todo を 1 件）</button></div>
-    <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">人間待ち</div><div class="n">${o.counts.blocked}</div></div></div>
+    <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
+  const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty">${esc(tt(T.board.more, { n: list.length - cap }))}</div>` : ''}</section>`;
+  const canDispatch = by.todo.length > 0;
+  render(head(esc(T.nav.board), T.sub.board, `
+      <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+      <a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
+    + `<div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${o.counts.blocked}</div></div></div>
     <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('blocked', by.blocked)}${col('done', by.done, 15)}</div>`);
   schedule(viewBoard, 5000);
 }
 
+/* 配車のダイアログ。押す前に「次に回るチケット」を見せる（影響を名前で示す）。未着手が無ければ実行できない */
+async function dispatchDialog() {
+  const t = await api('tickets'); const pj0 = localStorage.getItem('pj') || '';
+  const opt = (list, blank) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option ${x === pj0 ? 'selected' : ''}>${esc(x)}</option>`).join('');
+  const load = async dlg => {
+    const pj = dlg.querySelector('#dp-pj').value; const box = dlg.querySelector('#dp-next'); const okb = dlg.querySelector('#dlg-ok');
+    box.innerHTML = `<span class="help">${esc(T.dialog.dispatch.loading)}</span>`;
+    let next = null;
+    try { next = (await api('next' + (pj ? `?pj=${encodeURIComponent(pj)}` : ''))).next; } catch (e) { next = null; }
+    if (next) { box.innerHTML = `<div class="k">${esc(T.dialog.dispatch.nextIs)}</div><div class="pick"><span class="id">${next.id}</span><span class="tag pj">${esc(next.pj)}</span> <span class="tag">${esc(next.kind)}</span> ${esc(next.title)}</div><div class="help">${esc(T.dialog.dispatch.nextNote)}</div>`; okb.disabled = false; }
+    else { box.innerHTML = `<div class="warn">${esc(T.dialog.dispatch.none)}</div>`; okb.disabled = true; }
+  };
+  const ok = await ask({
+    title: T.dialog.dispatch.title, ok: T.btn.dispatch,
+    body: `<p>${esc(T.dialog.dispatch.body)}</p>
+      <div class="row"><label class="field">${esc(T.label.pj)}<select id="dp-pj">${opt(t.pjs, T.label.allPj)}</select></label>
+      <label class="field">${esc(T.label.count)}<select id="dp-max"><option value="1">${esc(T.label.count1)}</option><option value="3">${esc(T.label.count3)}</option><option value="10">${esc(T.label.count10)}</option><option value="0">${esc(T.label.countAll)}</option></select></label></div>
+      <label class="help check"><input type="checkbox" id="dp-dry"> ${esc(T.label.dispatchDry)}</label>
+      <div class="preview" id="dp-next"></div>`,
+    onOpen: dlg => { load(dlg); dlg.querySelector('#dp-pj').onchange = () => load(dlg); },
+  });
+  if (!ok) return;
+  const max = $('dp-max').value, dry = $('dp-dry').checked, pj = $('dp-pj').value;
+  const r = await api('dispatch', { pj: pj || undefined, once: max === '1', max: max === '1' ? undefined : Number(max), dry_run: dry });
+  go(`#/job/${r.job.id}`);
+}
+
 /* ---------- チケット */
-async function viewTicket(id) {
+async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
   const runBusy = d.jobs.find(j => j.state === 'running' && (j.kind === 'kb-run' || j.kind === 'sandbox-release'));
-  const stBtn = (act, label, cls) => `<button data-act="status" data-id="${t.id}" data-do="${act}" class="${cls || ''}">${label}</button>`;
-  const moves = { todo: [stBtn('start', '開始にする'), stBtn('block', '人間待ちにする')], in_progress: [stBtn('review', 'レビュー待ちにする'), stBtn('block', '人間待ちにする'), stBtn('reopen', '未着手に戻す')],
-    review: [stBtn('done', '完了にする', 'primary'), stBtn('block', '人間待ちにする'), stBtn('reopen', '未着手に戻す')], blocked: [stBtn('reopen', '未着手に戻す', 'primary'), stBtn('done', '完了にする')], done: [stBtn('reopen', '未着手に戻す（やり直す）')] }[t.status];
-  render(`<div class="crumb"><a href="#/board">ボード</a> › ${t.id}</div>
-    <div class="head"><h1><span class="mono" style="color:var(--muted)">${t.id}</span> ${esc(t.title)}</h1>${st(t.status)}<span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
-    ${t.note ? `<div class="panel" style="padding:8px 14px"><b>メモ</b> ${esc(t.note)}</div>` : ''}
+  const stBtn = (act, label, cls) => `<button data-act="status" data-id="${t.id}" data-do="${act}" data-from="${esc(t.status)}" class="${cls || ''}">${esc(label)}</button>`;
+  const moves = { todo: [stBtn('start', T.btn.start, 'primary'), stBtn('block', T.btn.block)],
+    in_progress: [stBtn('review', T.btn.review, 'primary'), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
+    review: [stBtn('done', T.btn.done, 'primary'), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
+    blocked: [stBtn('reopen', T.btn.reopen, 'primary'), stBtn('done', T.btn.done)],
+    done: [stBtn('reopen', T.btn.redo)] }[t.status] || [];
+  const runHint = t.status === 'done' ? T.help.runDone : t.status === 'in_progress' ? T.help.runInProgress : T.help.runDefault;
+  const runBtn = (label, cls, dry) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''}>${esc(label)}</button>`;
+  render(crumb('#/board', T.nav.board, tt(T.ticket.crumb, { id: t.id })) + `
+    <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
+    ${t.note ? `<div class="panel note"><b>${esc(T.label.note)}</b> ${esc(t.note)}</div>` : ''}
     <div class="grid2">
       <div>
-        <div class="panel"><h2>runner で回す<small>kb run ${t.id}</small></h2>
-          ${!d.project_yml ? `<div class="warn">${esc(t.pj)} に project.yml が無いので runner は動かない（$AIFACTORY_WORKSPACE/projects/${esc(t.pj)}/project.yml を書く）</div>` :
-      runBusy ? `<div class="warn">実行中のジョブがある: <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div>` : `
-          <div class="row"><label class="field">workflow<select id="run-wf"><option value="">${esc(t.kind)}（種別のまま）</option>${d.kinds.filter(k => k !== t.kind).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select></label>
-            <label class="help"><input type="checkbox" id="run-keep"> 終了後 VM を返却しない（中を見る）</label>
-            <label class="help"><input type="checkbox" id="run-resume"> 貸出中の VM で続きから（--resume）</label></div>
-          <div class="actions"><button class="primary" data-act="run" data-id="${t.id}">実行する</button><button data-act="run" data-id="${t.id}" data-dry="1">dry-run で依頼文だけ組む</button>
-          <span class="help">${t.status === 'done' ? '完了済み。実行するには先に「未着手に戻す」' : t.status === 'in_progress' ? '実行中の扱い。別の run が動いていないか確かめてから' : 'VM を 1 台貸し出し、step を順に回す。終わると状態が自動で進む'}</span></div>`}
+        <div class="panel"><h2>${esc(T.h.run)}<small>kb run ${t.id}</small></h2>
+          ${!d.project_yml ? `<div class="warn">${esc(tt(T.help.noProjectYml, { pj: t.pj }))}</div>` :
+          runBusy ? `<div class="warn">${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div>` : `
+          <div class="row"><label class="field">${esc(T.label.workflow)}<select id="run-wf"><option value="">${esc(tt(T.label.workflowAsKind, { kind: t.kind }))}</option>${d.kinds.filter(k => k !== t.kind).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select></label></div>
+          <div class="row checks"><label class="help check"><input type="checkbox" id="run-keep"> ${esc(T.label.keep)}</label>
+            <label class="help check"><input type="checkbox" id="run-resume"> ${esc(T.label.resume)}</label></div>
+          <div class="actions">${runBtn(T.btn.run, 'primary')}<span class="help">${esc(runHint)}</span></div>
+          <div class="aside">${runBtn(T.btn.dryRun, 'ghost', true)}<span class="help">${esc(T.help.dryRun)}</span></div>`}
         </div>
-        <div class="panel"><h2>状態を手で進める</h2><div class="actions">${moves.join('')}</div>
-          <div class="row" style="margin-top:10px"><label class="field">メモ（人間待ちには必須）<input type="text" id="note" size="40" placeholder="何を待っているか / 何をしたか"></label></div></div>
-        <div class="panel"><h2>項目を直す<small>kb set</small></h2>
-          <div class="row"><label class="field">種別<select id="set-kind">${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
-            <label class="field">PR 番号<input type="number" id="set-pr" value="${t.pr || ''}" style="width:100px"></label>
-            <button data-act="set" data-id="${t.id}">保存する</button>
-            ${t.run ? `<button data-act="sync" data-id="${t.id}" title="runs/<run>/state.json を読み直して状態を合わせる">run 記録から状態を取り直す</button>` : ''}</div></div>
-        <div class="panel"><h2>実行記録</h2>${d.runs.length ? `<table><tr><th>run</th><th>workflow</th><th>開始</th><th>所要</th><th>結果</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.kind === 'v1' ? `<span class="dot pulse"></span>${since(r.started)}` : '')}</td><td>${r.result ? st(r.result) : r.kind === 'v0' ? 'v0' : `次 ${esc(r.next || '')}`}</td></tr>`).join('')}</table>` : `<div class="help">まだ無い${t.run ? `（DB の run: ${runLink(t.run)}）` : ''}</div>`}</div>
-        ${d.jobs.length ? `<div class="panel"><h2>このコンソールのジョブ</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
+        <div class="panel"><h2>${esc(T.h.move)}</h2><div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveUndo)}</div></div>
+        <div class="panel"><h2>${esc(T.h.fix)}<small>kb set</small></h2>
+          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind">${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
+            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
+            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.kind === 'v1' ? `<span class="dot pulse"></span>${since(r.started)}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(T.empty.ticketRuns)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
       </div>
       <div>
-        <div class="panel"><h2>本文<small class="mono">${esc(d.file)}</small></h2>${d.body != null ? md(d.body) : '<div class="err">本文ファイルが無い</div>'}</div>
-        <div class="panel"><h2>履歴</h2><table><tr><th>日時</th><th>項目</th><th>前</th><th>後</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
-          <div class="help" style="margin-top:6px">作成 ${fmtT(t.created)} / 更新 ${fmtT(t.updated)}</div></div>
+        <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.history)}</h2><table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
+          <div class="help top">${esc(tt(T.ticket.stamps, { c: fmtT(t.created), u: fmtT(t.updated) }))}</div></div>
       </div>
     </div>`);
   schedule(() => viewTicket(id), 5000);
@@ -138,11 +216,11 @@ async function viewTicket(id) {
 async function viewRuns() {
   const d = await api('runs'); const showAll = localStorage.getItem('runs-all') === '1';
   const list = d.runs.filter(r => showAll || (!r.dry && !r.attempt));
-  render(`<div class="head"><h1>実行記録</h1><span class="sub">runs/ の state.json を読む</span><span class="spacer"></span><label class="help"><input type="checkbox" data-act="runs-all" ${showAll ? 'checked' : ''}> dry-run と退避分（-attemptN）も見る</label></div>
-    <div class="panel"><table><tr><th>run</th><th>PJ</th><th>task</th><th>workflow</th><th>開始</th><th>所要</th><th>step</th><th>結果</th><th>PR</th></tr>
+  render(head(esc(T.nav.runs), T.sub.runs, `<label class="help check"><input type="checkbox" data-act="runs-all" ${showAll ? 'checked' : ''}> ${esc(T.label.runsAll)}</label>`) + `
+    <div class="panel"><table><tr><th>${esc(T.th.run)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.step)}</th><th>${esc(T.th.result)}</th><th>PR</th></tr>
     ${list.map(r => `<tr class="link" data-href="#/run/${encodeURIComponent(r.name)}"><td class="mono">${esc(r.name)}</td><td>${esc(r.pj || '')}</td><td>${r.task ? `<a href="#/ticket/${esc(r.task)}">${esc(r.task)}</a>` : ''}</td><td>${esc(r.workflow || '')}</td><td>${fmtT(r.started)}</td>
-      <td>${r.finished ? fmtDur(r.elapsed_s) : r.kind === 'v1' ? `<span class="dot pulse"></span>${since(r.started)}` : ''}</td><td>${r.steps_done ?? ''}${!r.finished && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? st(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : '<span class="st running">実行中</span>'}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
-    ${!list.length ? '<tr><td colspan="9" class="help">まだ無い。チケットから「実行する」で作られる</td></tr>' : ''}</table></div>`);
+      <td>${r.finished ? fmtDur(r.elapsed_s) : r.kind === 'v1' ? `<span class="dot pulse"></span>${since(r.started)}` : ''}</td><td>${r.steps_done ?? ''}${!r.finished && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
+    ${!list.length ? `<tr><td colspan="9" class="help">${esc(T.empty.runs)}</td></tr>` : ''}</table></div>`);
   schedule(viewRuns, 10000);
 }
 
@@ -152,17 +230,17 @@ function track(state, wf) {
   const stepOrder = wf ? wf.steps.map(s => s.id) : [];
   h.forEach((e, i) => {
     const d = sec(prev, e.at); prev = e.at;
-    if (i) parts.push(`<div class="arrow ${stepOrder.indexOf(e.step) < stepOrder.indexOf(h[i - 1].step) ? 'back' : ''}">${stepOrder.indexOf(e.step) < stepOrder.indexOf(h[i - 1].step) ? '↺' : '→'}</div>`);
+    if (i) { const back = stepOrder.indexOf(e.step) < stepOrder.indexOf(h[i - 1].step); parts.push(`<div class="arrow ${back ? 'back' : ''}">${back ? '↺' : '→'}</div>`); }
     parts.push(`<div class="step ${e.ok ? 'ok' : 'ng'}"><div class="nm">${esc(e.step)}</div><div class="ds">${fmtDur(d)}</div></div>`);
   });
-  if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${state.result === 'end' ? '終了' : '人間へ'}</div><div class="ds">${esc(state.result)}</div></div>`); }
-  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm"><span class="dot pulse"></span>${esc(state.next)}</div><div class="ds">${since(state.current && state.current.since || prev)} 経過</div></div>`); }
-  const plan = wf ? `<div class="help">定義: ${wf.steps.map(s => `${esc(s.id)}${s.role ? `(${esc(s.role)})` : '(code)'}`).join(' → ')}</div>` : '';
+  if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
+  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm"><span class="dot pulse"></span>${esc(state.next)}</div><div class="ds">${esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
+  const plan = wf ? `<div class="help">${esc(T.run.plan)} ${wf.steps.map(s => `${esc(s.id)}${s.role ? `（${esc(s.role)}）` : '（code）'}`).join(' → ')}</div>` : '';
   return `<div class="track">${parts.join('')}</div>${plan}`;
 }
 
 const runFile = {};   // run 名 → 開いているファイル
-const runPicked = {}; // run 名 → 人がファイルを選んだか（選ぶまでは実行中 step のログを追う）
+const runPicked = {}; // run 名 → 人がファイルを選んだか（選ぶまでは実行中の工程のログを追う）
 async function viewRun(name) {
   const d = await api(`runs/${encodeURIComponent(name)}`); const s = d.summary, state = d.state;
   const running = s.kind === 'v1' && !s.finished;
@@ -170,68 +248,89 @@ async function viewRun(name) {
   if (cur && !runPicked[name]) runFile[name] = cur.path;
   if (!runFile[name]) { const pick = [...d.files].filter(f => /\.(log|md|txt)$/.test(f.name) && f.name !== 'ticket.md').sort((a, b) => b.mtime.localeCompare(a.mtime))[0] || d.files.find(f => f.name === 'state.json'); runFile[name] = s.kind === 'v0' ? d.files[0].path : (pick ? pick.path : null); }
   const f = runFile[name]; const file = f ? await api(`file?path=${encodeURIComponent(f)}&tail=300000`) : null;
-  render(`<div class="crumb"><a href="#/runs">実行記録</a> › ${esc(name)}</div>
-    <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? st(s.result) : running ? '<span class="st running"><span class="dot pulse"></span>実行中</span>' : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">チケット ${esc(s.task)}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
-    <div class="panel"><h2>工程<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${track(state, d.workflow) || '<div class="help">v0 の記録（Markdown 1 枚）</div>'}
-      <dl class="kv" style="margin-top:8px"><dt>開始</dt><dd>${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${since(s.started)} 経過）` : ''}</dd>
-      ${s.pr_url ? `<dt>PR</dt><dd><a href="${esc(s.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(s.pr_url)}</a></dd>` : ''}${s.wip_branch ? `<dt>退避</dt><dd class="mono">origin/${esc(s.wip_branch)}</dd>` : ''}
-      ${state && state.loops && Object.keys(state.loops).length ? `<dt>戻し</dt><dd>${Object.entries(state.loops).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}</dd>` : ''}
-      ${d.jobs && d.jobs.length ? `<dt>ジョブ</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>
-    <div class="panel"><h2>ファイル<small>runs/${esc(name)}/</small></h2><div class="filelist">${d.files.map(x => `<a href="#" data-act="run-file" data-run="${esc(name)}" data-path="${esc(x.path)}" class="${x.path === f ? 'active' : ''}">${esc(x.name || x.path)}<span>${(x.size / 1024).toFixed(x.size > 10240 ? 0 : 1)}K</span></a>`).join('')}</div></div>
-    ${file ? `<div class="panel"><div class="logbar"><span class="mono">${esc(file.path)}</span>${file.truncated ? '<span>（末尾 300KB だけ表示）</span>' : ''}<span class="spacer"></span>${running ? `<span><span class="dot pulse"></span>${cur && file.path === cur.path ? `${esc(state.current.step)}（${esc(state.current.kind)}）の出力を追い読み・` : ''}5 秒ごとに更新</span>` : ''}</div>
+  render(crumb('#/runs', T.nav.runs, name) + `
+    <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? rst(s.result) : running ? `<span class="st running"><span class="dot pulse"></span>${esc(T.jobState.running)}</span>` : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">${esc(tt(T.ticket.crumb, { id: s.task }))}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
+    <div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${track(state, d.workflow) || `<div class="help">${esc(T.run.v0)}</div>`}
+      <dl class="kv top"><dt>${esc(T.th.started)}</dt><dd>${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${esc(tt(T.run.elapsed, { t: since(s.started) }))}）` : ''}</dd>
+      ${s.pr_url ? `<dt>PR</dt><dd><a href="${esc(s.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(s.pr_url)}</a></dd>` : ''}${s.wip_branch ? `<dt>${esc(T.run.wip)}</dt><dd class="mono">origin/${esc(s.wip_branch)}</dd>` : ''}
+      ${state && state.loops && Object.keys(state.loops).length ? `<dt>${esc(T.run.loops)}</dt><dd>${Object.entries(state.loops).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}</dd>` : ''}
+      ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>
+    <div class="panel"><h2>${esc(T.h.files)}<small>runs/${esc(name)}/</small></h2><div class="filelist">${d.files.map(x => `<a href="#" data-act="run-file" data-run="${esc(name)}" data-path="${esc(x.path)}" class="${x.path === f ? 'active' : ''}">${esc(x.name || x.path)}<span>${(x.size / 1024).toFixed(x.size > 10240 ? 0 : 1)}K</span></a>`).join('')}</div></div>
+    ${file ? `<div class="panel"><div class="logbar"><span class="mono" title="${esc(file.path)}">${esc((d.files.find(x => x.path === file.path) || {}).name || file.path.split('/').pop())}</span>${file.truncated ? `<span>${esc(T.run.truncated)}</span>` : ''}<span class="spacer"></span>${running ? `<span><span class="dot pulse"></span>${cur && file.path === cur.path ? esc(tt(T.run.following, { step: state.current.step, kind: state.current.kind })) + ' ' : ''}${esc(T.run.refresh)}</span>` : ''}</div>
       ${/\.md$/.test(file.path) && !/prompt-/.test(file.path) ? md(file.text) : `<pre class="log" id="runlog">${esc(file.text)}</pre>`}</div>` : ''}`);
-  const pre = document.getElementById('runlog'); if (pre && running) pre.scrollTop = pre.scrollHeight;
+  const pre = $('runlog'); if (pre && running) pre.scrollTop = pre.scrollHeight;
   if (running) schedule(() => viewRun(name), 5000); else clearInterval(timer);
 }
 
 /* ---------- sandbox */
 async function viewSandbox() {
-  const d = await api('sandbox'); const lent = Object.entries(d.lent).filter(([k, v]) => v && typeof v === 'object');
+  const [d, o] = await Promise.all([api('sandbox'), refreshNav()]);
+  const lent = Object.entries(d.lent).filter(([k, v]) => v && typeof v === 'object');
+  const lsRunning = o && o.jobs.find(j => j.kind === 'sandbox-ls');
   let ls = null; if (d.last_ls) ls = await api(`jobs/${d.last_ls.id}`);
-  render(`<div class="head"><h1>sandbox</h1><span class="sub">貸出状況は ~/.config/sandbox/state.json。VM の実勢は sandbox ls（Proxmox に ssh、数秒）</span><span class="spacer"></span><button data-act="sandbox-ls">一覧を取り直す（sandbox ls）</button></div>
-    <div class="panel"><h2>貸出中<small>${lent.length} 台</small></h2>
-      ${lent.length ? `<table><tr><th>task</th><th>VM</th><th>IP</th><th>PJ</th><th>貸出から</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a></td><td class="mono">${esc(v.name)} (${esc(v.vmid)})</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${since(v.since)}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
-        <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}">返却する</button></td></tr>`).join('')}</table>
-        <div class="help" style="margin-top:8px">返却は snapshot clean に巻き戻す。run が動いている VM を返すと run は止まる。runner は終了時に自分で返す</div>` : '<div class="help">貸出中の VM は無い</div>'}</div>
-    <div class="panel"><h2>PJ とプール<small>PJ あたり ${d.pool_per_pj} 台</small></h2><table><tr><th>PJ</th><th>repo</th><th>base</th><th>project.yml</th><th>トークン</th><th>貸出</th></tr>
-      ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? '<span class="st done">あり</span>' : '<span class="st blocked">無し</span>'}</td><td>${p.token_file ? '<span class="st done">保存済み</span>' : '<span class="st todo">未設定</span>'}</td><td>${p.lent} / ${p.pool}</td></tr>`).join('')}</table>
-      <div class="help" style="margin-top:8px">project.yml が無い PJ は起票できるが dispatch が人間待ちにする。トークンは ~/.config/sandbox/pj/&lt;pj&gt;.env の有無だけ見ている（中身は表示しない）</div></div>
-    <div class="panel"><h2>sandbox ls の結果<small>${ls ? `${fmtT(ls.job.finished)} 取得` : 'まだ取っていない'}</small></h2>${ls ? `<pre class="log small">${esc(ls.log.text.replace(/^\$.*\n/, ''))}</pre>` : '<div class="help">「一覧を取り直す」で Proxmox の qm list を読む</div>'}</div>`);
+  const runOf = task => o && o.runs_active.find(r => String(r.task) === String(task));
+  render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
+    <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(tt(T.sandbox.count, { n: lent.length }))}</small></h2>
+      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${since(v.since)}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
+        <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}" data-vm="${esc(v.name)}" data-run="${run ? esc(run.name) : ''}" data-step="${run && run.current ? esc(run.current.step) : ''}">${esc(T.btn.release)}</button></td></tr>`; }).join('')}</table>
+        <div class="help top">${esc(T.help.release)}</div>` : `<div class="help">${esc(T.empty.lent)}</div>`}</div>
+    <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(tt(T.sandbox.perPj, { n: d.pool_per_pj }))}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.lent)}</th></tr>
+      ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? `<span class="st done">${esc(T.sandbox.yes)}</span>` : `<span class="st blocked">${esc(T.sandbox.no)}</span>`}</td><td>${p.token_file ? `<span class="st done">${esc(T.sandbox.tokenSaved)}</span>` : `<span class="st todo">${esc(T.sandbox.tokenMissing)}</span>`}</td><td>${p.lent} / ${p.pool}</td></tr>`).join('')}</table>
+      <div class="help top">${esc(T.help.pjPool)}</div></div>
+    <div class="panel"><h2>${esc(T.h.lsResult)}<small>${ls ? esc(tt(T.sandbox.lsAt, { t: fmtT(ls.job.finished) })) : esc(T.sandbox.lsNever)}</small></h2>${ls ? `<pre class="log small">${esc(ls.log.text.replace(/^\$.*\n/, ''))}</pre>` : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
 
-/* ---------- 取り込み */
+/* ---------- 起票 */
 async function viewIntake() {
   clearInterval(timer);
   const t = await api('tickets');
-  const opt = (list, blank) => (blank ? `<option value="">${blank}</option>` : '') + list.map(x => `<option>${esc(x)}</option>`).join('');
-  render(`<div class="head"><h1>取り込み</h1><span class="sub">自由文は intake（LLM 1 回）、整った本文は kb new、todo の実行は dispatch</span></div>
+  const opt = (list, blank) => (blank != null ? `<option value="">${esc(blank)}</option>` : '') + list.map(x => `<option>${esc(x)}</option>`).join('');
+  render(head(esc(T.nav.intake), T.sub.intake) + `
     <div class="grid2">
-      <div class="panel"><h2>自由文から起票する<small>glue/bin/intake</small></h2>
-        <div class="field"><label>依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）</label><textarea id="in-text" placeholder="例: マルゴトの seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい"></textarea></div>
-        <div class="row"><label class="field">PJ（分かっていれば）<select id="in-pj">${opt(t.pjs, 'LLM に決めさせる')}</select></label><label class="field">種別<select id="in-kind">${opt(t.kinds, 'LLM に決めさせる')}</select></label>
-          <label class="help"><input type="checkbox" id="in-dry"> 起票せず判定だけ見る</label></div>
-        <div class="actions"><button class="primary" data-act="intake">取り込む</button><span class="help">claude -p を Mac 側で 1 回呼ぶ（20 秒ほど）。結果はジョブに出る</span></div></div>
-      <div class="panel"><h2>整った本文で起票する<small>kb new</small></h2>
-        <div class="row"><label class="field">PJ<select id="new-pj">${opt(t.pjs)}</select></label><label class="field">種別<select id="new-kind">${opt(t.kinds)}</select></label><label class="field">PR 番号（merge-pr）<input type="number" id="new-pr" style="width:100px"></label></div>
-        <div class="field"><label>題名（1 行目になる。ブランチ名と PR 題名に使う）</label><input type="text" id="new-title" placeholder="fix: … / docs: … / feat: …"></div>
-        <div class="field"><label>本文（Markdown。末尾に「## 完了条件」）</label><textarea id="new-body" style="min-height:140px"></textarea></div>
-        <div class="actions"><button class="primary" data-act="new">起票する</button></div></div>
+      <div class="panel"><h2>${esc(T.h.intakeFree)}<small>glue/bin/intake</small></h2>
+        <div class="field"><label for="in-text">${esc(T.label.request)}</label><textarea id="in-text" placeholder="${esc(T.label.requestPlaceholder)}"></textarea></div>
+        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj">${opt(t.pjs, T.label.letLlm)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind">${opt(t.kinds, T.label.letLlm)}</select></label>
+          <label class="help check"><input type="checkbox" id="in-dry"> ${esc(T.label.intakeDry)}</label></div>
+        <div class="actions"><button class="primary" data-act="intake">${esc(T.btn.intake)}</button><span class="help">${esc(T.help.intake)}</span></div></div>
+      <div class="panel"><h2>${esc(T.h.intakeNew)}<small>kb new</small></h2>
+        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj">${opt(t.pjs)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind">${opt(t.kinds)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100"></label></div>
+        <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}"></div>
+        <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" class="h140"></textarea></div>
+        <div class="actions"><button class="primary" data-act="new">${esc(T.btn.file)}</button><span class="help">${esc(T.help.newTicket)}</span></div></div>
     </div>
-    <div class="panel"><h2>配車する<small>glue/bin/dispatch</small></h2>
-      <div class="row"><label class="field">PJ<select id="dp-pj">${opt(t.pjs, 'すべて')}</select></label><label class="field">件数<select id="dp-max"><option value="1">1 件だけ（--once）</option><option value="3">3 件まで</option><option value="10">10 件まで</option><option value="0">todo が尽きるまで</option></select></label>
-        <label class="help"><input type="checkbox" id="dp-dry"> dry-run（VM を触らない・状態は進まない）</label><button class="primary" data-act="dispatch">配車する</button></div>
-      <div class="help">todo を古い順に取り、project.yml の有無とプールの空きだけ見て kb run する。直列。1 件が 60 分以上かかることがある</div></div>`);
+    <div class="help">${esc(T.help.dispatchMoved)} <a href="#/board">${esc(T.nav.board)}</a></div>`);
 }
 
 /* ---------- ジョブ */
 async function viewJobs() {
   const d = await api('jobs');
-  render(`<div class="head"><h1>ジョブ</h1><span class="sub">このコンソールが起動した CLI。記録は console/jobs/</span></div>
-    <div class="panel"><table><tr><th>状態</th><th>内容</th><th>開始</th><th>所要</th><th>rc</th><th>チケット</th></tr>
+  render(head(esc(T.nav.jobs), T.sub.jobs) + `
+    <div class="panel"><table><tr><th>${esc(T.th.state)}</th><th>${esc(T.th.what)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.rc)}</th><th>${esc(T.th.ticket)}</th></tr>
     ${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td><td>${fmtDur(sec(j.started, j.finished))}</td><td class="mono">${j.rc ?? ''}</td><td>${j.ticket ? `<a href="#/ticket/${j.ticket}">${j.ticket}</a>` : ''}</td></tr>`).join('')}
-    ${!d.jobs.length ? '<tr><td colspan="6" class="help">まだ無い</td></tr>' : ''}</table></div>`);
+    ${!d.jobs.length ? `<tr><td colspan="6" class="help">${esc(T.empty.jobs)}</td></tr>` : ''}</table></div>`);
   schedule(viewJobs, 3000);
+}
+/* ジョブが終わったあとの「次の一手」。主要な 1 つをプライマリに、残りはセカンダリに */
+function jobNext(j, text) {
+  if (j.state === 'running') return '';
+  const dry = (j.cmd || []).includes('--dry-run');
+  let lead = '', acts = [];
+  if (j.kind === 'intake') {
+    const last = text.trim().split('\n').reverse().find(l => /^\s*\d{3,}\s/.test(l)); const id = last ? last.trim().split(/\s+/)[0] : null;
+    if (j.state === 'done' && dry) { lead = T.next.intakeDry; acts = [link('#/intake', T.btn.openIntake, true)]; }
+    else if (j.state === 'done' && id) { lead = tt(T.next.intakeDone, { id }); acts = [link(`#/ticket/${id}`, T.btn.openTicket, true), link('#/board', T.btn.openBoard)]; }
+    else if (j.state === 'done') { lead = T.next.intakeDoneNoId; acts = [link('#/board', T.btn.openBoard, true)]; }
+    else { lead = T.next.intakeFailed; acts = [link('#/intake', T.btn.openIntake, true)]; }
+  } else if (j.kind === 'kb-run') {
+    const run = j.run_hint ? `#/run/${encodeURIComponent(j.run_hint)}` : null; const tk = j.ticket ? `#/ticket/${j.ticket}` : null;
+    if (j.state === 'done') { lead = dry ? T.next.runDry : T.next.runDone; acts = [run && link(run, T.btn.openRun, true), tk && link(tk, T.btn.openTicket)]; }
+    else { lead = T.next.runStopped; acts = [tk && `<button class="primary" data-act="sync" data-id="${j.ticket}" data-stay="1">${esc(T.btn.sync)}</button>`, link('#/sandbox', T.btn.openSandbox), run && link(run, T.btn.openRun)]; }
+  } else if (j.kind === 'dispatch') { lead = j.state === 'done' ? T.next.dispatchDone : T.next.dispatchFailed; acts = [link('#/board', T.btn.openBoard, true), link('#/runs', T.btn.openRuns)]; }
+  else if (j.kind === 'sandbox-release') { lead = j.state === 'done' ? T.next.releaseDone : T.next.releaseFailed; acts = [link('#/sandbox', T.btn.openSandbox, true)]; }
+  else if (j.kind === 'sandbox-ls') { lead = j.state === 'done' ? T.next.lsDone : T.next.lsFailed; acts = [link('#/sandbox', T.btn.openSandbox, true)]; }
+  if (!lead) return '';
+  return `<div class="panel next"><h2>${esc(T.h.next)}</h2><p>${esc(lead)}</p><div class="actions">${acts.filter(Boolean).join('')}</div></div>`;
 }
 const jobBuf = {};   // ジョブ id → { text, off }（off はサーバー側のバイト位置）
 async function viewJob(id, first) {
@@ -239,30 +338,30 @@ async function viewJob(id, first) {
   const buf = jobBuf[id] || { text: '', off: 0 };
   const d = await api(`jobs/${id}?offset=${buf.off}`); const j = d.job;
   if (d.log) { buf.text += d.log.text; buf.off = d.log.size; } jobBuf[id] = buf;
-  const pre0 = document.getElementById('joblog'); const atBottom = !pre0 || pre0.scrollHeight - pre0.scrollTop - pre0.clientHeight < 40;
-  render(`<div class="crumb"><a href="#/jobs">ジョブ</a> › ${esc(id)}</div>
-    <div class="head"><h1>${esc(j.label)}</h1>${jst(j)}${j.ticket ? `<a href="#/ticket/${j.ticket}">チケット ${j.ticket}</a>` : ''}${j.run_hint ? runLink(j.run_hint) : ''}<span class="spacer"></span>${j.state === 'running' ? `<button class="danger" data-act="job-stop" data-id="${esc(j.id)}">止める</button>` : ''}</div>
+  const pre0 = $('joblog'); const atBottom = !pre0 || pre0.scrollHeight - pre0.scrollTop - pre0.clientHeight < 40;
+  render(crumb('#/jobs', T.nav.jobs, id) + `
+    <div class="head"><h1>${esc(j.label)}</h1>${jst(j)}${j.ticket ? `<a href="#/ticket/${j.ticket}">${esc(tt(T.ticket.crumb, { id: j.ticket }))}</a>` : ''}${j.run_hint ? runLink(j.run_hint) : ''}<span class="spacer"></span>${j.state === 'running' ? `<button class="danger" data-act="job-stop" data-id="${esc(j.id)}">${esc(T.btn.stop)}</button>` : ''}</div>
     ${j.note ? `<div class="warn">${esc(j.note)}</div>` : ''}
-    <div class="panel"><dl class="kv"><dt>コマンド</dt><dd class="mono">${esc(j.cmd.join(' '))}</dd><dt>開始</dt><dd>${fmtT(j.started)}${j.finished ? ` → ${fmtT(j.finished)}` : ''}（${fmtDur(sec(j.started, j.finished))}）</dd><dt>pid / rc</dt><dd class="mono">${j.pid} / ${j.rc ?? '—'}</dd></dl></div>
-    <div class="panel"><div class="logbar"><span>出力</span><span class="spacer"></span>${j.state === 'running' ? '<span><span class="dot pulse"></span>2 秒ごとに追い読み</span>' : ''}</div><pre class="log" id="joblog">${esc(buf.text) || '（まだ出力が無い）'}</pre>
-      ${j.kind === 'kb-run' && j.state !== 'running' && j.state !== 'done' ? '<div class="help" style="margin-top:8px">途中で止まった run は、チケットの「run 記録から状態を取り直す」で kb の状態を合わせる。VM が貸出中のままなら sandbox で返却する</div>' : ''}</div>`);
-  const pre = document.getElementById('joblog'); if (pre && atBottom) pre.scrollTop = pre.scrollHeight;
+    ${jobNext(j, buf.text)}
+    <div class="panel"><dl class="kv"><dt>${esc(T.th.command)}</dt><dd class="mono">${esc(j.cmd.join(' '))}</dd><dt>${esc(T.th.started)}</dt><dd>${fmtT(j.started)}${j.finished ? ` → ${fmtT(j.finished)}` : ''}（${fmtDur(sec(j.started, j.finished))}）</dd><dt>${esc(T.th.pidRc)}</dt><dd class="mono">${j.pid} / ${j.rc ?? '—'}</dd></dl></div>
+    <div class="panel"><div class="logbar"><span>${esc(T.h.output)}</span><span class="spacer"></span>${j.state === 'running' ? `<span><span class="dot pulse"></span>${esc(T.job.following)}</span>` : ''}</div><pre class="log" id="joblog">${esc(buf.text) || esc(T.empty.jobLog)}</pre></div>`);
+  const pre = $('joblog'); if (pre && atBottom) pre.scrollTop = pre.scrollHeight;
   if (j.state === 'running') schedule(() => viewJob(id, false), 2000); else clearInterval(timer);
 }
 
 /* ---------- ログ・設定 */
 async function viewLogs() {
   const d = await api('logs');
-  const block = (name, f) => `<div class="panel"><h2>${name}<small class="mono">logs/${name}.log</small></h2>${f ? `<pre class="log small">${esc(f.text) || '（空）'}</pre>` : '<div class="help">まだ無い</div>'}</div>`;
-  render(`<div class="head"><h1>ログ</h1><span class="sub">起票（intake）と配車（dispatch）。step 単位の記録は実行記録、状態の履歴はチケット</span></div>${block('intake', d.intake)}${block('dispatch', d.dispatch)}`);
+  const block = (name, f) => `<div class="panel"><h2>${esc(name)}<small class="mono">logs/${esc(name)}.log</small></h2>${f ? `<pre class="log small">${esc(f.text) || esc(T.empty.log)}</pre>` : `<div class="help">${esc(T.empty.logFile)}</div>`}</div>`;
+  render(head(esc(T.nav.logs), T.sub.logs) + block('intake', d.intake) + block('dispatch', d.dispatch));
   schedule(viewLogs, 10000);
 }
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
-  render(`<div class="head"><h1>設定</h1><span class="sub">読むだけ。変えるのはファイル</span></div>
-    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><table><tr><th>名前</th><th>流れ</th></tr>${d.workflows.map(w => `<tr><td><b>${esc(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${w.steps.map(s => `<span class="tag" title="${esc(s.role || s.code || '')}">${esc(s.id)}</span>`).join(' → ')}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}</td></tr>`).join('')}</table></div>
-    <div><div class="panel"><h2>モデルの経路<small>workflow/kit/routes.env</small></h2><dl class="kv">${Object.entries(d.routes).map(([k, v]) => `<dt>${esc(k.replace('MODEL_', ''))}</dt><dd class="mono">${esc(v)}</dd>`).join('')}</dl><div class="help" style="margin-top:6px">役割: ${d.roles.map(esc).join(' / ')}</div></div>
-    <div class="panel"><h2>この console</h2><dl class="kv"><dt>repo</dt><dd class="mono">${esc(d.repo)}</dd><dt>kb_root</dt><dd class="mono">${esc(d.kb_root)}</dd></dl></div>
+  render(head(esc(T.nav.config), T.sub.config) + `
+    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${esc(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${w.steps.map(s => `<span class="tag" title="${esc(s.role || s.code || '')}">${esc(s.id)}</span>`).join(' → ')}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}</td></tr>`).join('')}</table></div>
+    <div><div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2><dl class="kv">${Object.entries(d.routes).map(([k, v]) => `<dt>${esc(k.replace('MODEL_', ''))}</dt><dd class="mono">${esc(v)}</dd>`).join('')}</dl><div class="help top">${esc(T.config.roles)} ${d.roles.map(esc).join(' / ')}</div></div>
+    <div class="panel"><h2>${esc(T.h.thisConsole)}</h2><dl class="kv"><dt>repo</dt><dd class="mono">${esc(d.repo)}</dd><dt>kb_root</dt><dd class="mono">${esc(d.kb_root)}</dd></dl></div>
     <div class="panel"><h2>git<small>status --short --branch</small></h2><pre class="log small">${esc(d.git)}</pre></div></div></div>`);
 }
 async function viewFile(q) {
@@ -271,49 +370,89 @@ async function viewFile(q) {
 }
 
 /* ---------- 操作 */
+const TO = { start: 'in_progress', review: 'review', done: 'done', reopen: 'todo', block: 'blocked' };
 const actions = {
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'runs-all': el => { localStorage.setItem('runs-all', el.checked ? '1' : '0'); viewRuns(); },
-  'dispatch-once': async () => { if (!confirm('todo の最も古い 1 件を runner で回します。VM を貸し出し、60 分以上かかることがあります。')) return; const r = await api('dispatch', { once: true }); go(`#/job/${r.job.id}`); },
+  'dispatch': () => dispatchDialog(),
+  'help': () => showHelp(),
+  'help-close': () => $('help').close(),
+  /* 状態の変更は可逆なので確認しない。代わりにトーストの「元に戻す」（kb set --status <前の状態>） */
   'status': async el => {
-    const note = document.getElementById('note').value.trim(); const act = el.dataset.do;
-    if (act === 'block' && !note) return toast('人間待ちには「何を待っているか」のメモを書く', true);
-    const r = await api(`tickets/${el.dataset.id}/action`, { action: act, note: note || undefined }); toast(esc(r.stdout.trim())); viewTicket(el.dataset.id);
+    const id = el.dataset.id, act = el.dataset.do, from = el.dataset.from;
+    let note;
+    if (act === 'block') {
+      const ok = await ask({ title: tt(T.dialog.block.title, { id }), ok: T.btn.block, focus: 'first',
+        body: `<p>${esc(T.dialog.block.body)}</p><label class="field">${esc(T.label.blockNote)}<input type="text" id="dlg-note" placeholder="${esc(T.label.blockPlaceholder)}"></label>`,
+        validate: dlg => dlg.querySelector('#dlg-note').value.trim() ? '' : T.err.blockNeedsNote });
+      if (!ok) return; note = $('dlg-note').value.trim();
+    }
+    await api(`tickets/${id}/action`, { action: act, note });
+    toast(esc(tt(T.msg.moved, { id, to: T.status[TO[act]] })), { action: { label: T.btn.undo, run: async () => {
+      await api(`tickets/${id}/action`, { action: 'set', status: from }); toast(esc(tt(T.msg.undone, { id, to: T.status[from] }))); if (location.hash === `#/ticket/${id}`) viewTicket(id, true);
+    } } });
+    viewTicket(id, true);
   },
-  'set': async el => { const r = await api(`tickets/${el.dataset.id}/action`, { action: 'set', kind: document.getElementById('set-kind').value, pr: document.getElementById('set-pr').value || undefined, note: document.getElementById('note').value.trim() || undefined }); toast(esc(r.stdout.trim())); viewTicket(el.dataset.id); },
-  'sync': async el => { const r = await api(`tickets/${el.dataset.id}/action`, { action: 'sync' }); toast(esc(r.stdout.trim())); viewTicket(el.dataset.id); },
+  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() || undefined }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  'sync': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'sync' }); toast(esc(tt(T.msg.synced, { id }))); if (!el.dataset.stay) viewTicket(id, true); },
+  /* 本番の run は半可逆・影響大: 何を・どこで・どれくらいを見せてから */
   'run': async el => {
-    const dry = !!el.dataset.dry; const wf = document.getElementById('run-wf').value; const keep = document.getElementById('run-keep').checked; const resume = document.getElementById('run-resume').checked;
-    if (!dry && !confirm(`チケット ${el.dataset.id} を runner で回します${wf ? `（workflow: ${wf}）` : ''}。VM を貸し出して step を順に実行し、PR まで進めます。`)) return;
-    const r = await api(`tickets/${el.dataset.id}/run`, { dry_run: dry, workflow: wf || undefined, keep, resume }); go(`#/job/${r.job.id}`);
+    const id = el.dataset.id, dry = !!el.dataset.dry;
+    const wf = $('run-wf').value, keep = $('run-keep').checked, resume = $('run-resume').checked;
+    if (!dry) {
+      const ok = await ask({ title: tt(T.dialog.run.title, { id }), ok: T.btn.run,
+        body: `<p>${esc(T.dialog.run.body)}</p><dl class="kv"><dt>${esc(T.th.ticket)}</dt><dd>${esc(id)} ${esc(el.dataset.title)}</dd><dt>${esc(T.label.pj)}</dt><dd>${esc(el.dataset.pj)}</dd><dt>${esc(T.label.workflow)}</dt><dd>${esc(wf || el.dataset.kind)}</dd>${keep ? `<dt>${esc(T.label.option)}</dt><dd>${esc(T.label.keep)}</dd>` : ''}${resume ? `<dt>${esc(T.label.option)}</dt><dd>${esc(T.label.resume)}</dd>` : ''}</dl><p class="help">${esc(T.dialog.run.cost)}</p>` });
+      if (!ok) return;
+    }
+    const r = await api(`tickets/${id}/run`, { dry_run: dry, workflow: wf || undefined, keep, resume }); go(`#/job/${r.job.id}`);
   },
   'intake': async () => {
-    const text = document.getElementById('in-text').value; if (!text.trim()) return toast('依頼文が空', true);
-    const r = await api('intake', { text, pj: document.getElementById('in-pj').value || undefined, kind: document.getElementById('in-kind').value || undefined, dry_run: document.getElementById('in-dry').checked }); go(`#/job/${r.job.id}`);
+    const text = $('in-text').value; if (!text.trim()) { toast(esc(T.err.emptyRequest), { err: true }); $('in-text').focus(); return; }
+    const r = await api('intake', { text, pj: $('in-pj').value || undefined, kind: $('in-kind').value || undefined, dry_run: $('in-dry').checked }); go(`#/job/${r.job.id}`);
   },
   'new': async () => {
-    const b = { pj: document.getElementById('new-pj').value, kind: document.getElementById('new-kind').value, title: document.getElementById('new-title').value.trim(), body: document.getElementById('new-body').value, pr: document.getElementById('new-pr').value || undefined };
-    if (!b.title) return toast('題名が要る', true);
-    const r = await api('tickets', b); toast(`起票した: ${esc(r.stdout.split('\n')[0])}`); if (r.id) go(`#/ticket/${r.id}`);
+    const b = { pj: $('new-pj').value, kind: $('new-kind').value, title: $('new-title').value.trim(), body: $('new-body').value, pr: $('new-pr').value || undefined };
+    if (!b.title) { toast(esc(T.err.needTitle), { err: true }); $('new-title').focus(); return; }
+    const r = await api('tickets', b); toast(esc(tt(T.msg.filed, { id: r.id || '' }))); if (r.id) go(`#/ticket/${r.id}`);
   },
-  'dispatch': async () => {
-    const max = document.getElementById('dp-max').value; const dry = document.getElementById('dp-dry').checked; const pj = document.getElementById('dp-pj').value;
-    if (!dry && !confirm(`todo を${max === '1' ? ' 1 件' : max === '0' ? '尽きるまで' : ` ${max} 件まで`}回します。VM を貸し出し、1 件 60 分以上かかることがあります。`)) return;
-    const r = await api('dispatch', { pj: pj || undefined, once: max === '1', max: max === '1' ? undefined : Number(max), dry_run: dry }); go(`#/job/${r.job.id}`);
+  'sandbox-ls': async () => { const r = await api('sandbox/ls', {}); toast(`${esc(T.msg.lsStarted)} <a href="#/job/${esc(r.job.id)}">${esc(T.btn.openJob)}</a>`); viewSandbox(); },
+  /* 返却は不可逆・影響大: その VM で run が動いていればチケット番号を打たせる */
+  'sandbox-release': async el => {
+    const { task, vm, run, step } = el.dataset;
+    const ok = await ask({ title: tt(T.dialog.release.title, { task }), ok: T.btn.release, danger: true, typed: run ? task : null,
+      body: `<p>${esc(tt(T.dialog.release.body, { task, vm }))}</p>${run ? `<div class="warn">${esc(tt(T.dialog.release.runWarning, { run, step: step || '-' }))}</div>` : `<p class="help">${esc(T.dialog.release.noRun)}</p>`}` });
+    if (!ok) return;
+    const r = await api('sandbox/release', { task }); go(`#/job/${r.job.id}`);
   },
-  'sandbox-ls': async () => { const r = await api('sandbox/ls', {}); toast(`取得中: <a href="#/job/${esc(r.job.id)}">ジョブ</a>`); },
-  'sandbox-release': async el => { if (!confirm(`task ${el.dataset.task} の VM を snapshot clean に巻き戻して返却します。動いている run があれば止まります。`)) return; const r = await api('sandbox/release', { task: el.dataset.task }); go(`#/job/${r.job.id}`); },
-  'job-stop': async el => { if (!confirm('プロセスグループに SIGTERM を送ります。kb run の途中なら VM は貸出中のまま残ることがあります。')) return; const r = await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(r.message)); },
+  'job-stop': async el => {
+    const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });
+    if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
+  },
   'run-file': el => { runFile[el.dataset.run] = el.dataset.path; runPicked[el.dataset.run] = true; viewRun(el.dataset.run); },
 };
 document.addEventListener('click', async e => {
-  const row = e.target.closest('tr[data-href]'); if (row && !e.target.closest('a')) { go(row.dataset.href); return; }
+  const row = e.target.closest('tr[data-href]'); if (row && !e.target.closest('a, button')) { go(row.dataset.href); return; }
   const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'SELECT' || el.type === 'checkbox') return;
   e.preventDefault();
-  try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), true); } finally { el.disabled = false; }
+  try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
-document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), true); } });
+document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
 function go(h) { location.hash = h; }
+
+/* ---------- キーボード（毎日使う画面には近道を置く）: g + 頭文字で移動、? で一覧 */
+let gArmed = false;
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || editing() || $('dlg').open) return;
+  if (e.key === '?') { e.preventDefault(); $('help').open ? $('help').close() : showHelp(); return; }
+  if ($('help').open) return;
+  if (gArmed && KEYS[e.key]) { e.preventDefault(); gArmed = false; go('#/' + KEYS[e.key]); return; }
+  gArmed = e.key === 'g';
+});
+function showHelp() {
+  const help = $('help');
+  help.innerHTML = `<div class="dlg"><h2>${esc(T.h.shortcuts)}</h2><table class="keys">${Object.entries(KEYS).map(([k, v]) => `<tr><td><kbd>g</kbd> <kbd>${k}</kbd></td><td>${esc(T.nav[v])}</td></tr>`).join('')}<tr><td><kbd>?</kbd></td><td>${esc(T.help.shortcutsToggle)}</td></tr><tr><td><kbd>Esc</kbd></td><td>${esc(T.help.shortcutsClose)}</td></tr></table><div class="actions dlg-actions"><button type="button" data-act="help-close">${esc(T.btn.close)}</button></div></div>`;
+  help.showModal();
+}
 
 /* ---------- ルーター */
 async function route() {
@@ -332,9 +471,12 @@ async function route() {
     else if (seg[0] === 'logs') await viewLogs();
     else if (seg[0] === 'config') await viewConfig();
     else if (seg[0] === 'file') await viewFile(q);
-    else render(`<div class="err">この画面は無い: ${esc(h)}</div>`);
+    else render(`<div class="err">${esc(tt(T.err.noRoute, { h }))}</div>`);
   } catch (e) { render(`<div class="err">${esc(e.message)}</div>`); }
   window.scrollTo(0, 0);
 }
+/* 起動: 静的な文言（ナビ・切断の帯）を T から入れ、ナビに近道のヒントを付ける */
+document.querySelectorAll('[data-t]').forEach(el => { const v = el.dataset.t.split('.').reduce((o, k) => (o == null ? o : o[k]), T); if (v != null) el.textContent = v; });
+Object.entries(KEYS).forEach(([k, v]) => { const a = document.querySelector(`.rail a[data-nav="${v}"]`); if (a) a.title = `g ${k}`; });
 window.addEventListener('hashchange', route);
 route(); setInterval(refreshNav, 5000);

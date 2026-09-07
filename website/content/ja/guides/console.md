@@ -29,7 +29,9 @@ launchd の PATH は最小なので、登録時に「今のシェルの python3�
 flowchart LR
   B[ボード<br>工程の帯 + 5 列] --> T[チケット<br>本文・履歴・実行]
   T --> R[実行記録<br>工程ごとの進捗表示 + ログ]
-  B --> I[取り込み<br>intake / kb new / dispatch]
+  B --> I[起票<br>intake / kb new]
+  B --> D[配車<br>ダイアログ → dispatch]
+  D --> J
   I --> J[ジョブ<br>CLI の出力を随時表示]
   T --> J
   S[sandbox<br>貸出と PJ]
@@ -37,12 +39,12 @@ flowchart LR
 
 | 画面 | 見るもの | 押せるもの |
 |---|---|---|
-| ボード | 工程の帯（未着手 → 実行中 → レビュー待ち → 完了、横に人間待ち）と 5 列のカード。動いている run は「実行中」の下に、今の工程と経過時間つきで出る | チケットの作成（「取り込み」へ）、1 件の実行（「配車 1 件」） |
-| チケット | 本文（Markdown）、状態の履歴、関連する run とジョブ | `kb run`（dry-run / ワークフローの上書き / `--keep` / `--resume`）、状態を進める（開始 / レビュー待ち / 完了 / 未着手に戻す / 人間待ち）、種別と PR 番号の修正、run 記録からの状態同期 |
+| ボード | 工程の帯（未着手 → 実行中 → レビュー待ち → 完了、横に人間待ち）と 5 列のカード。動いている run は「実行中」の下に、今の工程と経過時間つきで出る | 起票（「起票」へ）、配車（ダイアログで PJ・件数・dry-run を選ぶ。押す前に「次に回るチケット」が出る。未着手が無ければ押せない） |
+| チケット | 本文（Markdown）、状態の履歴、関連する run とジョブ | `kb run`（ダイアログで PJ・ワークフロー・所要を確かめてから。dry-run / `--keep` / `--resume`）、状態を進める（開始 / レビュー待ち / 完了 / 未着手に戻す / 人間待ち。確認は出ず、トーストの「元に戻す」で戻せる）、種別・PR 番号・メモの修正、run 記録からの状態同期 |
 | 実行記録 | `workspace/runs/` の一覧と、run ごとの工程ごとの進捗表示（工程の合否と所要、戻し ↺、終端 end / human）。ファイル一覧とログ | — |
-| sandbox | 貸出中の VM（task、VM 名、IP、プロジェクト、貸出からの時間、アプリの URL）とプロジェクトの一覧（project.yml とトークンファイルの有無、プールの使用数） | `sandbox ls`（Proxmox に ssh、数秒）、`sandbox release` |
-| 取り込み | — | 自由文 → `intake`、整った本文 → `kb new`、todo → `dispatch`（プロジェクト、件数、dry-run） |
-| ジョブ | このコンソールが起動した CLI の一覧。出力を 2 秒ごとに継続的な読み取り | 止める（プロセスグループに SIGTERM） |
+| sandbox | 貸出中の VM（task、VM 名、IP、プロジェクト、貸出からの時間、アプリの URL）とプロジェクトの一覧（project.yml とトークンファイルの有無、プールの使用数） | `sandbox ls`（Proxmox に ssh、数秒）、`sandbox release`（その VM で run が動いていればチケット番号を入力してから） |
+| 起票 | — | 自由文 → `intake`、整った本文 → `kb new`。配車はボードから |
+| ジョブ | このコンソールが起動した CLI の一覧。出力を 2 秒ごとに継続的な読み取り。終わると「次にすること」（できたチケットを開く、止まった run の状態を合わせる、など） | 止める（プロセスグループに SIGTERM） |
 | ログ | `workspace/logs/intake.log` / `workspace/logs/dispatch.log` | — |
 | 設定 | ワークフローの流れ、モデルの経路（`routes.env`）、`git status` | — |
 
@@ -68,7 +70,9 @@ run の画面は、実行中なら 5 秒ごとに更新され、**今動いて�
 - **時間のかかる操作はバックグラウンドで実行します**。`kb run` は 60 分を超えることがあるので、コンソールは子プロセスとして切り離し、出力を `console/jobs/<id>/log`（git 追跡外）に流します
 - **重複する操作を防ぐ**。同じチケットの `kb run`、2 本目の `dispatch`、貸出中 task への `release` はロックの中で拒否されます
 - **読めるファイルは限られる**。workspace（`runs/`、`kanban/tickets/`、`logs/`、`projects/`）、`examples/projects/`、`workflow/kit/`、`console/jobs/` だけ。トークンの中身は表示しません
-- 本番の run、返却、停止は確認ダイアログを出します
+- **確認の重さは操作の危険性に合わせています**。状態を進める・戻すは確認なしですぐ変わり、トーストの「元に戻す」で前の状態に戻せます。本番の run と配車は、何が起きるか（回るチケット、PJ、所要）を見せるダイアログを出します。VM の返却とジョブの停止は危険色のダイアログで、その VM で run が動いていればチケット番号の入力を求めます
+- ナビは使う頻度の順（ボード / 起票 / 実行記録 / ジョブ / sandbox / ログ / 設定）です。++g++ に続けて頭文字（++b++ ボード、++i++ 起票、++r++ 実行記録、++j++ ジョブ、++s++ sandbox、++l++ ログ、++c++ 設定）で移動でき、++question++ で一覧が出ます
+- 画面の文言の約束（ボタンは動詞、文は「ですます」、用語集）はリポジトリの `console/UX.md` にあります。判断の記録は ADR-0019
 
 ## API
 
@@ -84,6 +88,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 |---|---|
 | `GET /api/overview` | 状態の件数、動いている run とジョブ、貸出数 |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | 一覧 / 本文・履歴・run・ジョブ |
+| `GET /api/next[?pj=]` | 配車で次に回る todo（`kb next`）。無ければ `null` |
 | `POST /api/tickets` | `kb new` |
 | `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr}` |
 | `POST /api/tickets/<id>/run` | `kb run` をジョブで。`{dry_run, workflow, keep, resume}` |
@@ -95,6 +100,8 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/logs` / `GET /api/config` | intake / dispatch のログ / ワークフローと routes と git |
 
 ## AI セッションから使う（MCP）
+
+`.mcp.json` には **`aifactory-local`**（手元の workspace）と **`aifactory-ctl`**（Proxmox 上の制御系）の 2 つがあります。制御系を Proxmox 上の LXC に置いた構成（[貸出先ごとの環境（テナント）](tenants.md)）では `aifactory-ctl` を使うか、どのディレクトリからでも使えるよう user スコープで登録します（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`）。Codex CLI なら `codex mcp add aifactory -- <repo>/console/bin/mcp-remote`。stdio の MCP を話せるクライアントなら何でも同じ入口です。`console/bin/mcp-remote` が ssh 越しに LXC の MCP サーバーを起動するので、AI セッションは LXC 側の workspace と貸出状態をそのまま読み書きします。接続先は `~/.config/aifactory/mcp-remote.env` の `AIFACTORY_CTL`（既定 `aifactory@ctl.main.sb.internal`。別テナントは `aifactory@ctl.<tenant>.sb.internal`）、tailnet 未承認の間は `AIFACTORY_CTL_JUMP=<Proxmox ホストの ssh エイリアス>` です。追加後は `claude mcp reset-project-choices` で承認し直します。
 
 同じ読み書きを MCP のツールとして出すサーバーが `console/bin/mcp` です。リポジトリ直下の `.mcp.json` に登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory__*` として使えます。
 

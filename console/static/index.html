@@ -9,23 +9,31 @@
 </head>
 <body>
 <div class="shell">
-  <nav class="rail" aria-label="主メニュー">
+  <!-- ナビは頻度順（console/UX.md）。文言は strings.js の T から data-t で入る -->
+  <nav class="rail" aria-label="main">
     <a class="brand" href="#/board"><span class="brand-mark" aria-hidden="true"></span>aifactory<small>console</small></a>
-    <a href="#/board" data-nav="board">ボード<b id="n-board"></b></a>
-    <a href="#/runs" data-nav="runs">実行記録<b id="n-runs"></b></a>
-    <a href="#/sandbox" data-nav="sandbox">sandbox<b id="n-sandbox"></b></a>
-    <a href="#/intake" data-nav="intake">取り込み</a>
-    <a href="#/jobs" data-nav="jobs">ジョブ<b id="n-jobs"></b></a>
-    <a href="#/logs" data-nav="logs">ログ</a>
-    <a href="#/config" data-nav="config">設定</a>
+    <a href="#/board" data-nav="board"><span data-t="nav.board"></span><b id="n-board"></b></a>
+    <a href="#/intake" data-nav="intake"><span data-t="nav.intake"></span></a>
+    <a href="#/runs" data-nav="runs"><span data-t="nav.runs"></span><b id="n-runs"></b></a>
+    <a href="#/jobs" data-nav="jobs"><span data-t="nav.jobs"></span><b id="n-jobs"></b></a>
+    <a href="#/sandbox" data-nav="sandbox"><span data-t="nav.sandbox"></span><b id="n-sandbox"></b></a>
+    <a href="#/logs" data-nav="logs"><span data-t="nav.logs"></span></a>
+    <a href="#/config" data-nav="config"><span data-t="nav.config"></span></a>
     <div class="rail-foot">
       <span id="clock">—</span>
-      <span id="conn" class="conn" title="サーバーとの接続">接続中</span>
+      <span id="conn" class="conn"></span>
+      <button type="button" class="linkish" data-act="help" data-t="nav.shortcuts"></button>
     </div>
   </nav>
-  <main id="main" class="main" tabindex="-1"></main>
+  <div class="col-main">
+    <div id="offline" class="banner err" role="alert" data-t="banner.offline" hidden></div>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
 </div>
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
+<dialog id="dlg"></dialog>
+<dialog id="help"></dialog>
+<script src="/strings.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -17,6 +17,7 @@ Thanks for looking. aifactory is written to be worked on by humans and AI sessio
 | `sandbox/bin/sandbox`, Proxmox scripts | `bash -n`; `sandbox ls` to confirm nothing is lent out | `sandbox/bin/install.sh` |
 | runner (`workflow/bin/run`) | confirm no run is in progress | `--dry-run` |
 | `kb` / glue / console | tests with a temporary `AIFACTORY_WORKSPACE` | |
+| console UI text | read `console/UX.md` (one page: friction rules, voice, glossary). Put every string in `console/static/strings.js`, never inline in `app.js` | `python3 -m unittest discover -s console/tests -p 'test_strings.py'` |
 | documentation site | edit `website/content/ja/`, mirror to `en/` | `mkdocs build --strict` |
 
 - Tests: `python3 -m unittest discover -s console/tests` and `python3 -m unittest discover -s workflow/tests`. They need `pyyaml` and `jsonschema`, nothing else (no VM, no Claude)

@@ -65,7 +65,7 @@ class McpTest(unittest.TestCase):
         err, t = self.c.tool("ticket_list", all=True); self.assertFalse(err); self.assertGreater(len(t["tickets"]), 0)
         tid = t["tickets"][0]["id"]
         err, d = self.c.tool("ticket_show", id=tid); self.assertFalse(err); self.assertIsNotNone(d["body"]); self.assertTrue(d["history"])
-        err, msg = self.c.tool("ticket_show", id=999999); self.assertTrue(err); self.assertIn("無い", msg)
+        err, msg = self.c.tool("ticket_show", id=999999); self.assertTrue(err); self.assertIn("見つかりません", msg)
         err, msg = self.c.tool("ticket_show"); self.assertTrue(err)                                   # id 無し
         err, r = self.c.tool("run_list", all=True); self.assertFalse(err); self.assertTrue(r["runs"])
         name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")

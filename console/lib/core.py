@@ -148,8 +148,8 @@ def rel(p):
 
 def read_file(relpath, tail=None, offset=None):
     p = (REPO / relpath).resolve()   # 絶対パスならそのまま（workspace がリポジトリ外でもよい。根の検査は下）
-    if not any(p.is_relative_to(r.resolve()) for r in READ_ROOTS if r.exists()): return None, "この場所のファイルは読めない"
-    if not p.is_file(): return None, "ファイルが無い"
+    if not any(p.is_relative_to(r.resolve()) for r in READ_ROOTS if r.exists()): return None, "この場所のファイルは表示できません（読めるのは runs / kanban/tickets / logs / workflow/kit / PJ 定義 / console/jobs の下だけです）"
+    if not p.is_file(): return None, "ファイルが見つかりません"
     size = p.stat().st_size
     with open(p, "rb") as f:
         if offset is not None:
@@ -280,11 +280,11 @@ class JobStore:
     def stop(cls, jid):
         with cls.lock, _flock():   # 先にフラグを書いてから殺す（殺した瞬間に _wait が走る）
             meta = cls.get(jid)
-            if not meta or meta.get("rc") is not None: return False, "既に終わっている"
+            if not meta or meta.get("rc") is not None: return False, "このジョブは既に終わっています"
             meta["stop_requested"] = now(); cls.save(meta)
         try: os.killpg(os.getpgid(meta["pid"]), signal.SIGTERM)
-        except ProcessLookupError: return False, "プロセスが見つからない"
-        return True, "SIGTERM を送った"
+        except ProcessLookupError: return False, "プロセスが見つかりません（既に終わっている可能性があります）"
+        return True, "SIGTERM を送りました。終わるまで数秒かかることがあります"
 
     @classmethod
     def reconcile(cls):
@@ -343,9 +343,17 @@ def tickets_list(pj=None, status=None, all_=True):
     return {"tickets": rows(sql + " ORDER BY id", p), "pjs": pjs(), "kinds": kinds(), "labels": STATUS_LABEL}
 
 
+def ticket_next(pj=None):
+    """配車で次に回る todo を 1 件（kb next --json）。画面が「配車する」を押す前に影響を見せるために使う。無ければ None"""
+    rc, out, err = kb("next", *(["--pj", pj] if pj else []), "--json")
+    if rc != 0: raise ApiError((err or out).strip() or f"kb next が失敗 rc={rc}")
+    out = out.strip()
+    return {"next": json.loads(out) if out else None}
+
+
 def ticket_detail(tid):
     t = rows("SELECT * FROM tickets WHERE id = ?", (tid,))
-    if not t: raise ApiError("チケットが無い", 404)
+    if not t: raise ApiError(f"チケット {tid} は見つかりません", 404)
     t = t[0]; f = KB_ROOT / t["file"]
     py = project_yml(t["pj"])
     t["repo"] = load_yaml(py).get("repo") if py.exists() else None
@@ -360,17 +368,17 @@ def ticket_detail(tid):
 def ticket_action(tid, b):
     act = b.get("action")
     if act in ("start", "review", "done", "reopen", "block"):
-        if act == "block" and not b.get("note"): raise ApiError("人間待ちには『何を待っているか』のメモが要る")
+        if act == "block" and not b.get("note"): raise ApiError("人間待ちにするには、何を待っているかを note に書いてください")
         args = [act, tid] + (["--note", b["note"]] if b.get("note") else [])
     elif act == "set":
         args = ["set", tid]
         for k in ("status", "pr", "note", "kind"):
             if b.get(k) not in (None, ""): args += [f"--{k}", b[k]]
         if b.get("run"): args += ["--run", b["run"]]
-        if len(args) == 2: raise ApiError("変える項目が無い")
+        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run のどれかを指定してください")
     elif act == "sync":
         args = ["sync", tid] + (["--run", b["run"]] if b.get("run") else [])
-    else: raise ApiError(f"未知の操作 {act}（start / review / done / reopen / block / set / sync）")
+    else: raise ApiError(f"操作 {act} はありません。start / review / done / reopen / block / set / sync のどれかを指定してください")
     rc, out, err = kb(*args)
     if rc != 0: raise ApiError((err or out).strip() or f"kb {act} が失敗 rc={rc}")
     return {"rc": rc, "stdout": out, "stderr": err}
@@ -378,20 +386,22 @@ def ticket_action(tid, b):
 
 def ticket_run(tid, b):
     t = rows("SELECT * FROM tickets WHERE id = ?", (tid,))
-    if not t: raise ApiError("チケットが無い", 404)
+    if not t: raise ApiError(f"チケット {tid} は見つかりません", 404)
     cmd = [str(KB), "run", str(tid)]
     if b.get("workflow"): cmd += ["--workflow", b["workflow"]]
     for f in ("dry_run", "keep", "resume"):
         if b.get(f): cmd.append("--" + f.replace("_", "-"))
     label = f"kb run {tid}" + (" --dry-run" if b.get("dry_run") else "") + (" --resume" if b.get("resume") else "")
     hint = f"{datetime.date.today().isoformat()}-{t[0]['pj']}-{tid}" + ("-dry" if b.get("dry_run") else "")
-    same = lambda j: f"このチケットのジョブが実行中（{j['id']}）" if j.get("ticket") == tid and j.get("kind") in ("kb-run", "dispatch", "sandbox-release") else None
+    if b.get("resume") and not b.get("dry_run") and t[0].get("run"):
+        hint = t[0]["run"]
+    same = lambda j: f"チケット {tid} のジョブ {j['id']} が実行中です。終わるのを待つか、ジョブを止めてから実行してください" if j.get("ticket") == tid and j.get("kind") in ("kb-run", "dispatch", "sandbox-release") else None
     return {"job": JobStore.start("kb-run", cmd, label, ticket=tid, run_hint=hint, conflict=same)}
 
 
 def ticket_new(b):
     for k in ("pj", "kind", "title"):
-        if not b.get(k): raise ApiError(f"{k} が要る")
+        if not b.get(k): raise ApiError(f"{k} を指定してください")
     args = ["new", b["pj"], b["kind"], b["title"][:70], "--body", "-"]
     if b.get("pr"): args += ["--pr", str(b["pr"])]
     if b.get("note"): args += ["--note", b["note"]]
@@ -403,7 +413,7 @@ def ticket_new(b):
 
 def op_intake(b):
     text = (b.get("text") or "").strip()
-    if not text: raise ApiError("依頼文が空")
+    if not text: raise ApiError("依頼文が空です。取り込む文章を text に入れてください")
     cmd = [str(REPO / "glue" / "bin" / "intake"), "{stdin}"]
     if b.get("pj"): cmd += ["--pj", b["pj"]]
     if b.get("kind"): cmd += ["--kind", b["kind"]]
@@ -418,7 +428,7 @@ def op_dispatch(b):
     if b.get("once"): cmd.append("--once")
     elif b.get("max"): cmd += ["--max", str(int(b["max"]))]
     if b.get("dry_run"): cmd.append("--dry-run")
-    serial = (lambda j: None) if b.get("dry_run") else (lambda j: "dispatch が既に実行中。直列で回す約束なので待つ" if j.get("kind") == "dispatch" else None)
+    serial = (lambda j: None) if b.get("dry_run") else (lambda j: f"dispatch（ジョブ {j['id']}）が既に実行中です。直列で回す約束なので、終わるまで待ってください" if j.get("kind") == "dispatch" else None)
     return {"job": JobStore.start("dispatch", cmd, "dispatch " + " ".join(cmd[1:]), conflict=serial)}
 
 
@@ -428,14 +438,14 @@ def op_sandbox_ls():
 
 def op_sandbox_release(b):
     task = str(b.get("task") or "")
-    if not re.match(r"^\d{3,}$", task): raise ApiError("task-id が不正")
-    busy = lambda j: f"task {task} のジョブが実行中（{j['id']}）。先に止める" if j.get("ticket") == int(task) else None
+    if not re.match(r"^\d{3,}$", task): raise ApiError("チケット番号（task）は 3 桁以上の数字で指定してください")
+    busy = lambda j: f"チケット {task} のジョブ {j['id']} が実行中です。先にジョブを止めてから返却してください" if j.get("ticket") == int(task) else None
     return {"job": JobStore.start("sandbox-release", ["sandbox", "release", task], f"sandbox release {task}", ticket=int(task), conflict=busy)}
 
 
 def job_view(jid, offset=0):
     j = JobStore.get(jid)
-    if not j: raise ApiError("ジョブが無い", 404)
+    if not j: raise ApiError(f"ジョブ {jid} は見つかりません", 404)
     data, _ = read_file(str(JOBS / j["id"] / "log"), offset=offset)   # JOBS はリポジトリ外でもよい（絶対パス。根の検査は read_file）
     return {"job": j, "log": data}
 
@@ -445,7 +455,7 @@ def job_wait(jid, timeout_s=120):
     t0 = time.time()
     while True:
         j = JobStore.get(jid)
-        if not j: raise ApiError("ジョブが無い", 404)
+        if not j: raise ApiError(f"ジョブ {jid} は見つかりません", 404)
         if j.get("state") != "running" or time.time() - t0 >= timeout_s: return j
         time.sleep(1)
 

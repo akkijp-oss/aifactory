@@ -23,6 +23,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
 .shell { display: grid; grid-template-columns: 196px 1fr; min-height: 100vh; }
+.col-main { min-width: 0; }
 .rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); }
 .rail a { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: var(--r); color: var(--ink); }
 .rail a:hover { background: var(--ground); text-decoration: none; }
@@ -35,6 +36,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
 .conn::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--done); margin-right: 6px; }
 .conn.off::before { background: var(--blocked); }
+.linkish { border: 0; background: none; padding: 0; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; }
+.linkish:hover { color: var(--accent); text-decoration: underline; }
+.banner { margin: 14px 28px 0; }
 
 .main { padding: 22px 28px 60px; min-width: 0; }
 .head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -118,13 +122,31 @@ dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; ma
 dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
-button, .btn { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 6px 12px; cursor: pointer; line-height: 1.4; }
-button:hover, .btn:hover { background: var(--ground); }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-button.primary:hover { filter: brightness(1.08); }
+/* ボタンの階層: primary（その画面の主要な一手）/ 通常 / ghost（安全だが脇に置くもの）/ danger（不可逆。通常のボタンから離して置く） */
+button, .btn { display: inline-block; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 6px 12px; cursor: pointer; line-height: 1.4; color: var(--ink); }
+button:hover, .btn:hover { background: var(--ground); text-decoration: none; }
+button.primary, .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.primary:hover, .btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
+button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+button.ghost:hover { background: var(--ground); color: var(--ink); }
 button.danger { color: var(--blocked); border-color: var(--blocked); }
 button.danger:hover { background: var(--blocked-bg); }
-button:disabled { opacity: .5; cursor: default; }
+button.danger.solid { background: var(--blocked); color: #fff; }
+button.danger.solid:hover { filter: brightness(1.08); background: var(--blocked); }
+button:disabled { opacity: .5; cursor: default; filter: none; }
+.aside { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line-soft); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.muted { color: var(--muted); }
+.top { margin-top: 8px; }
+.w100 { width: 100px; }
+.h140 { min-height: 140px; }
+.grow { flex: 1; min-width: 220px; }
+.check { display: inline-flex; align-items: center; gap: 6px; }
+.row.checks { margin: 2px 0 10px; gap: 16px; }
+.panel.note { padding: 8px 14px; }
+.panel.next { border-left: 3px solid var(--accent); }
+.panel.next p { margin: 0 0 10px; }
+.flash .st { animation: flash 1.2s ease-out; }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 rgba(11,93,93,.55); } 100% { box-shadow: 0 0 0 12px rgba(11,93,93,0); } }
 select, input[type=text], input[type=number], textarea { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 9px; background: var(--panel); }
 textarea { width: 100%; min-height: 200px; font-family: var(--font); resize: vertical; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -172,7 +194,28 @@ pre.log.small { max-height: 40vh; }
 .filelist a.active { background: var(--accent-soft); color: var(--accent); }
 .filelist a span { color: var(--muted); }
 
-/* 通知 */
-.toast { position: fixed; right: 20px; bottom: 20px; background: var(--ink); color: #fff; padding: 10px 14px; border-radius: var(--r); max-width: 420px; box-shadow: 0 6px 20px rgba(28,39,51,.25); z-index: 10; }
+/* 通知。可逆な操作のあとは「元に戻す」を並べる */
+.toast { position: fixed; right: 20px; bottom: 20px; display: flex; gap: 12px; align-items: center; background: var(--ink); color: #fff; padding: 10px 14px; border-radius: var(--r); max-width: 460px; box-shadow: 0 6px 20px rgba(28,39,51,.25); z-index: 10; }
 .toast.err { background: var(--blocked); }
 .toast a { color: #fff; text-decoration: underline; }
+.toast .toast-act { background: transparent; color: #fff; border-color: rgba(255,255,255,.55); white-space: nowrap; }
+.toast .toast-act:hover { background: rgba(255,255,255,.12); }
+
+/* 確認ダイアログ。危険性に比例して摩擦を足す: 影響を文で、既定フォーカスはキャンセル、不可逆なら番号の入力 */
+dialog { border: 0; border-radius: 8px; padding: 0; max-width: 540px; width: calc(100% - 40px); color: var(--ink); background: var(--panel); box-shadow: 0 14px 44px rgba(28,39,51,.3); }
+dialog::backdrop { background: rgba(28,39,51,.35); }
+.dlg { padding: 18px 20px; }
+.dlg h2 { font-size: 16px; margin: 0 0 10px; }
+.dlg.danger h2 { color: var(--blocked); }
+.dlg-body p { margin: 6px 0; }
+.dlg-body .kv { margin: 8px 0; }
+.dlg-body .warn { margin-top: 8px; }
+.dlg-typed { margin-top: 12px; }
+.dlg-err { margin-top: 10px; }
+.dlg-actions { justify-content: flex-end; margin-top: 16px; }
+.preview { margin-top: 12px; padding: 10px 12px; background: var(--ground); border-radius: var(--r); }
+.preview .k { font-size: 12.5px; color: var(--muted); }
+.preview .pick { margin: 4px 0; }
+.preview .id { font-family: var(--mono); color: var(--muted); margin-right: 6px; }
+kbd { font: 11.5px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel); }
+.keys td { padding: 5px 10px; }

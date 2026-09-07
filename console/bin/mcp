@@ -33,7 +33,7 @@ def s(v, k=None):   # 引数を安全に取り出す
 def arg_int(a, k, required=True):
     v = a.get(k)
     if v in (None, ""):
-        if required: raise core.ApiError(f"{k} が要る")
+        if required: raise core.ApiError(f"{k} を指定してください")
         return None
     try: return int(v)
     except (TypeError, ValueError): raise core.ApiError(f"{k} は整数")
@@ -53,7 +53,7 @@ def t_run_list(a):
     return {"runs": runs[: int(a.get("limit") or 50)]}
 def t_run_show(a):
     d = core.run_detail(a.get("name") or "")
-    if not d: raise core.ApiError("run が無い", 404)
+    if not d: raise core.ApiError(f"実行記録 {a.get('name') or ''} は見つかりません", 404)
     return d
 def t_read_file(a):
     data, err = core.read_file(a.get("path") or "", tail=int(a["tail"]) if a.get("tail") else None, offset=int(a["offset"]) if a.get("offset") else None)
@@ -125,7 +125,7 @@ def resource_read(uri):
     elif uri.startswith("aifactory://ticket/"):
         d = core.ticket_detail(int(uri.rsplit("/", 1)[1])); return d["body"] or ""
     else: raise core.ApiError(f"未知の resource {uri}", 404)
-    if not p.exists(): raise core.ApiError(f"{p.name} が無い", 404)
+    if not p.exists(): raise core.ApiError(f"{p.name} は見つかりません", 404)
     return p.read_text(encoding="utf-8", errors="replace")
 
 

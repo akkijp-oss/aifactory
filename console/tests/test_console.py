@@ -85,6 +85,28 @@ class ApiTest(unittest.TestCase):
         _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
         for ep in ("/api/sandbox", "/api/config", "/api/logs", "/api/jobs"): self.assertEqual(self.http.get(ep)[0], 200)
 
+    def test_next_for_dispatch_dialog(self):
+        """配車ダイアログが押す前に見せる「次に回るチケット」（kb next --json）"""
+        tid = self.todo_id()
+        st, d = self.http.get("/api/next"); self.assertEqual(st, 200); self.assertIsNotNone(d["next"]); self.assertEqual(d["next"]["status"], "todo")
+        self.assertLessEqual(d["next"]["id"], tid)                                   # 最も古い todo
+        st, d = self.http.get(f"/api/next?pj={PJ}"); self.assertEqual(st, 200); self.assertEqual(d["next"]["pj"], PJ)
+        st, d = self.http.get("/api/next?pj=no-such-pj"); self.assertEqual(st, 200); self.assertIsNone(d["next"])
+
+    def test_error_messages_say_what_to_do(self):
+        """エラー文は「何が起きたか」の後に「どうすればよいか」（console/UX.md）"""
+        st, d = self.http.post("/api/sandbox/release", {"task": "abc"}); self.assertEqual(st, 400); self.assertIn("指定してください", d["error"])
+        st, d = self.http.post(f"/api/tickets/{self.todo_id()}/action", {"action": "nope"}); self.assertEqual(st, 400); self.assertIn("してください", d["error"])
+        st, d = self.http.post("/api/intake", {"text": " "}); self.assertEqual(st, 400); self.assertIn("入れてください", d["error"])
+        st, d = self.http.post("/api/tickets/999999/action", {"action": "start"}, header=False); self.assertEqual(st, 403); self.assertIn("X-Console", d["error"])
+
+    def test_static_ui_files(self):
+        """画面の静的ファイル（index.html / strings.js / app.js / style.css）が配信され、index.html が strings.js を app.js より先に読む"""
+        for p, ctype in (("/", "text/html"), ("/strings.js", "javascript"), ("/app.js", "javascript"), ("/style.css", "text/css")):
+            with urllib.request.urlopen(self.http.base + p, timeout=10) as r:
+                self.assertEqual(r.status, 200, p); self.assertIn(ctype, r.headers["Content-Type"], p); body = r.read().decode("utf-8")
+            if p == "/": self.assertLess(body.index("strings.js"), body.index("app.js")); self.assertIn('charset="utf-8"', body); self.assertIn('lang="ja"', body)
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
@@ -147,6 +169,58 @@ class ApiTest(unittest.TestCase):
         _, j2 = self.http.get(f"/api/jobs/{jid}?offset={j['log']['size']}"); self.assertEqual(j2["log"]["text"], "")
         self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")   # dry-run は状態を進めない
         self.assertTrue(any(x["label"].startswith("kb run") for x in self.http.get("/api/jobs")[1]["jobs"]))
+
+
+class AuthDocsTest(unittest.TestCase):
+    """CONSOLE_TOKEN（合言葉）付きで起動したときの認証と、/docs/ の配信（ADR-0017）"""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-console-auth-"))
+        cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
+        cls.port = free_port(); cls.token = "s3cret-token"
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs"), "CONSOLE_TOKEN": cls.token}
+        cls.proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(cls.port)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        for _ in range(50):
+            try: urllib.request.urlopen(cls.base + "/api/overview", timeout=2)
+            except urllib.error.HTTPError: break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate(); cls.proc.wait(timeout=10); shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def req(self, path, headers=None, method="GET"):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k): return None
+        opener = urllib.request.build_opener(NoRedirect)
+        r = urllib.request.Request(self.base + path, headers=headers or {}, method=method, data=b"{}" if method == "POST" else None)
+        try:
+            with opener.open(r, timeout=10) as resp: return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as e: return e.code, dict(e.headers), e.read()
+
+    def test_token_required(self):
+        st, _, body = self.req("/api/overview"); self.assertEqual(st, 401); self.assertIn("token", body.decode())
+        st, _, _ = self.req("/"); self.assertEqual(st, 401)
+        st, _, _ = self.req("/api/sandbox/ls", headers={"X-Console": "1", "Content-Type": "application/json"}, method="POST"); self.assertEqual(st, 401)
+
+    def test_bearer_and_cookie(self):
+        st, _, _ = self.req("/api/overview", headers={"Authorization": f"Bearer {self.token}"}); self.assertEqual(st, 200)
+        st, _, _ = self.req("/api/overview", headers={"Authorization": "Bearer wrong"}); self.assertEqual(st, 401)
+        st, h, _ = self.req(f"/?token={self.token}"); self.assertEqual(st, 302); self.assertEqual(h.get("Location"), "/")
+        cookie = h.get("Set-Cookie", "").split(";")[0]; self.assertIn(self.token, cookie)
+        st, _, _ = self.req("/api/overview", headers={"Cookie": cookie}); self.assertEqual(st, 200)
+        st, _, _ = self.req("/", headers={"Cookie": cookie}); self.assertEqual(st, 200)
+        st, h, _ = self.req(f"/api/tickets?pj=x&token={self.token}"); self.assertEqual(st, 302); self.assertEqual(h.get("Location"), "/api/tickets?pj=x")
+
+    def test_docs_route(self):
+        h = {"Authorization": f"Bearer {self.token}"}
+        st, _, body = self.req("/docs/", headers=h)
+        self.assertIn(st, (200, 503))                       # website/site/ があれば 200、無ければ作り方の案内（503）
+        self.assertIn(b"<html", body.lower()[:200] if st == 503 else body.lower())
+        st, hh, _ = self.req("/docs", headers=h); self.assertIn(st, (301, 503))
+        st, _, _ = self.req("/docs/../console/lib/core.py", headers=h); self.assertNotEqual(st, 200)
 
 
 class JobStoreTest(unittest.TestCase):
