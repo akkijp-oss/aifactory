@@ -116,6 +116,11 @@ else{Copy-Item "$build\aifactory-worker.exe" "$root\bin\aifactory-worker.exe" -F
 foreach($name in @('aifactory-computer.exe','aifactory-desktop.exe')){Copy-Item "$build\$name" "$root\bin\$name" -Force}
 Copy-Item "$source\computer\windows.ps1" "$root\bin\windows.ps1" -Force
 if(Test-Path "$build\claude.exe"){Copy-Item "$build\claude.exe" "$root\bin\claude.exe" -Force}
+$machinePath=[Environment]::GetEnvironmentVariable('PATH','Machine')
+foreach($entry in @("$root\bin",'C:\Program Files\Git\cmd','C:\Program Files\GitHub CLI')){
+ if(($machinePath -split ';') -notcontains $entry){$machinePath=$machinePath.TrimEnd(';')+';'+$entry}
+}
+[Environment]::SetEnvironmentVariable('PATH',$machinePath,'Machine')
 & "$source\computer\install-windows.ps1"
 if($env:AIFACTORY_AUTOLOGIN -eq '1'){& "$PSScriptRoot\autologon.ps1" -TaskUser $taskUser -PasswordFile "$root\private\task.password"}
 Start-Service AIFactoryWorker
