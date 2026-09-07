@@ -2,11 +2,11 @@
 
 専用Macホスト、専用Windows、専用Linuxに公開スクリプトからワーカーとcomputer-use環境を導入する。所属先は `AIFACTORY_URL`、ワーカーIDと専用トークンは `AIFACTORY_WORKER` / `AIFACTORY_TOKEN` で渡す。Proxmoxは不要。ネットワークの接続制限は導入先で事前に設定する。
 
-配布ブランチは `install/worker-bootstrap`。スクリプトと同じブランチのソースを取得し、公式Go配布サイトのSHA-256で検証したツールチェーンでビルドする。Goの事前導入やリリース用バイナリの手作業配置は不要。初回はソース・依存ツール・Mac VMイメージのダウンロードに時間がかかる。
+配布元は `main` ブランチ。スクリプトと同じrefのソースを取得し、公式Go配布サイトのSHA-256で検証したツールチェーンでビルドする。Goの事前導入やリリース用バイナリの手作業配置は不要。初回はソース・依存ツール・Mac VMイメージのダウンロードに時間がかかる。
 
 ## 制御系で一度準備する
 
-このブランチの制御系（`POST /v1/check` 対応）を起動し、ワーカーごとに登録する。URLはconsoleではなくワーカー用HTTPS受信口を指定する。
+v0.3.0以降の制御系（`POST /v1/check` 対応）を起動し、ワーカーごとに登録する。URLはconsoleではなくワーカー用HTTPS受信口を指定する。
 
 ```bash
 python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" enroll linux-worker-01 --token-file "$HOME/.config/aifactory-workers/linux-worker.token"
@@ -21,7 +21,7 @@ python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" en
 Ubuntu 24.04 / Debian 13以降など、aptとsystemd 254以降を備えたamd64 / arm64の専用インスタンスで実行する。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/install/worker-bootstrap/workers/install.sh | sudo env AIFACTORY_URL='https://ctl.example.com:8766' AIFACTORY_WORKER='linux-worker-01' AIFACTORY_TOKEN='XXXXXX' bash
+curl -fsSL https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/main/workers/install.sh | sudo env AIFACTORY_URL='https://ctl.example.com:8766' AIFACTORY_WORKER='linux-worker-01' AIFACTORY_TOKEN='XXXXXX' bash
 ```
 
 一般作業ユーザー、Git・gh・Claude CLI、Xvfb/Openbox・ランチャー・日本語フォント・Mousepad、ワーカーとデスクトップのsystemdサービスを導入する。`Alt+F2` でアプリを起動できる。再起動後も自動起動する。ネイティブWaylandは対象外。
@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/ins
 Apple Silicon Macのログイン中ユーザーで実行する。HomebrewとApple Command Line Toolsは事前に用意する。Mac全体を `sudo bash` で実行しない。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/install/worker-bootstrap/workers/install.sh | AIFACTORY_URL='https://ctl.example.com:8766' AIFACTORY_WORKER='mac-worker-01' AIFACTORY_TOKEN='XXXXXX' bash
+curl -fsSL https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/main/workers/install.sh | AIFACTORY_URL='https://ctl.example.com:8766' AIFACTORY_WORKER='mac-worker-01' AIFACTORY_TOKEN='XXXXXX' bash
 ```
 
 Tart / Softnet、専用基準VM、ゲスト内のCLIと画面操作ヘルパー、ホストのLaunchAgentを準備する。Softnetの設定ではsudo認証が必要な場合がある。新規基準VMの既定イメージは `ghcr.io/cirruslabs/macos-sequoia-base:latest`。既存の専用基準VMは `AIFACTORY_MAC_BASE` で指定できる。
@@ -43,7 +43,7 @@ Tart / Softnet、専用基準VM、ゲスト内のCLIと画面操作ヘルパー�
 Windows 11 x64の専用マシンで、管理者PowerShellを開いて実行する。
 
 ```powershell
-$env:AIFACTORY_URL='https://ctl.example.com:8766'; $env:AIFACTORY_WORKER='windows-worker-01'; $env:AIFACTORY_TOKEN='XXXXXX'; $env:AIFACTORY_AUTOLOGIN='1'; irm https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/install/worker-bootstrap/workers/install.ps1 | iex
+$env:AIFACTORY_URL='https://ctl.example.com:8766'; $env:AIFACTORY_WORKER='windows-worker-01'; $env:AIFACTORY_TOKEN='XXXXXX'; $env:AIFACTORY_AUTOLOGIN='1'; irm https://raw.githubusercontent.com/akkijp-oss/aifactory/refs/heads/main/workers/install.ps1 | iex
 ```
 
 Git・gh・Claude CLI、一般作業ユーザー、Windowsサービス、画面用のログオンタスクを準備する。`AIFACTORY_AUTOLOGIN=1` は専用作業ユーザーの自動ログインを設定する。生成したパスワードは保護されたファイルとLSA secretへ保存し、コマンド引数やWinlogonの平文 `DefaultPassword` へ書かない。自動ログインは次の再起動から有効になり、インストーラーは勝手に再起動しない。
@@ -60,7 +60,7 @@ Git・gh・Claude CLI、一般作業ユーザー、Windowsサービス、画面�
 | `AIFACTORY_CA_B64` | 独自CA証明書のPEMをBase64にした値。省略時はシステムの信頼済みCAを使用 |
 | `AIFACTORY_CA_FILE` | 導入先に既にあるCAのPEMファイル。`CA_B64` と併用しない |
 | `AIFACTORY_SERVER_IP` | 任意。URLのホスト名をこのIPへhosts登録。異なる既存エントリーがあれば停止 |
-| `AIFACTORY_REF` | 取得するGit ref。既定 `install/worker-bootstrap`。版を固定する場合はコミットSHAを指定し、入口URLにも同じSHAを使う |
+| `AIFACTORY_REF` | 取得するGit ref。既定 `main`。版を固定する場合はコミットSHAを指定し、入口URLにも同じSHAを使う |
 | `AIFACTORY_MAC_IMAGE` | 新規Mac基準VMの取得元。再現性が必要ならdigestで固定 |
 | `AIFACTORY_MAC_BASE` | Macの専用基準VM名。既存インストールでは現在の設定を引き継ぐ |
 | `AIFACTORY_MAC_GUEST` | Macの実行用ゲスト名。既定 `aifactory-macos-guest` |

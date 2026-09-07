@@ -23,7 +23,7 @@ aifactory_install() {
       echo 'Python 3 is required. On macOS install Homebrew and its python package first.' >&2; return 1
     fi
   fi
-  ref=${AIFACTORY_REF:-install/worker-bootstrap}
+  ref=${AIFACTORY_REF:-main}
   [[ "$ref" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]*$ && "$ref" != *..* ]] || { echo 'Invalid AIFACTORY_REF' >&2; return 1; }
   staging=$(mktemp -d "${TMPDIR:-/tmp}/aifactory-install.XXXXXXXX")
   trap "rm -rf -- $(printf '%q' "$staging")" EXIT

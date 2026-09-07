@@ -8,7 +8,7 @@ function Install-AIFactoryWorker {
   if(-not [Environment]::GetEnvironmentVariable($name)){throw "Set $name before running this script"}
  }
  if(-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Run in an elevated Administrator PowerShell'}
- $ref=$env:AIFACTORY_REF; if(-not $ref){$ref='install/worker-bootstrap'}
+ $ref=$env:AIFACTORY_REF; if(-not $ref){$ref='main'}
  if($ref -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._/-]*$' -or $ref.Contains('..')){throw 'Invalid AIFACTORY_REF'}
  $stage=Join-Path $env:ProgramData ('AIFactoryInstall-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory $stage | Out-Null
