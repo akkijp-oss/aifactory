@@ -1,0 +1,20 @@
+[Unit]
+Description=aifactory pull worker endpoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=/usr/bin/python3 @REPO@/workers/bin/control --db @WORKSPACE@/workers/queue.sqlite3 serve --host @BIND@ --port 8766 --cert @CONFIG@/server.crt --key @CONFIG@/server.key
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=@WORKSPACE@/workers
+
+[Install]
+WantedBy=multi-user.target

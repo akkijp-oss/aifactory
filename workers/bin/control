@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Local administrator CLI and HTTPS worker endpoint. Credentials never print."""
+import argparse
+import json
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+from pull import Store, Error, server
+
+
+def main():
+    os.umask(0o077)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--db", required=True)
+    sub = ap.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("serve")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8766)
+    p.add_argument("--cert")
+    p.add_argument("--key")
+    p = sub.add_parser("enroll")
+    p.add_argument("worker")
+    p.add_argument("--token-file", required=True)
+    sub.add_parser("list")
+    p = sub.add_parser("disable")
+    p.add_argument("worker")
+    p = sub.add_parser("submit")
+    p.add_argument("worker")
+    p.add_argument("kind", choices=["probe", "guest-exec", "guest-prepare", "guest-release"])
+    p.add_argument("--payload-file")
+    p.add_argument("--stdin-file", help="private transient input; never printed in operation records")
+    p.add_argument("--operation-id")
+    p = sub.add_parser("acquire")
+    p.add_argument("worker")
+    p.add_argument("lease")
+    p = sub.add_parser("release-lease")
+    p.add_argument("worker")
+    p.add_argument("lease")
+    p.add_argument("--operation", required=True, help="successful guest-release operation ID")
+    for action in ("show", "cancel"):
+        p = sub.add_parser(action)
+        p.add_argument("operation")
+    p = sub.add_parser("resolve")
+    p.add_argument("operation")
+    p.add_argument("--confirmed-stopped", action="store_true", required=True)
+    a = ap.parse_args()
+    store = Store(a.db)
+    try:
+        if a.action == "serve":
+            server(store, a.host, a.port, a.cert, a.key).serve_forever()
+        elif a.action == "enroll":
+            p = pathlib.Path(a.token_file).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # Exclusive creation prevents silently replacing a deployed token.
+            with p.open("x") as f:
+                p.chmod(0o600)
+                f.write(store.enroll(a.worker) + "\n")
+            print("registered " + a.worker + "; token saved to " + str(p))
+        elif a.action == "list":
+            print(json.dumps(store.workers(), ensure_ascii=False, indent=2))
+        elif a.action == "disable":
+            store.disable(a.worker)
+        elif a.action == "submit":
+            payload = json.loads(pathlib.Path(a.payload_file).read_text()) if a.payload_file else {}
+            stdin = pathlib.Path(a.stdin_file).read_text() if a.stdin_file else None
+            print(store.submit(a.worker, a.kind, payload, a.operation_id, stdin=stdin))
+        elif a.action == "acquire":
+            store.acquire(a.worker, a.lease)
+        elif a.action == "release-lease":
+            store.release_lease(a.worker, a.lease, a.operation)
+        elif a.action == "show":
+            print(json.dumps(store.operation(a.operation), ensure_ascii=False, indent=2))
+        elif a.action == "cancel":
+            store.cancel(a.operation)
+        elif a.action == "resolve":
+            store.resolve(a.operation)
+    except Error as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
