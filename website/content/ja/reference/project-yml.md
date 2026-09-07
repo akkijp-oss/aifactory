@@ -23,6 +23,9 @@
 | `workflow_overrides` | object | | ワークフロー名 → 上書き（v1 は `base_branch` のみ） | base の決定 |
 | `known_red_gates` | array | | base ブランチで既に失敗するゲート名（`gates.sh` の名前） | runner が FAIL を INFO（参考情報）として扱うように変更し、エージェントに「直せ」と戻さない |
 
+
+Windowsでは `backend: windows-pull`、登録済みの `worker`、`app_dir: <work_root>/app`、`.ps1` のゲートを指定します。[Windowsワーカーの導入手順](../guides/windows-worker.md)を参照してください。
+
 ## 例（kumitate）
 
 同梱の `examples/projects/kumitate/project.yml` です。
@@ -81,3 +84,7 @@ INFO audit-gate red (known on base; not a gate)
 | `INFO <name> …` | 情報扱い（`known_red_gates` か、スクリプト側で情報にしたもの） |
 
 具体的な書き方は [プロジェクトを追加する](../guides/add-project.md#gates-sh) を参照してください。
+
+`computer_use: true` は `macos-pull` / `windows-pull` でVM内のcomputer MCPを有効にする。既定は無効。[導入手順](../guides/computer-use.md)。
+
+`backend: linux-pull` は単体Linuxインスタンスを使う。`app_dir` は `<work_root>/app`、`gates` は `.sh`。`computer_use: true` に対応。[Linux導入手順](../guides/linux-worker.md)。

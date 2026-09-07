@@ -2,6 +2,17 @@
 
 aifactory は、実行環境を管理する sandbox、チケットを管理する kanban、作業手順を実行するワークフロー、それらをつなぐ glue の 4 つで構成されています。それぞれの役割と、データを受け渡す方法を説明します。
 
+## Mac・Windowsの実行先
+
+共通のworkflow runnerから、`macos-pull` と `windows-pull` を選べます。どちらもワーカーがHTTPSで操作を取得し、run単位の予約、逐次ログ、成果物のハッシュ照合を使います。依頼は同じMCPの `ticket_run` または `kb run` です。
+
+| 実行先 | サービスの場所 | タスクの実行 | 返却時の処理 |
+| --- | --- | --- | --- |
+| Mac | Macホスト | Tartで複製したmacOS VM | VMを停止・削除 |
+| Windows | 専用Windows VM内 | 別の一般ユーザーでPowerShellを実行 | 作業フォルダーと一時プロファイルを削除。VMは常駐 |
+
+導入・復旧は[Macワーカー](../guides/macos-worker.md)と[Windowsワーカー](../guides/windows-worker.md)を参照してください。
+
 ## 4 つの構成要素
 
 「どこで実行するか」「何をいつ実行するか」「どう進めるか」を別々の構成要素が担当します。さらに、それらを連携させる glue を加えた 4 つの構成にしています。
@@ -93,3 +104,7 @@ flowchart LR
 - ただし sandbox 単体には価値がないので、最小のワークフローを 1 本並走させて要求を引き出した
 
 設計の経緯は `docs/ledger.md`（構想台帳）と ADR-0001〜0004 を参照してください。
+
+### 単体Linuxワーカー
+
+`linux-pull` はLinuxインスタンス自身へsystemdサービスを導入する。制御系とのHTTPS pullキューと予約管理は共通で、コマンドは専用の一般ユーザーで実行する。ProxmoxのAPI、VMのclone/snapshotは使わない。X11の画面操作は既存のログイン画面またはXvfbで行う。[導入手順](../guides/linux-worker.md)。

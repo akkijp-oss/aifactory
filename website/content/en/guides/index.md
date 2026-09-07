@@ -5,6 +5,7 @@ Everyday operations, ordered by what you want to do. Every command option is in 
 | I want to… | Page |
 |---|---|
 | Run tickets in a macOS VM on a Mac; set up, monitor, and recover the worker | [Mac worker setup and operations](macos-worker.md) |
+| Run tickets in a Windows VM; install and recover the service | [Windows worker setup and operations](windows-worker.md) |
 | Turn a request into a ticket (from free text / from a well-formed body) | [Create tickets](tickets.md) |
 | Run tickets (one at a time / in bulk / dry run) | [Run work](running.md) |
 | Read PRs, logs, artifacts and state | [Read the results](results.md) |
@@ -28,3 +29,7 @@ flowchart LR
 - Filing a ticket takes seconds; running one takes 5 to 60 minutes. You can do other things while it runs
 - State is always visible in `workspace/kanban/BOARD.md`, and `kb list` shows the same. In a browser, use the [Web console](console.md)
 - Humans only touch PR reviews and items that became `blocked` (waiting for a human)
+
+- [Mac and Windows computer use](computer-use.md): operate dedicated VM desktops through MCP or tickets.
+
+- [Standalone Linux worker](linux-worker.md): CLI and X11 desktop execution without a hypervisor API.

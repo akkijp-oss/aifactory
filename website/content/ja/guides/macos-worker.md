@@ -1,5 +1,7 @@
 # Macワーカーの導入と運用
 
+初回導入は [ワンライナーで導入する](worker-install.md) を参照。
+
 2026-09-07 / macOS VMでの文書整備からPR作成・VM返却まで実機確認済み。
 
 aifactoryは、Apple Silicon Mac上のmacOS VMをチケットの実行先にできる。制御系はProxmox上に置いたまま、Mac上のGo製ワーカーがHTTPSで仕事を取得する。利用者は通常と同じMCPの `ticket_run` または `kb run` から依頼する。
@@ -144,4 +146,6 @@ PR後の `result: human` は人間によるレビュー待ちを表す。これ�
 
 ゲストはホストのディレクトリ・クリップボード・音声を共有しない。Softnetでprivate IPv4・リンクローカル・tailnet宛てを遮断し、ゲストの `Ethernet` に公開DNSを設定してIPv6を無効にする。このサービス名と、設定に使えるゲストのsudo環境が前提である。
 
-現在のcode step対応は `gates.sh` と `pr-create.sh`。`merge-pr`、工程ごとのOS切替、GUI配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
+現在のcode step対応は `gates.sh` と `pr-create.sh`。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
+
+画面操作の追加手順は[Mac・Windowsの画面操作](computer-use.md)を参照。

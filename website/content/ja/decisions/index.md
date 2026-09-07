@@ -26,6 +26,7 @@
 | 0014 | エージェントが担当する工程の出力は stream-json を人が読める形に起こして逐次書き、生イベントはローカルにだけ残す | 60 分の工程の途中が見える。生 JSONL は大きいので git に入れない。`state.json` の `current` で今の工程を指す | 採用 |
 | 0015 | 操作口は Web コンソール（HTTP）と MCP（stdio）の 2 つ。読み書きの正本は `console/lib/core.py` に 1 つ | 口ごとに判定を複製すると穴になる。ジョブ記録は flock で共有。MCP は標準ライブラリの最小実装 | 採用 |
 | 0016 | 枠組み（リポジトリ）と運用データ（`AIFACTORY_WORKSPACE`）を分ける。置き場の判断は `lib/aifactory_paths.py` に 1 つ | 公開リポジトリに私有プロジェクトの情報が混ざる事故を置き場で構造的に防ぐ。例は `examples/projects/` に同梱し、テストは本番データに依存しない | 採用 |
+| [0022](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0022-windows-pull-worker.md) | 専用Windows VM内のサービスを共通pull workerにする | 一般ユーザー実行、Job Objectによる子孫プロセス停止、workspace単位の返却を共通workflowにつなぐ | 採用 |
 
 ## 判断の流れ
 
@@ -56,3 +57,7 @@ flowchart LR
 3. `docs/adr/README.md` の表に 1 行足す
 4. `docs/ledger.md` の該当箇所に番号を引用する
 5. このサイトの一覧にも 1 行足す（日本語と英語）
+
+- [ADR 0023: Computer use in dedicated VMs](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0023-computer-use.md)
+
+- [ADR 0024: Standalone Linux worker](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0024-standalone-linux-worker.md)

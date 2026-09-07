@@ -24,6 +24,7 @@ This page is a list with summaries. Read the full text in `docs/adr/` in the rep
 | 0014 | Agent step output is the stream-json event stream rendered into a readable log as it arrives; raw events stay local | The middle of a 60-minute step becomes visible. Raw JSONL is large, so it stays out of git. `current` in `state.json` names the running step | Accepted |
 | 0015 | Two operating surfaces, the Web console (HTTP) and MCP (stdio), over one source of reads and writes in `console/lib/core.py` | Duplicating the checks per surface opens holes. Job records are shared under a file lock. The MCP server is a minimal standard-library implementation | Accepted |
 | 0016 | Separate the framework (this repository) from operational data (`AIFACTORY_WORKSPACE`); one place, `lib/aifactory_paths.py`, decides where data lives | Keeps private project data out of the public repository by construction. A reference project ships under `examples/projects/`, so tests do not depend on production data | Accepted |
+| [0022](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0022-windows-pull-worker.md) | Run a shared pull worker as a service inside a dedicated Windows VM | Integrate ordinary-user execution, Job Object process cleanup, and workspace release with the shared workflow | Accepted |
 
 ## How the decisions relate
 
@@ -54,3 +55,7 @@ Kept under "things we want" in `docs/ledger.md`. They become ADRs once work star
 3. Add a row to the table in `docs/adr/README.md`
 4. Quote the number where it applies in `docs/ledger.md`
 5. Add a row to the list on this site (Japanese and English)
+
+- [ADR 0023: Computer use in dedicated VMs](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0023-computer-use.md)
+
+- [ADR 0024: Standalone Linux worker](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0024-standalone-linux-worker.md)
