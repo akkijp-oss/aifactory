@@ -202,8 +202,14 @@ def linux(c, ca):
         run('bash', SOURCE / 'templates/install-linux-worker.sh', tmp / 'config.json', binaries, '--headless')
         run('systemctl', 'is-active', 'aifactory-worker', 'aifactory-desktop')
         # A desktop HTTP process alone is insufficient: exercise actual X11 capture.
-        run('runuser', '-u', 'aifactory-task', '--', '/usr/local/lib/aifactory-computer/aifactory-computer',
-            input=b'{"action":"screenshot"}', stdout=subprocess.DEVNULL)
+        for _ in range(30):
+            probe = subprocess.run(['runuser', '-u', 'aifactory-task', '--', '/usr/local/lib/aifactory-computer/aifactory-computer'],
+                input=b'{"action":"screenshot"}', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=25)
+            if probe.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            raise ValueError('Desktop failed its X11 screenshot check; inspect journalctl -u aifactory-desktop')
     print('Installed Linux worker ' + c['WORKER'] + '. Desktop: Alt+F2 -> application name. Check control list for online status.')
 
 
