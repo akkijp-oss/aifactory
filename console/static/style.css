@@ -34,6 +34,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .brand small { font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 6px; }
 .brand-mark { width: 12px; height: 12px; border-radius: 3px; background: var(--accent); display: inline-block; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+.tznote { font-size: 11px; line-height: 1.35; color: var(--muted); }
 .conn::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--done); margin-right: 6px; }
 .conn.off::before { background: var(--blocked); }
 .linkish { border: 0; background: none; padding: 0; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; }
@@ -119,6 +120,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12.5px; }
+th.nw, td.nw { white-space: nowrap; }   /* VM 名・IP・時刻。折り返すと列頭と値が離れる */
 tr.link { cursor: pointer; }
 tr.link:hover td { background: var(--ground); }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }

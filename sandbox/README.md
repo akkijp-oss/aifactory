@@ -27,7 +27,7 @@ sandbox は `sandbox` CLI の5操作で完結する。これが区画間のイ�
 | `url <task-id>` | タスク ID | アプリの URL を返す。`http://task-<id>.sb.internal:3000` |
 | `reset <task-id>` | タスク ID | VM をスナップショット `clean` に巻き戻す。貸出は継続 |
 | `release <task-id>` | タスク ID | reset して名前を外し、プールに返す |
-| `ls` | なし | 貸出状況（VM名 / task-id / IP / 状態） |
+| `ls` | なし | プール VM の一覧（貸出先の task-id / VM 名 / VMID / IP / 稼働状態 / 貸出開始時刻）。稼働状態は Proxmox の電源（running / stopped）で、貸出とは別の軸 |
 
 出力物（diff、PR、テスト結果、スクショ）は sandbox の責務ではない。VM の中で workflow が作り、`ssh` か `git push` で外に出す。
 

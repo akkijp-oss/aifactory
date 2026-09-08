@@ -7,6 +7,7 @@ VM も claude も使わない。PATH の先頭に偽の `sandbox` を置いて r
 - take 成功 → 直後の ssh が非 0 → VM を返してから同じ記録を残す
 - kb run 経由ならチケットは in_progress のまま残らず blocked になる
 """
+import datetime
 import json
 import os
 import pathlib
@@ -72,6 +73,8 @@ class TakeFailureTest(unittest.TestCase):
         self.assertIsNone(s["current"])
         self.assertIn(reason, s["error"])
         self.assertTrue(s.get("finished") and s.get("started"))
+        for k in ("started", "finished"):   # 記録の時刻はオフセット付き（ADR-0026。チケット 235）
+            self.assertIsNotNone(datetime.datetime.fromisoformat(s[k]).utcoffset(), f"{k}: {s[k]!r}")
         self.assertEqual((s["pj"], s["task"], s["workflow"]), ("kumitate", s["task"], "research"))
 
     def test_take_failure_is_recorded_and_state_exists_from_the_start(self):

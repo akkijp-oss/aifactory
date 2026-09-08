@@ -10,7 +10,7 @@ sandbox ssh <task-id> [cmd...]   log in as dev / run a command (via login shell)
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          roll back to snapshot clean (stays lent, env re-injected)
 sandbox release <task-id>        roll back and return
-sandbox ls                       lending status
+sandbox ls                       list the pool VMs (who it is lent to / IP / power state)
 ```
 
 | Operation | What it does | Fails when |
@@ -20,7 +20,7 @@ sandbox ls                       lending status
 | `url` | Prints `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` | |
 | `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean` |
 | `release` | reset → remove DNS → delete from `state.json`. Waits and retries on rollback lock contention | |
-| `ls` | `TASK VM VMID IP STATUS SINCE` | |
+| `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it, so `running` rows appear even when nothing is lent | |
 
 Example `sandbox ls` output:
 
