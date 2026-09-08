@@ -118,7 +118,8 @@ async function refreshNav() {
   try {
     const o = await api('overview');
     const c = o.counts; $('n-board').textContent = (c.todo + c.in_progress + c.review + c.blocked) || '';
-    $('n-runs').textContent = o.runs_active.length || '';
+    $('n-runs').textContent = (o.runs_active_n != null ? o.runs_active_n : o.runs_active.length) || '';
+    $('n-board').title = $('n-runs').title = T.nav.badgeScope;                  /* バッジは全 PJ。ボードで PJ を選んでも変わらない */
     $('n-sandbox').textContent = o.vms_lent || '';
     $('n-jobs').textContent = o.jobs_running || '';
     $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6), tz: tzLabel() });
@@ -134,7 +135,10 @@ function render(html) { const y = window.scrollY; main.innerHTML = html; window.
 /* ---------- ボード */
 async function viewBoard() {
   const pj = localStorage.getItem('pj') || '';
-  const [o, t] = await Promise.all([refreshNav(), api('tickets' + (pj ? `?pj=${encodeURIComponent(pj)}` : ''))]);
+  /* run の絞り込みはサーバー側（上限 6 件を掛ける前に絞る。ブラウザーで絞ると 7 本以上動いているとき漏れる） */
+  const [nav, t, ov] = await Promise.all([refreshNav(), api('tickets' + (pj ? `?pj=${encodeURIComponent(pj)}` : '')),
+                                          pj ? api(`overview?pj=${encodeURIComponent(pj)}`).catch(() => null) : null]);
+  const o = pj ? ov : nav;                                                      /* ナビの数字は全 PJ のまま（バッジは画面をまたぐ） */
   if (!o) return render(`<div class="err">${esc(T.err.noOverview)}</div>`);
   const by = {}; STATUSES.forEach(s => by[s] = []); t.tickets.forEach(x => (by[x.status] || by.todo).push(x));
   by.done.sort((a, b) => b.updated.localeCompare(a.updated));
@@ -144,11 +148,13 @@ async function viewBoard() {
   const runsNew = ((o.runs_not_started || {}).runs || []).filter(inPj);          /* 工程が始まる前に止まった run。名前だけ出す */
   const runsGone = ((o.runs_abandoned || {}).runs || []).filter(inPj);           /* runner が居なくなった run。待っても進まないので pulse を出さない */
   const nLive = runsRun.length + runsNew.length + runsGone.length;
+  const moreRuns = (o.runs_active_n || runsRun.length) - runsRun.length;        /* サーバーの上限からあふれた「実行中」の件数 */
   const live = (nLive ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: nLive, m: runsNew.length, a: runsGone.length }))}</div>` : '')
     + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
     + runsGone.map(r => `<div><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj || '')} ${esc(r.task || '')}</a> · ${r.runner ? `${esc(tt(T.board.liveAbandoned, { t: fmtT(r.runner.finished) }))} <a href="#/job/${esc(r.runner.id)}">${esc(T.btn.openJob)}</a>` : `<span class="tag">${esc(T.result.abandoned)}</span>`}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
-    + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
+    + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '')
+    + (moreRuns > 0 ? `<div><a href="#/runs">${esc(tt(T.board.moreRuns, { n: moreRuns }))}</a></div>` : '');   /* 上限からあふれた分は実行記録で見る */
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
   const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
     <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
@@ -682,7 +688,7 @@ const actions = {
         ${p.updated_after_run ? `<div class="warn">${esc(tt(T.dialog.sync.newer, { id, at: fmtT(p.ticket.updated) }))}</div>` : ''}
         ${p.changes ? '' : `<p class="help">${esc(T.dialog.sync.same)}</p>`}` });
     if (!ok) return;
-    await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined });
+    await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined, dry_run: false });   /* ダイアログで前後を見せた後なので、ここで初めて書く */
     const b = p.before;
     toast(esc(tt(T.msg.synced, { id })), { action: { label: T.btn.undo, run: async () => {
       await api(`tickets/${id}/action`, { action: 'set', status: b.status, note: b.note || undefined });

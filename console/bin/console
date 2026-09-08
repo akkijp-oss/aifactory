@@ -105,7 +105,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def api_get(self, ep, q):
         """戻り: (obj, code)"""
-        if ep == "overview": return overview(), 200
+        if ep == "overview": return overview(pj=q.get("pj") or None), 200
         if ep == "tickets": return tickets_list(pj=q.get("pj")), 200
         if ep == "next": return ticket_next(pj=q.get("pj")), 200
         m = re.match(r"^tickets/(\d+)$", ep)

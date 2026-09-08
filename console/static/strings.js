@@ -9,7 +9,7 @@ const T = {
   "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）", "abandoned": "中断" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
   "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
-           "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
+           "badgeScope": "この数字はすべての PJ の件数です。ボードで PJ を選んでも変わりません。", "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "power": { "running": "起動中", "stopped": "停止中" },
   "banner": { "offline": "サーバーに届きません。console/bin/console が動いているか確かめてください。" },
@@ -68,8 +68,8 @@ const T = {
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
     "runsCount": "実行記録 {n} 件（うち開始前 {m} 件、中断 {a} 件）", "liveAbandoned": "中断。runner は {t} に終わっています。", "ticketCount": "左の数字はチケットの件数です。",
-    "noLive": "動いている run はありません。", "more": "ほか {n} 件をすべて見る",
-    "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
+    "noLive": "動いている run はありません。", "more": "ほか {n} 件をすべて見る", "moreRuns": "ほか {n} 件の動いている run を実行記録で見る",
+    "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}（左のナビの数字はすべての PJ）"
   },
   "tickets": { "count": "{n} 件（全 {m} 件）" },
   "logs": {

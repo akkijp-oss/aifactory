@@ -40,9 +40,18 @@ def arg_int(a, k, required=True):
     except (TypeError, ValueError): raise core.ApiError(f"{k} は整数")
 
 
-def t_overview(a): return core.overview()
+def t_overview(a): return core.overview(pj=a.get("pj") or None)
 def t_ticket_list(a): return core.tickets_list(pj=a.get("pj"), status=a.get("status"), all_=bool(a.get("all")))
-def t_ticket_show(a): return core.ticket_detail(arg_int(a, "id"))
+def t_ticket_show(a):
+    """チケット 1 件。run があれば「状態を合わせたらどうなるか」の下見も付ける（HTTP の sync-preview と同じ内容）。
+       下見は kb を 1 回起動する。読めなくても ticket_show 自体は失敗させない（理由を sync_preview.error に入れる）"""
+    tid = arg_int(a, "id")
+    d = core.ticket_detail(tid)
+    d["sync_preview"] = None
+    if d["ticket"].get("run"):
+        try: d["sync_preview"] = core.sync_preview(tid)
+        except core.ApiError as e: d["sync_preview"] = {"error": str(e)}
+    return d
 def t_ticket_new(a): return core.ticket_new(a)
 def t_ticket_action(a): return core.ticket_action(arg_int(a, "id"), a)
 def t_ticket_run(a): return core.ticket_run(arg_int(a, "id"), a)
@@ -111,12 +120,13 @@ TOOLS = [
     ("computer_open", "専用Mac/Windows/Linux環境を画面操作用に予約・準備する。他のrunで使用中なら失敗する。返却はcomputer_close。", schema({"worker": STR}, ["worker"]), t_computer_open),
     ("computer_action", "予約したVMの画面取得・入力。まずscreenshotで確認し、その画像のピクセル座標を使う。typeはUnicode、keyはCTRL/ALT/SHIFT/WINまたはCMDとENTER等、scrollは正で上。", schema({"session":STR,"action":{"type":"string","enum":["screenshot","click","move","type","key","scroll"]},"x":INT,"y":INT,"button":{"type":"string","enum":["left","right"]},"count":INT,"text":STR,"keys":{"type":"array","items":STR},"amount":INT},["session","action"]), t_computer_action),
     ("computer_close", "画面操作用の予約を返却する。Macは専用VMを削除、Windows/Linuxはworkspaceを削除。保存済みスクリーンショットは保持する。",schema({"session":STR},["session"]),t_computer_close),
-    ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数", schema({}), t_overview),
+    ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数。pj を渡すと run の一覧だけその PJ に絞る（チケット数は常に全 PJ）", schema({"pj": STR}), t_overview),
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
-    ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ", schema({"id": INT}, ["id"]), t_ticket_show),
+    ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ。run があれば sync_preview（状態を合わせたときの前後）も付く", schema({"id": INT}, ["id"]), t_ticket_show),
     ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR}, ["pj", "kind", "title"]), t_ticket_new),
-    ("ticket_action", "チケットの状態を進める・項目を直す（kb）。action: start / review / done / reopen / block（note 必須）/ set（kind・pr・note・status・run）/ sync（run 記録から状態を取り直す）",
-     schema({"id": INT, "action": {"type": "string", "enum": ["start", "review", "done", "reopen", "block", "set", "sync"]}, "note": STR, "kind": STR, "pr": INT, "status": STR, "run": STR}, ["id", "action"]), t_ticket_action),
+    ("ticket_action", "チケットの状態を進める・項目を直す（kb）。action: start / review / done / reopen / block（note 必須）/ set（kind・pr・note・status・run）/ sync（run 記録から状態を取り直す。既定は書かずに前後を返すだけ）",
+     schema({"id": INT, "action": {"type": "string", "enum": ["start", "review", "done", "reopen", "block", "set", "sync"]}, "note": STR, "kind": STR, "pr": INT, "status": STR, "run": STR,
+             "dry_run": {**BOOL, "description": "sync 専用。既定 true = 書かずに前後を返す。false を明示したときだけ状態とメモを上書きする"}}, ["id", "action"]), t_ticket_action),
     ("ticket_run", "チケットを runner で回す（kb run）。VM を貸し出し step を順に実行し PR まで進める。ジョブを返す。dry_run なら VM を触らず依頼文だけ組む",
      schema({"id": INT, "dry_run": BOOL, "workflow": {**STR, "description": "種別と違う workflow で回すとき"}, "keep": {**BOOL, "description": "終了後 VM を返却しない"}, "resume": {**BOOL, "description": "貸出中の VM で続きから"}}, ["id"]), t_ticket_run),
     ("intake", "自由文から起票する（glue/bin/intake。LLM 1 回で pj / kind / 題名 / 完了条件を決める）。ジョブを返す。pj / kind が分かっていれば渡す",

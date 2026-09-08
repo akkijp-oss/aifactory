@@ -93,6 +93,54 @@ class ApiTest(unittest.TestCase):
         _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
         for ep in ("/api/sandbox", "/api/config", "/api/logs", "/api/jobs"): self.assertEqual(self.http.get(ep)[0], 200)
 
+    def test_overview_filters_runs_by_pj_before_the_cap(self):
+        """動いている run の一覧を PJ で絞るのはサーバー側（先に絞ってから上限を掛ける）。
+
+        `runs_active` は 6 件で切るので、ブラウザーが受け取ってから絞ると、7 本以上動いているときに
+        選んだ PJ の run が一覧から漏れる。プール合計は PJ × 3 台なので現実に起きる。"""
+        mine = [self._fixture_run(f"2020-02-0{i}-other-90{i}",
+                                  {"pj": "other", "task": f"90{i}", "workflow": "feature", "started": f"2020-02-0{i}T09:00:00+00:00",
+                                   "next": "implement", "loops": {}, "current": None, "history": []}) for i in range(1, 7)]
+        mine.append(self._fixture_run(f"2020-01-01-{PJ}-989",
+                                      {"pj": PJ, "task": "989", "workflow": "feature", "started": "2020-01-01T09:00:00+00:00",
+                                       "next": "implement", "loops": {}, "current": None, "history": []}))
+        try:
+            st, o = self.http.get("/api/overview")
+            self.assertEqual(st, 200)
+            self.assertNotIn(f"2020-01-01-{PJ}-989", [r["name"] for r in o["runs_active"]])   # 全体では上限に押し出される
+
+            st, f = self.http.get(f"/api/overview?pj={PJ}")
+            self.assertEqual(st, 200); self.assertEqual(f["pj"], PJ)
+            names = [r["name"] for r in f["runs_active"]]
+            self.assertIn(f"2020-01-01-{PJ}-989", names, "PJ で絞ったのに、その PJ の動いている run が漏れている")
+            self.assertEqual({r["pj"] for r in f["runs_active"]}, {PJ})
+            _, allr = self.http.get("/api/runs")
+            live = [r for r in allr["runs"] if r["status"] == "running" and not r.get("dry") and r["pj"] == PJ and r["kind"] == "v1"]
+            self.assertEqual(f["runs_active_n"], len(live))                                  # 画面が「ほか n 件」を出せる
+            self.assertEqual(f["counts"], o["counts"])                                       # 件数はナビ用に全 PJ のまま
+            self.assertEqual(f["limit"], 6); self.assertGreaterEqual(o["runs_active_n"], 7)   # 上限は結果と一緒に返す
+
+            _, g = self.http.get("/api/overview?pj=other")
+            self.assertEqual(g["runs_active_n"], 6); self.assertEqual(len(g["runs_active"]), 6)
+            self.assertEqual({r["name"] for r in g["runs_active"]}, set(mine[:6]))
+            self.assertEqual(self.http.get("/api/overview?pj=nosuch")[1]["runs_active"], [])
+        finally:
+            for name in mine: shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+    def test_board_and_nav_read_the_run_count_from_the_server(self):
+        """ボードは PJ で絞った overview を読み、上限からあふれた分を画面に出す。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewBoard")
+        board = app[i:app.index("\n}", i)]
+        self.assertRegex(board, r"overview\?pj=", "ボードが PJ で絞った overview を取っていない（7 本以上で run が漏れる）")
+        self.assertIn("T.board.moreRuns", board, "上限からあふれた run の案内が無い")
+        i = app.index("async function refreshNav")
+        nav = app[i:app.index("\n}", i)]
+        self.assertIn("runs_active_n", nav, "ナビの run 数が一覧の長さのままで、6 で頭打ちになる")
+
     def test_next_for_dispatch_dialog(self):
         """配車ダイアログが押す前に見せる「次に回るチケット」（kb next --json）"""
         tid = self.todo_id()
@@ -141,6 +189,24 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(re.findall(r"col\('(\w+)'", body), ["todo", "in_progress", "review", "done", "blocked"],
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
+
+    def test_nav_badges_say_which_scope_they_count(self):
+        """左ナビのバッジは全 PJ の数字（画面をまたぐので絞らない）。その対象範囲が画面で分かること。
+
+        ボードで PJ を選ぶと帯と列は絞られるのに、バッジだけ数が違って見える。
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function refreshNav")
+        nav = app[i:app.index("\n}", i)]
+        self.assertIn("T.nav.badgeScope", nav, "バッジが何を数えているかを画面が言っていない")
+        for el in ("n-board", "n-runs"):
+            self.assertRegex(nav, r"\$\('%s'\)\.title" % el, f"{el} のバッジに対象範囲の説明（title）が無い")
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertIn("PJ", T["nav"]["badgeScope"])
+        self.assertIn("PJ", T["board"]["scopePj"])
+        self.assertNotEqual(T["board"]["scopePj"], T["board"]["scopeAll"])
 
     def test_done_overflow_leads_to_ticket_list(self):
         """ボードの完了列からあふれた分が、CLI ではなく画面（#/tickets）に続く。
@@ -703,6 +769,31 @@ class ApiTest(unittest.TestCase):
         st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: run の無いチケット", "body": "x"})
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get(f"/api/tickets/{d['id']}/sync-preview")
         self.assertEqual(cm.exception.code, 400); self.assertIn("--run", json.loads(cm.exception.read())["error"])
+
+    def test_sync_action_writes_only_when_asked(self):
+        """状態を合わせる操作は、既定では書かずに前後を返す（HTTP も MCP も同じ関数を通る）。
+
+        書くのは dry_run: false を明示したときだけ。画面はダイアログで前後を見せてから明示する。"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: 合わせる操作の既定", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        name = self._fixture_run(f"2020-01-02-{PJ}-{tid}", {"pj": PJ, "task": tid, "workflow": "research", "started": "2000-01-01T00:00:00+00:00",
+                                                            "finished": "2000-01-01T00:00:00+00:00", "result": "end", "pr_url": "", "history": []})
+        try:
+            st, p1 = self.http.post(f"/api/tickets/{tid}/action", {"action": "sync", "run": name})
+            self.assertEqual(st, 200, p1)
+            self.assertTrue(p1["dry_run"]); self.assertEqual(p1["before"]["status"], "todo"); self.assertEqual(p1["after"]["status"], "done")
+            self.assertTrue(p1["updated_after_run"]); self.assertTrue(p1["warning"])
+            self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")   # 既定は書かない
+            st, p2 = self.http.post(f"/api/tickets/{tid}/action", {"action": "sync", "run": name, "dry_run": False})
+            self.assertEqual(st, 200, p2); self.assertFalse(p2["dry_run"]); self.assertEqual(p2["before"]["status"], "todo")
+            self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "done")
+        finally:
+            shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("  'sync': async el =>")
+        body = app[i:app.index("\n  },", i)]
+        self.assertIn("dry_run: false", body, "ダイアログで確認した後に書く指定が無い（押しても状態が変わらない）")
 
     def test_new_ticket(self):
         st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: console テスト", "body": "本文\n\n## 完了条件\n- summary.md"})

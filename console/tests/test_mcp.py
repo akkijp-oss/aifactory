@@ -152,6 +152,54 @@ class McpTest(unittest.TestCase):
         desc = next(t["description"] for t in self.c.call("tools/list")["result"]["tools"] if t["name"] == "job_wait")
         self.assertIn("既定 60", desc); self.assertIn("上限 300", desc)
 
+    def test_09_sync_is_dry_by_default(self):
+        """MCP の sync は既定で書かない（LLM が完了済みチケットを過去の run で巻き戻せないように）。
+
+        console の同じ操作は下見（kb sync --dry-run）と警告つきダイアログを通るが、MCP には確認の場が無い。
+        既定を「前後を返すだけ」にして、書くのは dry_run: false を明示したときだけにする。"""
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: mcp sync の下見", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r); tid = r["id"]
+        name = f"2020-01-01-{PJ}-{tid}"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({"pj": PJ, "task": tid, "workflow": "research", "started": "2000-01-01T00:00:00+00:00",
+                                                  "finished": "2000-01-01T00:00:00+00:00", "result": "end", "pr_url": "", "history": []},
+                                                 ensure_ascii=False), encoding="utf-8")
+        before = self.c.tool("ticket_show", id=tid)[1]
+
+        err, p = self.c.tool("ticket_action", id=tid, action="sync", run=name)
+        self.assertFalse(err, p)
+        self.assertTrue(p["dry_run"], "MCP の sync が既定で書き込んでいる")
+        self.assertEqual(p["before"]["status"], "todo"); self.assertEqual(p["after"]["status"], "done")
+        self.assertTrue(p["updated_after_run"], "run の後にチケットが更新されていることを伝えていない")
+        self.assertTrue(p.get("warning"), "上書きになる警告が無い")
+        after = self.c.tool("ticket_show", id=tid)[1]
+        self.assertEqual(after["ticket"]["status"], "todo", "下見なのにチケットが書き換わった")
+        self.assertEqual(len(after["history"]), len(before["history"]))
+
+        err, w = self.c.tool("ticket_action", id=tid, action="sync", run=name, dry_run=False)
+        self.assertFalse(err, w)
+        self.assertFalse(w["dry_run"]); self.assertEqual(w["before"]["status"], "todo"); self.assertEqual(w["after"]["status"], "done")
+        self.assertTrue(w.get("warning")); self.assertIn("stdout", w)
+        self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["status"], "done")
+
+    def test_10_ticket_show_carries_the_sync_preview(self):
+        """run のあるチケットは、状態を合わせたらどうなるかを ticket_show の時点で見せる（HTTP の sync-preview と同じ内容）"""
+        err, t = self.c.tool("ticket_list", all=True); self.assertFalse(err)
+        tid = next(x["id"] for x in t["tickets"] if x.get("run"))
+        err, d = self.c.tool("ticket_show", id=tid); self.assertFalse(err, d)
+        self.assertIsNotNone(d.get("sync_preview"), "run のあるチケットに下見が付いていない")
+        self.assertEqual(d["sync_preview"]["run"], d["ticket"]["run"])
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: run の無いチケット", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r)
+        err, d = self.c.tool("ticket_show", id=r["id"]); self.assertFalse(err, d)
+        self.assertIsNone(d["sync_preview"], "run が無いのに下見が付いている")
+
+    def test_11_sync_dry_run_is_in_the_schema(self):
+        tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
+        props = tools["ticket_action"]["inputSchema"]["properties"]
+        self.assertIn("dry_run", props, "ticket_action のスキーマに dry_run が無い（呼び手が書く方法を見つけられない）")
+        self.assertIn("sync", props["dry_run"].get("description", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

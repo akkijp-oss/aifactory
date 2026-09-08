@@ -90,12 +90,12 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/overview` | Counts per state, running runs and jobs, number of lent VMs |
+| `GET /api/overview[?pj=]` | Counts per state, running runs and jobs, number of lent VMs. `pj` narrows the run lists only, before the `limit` is applied (so a project's run is never dropped when seven or more are running; `runs_active_n` is the count after filtering). `counts` always covers every project |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | List / body, history, runs, jobs. The list also returns the project candidates (`pjs`) and whether each one has a project.yml (`pj_ready`) |
 | `GET /api/next[?pj=]` | The todo `kb next` would pick for dispatch, or `null` |
 | `GET /api/tickets/<id>/sync-preview[?run=]` | A preview of the state sync (`kb sync --dry-run`): state and note before and after, and whether the ticket was updated after that run |
 | `POST /api/tickets` | `kb new` |
-| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr}` |
+| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr, dry_run}`. `sync` returns the before/after without writing unless you pass `dry_run: false` |
 | `POST /api/tickets/<id>/run` | `kb run` as a job. `{dry_run, workflow, keep, resume}` |
 | `GET /api/runs` / `GET /api/runs/<name>` | Run records |
 | `GET /api/file?path=&tail=` | A file under one of the allowed roots |
@@ -117,9 +117,9 @@ claude mcp reset-project-choices   # approve again
 
 | Tool | What it does |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | Overview, list, one ticket (body, history, runs, jobs) |
+| `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs; plus `sync_preview` when the ticket has a run) |
 | `ticket_new` / `intake` | File a ticket (well-formed body / free text; intake is a job) |
-| `ticket_action` | start / review / done / reopen / block / set / sync |
+| `ticket_action` | start / review / done / reopen / block / set / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |
 | `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log` and so on) |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | Lending state / live list (job) / release (job) |
