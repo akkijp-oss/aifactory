@@ -124,13 +124,51 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_done_overflow_leads_to_ticket_list(self):
+        """ボードの完了列からあふれた分が、CLI ではなく画面（#/tickets）に続く。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        board = app[app.index("async function viewBoard"):app.index("\n}", app.index("async function viewBoard"))]
+        self.assertIn("#/tickets", board, "完了列からあふれた分を見る導線が画面に無い（CLI の案内だけで終わっている）")
+        self.assertIn("T.btn.openTickets", board, "ボードから一覧へ行くボタンが無い")
+        self.assertRegex(app, r"seg\[0\] === 'tickets'", "route() に #/tickets が無い")
+
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertNotIn("kb list", T["board"]["more"], "あふれた分の案内が CLI のコマンドのままになっている")
+
+        i = app.index("async function viewTickets")
+        view = app[i:app.index("\n}", i)]
+        for key in ("q", "pj", "status"):
+            self.assertIn(f"p.get('{key}')", view, f"絞り込み条件 {key} を URL から読んでいない（詳細から戻ると条件が消える）")
+        render = app[app.index("function tkRender"):app.index("\n}", app.index("function tkRender"))]
+        self.assertIn("T.tickets.count", render, "件数（何件中の何件か）を出していない")
+        self.assertIn("T.empty.tickets", render, "0 件のときの案内が無い")
+
+    def test_every_data_act_has_a_handler(self):
+        """`data-act` は必ず `actions` に手がある名前だけにする。
+
+        click の委譲（`document.addEventListener('click', ...)`）は SELECT と checkbox 以外の
+        `[data-act]` をすべて `actions[...]` に回すので、手の無い名前を書くと押した瞬間に
+        TypeError → 赤いトースト、さらに `disabled` の切り替えでフォーカスが外れる。
+        JS を動かす基盤が無いので、ソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        block = app[app.index("const actions = {"):app.index("\n};", app.index("const actions = {"))]
+        handlers = set(re.findall(r"^  '?([\w-]+)'?:", block, re.M))
+        used = set(re.findall(r'data-act="([\w-]+)"', app))
+        self.assertTrue(handlers, "actions の手を読み取れていない（テストの前提が壊れている）")
+        self.assertEqual(used - handlers, set(), "actions に手の無い data-act がある（押すとエラーのトーストが出る）")
+
     def test_ticket_run_area_follows_status(self):
         """チケットの実行エリアが今の状態に合う（完了で押せる緑ボタン、ボタンが無い画面での「上の実行する」案内を防ぐ）。
 
         JS を動かす基盤が無いので、ボードの帯と同じくソースを検査する。
         """
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
-        i = app.index("async function viewTicket")
+        i = app.index("async function viewTicket(")
         body = app[i:app.index("\n}", i)]
         self.assertRegex(body, r"canRun\s*=[^;\n]*status\s*!==\s*'done'", "実行できるかを status から決めていない")
         self.assertRegex(body, r"const runBtn = \([^)]*disabled[^)]*\)", "runBtn が押せない状態を受け取れない")
@@ -207,7 +245,7 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertRegex(app, r"function jobLink\(j\)[^\n]*<a href=\"#/job/", "ジョブ名を <a> にする jobLink が無い")
         for fn, helper in (("async function viewRuns", "runLink("), ("async function viewJobs", "jobLink("),
-                           ("async function viewTicket", "jobLink(")):
+                           ("async function viewTicket(", "jobLink(")):
             i = app.index(fn); body = app[i:app.index("\n}", i)]
             self.assertIn(helper, body, f"{fn} の一覧が名前をリンクにしていない（{helper}）")
             self.assertIn('tr class="link" data-href', body, f"{fn} の行クリック（tr.link data-href）が消えている")

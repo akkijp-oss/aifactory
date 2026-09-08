@@ -28,6 +28,8 @@ launchd's PATH is minimal, so the installer writes the absolute path of the curr
 ```mermaid
 flowchart LR
   B[Board<br>pipeline strip + 5 columns] --> T[Ticket<br>body, history, run]
+  B --> L[Tickets<br>filter by number, title, project, state]
+  L --> T
   T --> R[Runs<br>step track + logs]
   B --> I[File<br>intake / kb new]
   B --> D[Dispatch<br>dialog → dispatch]
@@ -39,7 +41,8 @@ flowchart LR
 
 | Screen | What you see | What you can press |
 |---|---|---|
-| Board | The pipeline strip (todo → in progress → review → done, with "waiting for a human" to the side) and five columns of cards in the same order. Running runs appear under "in progress" with the current step and elapsed time. The strip, the columns and the runs all follow the project filter, and the scope is stated above the strip | File a ticket (goes to File), dispatch (a dialog to pick project, count and dry run; it shows the ticket that will be picked before you confirm, and cannot be pressed when there is no todo) |
+| Board | The pipeline strip (todo → in progress → review → done, with "waiting for a human" to the side) and five columns of cards in the same order. Running runs appear under "in progress" with the current step and elapsed time. The strip, the columns and the runs all follow the project filter, and the scope is stated above the strip | File a ticket (goes to File), dispatch (a dialog to pick project, count and dry run; it shows the ticket that will be picked before you confirm, and cannot be pressed when there is no todo), *Search the list* and the done column's *See all n more* (both go to Tickets) |
+| Tickets | Every ticket in one table, newest update first (number, project, kind, title, state, PR, updated). The board's done column only keeps the newest 15, so anything past that is found here. The filter lives in the URL, so it survives opening a ticket and coming back | Narrow by number (prefix), title (substring), project and state, all at once. Pressing a row opens the ticket |
 | Ticket | Body (Markdown), state history, related runs and jobs | `kb run` (a dialog shows project, workflow and expected duration first; dry run / `--keep` / `--resume`. On a done ticket the button is disabled and *Back to todo (redo)* sits beside it; when the project has no project.yml there is no run button at all, only a note on where to put the file), move the state (start / review / done / back to todo / waiting for a human; no confirmation, the toast offers *Undo*), fix the kind, PR number and note, sync the state from the run record (before it runs you see the target run and the state and note before and after; a warning if the ticket was updated after that run) |
 | Runs | The list of `workspace/runs/` and, per run, the step track (pass / fail and duration per step, loops ↺, terminal end / human). File list and logs | — |
 | sandbox | Lent VMs (task, VM name, IP, project, time since lending, app URL) and the project list (whether project.yml and the token file exist, pool usage) | `sandbox ls` (ssh to Proxmox, a few seconds), `sandbox release` (if a run is active on that VM you must type the ticket number first) |
