@@ -357,10 +357,56 @@ class Run:
             return (bool(head) and "PASS" in head[0]), self.vm_read("review.md")[:4000]
         return True, ""
 
+    ADR_FILE = re.compile(r"^(\d{4})-[^/]*\.md$")
+
+    def run_sync(self, step):
+        """PR を作る直前に base の最新を取り込む（チケット 239）。並列に走った別 run の PR が先にマージされても、
+        後発の PR が CONFLICTING で出てこないようにする。衝突は人間ではなく implementer に戻す（呼び元の on_fail）。
+        作業ツリーを衝突状態のまま agent に渡さない（`git merge --abort` して、衝突したファイル名だけ渡す）。
+        gates は回し直さない（差分は自分の変更 + base なので。ADR-0031）"""
+        log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
+        self.set_current(step["id"], "code", log_path.name)
+        self.refresh_token()
+        out = []
+        def say(msg):
+            out.append(msg); self.log(f"sync: {msg}")
+            with open(log_path, "a", encoding="utf-8") as f: f.write(msg + "\n")
+        base = shlex.quote(self.base)
+        if "ok" not in self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {base} && echo ok", check=False):
+            say(f"git fetch origin {self.base} が失敗した。ネットワークかトークンを確かめること")
+            return False, "\n".join(out)
+        if "up-to-date" in self.sb(f"cd $SANDBOX_APP_DIR && git merge-base --is-ancestor origin/{base} HEAD && echo up-to-date", check=False):
+            say(f"origin/{self.base} は取り込み済み")
+        elif "merged" in self.sb(f"cd $SANDBOX_APP_DIR && git merge --no-edit origin/{base} && echo merged", check=False):
+            say(f"origin/{self.base} を取り込んだ（マージコミットを作った）")
+        else:
+            files = self.sb("cd $SANDBOX_APP_DIR && git diff --name-only --diff-filter=U", check=False).split()
+            self.sb("cd $SANDBOX_APP_DIR && git merge --abort", check=False)
+            say(f"`git merge origin/{self.base}` が衝突した（作業ツリーは merge --abort で元に戻してある）。"
+                f"自分で `git merge origin/{self.base}` をやり直し、両方の意図を残す形で解消してマージコミットを作ること。"
+                "衝突と無関係な変更はしない。解消したファイルに関係するテストだけ走らせる（全体は次の gates が回す）")
+            say(f"衝突したファイル: {', '.join(files) or '(不明)'}")
+            return False, "\n".join(out)
+        # ADR の採番は別ファイルなので git は衝突と見なさない（先に取り込んだ base と同じ番号でも「成功」する）
+        names = self.sb("cd $SANDBOX_APP_DIR && ls docs/adr 2>/dev/null", check=False).split()
+        nums = {}
+        for n in names:
+            m = self.ADR_FILE.match(n)
+            if m: nums.setdefault(m.group(1), []).append(n)
+        dup = {k: v for k, v in sorted(nums.items()) if len(v) > 1}
+        if dup:
+            say("base を取り込んだ結果 ADR の番号が重複した。自分が足した側を `ls docs/adr` の次の空き番号に振り直し、"
+                "本文・README の一覧・コード・テストの参照も更新すること")
+            for k, v in dup.items(): say(f"ADR 番号 {k} が重複: {', '.join(sorted(v))}")
+            return False, "\n".join(out)
+        say("PASS")
+        return True, "\n".join(out)
+
     def run_code(self, step):
-        script = KIT / "steps" / step["code"]
         self.log(f"code {step['id']} ({step['code']})")
         if self.dry: return True, "(dry-run)"
+        if step["code"] == "sync-base": return self.run_sync(step)   # runner 内蔵（kit/steps/ にファイルは無い）
+        script = KIT / "steps" / step["code"]
         self.refresh_token()
         env = {"PJ": self.pj, "TASK": self.task, "RUN_DIR": str(self.run_dir), "PROJECT_DIR": str(self.project_dir),
                "GATES": self.project["gates"], "WORK": self.work, "APP_DIR": self.project["app_dir"], "BASE": self.base,
@@ -418,8 +464,13 @@ class Run:
             self.state["next"] = nxt; self.state["current"] = None; self.save()
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
+            if not ok and nxt == "human":
+                # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）
+                why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]
+                self.state["error"] = f"{cur} で止まった（失敗、または戻せる回数を使い切った）: {why}"
+                self.save()
             retry_note = "" if ok else (info if "role" in step else f"```\n{info}\n```")
-            if not ok and nxt in self.steps and "role" in self.steps[nxt] and "code" in step:
+            if not ok and nxt in self.steps and "role" in self.steps[nxt] and step.get("code") == "gates.sh":
                 retry_note = ("ゲートの結果（赤あり）。ログを読んで原因を直し、ゲートを全緑にしてコミットすること。\n"
                               "**ただし、その赤が自分の変更と無関係で base ブランチでも既に赤い場合は直さない**（範囲外）。"
                               "その場合は report.md に『base で既に赤: <ゲート名> <理由>』と書いてコミットし、コードは触らないこと。\n\n"

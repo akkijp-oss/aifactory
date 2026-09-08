@@ -107,7 +107,7 @@
         "code": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_./-]+$",
-          "description": "code step。kit/steps/ からの相対パス。Mac で実行され、VM へは sandbox ssh で入る"
+          "description": "code step。kit/steps/ からの相対パス。制御系で実行され、VM へは sandbox ssh で入る。特別値 `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、kit/steps/ にファイルは無い"
         },
         "brief": {
           "type": "string",

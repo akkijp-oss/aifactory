@@ -1,6 +1,6 @@
 # hotfix: 本番障害の最小修正。計画は短く、レビューは厳しく。宛先は project.yml の hotfix_base（無ければ base_branch）
 name: hotfix
-description: 本番障害の最小修正。原因の特定 → 最小の変更 → ゲート → 厳しいレビュー → PR。範囲を広げない
+description: 本番障害の最小修正。原因の特定 → 最小の変更 → ゲート → 厳しいレビュー → base 取り込み → PR。範囲を広げない
 base_branch: hotfix_base
 inputs: [ticket.md]
 steps:
@@ -32,8 +32,21 @@ steps:
       hotfix なので「範囲の小ささ」と「本番影響」を最も厳しく見る。根本対処が混ざっていたら FAIL。
     inputs: [plan.md, report.md, gates.txt]
     outputs: [review.md]
-    on_pass: pr
+    on_pass: sync
     on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: sync
+    code: sync-base
+    on_pass: pr
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: resolve
+    role: implementer
+    brief: |
+      **base の取り込みで戻された**（PR を作る直前に `git merge origin/<base>` が衝突した、または ADR の番号が重複した）。
+      やることは戻された理由の解消だけで、この PR 本来の変更は直さない・広げない。役割文書の「base の取り込みで戻されたとき」の節に従う。
+    outputs: [git, report.md]
+    next: gates
 
   - id: pr
     code: pr-create.sh

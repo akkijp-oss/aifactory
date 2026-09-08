@@ -1,5 +1,5 @@
 name: docs
-description: ドキュメント整備。実装確認と構成の計画 → 執筆 → 文書ゲート → レビュー → PR
+description: ドキュメント整備。実装確認と構成の計画 → 執筆 → 文書ゲート → レビュー → base 取り込み → PR
 inputs: [ticket.md]
 steps:
   - id: plan
@@ -26,8 +26,22 @@ steps:
     role: reviewer
     inputs: [plan.md, report.md, gates.txt]
     outputs: [review.md]
-    on_pass: pr
+    on_pass: sync
     on_fail: {goto: implement, max_loops: 1, else: human}
+
+  - id: sync
+    code: sync-base
+    on_pass: pr
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: resolve
+    role: implementer
+    brief: |
+      **base の取り込みで戻された**（PR を作る直前に `git merge origin/<base>` が衝突した、または ADR の番号が重複した）。
+      やることは戻された理由の解消だけで、この PR 本来の変更は直さない・広げない。役割文書の「base の取り込みで戻されたとき」の節に従う。
+    outputs: [git, report.md]
+    next: gates
+
   - id: pr
     code: pr-create.sh
     inputs: [report.md, review.md, gates.txt]

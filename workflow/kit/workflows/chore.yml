@@ -1,6 +1,6 @@
 # chore: 雑務（docs 整理、依存更新、設定の追随）。計画とレビューを省き、ゲートだけで PR
 name: chore
-description: 雑務。implementer がチケットから直接着手し、ゲートが緑なら PR。判断が要る仕事には使わない
+description: 雑務。implementer がチケットから直接着手し、ゲートが緑なら base を取り込んで PR。判断が要る仕事には使わない
 inputs: [ticket.md]
 steps:
   - id: implement
@@ -13,8 +13,21 @@ steps:
   - id: gates
     code: gates.sh
     outputs: [gates.txt]
-    on_pass: pr
+    on_pass: sync
     on_fail: { goto: implement, max_loops: 2, else: human }
+
+  - id: sync
+    code: sync-base
+    on_pass: pr
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: resolve
+    role: implementer
+    brief: |
+      **base の取り込みで戻された**（PR を作る直前に `git merge origin/<base>` が衝突した、または ADR の番号が重複した）。
+      やることは戻された理由の解消だけで、この PR 本来の変更は直さない・広げない。役割文書の「base の取り込みで戻されたとき」の節に従う。
+    outputs: [git, report.md]
+    next: gates
 
   - id: pr
     code: pr-create.sh

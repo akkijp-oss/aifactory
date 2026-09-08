@@ -100,5 +100,15 @@ class MacBackendTest(unittest.TestCase):
             run.setup_project=lambda:self.fail('recreated an unverified guest')
             with self.assertRaises(RuntimeError):run.resume_guest('lease-1')
 
+    def test_builtin_sync_base_step_is_accepted_but_unknown_scripts_are_not(self):
+        # sync-base は runner 内蔵（kit/steps/ にファイルが無い）ので、pull worker でも拒否しない（チケット 239）
+        class Base:
+            def __init__(self,wf):
+                self.wf=wf;self.project={'app_dir':'/Users/admin/app','worker':'mac1'}
+                self.task='209';self.resume=False;self.state={}
+        MacRun=macos.backend(Base)
+        MacRun({'steps':[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'}]})
+        with self.assertRaises(ValueError):MacRun({'steps':[{'code':'pr-merge.sh'}]})
+
 
 if __name__=='__main__':unittest.main()
