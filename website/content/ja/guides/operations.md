@@ -30,7 +30,7 @@ sandbox reinject --all
 
 ### GitHub のトークン（自動）
 
-GitHub App の installation token は 1 時間で切れます。launchd `com.aifactory.sandbox.gh-refresh` が 45 分ごとに貸出中の VM へ払い出し直し、runner もスクリプトが担当する工程の前に払い出し直します。手動なら:
+GitHub App の installation token は 1 時間で切れます。制御系の systemd timer `aifactory-gh-refresh.timer` が 45 分ごとに貸出中の VM へ払い出し直し、runner もスクリプトが担当する工程の前に払い出し直します。手動なら:
 
 ```bash
 sandbox gh-app refresh                   # 貸出中の全 VM
@@ -49,6 +49,19 @@ App の権限を足したとき（Actions: Read など）は、各 installation 
 | 台数を増やす | `TPL_VMID=911x sandbox/proxmox/run.sh 40-pool.sh <pj> <台数>` → `50-firewall.sh`。`lvs pve/data` の `data%` を見る |
 | 汚れた VM を作り直す | `qm destroy <vmid>` → `40-pool.sh`。`clean` がない VM は `reset` できない |
 | 貸出中の VM を触らない | `~/.config/sandbox/state.json` を読んで飛ばす（`50-firewall.sh` は `LENT=` で飛ばせる） |
+
+### 使われていない VM は自動で止まる
+
+貸し出されていないプール VM は、最後に使われてから 3 時間（既定）で止まります。制御系の systemd timer `aifactory-idle-stop.timer` が 15 分ごとに `sandbox idle-stop` を呼びます（ADR-0033）。`sandbox ls` の STATUS が `stopped` でも、たいていは故障ではなく節電です。表の後に `[idle-stop] N 台が節電で停止中` と出ます。
+
+**手で起こす必要はありません**。次の `take` が自動で起動し、`[start] vm <vmid>: 停止中だったので起動した（N 秒）` を出します（そのぶん 30〜60 秒ほど余分にかかります）。
+
+```bash
+sandbox idle-stop --dry-run              # 何が止まる判定になるか、止めずに見る
+journalctl -u aifactory-idle-stop        # timer のログ
+```
+
+止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0`（全体）か、`~/.config/sandbox/pj/<pj>.env` に同じ行（その PJ だけ）を書きます。時間を変えるときは `3` の代わりに時間数を書きます。
 
 ## テンプレートの更新
 

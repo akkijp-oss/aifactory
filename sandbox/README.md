@@ -120,7 +120,7 @@ flowchart LR
 
 構築（メンテナ）: `~/.config/sandbox/tenants/<t>.env` に `PVE_HOST` / `SB_NET` / `SB_VMID_BASE` を書き、`SB_TENANT=<t> sandbox/proxmox/run.sh 05-tenant.sh` → `10-sdn.sh` → `20-gateway-lxc.sh` → `25-control-lxc.sh` → `30`〜`50`（`BUILD.md`）。`05` がプール・ロール・ユーザー・ACL、`25` が制御系 LXC（API トークンを発行して LXC に直接書く）。
 
-制御系 LXC の中（貸出先）: `~/aifactory`（checkout）、`~/workspace`、`~/.config/sandbox/env`（API モード）、`~/.config/aifactory/ctl.env`（コンソールの合言葉 `CONSOLE_TOKEN`、intake 用 `CLAUDE_CODE_OAUTH_TOKEN`、runner 用 `GH_TOKEN`。App があれば `GH_TOKEN` は空でよい。ADR-0030）。常駐は systemd（`aifactory-console`、`aifactory-gh-refresh.timer`）。入口は `http://ctl.<domain>:8765/?token=<合言葉>`（docs は `/docs/`）と `ssh aifactory@ctl.<domain>`。
+制御系 LXC の中（貸出先）: `~/aifactory`（checkout）、`~/workspace`、`~/.config/sandbox/env`（API モード）、`~/.config/aifactory/ctl.env`（コンソールの合言葉 `CONSOLE_TOKEN`、intake 用 `CLAUDE_CODE_OAUTH_TOKEN`、runner 用 `GH_TOKEN`。App があれば `GH_TOKEN` は空でよい。ADR-0030）。常駐は systemd（`aifactory-console`、`aifactory-gh-refresh.timer`、`aifactory-idle-stop.timer`）。入口は `http://ctl.<domain>:8765/?token=<合言葉>`（docs は `/docs/`）と `ssh aifactory@ctl.<domain>`。
 
 ## 命名・採番・アドレス（既定。変えるなら ADR か環境変数）
 

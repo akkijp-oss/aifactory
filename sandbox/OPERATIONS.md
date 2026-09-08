@@ -14,7 +14,15 @@
 **1 テナントに制御系は 1 つ**。貸出台帳（`~/.config/sandbox/state.json`）は制御系ごとに別なので、Mac と制御系 LXC の両方から同じプールに `take` すると二重貸出になる。制御系 LXC に寄せたら Mac 側では `take` しない（`ls` は読むだけなので可）。
 同じ制御系の中でなら `take` は安全で、空き VM の選定と台帳への予約は `state.json.lock`（`flock`。無い環境は `state.json.lock.d`）で直列化される。`kb run` を同時に何本立てても同じ VM が 2 つの task に貸し出されることはない（2026-09 の 234）。プールが尽きたときは後発が「空きなし」で失敗する。
 
-制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer`、ログは `journalctl -u aifactory-console -f`。コードの更新は下記の `bin/ctl-update` 1 本。
+制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer aifactory-idle-stop.timer`、ログは `journalctl -u aifactory-console -f`。コードの更新は下記の `bin/ctl-update` 1 本。
+
+| 常駐 | 何をするか | 間隔 |
+|---|---|---|
+| `aifactory-console` | コンソールと MCP と docs | 常時 |
+| `aifactory-gh-refresh.timer` | 貸出中の VM の `GH_TOKEN` を払い出し直す（ADR-0008） | 45 分 |
+| `aifactory-idle-stop.timer` | 使われていないプール VM を止める（`sandbox idle-stop`。ADR-0033） | 15 分 |
+
+登録・解除は `sandbox/bin/install.sh --systemd` / `--remove`（両方の timer をまとめて扱う）。
 
 ## 制御系にコードを配備する（`bin/ctl-update`）
 
@@ -108,6 +116,21 @@ sandbox gh-app refresh          # 貸出中の VM 全部の GH_TOKEN を払い�
 
 ### base 層（OS パッケージ・ツール）
 base を直したら PJ 層も作り直しになる。`30-base-template.sh` → `31-provision-base.sh` → `32-pj-template.sh` → `40-pool.sh` の順で、新しい VMID（9101 / 9111 / 92NN）で一式作り、切り替える。
+
+## VM が `stopped` になっている
+
+`sandbox ls` の STATUS が `stopped` なのは、たいてい**故障ではなく節電**です。貸し出されておらず、最後に使われてから 3 時間（既定）経ったプール VM は `sandbox idle-stop` が止めます。表の下に `[idle-stop] N 台が節電で停止中（次の take で起動、+30〜60 秒）` と出ていれば、それです。
+
+**手で起こす必要はありません**。次の `take` が自動で起動し、ssh が上がるまで待って `[start] vm <vmid>: 停止中だったので起動した（N 秒）` を出します（起こすためだけのコマンドは用意していません。ADR-0033）。
+
+```bash
+sandbox idle-stop --dry-run     # 何が止まる判定になるか、止めずに見る
+sandbox idle-stop --hours 6     # この 1 回だけ 6 時間に
+```
+
+常時起動にしたい PJ は `~/.config/sandbox/pj/<pj>.env` に `SB_IDLE_STOP_HOURS=0`、全体で止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0` を書きます。最終利用は `~/.config/sandbox/last-used.json`、直近の判定結果は `~/.config/sandbox/idle-stop.json` にあります。
+
+`stopped` のまま次の `take` でも起動してこないなら故障です。`journalctl -u aifactory-idle-stop` と Proxmox 側を見てください。
 
 ## 障害と対処
 
