@@ -72,7 +72,8 @@ Web コンソールの画面と日本語文言を、個人のセンスではな�
 | 成果物 | run が残した読み物（報告・計画・検証結果など）。workflow の `outputs` から名前を引く | step の `outputs` |
 | 工程 | run の中の 1 ステップ | step |
 | ジョブ | このコンソールが起動した CLI 1 本 | `console/jobs/<id>` |
-| VM / 貸出 / 返却する | sandbox の仮想マシンと、その貸し出し・返却 | `sandbox take` / `release` |
+| VM / 貸出 / 返却する | sandbox の仮想マシンと、その貸し出し・返却。貸出先が無い VM は「空き」 | `sandbox take` / `release` |
+| 稼働状態: 起動中 / 停止中 | VM の電源が入っているか。貸出とは別の軸（返却しても止めない） | `sandbox ls` の STATUS、Proxmox の running / stopped |
 | PJ | 貸出先のリポジトリ（プロジェクト）。画面では常に PJ | pj |
 | dry-run | 状態を変えずに手順だけ組む | `--dry-run` |
 

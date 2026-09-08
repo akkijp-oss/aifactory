@@ -119,7 +119,7 @@ TOOLS = [
     ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
     ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数",
      schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
-    ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧（project.yml / トークンの有無、プール使用数）、最後の sandbox ls", schema({}), t_sandbox_status),
+    ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧（project.yml / トークンの有無、プール使用数）、直近の sandbox ls（成否問わず）と、最後に成功した回の VM 一覧（貸出先 / VM 名 / IP / 稼働状態）", schema({}), t_sandbox_status),
     ("sandbox_ls", "Proxmox に ssh して VM の実勢を取る（sandbox ls）。ジョブを返す（数秒）", schema({}), t_sandbox_ls),
     ("sandbox_release", "貸出中の VM を snapshot clean に巻き戻して返却する。動いている run は止まる。ジョブを返す", schema({"task": {**STR, "description": "task-id（3 桁以上）"}}, ["task"]), t_sandbox_release),
     ("job_list", "コンソール / MCP が起動した CLI ジョブの一覧", schema({"limit": INT}), t_job_list),

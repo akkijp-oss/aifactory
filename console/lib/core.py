@@ -287,6 +287,25 @@ def sandbox_env():
     return out
 
 
+def parse_ls(text):
+    """`sandbox ls` のジョブログを VM 1 台 = 1 件の dict に分ける。
+
+    CLI は固定幅の printf で出す（sandbox/bin/sandbox の cmd_ls）。VM 名・IP・時刻に空白は入らないので空白で区切る。
+    捨てる行: ジョブ先頭の `$ ...`、`[error]` のような注記、見出し（TASK ...）、列数が合わない行。
+    読めない行は黙って捨てる（生ログはジョブの記録にそのまま残る）。task が `-`（貸出なし）のときは None。
+    """
+    out = []
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not s or s[0] in "$[": continue
+        f = s.split()
+        if f[0] == "TASK" or not 5 <= len(f) <= 6: continue
+        task, name, vmid, ip, status = f[:5]
+        out.append({"task": None if task == "-" else task, "name": name, "vmid": vmid, "ip": ip,
+                    "status": status, "since": f[5] if len(f) == 6 else None})
+    return out
+
+
 def sandbox_view():
     lent = {}
     if SANDBOX_STATE.exists():
@@ -300,10 +319,17 @@ def sandbox_view():
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
                     "lent": n, "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
-    last_ls = next((j for j in JobStore.list() if j.get("kind") == "sandbox-ls" and j.get("rc") == 0), None)
+    ls_jobs = [j for j in JobStore.list() if j.get("kind") == "sandbox-ls"]   # 新しい順
+    last_ls = ls_jobs[0] if ls_jobs else None                                 # 直近（失敗・実行中も含む）。画面は取得中 / 成功 / 失敗 / 未取得を分けて出す
+    last_ok_ls = next((j for j in ls_jobs if j.get("rc") == 0), None)          # 表に出せる最後の成功。失敗しても前回の表は残す
+    vms = []
+    if last_ok_ls:
+        log = JOBS / last_ok_ls["id"] / "log"
+        if log.exists(): vms = parse_ls(log.read_text(encoding="utf-8", errors="replace"))
     e = sandbox_env()
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
-    return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE), "last_ls": last_ls}
+    return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
+            "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms}
 
 
 # ---------- jobs

@@ -10,7 +10,7 @@ sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shel
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
 sandbox release <task-id>        巻き戻して返却
-sandbox ls                       貸出状況
+sandbox ls                       プール VM の一覧（貸出先 / IP / 稼働状態）
 ```
 
 | 操作 | 何をするか | 失敗の条件 |
@@ -20,7 +20,7 @@ sandbox ls                       貸出状況
 | `url` | `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` を表示 | |
 | `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない |
 | `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は待ってリトライ | |
-| `ls` | `TASK VM VMID IP STATUS SINCE` | |
+| `ls` | `TASK VM VMID IP STATUS SINCE`。TASK は貸出先の task-id（貸出なしは `-`）、STATUS は Proxmox の電源状態（running / stopped）で貸出とは別の軸。返却しても VM は止めないので、貸出 0 台でも running が並ぶ | |
 
 `sandbox ls` の出力例:
 

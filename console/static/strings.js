@@ -11,6 +11,7 @@ const T = {
   "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
            "updated": "更新 {t}", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
+  "power": { "running": "起動中", "stopped": "停止中" },
   "banner": { "offline": "サーバーに届きません。console/bin/console が動いているか確かめてください。" },
 
   "btn": {
@@ -34,7 +35,8 @@ const T = {
   "th": {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
-    "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ"
+    "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
+    "lentTo": "貸出先", "power": "稼働状態"
   },
 
   "label": {
@@ -47,14 +49,14 @@ const T = {
     "dispatchDry": "dry-run（VM を触らず、状態も進めません）", "intakeDry": "起票せず、判定だけ見る",
     "request": "依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）", "requestPlaceholder": "例: seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい",
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」）",
-    "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中"
+    "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中", "vacant": "空き"
   },
 
   "sub": {
     "board": "未着手 → 実行中 → レビュー待ち → 完了。人間待ちは横に置きます。",
     "tickets": "番号・題名・PJ・状態で探せます。完了したチケットもすべてここに並びます。",
     "runs": "runs/ の state.json を読んでいます。",
-    "sandbox": "貸出状況は state.json、VM の実勢は sandbox ls（Proxmox に ssh、数秒）で取ります。",
+    "sandbox": "貸出は誰がその VM を使っているか、稼働は VM の電源が入っているかです。稼働の一覧は Proxmox に ssh して取ります（数秒）。",
     "intake": "自由文は intake（LLM 1 回）、整った本文は kb new で起票します。",
     "jobs": "このコンソールが起動した CLI です。記録は console/jobs/ に残ります。",
     "logs": "起票（intake）と配車（dispatch）のログです。工程ごとの記録は実行記録、状態の履歴はチケットで見られます。",
@@ -95,7 +97,7 @@ const T = {
   },
   "sandbox": {
     "count": "{n} 台", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
-    "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません"
+    "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
   "config": { "roles": "役割:" },
@@ -118,6 +120,7 @@ const T = {
     "jobLog": "まだ出力がありません。数秒お待ちください。",
     "lent": "貸出中の VM はありません。",
     "ls": "「一覧を取り直す」を押すと、Proxmox の VM 一覧をここに出します。",
+    "lsVms": "プールの VM が 1 台もありませんでした。ジョブの記録で出力を確かめてください。",
     "log": "空です。",
     "logFile": "まだありません。起票や配車をすると作られます。"
   },
@@ -140,6 +143,8 @@ const T = {
     "newTicket": "すぐに起票します。できたチケットの画面へ移ります。",
     "dispatchMoved": "配車（未着手を runner に回す）はボードの「配車する」から行います。",
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
+    "lsAxes": "返却しても VM は止めないので、貸出が 0 台でも起動中の VM が並びます。",
+    "lsFailed": "Proxmox に届かなかったか、ssh が切れました。ジョブの記録を見てから「一覧を取り直す」を押してください。",
     "pjPool": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",

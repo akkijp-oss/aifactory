@@ -97,6 +97,20 @@ class ApiTest(unittest.TestCase):
         st, d = self.http.get(f"/api/next?pj={PJ}"); self.assertEqual(st, 200); self.assertEqual(d["next"]["pj"], PJ)
         st, d = self.http.get("/api/next?pj=no-such-pj"); self.assertEqual(st, 200); self.assertIsNone(d["next"])
 
+    def test_sandbox_api_returns_vms(self):
+        """/api/sandbox が sandbox ls の結果を列に分けて返す（画面が表を組める）。ジョブの記録は手で置く（VM を使わない）"""
+        jid = "20260907-080000-sandbox-ls"
+        d = self.tmp / "jobs" / jid; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"id": jid, "kind": "sandbox-ls", "label": "sandbox ls", "cmd": ["sandbox", "ls"],
+                                                 "ticket": None, "run_hint": None, "pid": 1, "started": "2026-09-07T08:00:00",
+                                                 "finished": "2026-09-07T08:00:04", "rc": 0, "state": "done"}), encoding="utf-8")
+        (d / "log").write_text("$ sandbox ls\nTASK     VM             VMID   IP           STATUS    SINCE\n"
+                               "-        sb-kumitate-long-name-99 9299 10.77.1.9 running\n", encoding="utf-8")
+        st, v = self.http.get("/api/sandbox")
+        self.assertEqual(st, 200); self.assertEqual(v["last_ok_ls"]["id"], jid); self.assertEqual(v["last_ls"]["id"], jid)
+        self.assertEqual(v["vms"], [{"task": None, "name": "sb-kumitate-long-name-99", "vmid": "9299",
+                                     "ip": "10.77.1.9", "status": "running", "since": None}])
+
     def test_error_messages_say_what_to_do(self):
         """エラー文は「何が起きたか」の後に「どうすればよいか」（console/UX.md）"""
         st, d = self.http.post("/api/sandbox/release", {"task": "abc"}); self.assertEqual(st, 400); self.assertIn("指定してください", d["error"])
@@ -517,6 +531,73 @@ class ApiTest(unittest.TestCase):
         _, j2 = self.http.get(f"/api/jobs/{jid}?offset={j['log']['size']}"); self.assertEqual(j2["log"]["text"], "")
         self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["status"], "todo")   # dry-run は状態を進めない
         self.assertTrue(any(x["label"].startswith("kb run") for x in self.http.get("/api/jobs")[1]["jobs"]))
+
+
+class SandboxLsTest(unittest.TestCase):
+    """sandbox ls のジョブログを表にするための解釈と、取得中 / 成功 / 失敗 / 未取得の区別（チケット 229）"""
+
+    HEAD = "TASK     VM             VMID   IP           STATUS    SINCE\n"
+    ROWS = ("229      sb-kumitate-01 9204   10.77.1.4    running   2026-09-06T12:00:07+09:00\n"
+            "-        sb-kumitate-long-name-99 9299 10.77.1.9 stopped\n")
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-ls-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+
+    def job(self, jid, started, rc, state, log):
+        """sandbox ls のジョブ記録を手で置く（VM も Proxmox も使わない）"""
+        d = self.m.core.JOBS / jid; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"id": jid, "kind": "sandbox-ls", "label": "sandbox ls", "cmd": ["sandbox", "ls"],
+                                                 "ticket": None, "run_hint": None, "pid": 1, "started": started,
+                                                 "finished": started, "rc": rc, "state": state}), encoding="utf-8")
+        (d / "log").write_text("$ sandbox ls\n" + log, encoding="utf-8")
+
+    def test_parse_ls_columns(self):
+        """固定幅の printf でも、長い VM 名・SINCE 無し・貸出なしの `-` を取り違えない"""
+        vms = self.m.core.parse_ls(self.HEAD + self.ROWS)
+        self.assertEqual(len(vms), 2)
+        self.assertEqual(vms[0], {"task": "229", "name": "sb-kumitate-01", "vmid": "9204", "ip": "10.77.1.4",
+                                  "status": "running", "since": "2026-09-06T12:00:07+09:00"})
+        self.assertEqual(vms[1]["name"], "sb-kumitate-long-name-99")     # 14 文字を超えて列がずれても名前は欠けない
+        self.assertIsNone(vms[1]["task"]); self.assertIsNone(vms[1]["since"]); self.assertEqual(vms[1]["status"], "stopped")
+
+    def test_parse_ls_drops_noise(self):
+        """ジョブ先頭の `$` 行・注記・見出し・列数の合わない行は捨てる（生ログはジョブの記録に残る）"""
+        noisy = "$ sandbox ls\n" + self.HEAD + "[error] ssh: connect timed out\n\nうまく読めない行\n" + self.ROWS
+        self.assertEqual([v["name"] for v in self.m.core.parse_ls(noisy)], ["sb-kumitate-01", "sb-kumitate-long-name-99"])
+        self.assertEqual(self.m.core.parse_ls(""), [])
+
+    def test_never_fetched(self):
+        d = self.m.core.sandbox_view()
+        self.assertIsNone(d["last_ls"]); self.assertIsNone(d["last_ok_ls"]); self.assertEqual(d["vms"], [])
+
+    def test_failure_is_not_never_fetched(self):
+        """失敗した回は「まだ取っていません」に見えてはいけない（last_ls は成否を問わず直近）"""
+        self.job("20260907-100000-sandbox-ls", "2026-09-07T10:00:00", 1, "failed", "[error] ssh: connect timed out\n")
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["last_ls"]["rc"], 1); self.assertIsNone(d["last_ok_ls"]); self.assertEqual(d["vms"], [])
+
+    def test_success_then_failure_keeps_last_table(self):
+        """直近が失敗でも、前に成功した回の表は残す（失敗の表示は別に出す）"""
+        self.job("20260907-090000-sandbox-ls", "2026-09-07T09:00:00", 0, "done", self.HEAD + self.ROWS)
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["last_ls"]["id"], d["last_ok_ls"]["id"]); self.assertEqual(len(d["vms"]), 2)
+        self.job("20260907-100000-sandbox-ls", "2026-09-07T10:00:00", 1, "failed", "[error] ssh: connect timed out\n")
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["last_ls"]["state"], "failed"); self.assertEqual(d["last_ok_ls"]["rc"], 0)
+        self.assertEqual([v["name"] for v in d["vms"]], ["sb-kumitate-01", "sb-kumitate-long-name-99"])
+
+    def test_screen_shows_a_table_not_raw_log(self):
+        """画面は生ログではなく表を出し、貸出先と稼働状態を別の列にする（console/UX.md の 4 軸表）。
+
+        JS を動かす基盤が無いので、test_strings.py と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
+        for key in ("d.vms", "T.th.lentTo", "T.th.power", "T.power", "T.label.vacant", "T.sandbox.lsFailed", "T.help.lsAxes"):
+            self.assertIn(key, body, key)
+        self.assertNotIn("ls.log.text", body)                            # 固定幅の生ログをそのまま出さない
 
 
 class AuthDocsTest(unittest.TestCase):
