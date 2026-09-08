@@ -123,8 +123,10 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log` など） |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実機の状態確認（ジョブ）/ 返却（ジョブ） |
-| `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（上限 570 秒）・停止 |
+| `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | intake / dispatch のログ / ワークフロー・routes・プロジェクト・git |
+
+`job_wait` は終わらなければ実行中のまま返るので、長く待ちたいときは繰り返し呼びます。待っている間も他のツールはすぐ応答します（ADR-0028）。
 
 resources として `aifactory://board`（ボード）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）も読めます。
 

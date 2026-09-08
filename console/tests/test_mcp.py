@@ -20,6 +20,16 @@ class McpClient:
         line = self.p.stdout.readline()
         assert line, f"応答が無い: {self.p.stderr.read()[-800:]}"
         return json.loads(line)
+    def send(self, method, params=None):
+        """リクエストを書くだけ（応答は recv で受ける）。採番した id を返す"""
+        self.n += 1
+        self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params or {}}, ensure_ascii=False) + "\n"); self.p.stdin.flush()
+        return self.n
+    def recv(self):
+        """応答を 1 行だけ受ける（届いた順）"""
+        line = self.p.stdout.readline()
+        assert line, f"応答が無い: {self.p.stderr.read()[-800:]}"
+        return json.loads(line)
     def notify(self, method, params=None):
         self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, "params": params or {}}) + "\n"); self.p.stdin.flush()
     def tool(self, _name, **args):
@@ -104,7 +114,45 @@ class McpTest(unittest.TestCase):
         self.c.p.stdin.write("not json\n"); self.c.p.stdin.flush(); r = json.loads(self.c.p.stdout.readline()); self.assertEqual(r["error"]["code"], -32700)
         r = self.c.call("tools/call", {"name": "nope"}); self.assertEqual(r["error"]["code"], -32602)
 
-    def test_07_sync_is_dry_by_default(self):
+    def test_07_job_wait_does_not_block_others(self):
+        """job_wait の待ちで他のツールを塞がない（別スレッドで待つ）。ADR-0028"""
+        jid = "20260908-000000-fake"
+        d = self.tmp / "jobs" / jid; d.mkdir(parents=True, exist_ok=True)
+        meta = d / "meta.json"
+        running = {"id": jid, "kind": "fake", "label": "fake", "cmd": ["true"], "ticket": None, "run_hint": None,
+                   "pid": 1, "started": "2026-09-08T00:00:00+09:00", "finished": None, "rc": None, "state": "running"}
+        meta.write_text(json.dumps(running, ensure_ascii=False), encoding="utf-8")
+        (d / "log").write_text("$ fake\n", encoding="utf-8")
+
+        t0 = time.time()
+        wait_id = self.c.send("tools/call", {"name": "job_wait", "arguments": {"id": jid, "timeout_s": 8}})
+        over_id = self.c.send("tools/call", {"name": "overview", "arguments": {}})
+
+        first = self.c.recv()                                                # overview が先に返る
+        self.assertEqual(first["id"], over_id, f"job_wait に塞がれた: {first}")
+        self.assertLess(time.time() - t0, 4, "overview が job_wait の待ちに引きずられている")
+        self.assertFalse(first["result"]["isError"]); self.assertIn("counts", json.loads(first["result"]["content"][0]["text"]))
+
+        meta.write_text(json.dumps({**running, "state": "done", "rc": 0, "finished": "2026-09-08T00:00:05+09:00"}, ensure_ascii=False), encoding="utf-8")
+        second = self.c.recv()                                               # timeout を待たず、終わった時点で返る
+        self.assertEqual(second["id"], wait_id)
+        self.assertEqual(json.loads(second["result"]["content"][0]["text"])["job"]["state"], "done")
+        self.assertLess(time.time() - t0, 8, "job_wait が timeout まで待っている")
+
+        # 上限を超える timeout_s を渡しても、終われば即返る（300 秒を実際に待たない）
+        meta.write_text(json.dumps(running, ensure_ascii=False), encoding="utf-8")
+        big_id = self.c.send("tools/call", {"name": "job_wait", "arguments": {"id": jid, "timeout_s": 999}})
+        time.sleep(1.5)
+        meta.write_text(json.dumps({**running, "state": "done", "rc": 0, "finished": "2026-09-08T00:00:05+09:00"}, ensure_ascii=False), encoding="utf-8")
+        r = self.c.recv(); self.assertEqual(r["id"], big_id)
+        self.assertEqual(json.loads(r["result"]["content"][0]["text"])["job"]["state"], "done")
+
+    def test_08_job_wait_limits_documented(self):
+        """既定 60 秒・上限 300 秒が tools/list の説明文に書いてある"""
+        desc = next(t["description"] for t in self.c.call("tools/list")["result"]["tools"] if t["name"] == "job_wait")
+        self.assertIn("既定 60", desc); self.assertIn("上限 300", desc)
+
+    def test_09_sync_is_dry_by_default(self):
         """MCP の sync は既定で書かない（LLM が完了済みチケットを過去の run で巻き戻せないように）。
 
         console の同じ操作は下見（kb sync --dry-run）と警告つきダイアログを通るが、MCP には確認の場が無い。
@@ -134,7 +182,7 @@ class McpTest(unittest.TestCase):
         self.assertTrue(w.get("warning")); self.assertIn("stdout", w)
         self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["status"], "done")
 
-    def test_08_ticket_show_carries_the_sync_preview(self):
+    def test_10_ticket_show_carries_the_sync_preview(self):
         """run のあるチケットは、状態を合わせたらどうなるかを ticket_show の時点で見せる（HTTP の sync-preview と同じ内容）"""
         err, t = self.c.tool("ticket_list", all=True); self.assertFalse(err)
         tid = next(x["id"] for x in t["tickets"] if x.get("run"))
@@ -146,7 +194,7 @@ class McpTest(unittest.TestCase):
         err, d = self.c.tool("ticket_show", id=r["id"]); self.assertFalse(err, d)
         self.assertIsNone(d["sync_preview"], "run が無いのに下見が付いている")
 
-    def test_09_sync_dry_run_is_in_the_schema(self):
+    def test_11_sync_dry_run_is_in_the_schema(self):
         tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
         props = tools["ticket_action"]["inputSchema"]["properties"]
         self.assertIn("dry_run", props, "ticket_action のスキーマに dry_run が無い（呼び手が書く方法を見つけられない）")

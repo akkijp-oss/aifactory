@@ -9,7 +9,7 @@ sandbox take <pj> <task-id>      空き VM を貸し出す（DNS: task-<id>.sb.i
 sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
-sandbox release <task-id>        巻き戻して返却
+sandbox release <task-id> [--force]  巻き戻して返却（--force: 巻き戻せなくても台帳から消す）
 sandbox ls                       プール VM の一覧（貸出先 / IP / 稼働状態）
 ```
 
@@ -18,8 +18,8 @@ sandbox ls                       プール VM の一覧（貸出先 / IP / 稼�
 | `take` | プロジェクトプールの空き VM を選んで `state.json` に予約（ここまで `state.json.lock` の排他区間。同時 take が同じ VM を選ばない） → `qm rollback clean` → プロジェクトの env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → 予約を確定。途中で失敗したら予約を消す | 空きなし、プロジェクトの env なし、App が未インストール |
 | `ssh` | `ssh dev@10.77.1.N`（`SB_JUMP` があれば ProxyJump）。cmd は login shell 経由（`/etc/profile.d/sandbox.sh` で env が読まれる） | VM に届かない |
 | `url` | `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` を表示 | |
-| `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない |
-| `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は待ってリトライ | |
+| `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない、巻き戻しに失敗（貸出は継続したまま非0で終わる） |
+| `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は既定で 3 回・10 秒間隔まで待ってリトライし（`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`）、失敗は毎回 stderr に出る | 巻き戻しに失敗（非0で終わり `state.json` に残す。次の一手はメッセージに出る）。`--force` を付けると巻き戻せなくても削除する（人が手で直した VM 用） |
 | `ls` | `TASK VM VMID IP STATUS SINCE`。TASK は貸出先の task-id（貸出なしは `-`）、STATUS は Proxmox の電源状態（running / stopped）で貸出とは別の軸。返却しても VM は止めないので、貸出 0 台でも running が並ぶ | |
 
 `sandbox ls` の出力例:
