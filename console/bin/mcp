@@ -8,8 +8,9 @@
 - 動かす: 起票（intake / kb new）/ 状態遷移 / kb run / dispatch / sandbox ls・release / ジョブの停止と待機
 - 読み書きの正本は lib/core.py。Web コンソール（bin/console）と同じ関数を呼ぶので、どちらから動かしても同じジョブ記録（console/jobs/）に載る
 - MCP の実装は最小: initialize / ping / tools/list / tools/call / resources/list / resources/read。1 行 1 メッセージの JSON-RPC 2.0
+- 待つだけの job_wait だけは別スレッドで処理し、待っている間も他の呼び出しに即応する。それ以外は到着順に直列（ADR-0028）
 """
-import json, pathlib, sys, traceback
+import json, pathlib, sys, threading, traceback
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
 import core
@@ -67,8 +68,14 @@ def t_job_show(a):
     d = core.job_view(a.get("id") or "", int(a.get("offset") or 0))
     if a.get("tail") and d.get("log"): d["log"]["text"] = d["log"]["text"][-int(a["tail"]):]
     return d
+JOB_WAIT_DEFAULT_S, JOB_WAIT_MAX_S = 60, 300
+
+
 def t_job_wait(a):
-    timeout = min(int(a.get("timeout_s") or 120), 570)   # .mcp.json の timeout（600 秒）より短く
+    # 既定 60 / 上限 300 秒。Claude Code は 120 秒でバックグラウンド化するので、それ以上待たせる意味が薄い（ADR-0028）
+    want = arg_int(a, "timeout_s", required=False) or JOB_WAIT_DEFAULT_S   # 0 / 未指定は既定
+    if want < 0: raise core.ApiError("timeout_s は 0 以上の整数")
+    timeout = min(want, JOB_WAIT_MAX_S)
     jb = core.job_wait(a.get("id") or "", timeout)
     d = core.job_view(jb["id"]); d["log"]["text"] = d["log"]["text"][-4000:]
     return d
@@ -124,7 +131,7 @@ TOOLS = [
     ("sandbox_release", "貸出中の VM を snapshot clean に巻き戻して返却する。動いている run は止まる。ジョブを返す", schema({"task": {**STR, "description": "task-id（3 桁以上）"}}, ["task"]), t_sandbox_release),
     ("job_list", "コンソール / MCP が起動した CLI ジョブの一覧", schema({"limit": INT}), t_job_list),
     ("job_show", "ジョブ 1 件と出力。offset（バイト）で追い読み、tail で末尾だけ", schema({"id": STR, "offset": INT, "tail": INT}, ["id"]), t_job_show),
-    ("job_wait", "ジョブが終わるまで待つ（最大 timeout_s 秒、既定 120、上限 570）。終わらなければ running のまま返す。出力は末尾 4000 文字", schema({"id": STR, "timeout_s": INT}, ["id"]), t_job_wait),
+    ("job_wait", "ジョブが終わるまで待つ（最大 timeout_s 秒、既定 60、上限 300）。終わらなければ running のまま返すので、長く待つなら繰り返し呼ぶ。待っている間も他のツールは即応する。出力は末尾 4000 文字", schema({"id": STR, "timeout_s": INT}, ["id"]), t_job_wait),
     ("job_stop", "ジョブを止める（プロセスグループに SIGTERM）。kb run の途中なら VM が貸出中のまま残ることがある", schema({"id": STR}, ["id"]), t_job_stop),
     ("logs", "起票（intake.log）と配車（dispatch.log）のログ（$AIFACTORY_WORKSPACE/logs/）", schema({}), t_logs),
     ("config", "workflow の流れ、モデルの経路（routes.env）、役割、PJ 一覧、git status", schema({}), t_config),
@@ -182,25 +189,48 @@ def handle(msg):
     raise KeyError(method)
 
 
+OUT_LOCK = threading.Lock()
+ASYNC_TOOLS = {"job_wait"}   # 待つだけのツール。別スレッドに逃がす（安易に増やさない。順序保証が要る操作は直列のまま）
+
+
+def reply(resp):
+    """応答 1 件を書き出す。複数スレッドから呼ばれるので、write と flush を lock の中でまとめて行い行の混線を防ぐ"""
+    with OUT_LOCK:
+        sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n"); sys.stdout.flush()
+
+
+def serve(msg):
+    """1 リクエストを処理して応答を書く"""
+    try:
+        resp = {"jsonrpc": "2.0", "id": msg["id"], "result": handle(msg)}
+    except KeyError as e:
+        resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": f"method not found: {e.args[0]}"}}
+    except core.ApiError as e:
+        resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32602, "message": str(e)}}
+    except Exception as e:
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+        resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32603, "message": f"{type(e).__name__}: {e}"}}
+    reply(resp)
+
+
+def is_async(msg):
+    params = msg.get("params") or {}
+    return msg.get("method") == "tools/call" and params.get("name") in ASYNC_TOOLS
+
+
 def main():
-    out = sys.stdout
     for line in sys.stdin:
         line = line.strip()
         if not line: continue
         try: msg = json.loads(line)
         except ValueError:
-            out.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}) + "\n"); out.flush(); continue
+            reply({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}); continue
         if "id" not in msg: continue   # notification（initialized / cancelled 等）は応答しない
-        try:
-            resp = {"jsonrpc": "2.0", "id": msg["id"], "result": handle(msg)}
-        except KeyError as e:
-            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": f"method not found: {e.args[0]}"}}
-        except core.ApiError as e:
-            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32602, "message": str(e)}}
-        except Exception as e:
-            print(traceback.format_exc(), file=sys.stderr, flush=True)
-            resp = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32603, "message": f"{type(e).__name__}: {e}"}}
-        out.write(json.dumps(resp, ensure_ascii=False) + "\n"); out.flush()
+        if is_async(msg):
+            # daemon スレッドなので、stdin が EOF になれば待ち中でもプロセスは終わる
+            threading.Thread(target=serve, args=(msg,), daemon=True).start()
+        else:
+            serve(msg)   # 読み取り系・状態変更系は到着順に直列（同じチケットへの ticket_action の順序保証がそのまま残る）
 
 
 if __name__ == "__main__":

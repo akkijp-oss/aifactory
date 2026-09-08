@@ -123,8 +123,10 @@ claude mcp reset-project-choices   # approve again
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |
 | `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log` and so on) |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | Lending state / live list (job) / release (job) |
-| `job_list` / `job_show` / `job_wait` / `job_stop` | Job list, output, wait (up to 570 s), stop |
+| `job_list` / `job_show` / `job_wait` / `job_stop` | Job list, output, wait (60 s by default, 300 s at most), stop |
 | `logs` / `config` | intake / dispatch logs / workflows, routes, projects, git |
+
+If the job has not finished, `job_wait` returns it still running, so call it again when you want to wait longer. Other tools stay responsive while it waits (ADR-0028).
 
 Resources: `aifactory://board` (the board), `aifactory://ledger` (the ledger) and `aifactory://ticket/<id>` (a ticket body).
 
