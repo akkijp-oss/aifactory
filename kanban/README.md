@@ -33,7 +33,7 @@ $kb list [--status S] [--pj P] [--all]                                  # 一覧
 $kb show <id>                                                           # メタ + 本文
 $kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（glue のルーターが読む）
 $kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]             # workflow/bin/run を呼び、結果で状態を進める
-$kb sync <id> [--run NAME]                                              # runs/<NAME>/state.json を読み直して状態を合わせる
+$kb sync <id> [--run NAME] [--dry-run]                                  # runs/<NAME>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
 $kb start|review|done|reopen <id> [--note TEXT]                         # 手で状態を進める
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
 $kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目

@@ -322,11 +322,12 @@ async function viewJobs() {
     ${!d.jobs.length ? `<tr><td colspan="6" class="help">${esc(T.empty.jobs)}</td></tr>` : ''}</table></div>`);
   schedule(viewJobs, 3000);
 }
-/* ジョブが終わったあとの「次の一手」。主要な 1 つをプライマリに、残りはセカンダリに */
-function jobNext(j, text) {
+/* ジョブが終わったあとの「次の一手」。主要な 1 つをプライマリに、残りはセカンダリに。
+   kb-run は「今」のチケット（core が付ける ticket.updated_after_job）で判断する。過去の失敗に古い復旧案内を出さないため */
+function jobNext(j, text, ticket) {
   if (j.state === 'running') return '';
   const dry = (j.cmd || []).includes('--dry-run');
-  let lead = '', acts = [];
+  let lead = '', acts = [], state = '';
   if (j.kind === 'intake') {
     const last = text.trim().split('\n').reverse().find(l => /^\s*\d{3,}\s/.test(l)); const id = last ? last.trim().split(/\s+/)[0] : null;
     if (j.state === 'done' && dry) { lead = T.next.intakeDry; acts = [link('#/intake', T.btn.openIntake, true)]; }
@@ -335,13 +336,18 @@ function jobNext(j, text) {
     else { lead = T.next.intakeFailed; acts = [link('#/intake', T.btn.openIntake, true)]; }
   } else if (j.kind === 'kb-run') {
     const run = j.run_hint ? `#/run/${encodeURIComponent(j.run_hint)}` : null; const tk = j.ticket ? `#/ticket/${j.ticket}` : null;
+    const st = ticket ? (T.status[ticket.status] || ticket.status) : '';
+    const moved = !!ticket && (ticket.status === 'done' || ticket.updated_after_job);   // ジョブの後に人がチケットを動かした
+    const syncBtn = cls => tk && `<button class="${cls}" data-act="sync" data-id="${j.ticket}" data-run="${esc(j.run_hint || '')}" data-stay="1">${esc(T.btn.sync)}</button>`;
     if (j.state === 'done') { lead = dry ? T.next.runDry : T.next.runDone; acts = [run && link(run, T.btn.openRun, true), tk && link(tk, T.btn.openTicket)]; }
-    else { lead = T.next.runStopped; acts = [tk && `<button class="primary" data-act="sync" data-id="${j.ticket}" data-stay="1">${esc(T.btn.sync)}</button>`, link('#/sandbox', T.btn.openSandbox), run && link(run, T.btn.openRun)]; }
+    else if (moved) { lead = tt(T.next.runStoppedOld, { id: ticket.id, status: st }); acts = [tk && link(tk, T.btn.openTicket, true), run && link(run, T.btn.openRun), syncBtn('')]; }
+    else { lead = T.next.runStopped; acts = [syncBtn('primary'), link('#/sandbox', T.btn.openSandbox), run && link(run, T.btn.openRun)]; }
+    if (ticket) state = tt(T.next.stateLine, { end: fmtT(j.finished), id: ticket.id, status: st, at: fmtT(ticket.updated) });
   } else if (j.kind === 'dispatch') { lead = j.state === 'done' ? T.next.dispatchDone : T.next.dispatchFailed; acts = [link('#/board', T.btn.openBoard, true), link('#/runs', T.btn.openRuns)]; }
   else if (j.kind === 'sandbox-release') { lead = j.state === 'done' ? T.next.releaseDone : T.next.releaseFailed; acts = [link('#/sandbox', T.btn.openSandbox, true)]; }
   else if (j.kind === 'sandbox-ls') { lead = j.state === 'done' ? T.next.lsDone : T.next.lsFailed; acts = [link('#/sandbox', T.btn.openSandbox, true)]; }
   if (!lead) return '';
-  return `<div class="panel next"><h2>${esc(T.h.next)}</h2><p>${esc(lead)}</p><div class="actions">${acts.filter(Boolean).join('')}</div></div>`;
+  return `<div class="panel next"><h2>${esc(T.h.next)}</h2><p>${esc(lead)}</p><div class="actions">${acts.filter(Boolean).join('')}</div>${state ? `<div class="help top">${esc(state)}</div>` : ''}</div>`;
 }
 const jobBuf = {};   // ジョブ id → { text, off }（off はサーバー側のバイト位置）
 async function viewJob(id, first) {
@@ -353,7 +359,7 @@ async function viewJob(id, first) {
   render(crumb('#/jobs', T.nav.jobs, id) + `
     <div class="head"><h1>${esc(j.label)}</h1>${jst(j)}${j.ticket ? `<a href="#/ticket/${j.ticket}">${esc(tt(T.ticket.crumb, { id: j.ticket }))}</a>` : ''}${j.run_hint ? runLink(j.run_hint) : ''}<span class="spacer"></span>${j.state === 'running' ? `<button class="danger" data-act="job-stop" data-id="${esc(j.id)}">${esc(T.btn.stop)}</button>` : ''}</div>
     ${j.note ? `<div class="warn">${esc(j.note)}</div>` : ''}
-    ${jobNext(j, buf.text)}
+    ${jobNext(j, buf.text, d.ticket)}
     <div class="panel"><dl class="kv"><dt>${esc(T.th.command)}</dt><dd class="mono">${esc(j.cmd.join(' '))}</dd><dt>${esc(T.th.started)}</dt><dd>${fmtT(j.started)}${j.finished ? ` → ${fmtT(j.finished)}` : ''}（${fmtDur(sec(j.started, j.finished))}）</dd><dt>${esc(T.th.pidRc)}</dt><dd class="mono">${j.pid} / ${j.rc ?? '—'}</dd></dl></div>
     <div class="panel"><div class="logbar"><span>${esc(T.h.output)}</span><span class="spacer"></span>${j.state === 'running' ? `<span><span class="dot pulse"></span>${esc(T.job.following)}</span>` : ''}</div><pre class="log" id="joblog">${esc(buf.text) || esc(T.empty.jobLog)}</pre></div>`);
   const pre = $('joblog'); if (pre && atBottom) pre.scrollTop = pre.scrollHeight;
@@ -405,7 +411,30 @@ const actions = {
     viewTicket(id, true);
   },
   'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() || undefined }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
-  'sync': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'sync' }); toast(esc(tt(T.msg.synced, { id }))); if (!el.dataset.stay) viewTicket(id, true); },
+  /* 状態を合わせるのは半可逆・影響大（状態とメモを上書きする）: 下見（kb sync --dry-run）で前後を見せてから */
+  'sync': async el => {
+    const id = el.dataset.id, run = el.dataset.run || '';
+    const p = await api(`tickets/${id}/sync-preview` + (run ? `?run=${encodeURIComponent(run)}` : ''));
+    const cell = x => `${esc(T.status[x.status] || x.status || '')}${x.note ? ` — ${esc(x.note)}` : ''}`;
+    const ok = await ask({ title: tt(T.dialog.sync.title, { id }), ok: T.btn.sync, danger: !!p.updated_after_run,
+      body: `<p>${esc(tt(T.dialog.sync.body, { run: p.run }))}</p>
+        <dl class="kv"><dt>${esc(T.th.ticket)}</dt><dd>${esc(id)} ${esc(p.ticket.title)}</dd>
+        <dt>${esc(T.th.run)}</dt><dd class="mono">${esc(p.run)}</dd>
+        <dt>${esc(T.th.before)}</dt><dd>${cell(p.before)}</dd>
+        <dt>${esc(T.th.after)}</dt><dd>${cell(p.after)}</dd></dl>
+        ${p.updated_after_run ? `<div class="warn">${esc(tt(T.dialog.sync.newer, { id, at: fmtT(p.ticket.updated) }))}</div>` : ''}
+        ${p.changes ? '' : `<p class="help">${esc(T.dialog.sync.same)}</p>`}` });
+    if (!ok) return;
+    await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined });
+    const b = p.before;
+    toast(esc(tt(T.msg.synced, { id })), { action: { label: T.btn.undo, run: async () => {
+      await api(`tickets/${id}/action`, { action: 'set', status: b.status, note: b.note || undefined });
+      toast(esc(tt(T.msg.syncUndone, { id, to: T.status[b.status] || b.status })));
+      if (location.hash === `#/ticket/${id}`) viewTicket(id, true);
+    } } });
+    if (!el.dataset.stay) viewTicket(id, true);
+    else if (location.hash.startsWith('#/job/')) viewJob(location.hash.slice(6), false);   // ジョブ画面なら「次にすること」を取り直す
+  },
   /* 本番の run は半可逆・影響大: 何を・どこで・どれくらいを見せてから */
   'run': async el => {
     const id = el.dataset.id, dry = !!el.dataset.dry;

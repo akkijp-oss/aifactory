@@ -110,6 +110,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "next": return ticket_next(pj=q.get("pj")), 200
         m = re.match(r"^tickets/(\d+)$", ep)
         if m: return ticket_detail(int(m.group(1))), 200
+        m = re.match(r"^tickets/(\d+)/sync-preview$", ep)
+        if m: return sync_preview(int(m.group(1)), q.get("run")), 200
         if ep == "runs": return {"runs": list_runs()}, 200
         m = re.match(r"^runs/(.+)$", ep)
         if m:
