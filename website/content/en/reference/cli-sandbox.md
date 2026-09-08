@@ -9,7 +9,7 @@ sandbox take <pj> <task-id>      lend a free VM (DNS task-<id>.sb.internal, env 
 sandbox ssh <task-id> [cmd...]   log in as dev / run a command (via login shell)
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          roll back to snapshot clean (stays lent, env re-injected)
-sandbox release <task-id>        roll back and return
+sandbox release <task-id> [--force]  roll back and return (--force: drop from the ledger even if the rollback failed)
 sandbox ls                       list the pool VMs (who it is lent to / IP / power state)
 ```
 
@@ -18,8 +18,8 @@ sandbox ls                       list the pool VMs (who it is lent to / IP / pow
 | `take` | Picks a free VM of the project's pool and reserves it in `state.json` (this much runs inside the `state.json.lock` critical section, so concurrent takes never pick the same VM) → `qm rollback clean` → writes the project env and a GitHub App token to `/run/sandbox/env` → registers in dnsmasq on sb-gw → confirms the reservation. A failure on the way drops the reservation | No free VM, no project env, App not installed |
 | `ssh` | `ssh dev@10.77.1.N` (ProxyJump if `SB_JUMP` is set). cmd runs through a login shell (`/etc/profile.d/sandbox.sh` loads the env) | VM unreachable |
 | `url` | Prints `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` | |
-| `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean` |
-| `release` | reset → remove DNS → delete from `state.json`. Waits and retries on rollback lock contention | |
+| `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean`; the rollback failed (exits non-zero, the VM stays lent) |
+| `release` | reset → remove DNS → delete from `state.json`. On rollback lock contention it waits and retries, 3 times 10 seconds apart by default (`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`), printing every failure to stderr | The rollback failed (exits non-zero and keeps the entry in `state.json`; the message tells you what to do next). `--force` deletes the entry even when the rollback failed, for a VM you fixed by hand |
 | `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it, so `running` rows appear even when nothing is lent | |
 
 Example `sandbox ls` output:
@@ -34,7 +34,8 @@ TASK     VM             VMID   IP           STATUS    SINCE
 
 ```
 sandbox token set <pj|global> [claude|gh]   enter a token interactively and save it (default claude), into the per-project file
-sandbox token show [pj]                     which token is in effect (masked)
+sandbox token rotate [claude|gh]            replace the token in the global file, every project file and ctl.env from one prompt
+sandbox token show [pj]                     which token is in effect (masked), how old it is, and whether this host is the control plane
 sandbox token clear <pj|global> [claude|gh] remove a token
 sandbox reinject <task-id>|--all            re-inject the current settings into lent VMs (no rollback; for key rotation)
 sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print an installation token for <pj> / reissue GH_TOKEN to every lent VM
@@ -47,7 +48,10 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print a
 | `token set <pj>` | `CLAUDE_CODE_OAUTH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` |
 | `token set <pj> gh` | `GH_TOKEN` in the same file (fallback when the App is not configured) |
 | `token set global` | `~/.config/sandbox/env` (default for every project) |
-| `token show [pj]` | Source and masked value of the effective token |
+| `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env` |
+| `token show [pj]` | Source and masked value of the effective token, days since it was saved, and whether this host is the control plane |
+
+Rotate an expired token with a single `sandbox token rotate` on the control plane (the host that has `ctl.env`). It lists every file it updated, restarts `aifactory-console` when `ctl.env` changed (printing the command instead if `sudo -n` does not work), and finishes with `reinject --all` when VMs are lent out (ADR-0029). A `claude` process already running inside a VM still has to be restarted there.
 
 ### gh-app
 

@@ -120,7 +120,7 @@ kanban/bin/kb run 207
 | 症状 | 見るところ |
 |---|---|
 | `take` が「空きなし」 | `sandbox ls`。貸出中の VM が残っていれば `sandbox release <id>` |
-| エージェントが認証エラー | `sandbox token show <pj>`。切れていれば `claude setup-token` → `sandbox token set <pj>` |
+| エージェントが認証エラー | `sandbox token show <pj>`（発行からの日数が出ます）。切れていれば `claude setup-token` → `sandbox token rotate` |
 | gates が失敗して 2 回差し戻されて `human` 行き | `code-gates-*.log`。変更前のブランチでも失敗しているなら `project.yml` の `known_red_gates` に書く |
 | 途中で VM に ssh できなくなった | 別セッションが VM を作り替えていないか。[複数セッションで作業する](../guides/multi-session.md) |
 

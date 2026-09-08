@@ -25,7 +25,8 @@ sandbox ssh 013                 # 中に入る（dev ユーザー）
 sandbox ssh 013 'git status'    # コマンドだけ実行
 sandbox url 013                 # http://task-013.sb.internal:3000
 sandbox reset 013               # clean に巻き戻す（貸出は継続。env も消えるので take し直しは不要、CLI が再注入する）
-sandbox release 013             # 巻き戻して返却
+sandbox release 013             # 巻き戻して返却（巻き戻しに失敗したら非0で終わり、台帳には残る）
+sandbox release 013 --force     # 手で直した VM を巻き戻さずに返す（台帳からだけ消す）
 ```
 
 cmux から使うときは surface で `sandbox take … && sandbox ssh …` を1行で打つ。surface = ssh セッション = 1エージェント。
@@ -33,9 +34,11 @@ cmux から使うときは surface で `sandbox take … && sandbox ssh …` を
 ## トークンの管理（PJ ごと。ADR-0006）
 
 ```bash
-sandbox token set kumitate            # Claude の長期トークンを対話入力（エコー無し）→ ~/.config/sandbox/pj/kumitate.env
+sandbox token rotate                  # 期限切れの差し替えはこれ 1 本（制御系で）。global・鍵を持つ全 PJ・ctl.env を対話入力 1 回で更新し、
+                                      #   更新箇所を一覧、aifactory-console を restart、貸出中 VM に reinject --all まで（ADR-0029）
+sandbox token set kumitate            # 1 PJ だけ（初期登録・rotate 後に別アカウントへ戻すとき）→ ~/.config/sandbox/pj/kumitate.env
 sandbox token set myapp gh            # GitHub トークン（GitHub App 未設定時のフォールバック）
-sandbox token show myapp              # 今どれが効いているか（マスク表示）
+sandbox token show myapp              # 今どれが効いているか（マスク表示・発行からの日数・このホストが制御系か）
 sandbox reinject --all                # 貸出中の VM 全部に差し替え後の値を再注入（巻き戻しなし）。VM 内の claude は再起動
 SANDBOX_CLAUDE_TOKEN=xxx sandbox take kumitate 021      # 一回限りの上書き（シェルの CLAUDE_CODE_OAUTH_TOKEN は無視される）
 ```
@@ -87,9 +90,10 @@ base を直したら PJ 層も作り直しになる。`30-base-template.sh` → 
 | 10.77.0.2 に ping 不可 | Tailscale 管理コンソールで `sb-gw` の route が Approved か。Approved でも不可なら `pct exec 9000 -- journalctl -u tailscaled -n 20` に `Drop: … no rules matched` が出ていないか（= tailnet **ACL** に `10.77.0.0/16:*` 宛て accept が無い） | `pct exec 9000 -- tailscale status`。落ちていれば `pct start 9000`。**急ぎなら** `~/.config/sandbox/env` に `SB_JUMP=pve1`（`PVE_HOST` と同じ値）を入れると CLI が Proxmox ホスト経由（ProxyJump）で VM に入る（ホストに ssh できる Mac から。URL は IP 直打ち） |
 | VM に ssh 不可 | `qm status 92NN`、`qm agent 92NN network-get-interfaces` | `qm start`。起動していれば `qm terminal 92NN` でシリアルから見る |
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | 無ければその VM は破棄して `40-pool.sh` で作り直す |
+| `release` / `reset` が「巻き戻しに失敗」で止まる | `sandbox ls`、`qm config 92NN | grep lock` | 台帳は残っているので少し待って再実行（既定で 3 回・10 秒間隔まで自動再試行。`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT` で伸ばせる）。ロックが残り続けるなら Proxmox 側で task を確認。手で直したら `sandbox release <task> --force` |
 | VM から外に出られない | `ssh "$PVE_HOST" 'iptables -t nat -S | grep 10.77'`、`pve-firewall status` | SDN を再適用 `pvesh set /cluster/sdn`。firewall で落ちている場合は `/etc/pve/firewall/cluster.fw` の group sandbox を確認（LAN / 他 VM / tailnet 宛ては仕様で不可。ADR-0010） |
 | Mac から VM に届かない（firewall 有効化後） | VM の `/etc/pve/firewall/<vmid>.fw` と `qm config <vmid> | grep firewall` | `sandbox/proxmox/run.sh 50-firewall.sh` を再実行。プールは clean スナップショットに firewall=1 が含まれている必要がある |
-| Claude Code が認証エラー | VM 内 `env | grep CLAUDE_CODE_OAUTH_TOKEN` | Mac で `sandbox token set <pj>` を更新して `sandbox reinject`（トークン期限切れは `claude setup-token` 再実行） |
+| Claude Code が認証エラー | VM 内 `env | grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show <pj>` の発行日数 | 制御系で `claude setup-token` → `sandbox token rotate`（global・全 PJ・ctl.env の更新、console restart、`reinject --all` まで 1 コマンド。VM 内の claude は再起動） |
 | Proxmox ノードが落ちた | `ssh "$PVE_HOST"` 不可、`pvecm nodes` | ノードの電源投入（遠隔でできるかは環境次第。できない環境では人間の物理操作）。プールは onboot=0 なので手で `qm start` |
 
 ## テナントの運用（ADR-0017）
@@ -104,4 +108,4 @@ base を直したら PJ 層も作り直しになる。`30-base-template.sh` → 
 
 ## 定期メンテ
 - 月1回: base テンプレートの OS 更新（上記「base 層」）。頻繁にやると PJ 層の作り直しが負担なので月1
-- `claude setup-token` のトークンは有効期限がある。切れたら人間待ちに戻る。`$AIFACTORY_WORKSPACE/docs/STATUS.md` の人間待ち表に期限を書いておく
+- `claude setup-token` のトークンは有効期限がある。切れたら人間待ちに戻る。`sandbox token show` の「発行から N 日」で切れる前に気づき、制御系で `sandbox token rotate`

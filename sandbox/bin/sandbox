@@ -4,11 +4,12 @@
 #   sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
 #   sandbox url <task-id>            http://task-<id>.sb.internal:3000
 #   sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
-#   sandbox release <task-id>        巻き戻して返却
+#   sandbox release <task-id> [--force]  巻き戻して返却（--force: 巻き戻せなくても台帳から消す。手で直した VM 用）
 #   sandbox ls                       貸出状況
 # 運用補助（契約外）:
 #   sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
-#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示）
+#   sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
+#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 #   sandbox token clear <pj|global> [claude|gh] トークンを消す
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
@@ -26,6 +27,8 @@
 #               PVE_API_CA にクラスタ CA を置くか PVE_API_INSECURE=1。PVE_API_RESOLVE=<node>:8006:<ip> で名前解決を SDN 側の IP に向ける）。
 #               PVE_API_TOKEN があれば API モード
 # 状態: ~/.config/sandbox/state.json（同時 take の直列化に state.json.lock を使う）
+#   rollback は最大 SB_ROLLBACK_TRIES 回（既定 3）・SB_ROLLBACK_WAIT 秒間隔（既定 10）で再試行し、
+#   全部失敗したら release / reset は非 0 で終わる（state は消さない）
 set -euo pipefail
 
 CONF_DIR="$HOME/.config/sandbox"
@@ -35,6 +38,8 @@ else ENV_FILE="$CONF_DIR/env"; fi
 if [[ "$ENV_FILE" == "$CONF_DIR/env" ]]; then PJ_DIR="$CONF_DIR/pj"; STATE="$CONF_DIR/state.json"
 else PJ_DIR="${ENV_FILE%.env}.pj"; STATE="${ENV_FILE%.env}.state.json"; fi
 PJ_DIR="${SANDBOX_PJ_DIR:-$PJ_DIR}"; STATE="${SANDBOX_STATE:-$STATE}"
+# 制御系（ctl LXC）のプロセス用 env。console の systemd が EnvironmentFile で読む。token rotate だけが触る（ADR-0029）
+CTL_ENV="${SANDBOX_CTL_ENV:-$HOME/.config/aifactory/ctl.env}"
 [[ -f "$ENV_FILE" ]] || { echo "[error] $ENV_FILE がありません（sandbox/templates/env.example をコピー）" >&2; exit 1; }
 # 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
 # シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
@@ -282,16 +287,38 @@ EOF
 dns_set() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; echo '$2 task-$1' >> /etc/sandbox/hosts; systemctl reload dnsmasq"; }
 dns_del() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; systemctl reload dnsmasq"; }
 
-rollback() { # vmid ip
-  # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする
-  local i
-  for i in $(seq 1 12); do
-    if [[ -z "$(pve_lock "$1")" ]] && pve_rollback "$1"; then break; fi
-    (( i < 12 )) || die "vm $1: rollback が通らない（ロック: $(pve_lock "$1" || echo none)）"
-    sleep 5
+# rollback の再試行（Proxmox の lock は一過性なので待って試す）。運用で足りなければ env で伸ばす
+: "${SB_ROLLBACK_TRIES:=3}"
+: "${SB_ROLLBACK_WAIT:=10}"
+_rollback_err=""
+rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
+  # die しないで rc を返す。「巻き戻せていないのに released」と言わないため、state を消すかどうかは呼び手が決める（245）
+  # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする。
+  # 無言で再試行すると失敗ログの直後に [ok] が出て「無視した」ように見えるので、失敗のたびに理由を出す
+  local i lock out n=$SB_ROLLBACK_TRIES w=$SB_ROLLBACK_WAIT
+  _rollback_err=""
+  for (( i = 1; i <= n; i++ )); do
+    lock="$(pve_lock "$1" || true)"
+    if [[ -n "$lock" ]]; then
+      _rollback_err="ロック中: $lock"
+    elif out="$(pve_rollback "$1" 2>&1)"; then
+      _rollback_err=""; break
+    else
+      _rollback_err="$(printf '%s' "$out" | tail -1)"; [[ -n "$_rollback_err" ]] || _rollback_err="rollback API が失敗"
+    fi
+    if (( i < n )); then
+      echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err。${w}秒後に再試行" >&2
+      sleep "$w"
+    else
+      echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err" >&2
+      return 1
+    fi
   done
-  [[ "$(pve_status "$1")" == running ]] || pve_start "$1"
-  wait_port "$2" 22 || die "vm $1 ($2): ssh が上がらない"
+  if [[ "$(pve_status "$1")" != running ]] && ! pve_start "$1"; then
+    _rollback_err="vm $1: 起動に失敗"; return 1
+  fi
+  if ! wait_port "$2" 22; then _rollback_err="vm $1 ($2): ssh が上がらない"; return 1; fi
+  return 0
 }
 
 # ---------- take（予約 → 準備 → 確定）
@@ -327,7 +354,9 @@ cmd_take() {
   _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
-  if [[ "$status" != running ]]; then rollback "$vmid" "$ip"; else wait_port "$ip" 22 || rollback "$vmid" "$ip"; fi
+  if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
+    rollback "$vmid" "$ip" || die "vm $vmid: rollback が通らない（$_rollback_err）"
+  fi
   inject_env "$ip" "$task" "$pj"
   dns_set "$task" "$ip"; _reserved_dns=1
   local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
@@ -354,23 +383,71 @@ cmd_reset() {
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   load_pj "$pj"
   echo "[reset] $(state_field "$task" name) → clean"
-  rollback "$vmid" "$ip"
+  rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
   echo "[ok] reset 完了（env 再注入済み）"
 }
 
 cmd_release() {
-  local task=${1:?task-id}
+  local task="" force=0 a
+  for a in "$@"; do
+    case "$a" in
+      --force) force=1 ;;
+      *) if [[ -n "$task" ]]; then die "usage: sandbox release <task-id> [--force]"; fi; task=$a ;;
+    esac
+  done
+  [[ -n "$task" ]] || die "usage: sandbox release <task-id> [--force]"
   local vmid ip; vmid="$(state_field "$task" vmid)"; ip="$(state_field "$task" ip)"
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   echo "[release] $(state_field "$task" name) ← task-$task"
-  rollback "$vmid" "$ip"
+  if ! rollback "$vmid" "$ip"; then
+    # 巻き戻せていない VM を state から消すと、次の take が clean だと思って貸し出す（245）
+    (( force )) || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。state は保持。\`sandbox release $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください（VM を手で直したなら \`sandbox release $task --force\`）"
+    echo "[warn] 巻き戻し失敗を無視して返却（--force）: $_rollback_err" >&2
+    dns_del "$task" || true
+    state_del "$task"
+    echo "[ok] released (--force)"
+    return 0
+  fi
   dns_del "$task"
   state_del "$task"
   echo "[ok] released"
 }
 
 mask() { local t=$1; [[ -z "$t" ]] && { echo "(未設定)"; return; }; echo "${t:0:8}…${t: -4} (${#t}文字)"; }
+
+# _write_key <file> <key> <val>: env ファイルの該当行だけを書き換える（val が空なら削除）。
+#   ctl.env には CONSOLE_TOKEN や説明コメントが同居するので、丸ごと上書きせず該当行と発行日コメントだけ差し替える
+_write_key() {
+  local file=$1 key=$2 val=$3 tmp
+  tmp=$(mktemp); grep -v -e "^$key=" -e "^# $key issued: " "$file" > "$tmp" || true
+  [[ -n "$val" ]] && printf '# %s issued: %s\n%s=%s\n' "$key" "$(date +%F)" "$key" "$val" >> "$tmp"
+  mv "$tmp" "$file"; chmod 600 "$file"
+}
+
+# _issued <file> <key>: 保存時に書いた発行日（YYYY-MM-DD）。無ければ空
+_issued() { [[ -f "$1" ]] && sed -n "s/^# $2 issued: //p" "$1" | tail -1 || true; }
+
+# _issued_days <YYYY-MM-DD>: 発行からの日数。GNU / mac のどちらの date でも計算できなければ空を返す（表示を落とさない）
+_issued_days() {
+  local e; e="$(date -j -f %Y-%m-%d "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null)" || return 0
+  [[ -n "$e" ]] || return 0
+  echo $(( ( $(date +%s) - e ) / 86400 ))
+}
+
+# _issued_note <key> <src>: token show の行末に足す「発行から N 日」。src は _src_claude / _src_gh の値
+_issued_note() {
+  local key=$1 src=$2 file="" d n
+  case "$src" in
+    "global(env)") file="$ENV_FILE" ;;
+    pj/*) file="$PJ_DIR/${src#pj/}" ;;
+    *) return 0 ;;
+  esac
+  d="$(_issued "$file" "$key")"
+  [[ -n "$d" ]] || { echo "発行日不明（token set / rotate で保存し直すと記録される）"; return 0; }
+  n="$(_issued_days "$d")"
+  [[ -n "$n" ]] && echo "発行から $n 日（issued $d）" || echo "issued $d"
+}
 
 # token set <pj|global> [claude|gh] : 対話入力（エコー無し）で保存。ファイルは 600
 cmd_token() {
@@ -386,27 +463,74 @@ cmd_token() {
         val="${val//[$'\r\n']/}"
         [[ -n "$val" ]] || die "空のトークン"
       fi
-      local tmp; tmp=$(mktemp); grep -v "^$key=" "$file" > "$tmp" || true
-      [[ -n "$val" ]] && printf '%s=%s\n' "$key" "$val" >> "$tmp"
-      mv "$tmp" "$file"; chmod 600 "$file"
+      _write_key "$file" "$key" "$val"
       echo "[ok] $key を $file に$([[ "$sub" == set ]] && echo 保存 || echo 削除)"
       if [[ "$scope" != global ]]; then
         local lent; lent="$(jq -r --arg p "$scope" 'to_entries[] | select(.value.pj==$p) | .key' "$STATE" | tr '\n' ' ')"
         [[ -n "$lent" ]] && echo "[hint] 貸出中の task ($lent) に反映するには: sandbox reinject --all（VM 内の claude は再起動が必要）"
+        true
       fi ;;
+    rotate)
+      # 1 回の入力で global・鍵を持つ全 PJ・ctl.env を差し替える（ADR-0029）。
+      # 順序は「ファイル更新 → 一覧 → console restart → reinject」。後段が失敗しても、更新できた場所は一覧に残す
+      local kind=${1:-claude} key
+      case "$kind" in claude) key=CLAUDE_CODE_OAUTH_TOKEN;; gh) key=GH_TOKEN;; *) die "kind は claude か gh";; esac
+      local is_ctl=0; [[ -f "$CTL_ENV" ]] && is_ctl=1
+      (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
+      local val=""
+      if [[ -t 0 ]]; then read -rs -p "$key（global・全 PJ・ctl.env をまとめて更新）: " val; echo; else val="$(cat)"; fi
+      val="${val//[$'\r\n']/}"
+      [[ -n "$val" ]] || die "空のトークン"
+      local n=0 skip=0 f
+      _write_key "$ENV_FILE" "$key" "$val"; echo "[updated] $ENV_FILE (global)"; n=$((n+1))
+      for f in "$PJ_DIR"/*.env; do
+        [[ -f "$f" ]] || continue
+        if grep -q "^$key=" "$f"; then _write_key "$f" "$key" "$val"; echo "[updated] $f"; n=$((n+1))
+        else echo "[skip]    $f（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
+      done
+      local ctl_done=0
+      if (( is_ctl )); then
+        if grep -q "^$key=" "$CTL_ENV"; then _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV"; n=$((n+1)); ctl_done=1
+        else echo "[skip]    $CTL_ENV（$key の行が無い）"; skip=$((skip+1)); fi
+      else
+        echo "[skip]    $CTL_ENV（無し）"
+      fi
+      echo "$n 箇所更新 / $skip 箇所 skip   $key = $(mask "$val")"
+      if (( ctl_done )); then
+        # console は起動時に ctl.env を読むので、intake の claude -p に効かせるには restart が要る
+        # （aifactory-gh-refresh.timer は oneshot で毎回読み直すので不要）
+        local sudo=""; [[ $EUID -eq 0 ]] || sudo="sudo"
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files aifactory-console.service 2>/dev/null | grep -q aifactory-console; then
+          if [[ -z "$sudo" ]] || sudo -n true 2>/dev/null; then
+            if $sudo systemctl restart aifactory-console; then echo "[ok] aifactory-console を restart した"
+            else echo "[要手動] restart に失敗。次のコマンドを実行してください: sudo systemctl restart aifactory-console"; fi
+          else
+            echo "[要手動] 次のコマンドを実行してください: sudo systemctl restart aifactory-console"
+          fi
+        else
+          echo "[hint] systemd に aifactory-console が無い。console を動かしているなら手で再起動してください"
+        fi
+      fi
+      # 起動時に読んだ古い値が reinject に混ざらないよう、この実行の中でも新しい値に揃える
+      case "$kind" in claude) CLAUDE_CODE_OAUTH_TOKEN="$val";; gh) GH_TOKEN="$val";; esac
+      local ids; ids="$(jq -r 'keys[]' "$STATE")"
+      if [[ -n "$ids" ]]; then echo "--- 貸出中 VM に再注入"; cmd_reinject --all
+      else echo "貸出中の task なし（reinject 不要）"; fi ;;
     show)
       local pj=${1:-} pjfile=""
       if [[ -n "$pj" ]]; then load_pj "$pj"; pjfile="$PJ_DIR/$pj.env"; [[ -f "$pjfile" ]] || pjfile="$pjfile (無し)"; fi
+      if [[ -f "$CTL_ENV" ]]; then echo "host: 制御系（ctl.env あり）。トークンの差し替えは sandbox token rotate"
+      else echo "host: 手元（ctl.env なし）。Mac 運用は停止中 → 差し替えは制御系 LXC で実行してください"; fi
       echo "scope: ${pj:-global}   files: $ENV_FILE${pjfile:+ + $pjfile}"
-      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}"
+      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}  $(_issued_note CLAUDE_CODE_OAUTH_TOKEN "${_src_claude:-}")"
       if ghapp_ready && [[ -n "${GH_REPO:-}" ]]; then
         echo "GH_TOKEN:                GitHub App が take 時に払い出す（${GH_REPO} 限定・1 時間）$([[ -n "${GH_TOKEN:-}" ]] && echo "  ※静的 GH_TOKEN も ${_src_gh} にあるが App が優先")"
       else
-        echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")"
+        echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")  $(_issued_note GH_TOKEN "${_src_gh:-}")"
       fi
       echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
       [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
-    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token show [pj]" ;;
+    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token rotate [claude|gh] / sandbox token show [pj]" ;;
   esac
 }
 
@@ -486,5 +610,5 @@ case "${1:-}" in
   token) shift; cmd_token "$@" ;;
   reinject) shift; cmd_reinject "$@" ;;
   gh-app) shift; cmd_gh_app "$@" ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
