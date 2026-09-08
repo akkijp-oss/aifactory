@@ -45,6 +45,12 @@ def sh(cmd, check=True, capture=True, input_text=None, env=None):
         raise RuntimeError(f"command failed ({r.returncode}): {cmd}\n{(r.stderr or '')[-2000:]}")
     return r
 
+SECRET_LINE = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY)\s*=|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-", re.I)
+
+def scrub(text):
+    """秘密が混ざりうる行を落とす（子プロセスの stderr をそのまま state.json に保存するため）"""
+    return "\n".join(l for l in text.splitlines() if not SECRET_LINE.search(l))
+
 def stream(cmd, log_path, render=None, env=None):
     """子プロセスの出力を 1 行ずつ log_path に流す（console が追い読みできる）。render(line) が与えられれば、その戻り値
     （None なら書かない）を書く。戻り: (rc, 書いた全文)。step の途中経過を見えるようにするため（2026-09-06）"""
@@ -165,6 +171,11 @@ class Run:
             "started": datetime.datetime.now().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
         if resume: self.branch = self.state["branch"]; self.base = self.state["base"]
         (self.run_dir / "ticket.md").write_text(self.ticket, encoding="utf-8")
+        if not resume:
+            # ticket.md だけの run を残さない。take の途中で落ちても console と kb が読める記録にする（2026-09-08 チケット 238）
+            self.state["current"] = {"step": "take", "kind": "take", "log": None,
+                                     "since": datetime.datetime.now().isoformat(timespec="seconds")}
+            self.save()
 
     # ---------- VM helpers
     def sb(self, cmd, input_text=None, check=True):
@@ -194,6 +205,7 @@ class Run:
     def take(self):
         if self.dry or self.resume: return
         self.log("take"); print(sh(["sandbox", "take", self.pj, self.task]).stdout.strip().splitlines()[-1])
+        self.taken = True   # ここから先で落ちたら VM を返す（238）
         self.sb(f"mkdir -p {self.work}")
         if self.pr_number:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
@@ -352,10 +364,31 @@ class Run:
             self.state["loops"][key] = n + 1; return t["goto"]
         return t.get("else", "human")
 
+    def fail_before_start(self, e):
+        """take（VM の取得と準備）で落ちたときの終わり方。工程は 1 つも走っていないので、記録に理由を残して人間へ返す（チケット 238）。
+        記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう"""
+        err = scrub(str(e))[-1500:]
+        self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
+                           "finished": datetime.datetime.now().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
+        self.save()
+        self.log(f"take failed: {([l for l in err.splitlines() if l.strip()] or ['(理由なし)'])[-1]}")
+        # take が通った後（fetch など）で落ちると VM は貸出中のまま。sandbox backend では返す（take 自体が失敗したなら貸出は無い）。
+        # pull backend（macOS / Windows / Linux）の release は artifact 回収込みで、lease は調査のため残す約束なので呼ばない
+        if type(self).release is Run.release and getattr(self, "taken", False):
+            try: self.release()
+            except Exception as e2: self.log(f"release も失敗: {e2}")
+        elif type(self).release is not Run.release:
+            self.log(f"{getattr(self, 'backend_label', 'pull')}: 調べられるよう lease は残す")
+        self.log(f"result: failed  run: {self.run_dir}")
+        return 2
+
     def main(self):
         self.t0 = time.time()
         self.log(f"workflow {self.wf_name}: " + " → ".join(s["id"] for s in self.wf["steps"]) + f"  (branch {self.branch} → {self.base})")
-        self.take()
+        try:
+            self.take()
+        except Exception as e:
+            return self.fail_before_start(e)
         cur = self.state["next"]; retry_note = ""; result = "end"
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")

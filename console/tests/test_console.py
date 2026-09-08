@@ -232,6 +232,31 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200); self.assertEqual(d["summary"]["status"], "not_started")
         self.assertIn("ticket.md", [f["name"] for f in d["files"]])
 
+    def test_run_failed_before_start_is_finished_with_reason(self):
+        """take が失敗した run（工程が 1 つも始まっていない）は「失敗」として終わった記録に見える（チケット 238）。
+
+        state.json を最初から書くようにしたので、こういう run は「開始前（記録なし）」でも「実行中」でもない。
+        """
+        name = "2026-09-07-kumitate-998"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "ticket.md").write_text("# 調査: take が失敗した run\n", encoding="utf-8")
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "998", "workflow": "research", "branch": "sandbox/998-research-x", "base": "develop",
+            "started": "2026-09-07T10:00:00", "finished": "2026-09-07T10:00:05", "elapsed_s": 5, "history": [], "loops": {},
+            "result": "failed", "next": "human", "current": None, "pr_url": "", "wip_branch": "",
+            "error": "command failed (1): ['sandbox', 'take', 'kumitate', '998']\n[error] pj=kumitate に空きなし"}, ensure_ascii=False), encoding="utf-8")
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == name)
+        self.assertEqual(row["status"], "finished"); self.assertEqual(row["result"], "failed"); self.assertEqual(row["pj"], PJ)
+        _, o = self.http.get("/api/overview")
+        self.assertNotIn(name, [x["name"] for x in o["runs_active"]])
+        self.assertNotIn(name, [x["name"] for x in o["runs_not_started"]["runs"]])
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200); self.assertEqual(d["summary"]["result"], "failed")
+        self.assertIn("空きなし", d["state"]["error"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.run.error", app)                                             # 詳細に失敗の理由が出る
+
     def test_file_roots(self):
         _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         _, d = self.http.get(f"/api/runs/{name}"); path = next(x["path"] for x in d["files"] if x["name"] == "state.json")

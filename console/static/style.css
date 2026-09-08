@@ -189,6 +189,7 @@ pre.log.small { max-height: 40vh; }
 .track .step.term { border-style: dashed; color: var(--muted); }
 .track .step.term.end { border-color: var(--done); color: var(--done); }
 .track .step.term.human { border-color: var(--blocked); color: var(--blocked); }
+.track .step.term.failed { border-color: var(--blocked); color: var(--blocked); }
 .track .arrow { align-self: center; width: 22px; text-align: center; color: var(--muted); }
 .track .arrow.back { color: var(--blocked); }
 .filelist { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; }
