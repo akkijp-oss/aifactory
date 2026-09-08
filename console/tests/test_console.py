@@ -82,6 +82,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200); self.assertTrue(o["db"]); self.assertEqual(set(o["counts"]), {"todo", "in_progress", "review", "blocked", "done"})
         self.assertEqual(o["paths"]["workspace"], str(self.ws)); self.assertFalse(o["paths"]["legacy"])
         _, t = self.http.get("/api/tickets"); self.assertGreater(len(t["tickets"]), 0); self.assertIn("bug", t["kinds"])
+        self.assertTrue(all(not k.startswith((".", "_")) for k in t["kinds"]), t["kinds"])   # `._bug` のようなごみを候補に出さない
+        self.assertIn("kind_desc", t); self.assertTrue(t["kind_desc"]["bug"])                # 画面が種別の用途を説明できる
         _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
         for ep in ("/api/sandbox", "/api/config", "/api/logs", "/api/jobs"): self.assertEqual(self.http.get(ep)[0], 200)
 
@@ -111,6 +113,7 @@ class ApiTest(unittest.TestCase):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
         self.assertEqual(st, 200); self.assertIsNotNone(d["body"]); self.assertTrue(d["history"]); self.assertIn("repo", d["ticket"])
+        self.assertTrue(all(not k.startswith((".", "_")) for k in d["kinds"]), d["kinds"]); self.assertIn(d["ticket"]["kind"], d["kind_desc"])
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get("/api/tickets/999999")
         self.assertEqual(cm.exception.code, 404)
 
@@ -292,6 +295,29 @@ class JobStoreTest(unittest.TestCase):
         dead = {"id": "20000101-000000-x", "kind": "x", "label": "x", "cmd": ["x"], "pid": 2**22 - 1, "started": "2000-01-01T00:00:00", "finished": None, "rc": None, "state": "running"}
         self.JS.save(dead); self.JS.reconcile()
         self.assertEqual(self.JS.get(dead["id"])["state"], "lost")
+
+
+class KitListingTest(unittest.TestCase):
+    """種別・役割の一覧は kit のディレクトリ走査。macOS の AppleDouble（`._bug.yml`）などのごみを候補に出さない"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-kit-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+        self.kit = self.tmp / "kit"; self.kit.mkdir()
+        (self.kit / "bug.yml").write_text("name: bug\ndescription: 不具合を直す\n", encoding="utf-8")
+        (self.kit / "._bug.yml").write_bytes(b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X")   # AppleDouble
+        (self.kit / ".hidden.yml").write_text("name: hidden\n", encoding="utf-8")
+        (self.kit / "planner.md").write_text("# planner\n", encoding="utf-8")
+        (self.kit / "._planner.md").write_bytes(b"\x00\x05\x16\x07")
+        (self.kit / "_common.md").write_text("# common\n", encoding="utf-8")
+        (self.kit / "sub").mkdir()                                                 # ディレクトリは候補にしない
+        (self.kit / "sub.yml").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_dot_files_are_not_candidates(self):
+        self.assertEqual(self.core.kinds(self.kit), ["bug"])
+        self.assertEqual(self.core.roles(self.kit), ["planner"])
 
 
 if __name__ == "__main__":
