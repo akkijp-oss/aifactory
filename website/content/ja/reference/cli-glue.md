@@ -52,7 +52,7 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
 ## dispatch
 
 ```
-dispatch [--pj P] [--once] [--max N] [--dry-run]
+dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]]
 ```
 
 | 引数 | 意味 |
@@ -61,6 +61,7 @@ dispatch [--pj P] [--once] [--max N] [--dry-run]
 | `--once` | 1 件だけ |
 | `--max N` | N 件まで（既定は無制限） |
 | `--dry-run` | `kb run --dry-run`。VM を触らず、状態も進まない |
+| `--wait [分]` | プールが満杯の PJ を飛ばさず、`kb run --wait <分>` で空くまで待たせる（分。値を省くと 60 分） |
 
 ### 動き
 
@@ -71,7 +72,7 @@ flowchart TD
   B -->|yes| C{project.yml がある?}
   C -->|no| D[kb block（理由をメモ）→ 次へ]
   C -->|yes| E{その PJ のプールに空き?<br>sandbox ls で貸出数 < 3}
-  E -->|no| F[この PJ は飛ばす → 次へ]
+  E -->|no| F[この PJ は飛ばす → 次へ<br>--wait なら飛ばさず kb run --wait]
   E -->|yes| G[kb run id]
   G --> H[dispatch.log に開始 / 終了 / rc / 状態 / 所要秒]
   H --> I{--once / --max に達した?}
@@ -83,6 +84,7 @@ flowchart TD
 - 判断はしない。種別は kanban が持つ
 - プール台数は `POOL_PER_PJ = 3`（`40-pool.sh` で作った台数に合わせる）
 - `--dry-run` ではプール確認をしない
+- `--wait` でもプール確認をしない。待つのは runner 1 か所（`kb run --wait` → `workflow/bin/run --wait`。ADR-0031）。上限を超えたチケットは `todo` に戻るので、次の `dispatch` が拾い直せる
 
 ### 出力
 

@@ -90,6 +90,7 @@ const T = {
     "stateBroken": "state.json を読めませんでした。工程と時刻は分かりません。今の状態はチケットで確かめてください。",
     "noStarted": "開始時刻は記録にありません。"
   },
+  "step": { "wait-vm": "VM の空き待ち" },
   "outcome": {
     "pr_created": "PR ができました。次はレビューです。",
     "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",
@@ -102,6 +103,7 @@ const T = {
     "runner_gone": "runner は {end} に終わっています。待っても進みません。",
     "runnerJob": "ジョブ {label} は{state}で、終了コードは {rc} です。",
     "failed_before_start": "VM の準備で止まりました: {summary}",
+    "wait_timeout": "VM の空きを {n} 分待ちましたが出ませんでした。チケットは未着手に戻っています。",
     "lease": "VM {name} は貸出中のままです。",
     "noDetail": "理由を書いたファイルは残っていません。",
     "ticketNow": "この run は {end} に終わりました。チケット {id} の今の状態は「{status}」です（{at} 更新）。",

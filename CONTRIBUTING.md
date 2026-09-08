@@ -22,7 +22,7 @@ Thanks for looking. aifactory is written to be worked on by humans and AI sessio
 
 - Tests: `python3 -m unittest discover -s console/tests` and `python3 -m unittest discover -s workflow/tests`. They need `pyyaml` and `jsonschema`, nothing else (no VM, no Claude)
 - A new design decision gets a new ADR under `docs/adr/` (`NNNN-slug.md`, sections 状況 / 決定 / 理由 / 結果 / 状態). Existing ADRs are never edited; supersede them. Pick the number with `ls docs/adr/` right before you write it — a PR running in parallel takes the same one otherwise
-- A user-visible change gets one file in `changelog.d/<ticket>-<slug>.md` (one entry per file, `### Added` / `### Changed` / `### Fixed` … headings). `CHANGELOG.md`'s `## [Unreleased]` is never edited directly: everybody appends to the same line there, so parallel PRs always conflict. A release runs `bin/changelog-release collect` to merge them in (ADR-0031, `changelog.d/README.md`)
+- A user-visible change gets one file in `changelog.d/<ticket>-<slug>.md` (one entry per file, `### Added` / `### Changed` / `### Fixed` … headings). `CHANGELOG.md`'s `## [Unreleased]` is never edited directly: everybody appends to the same line there, so parallel PRs always conflict. A release runs `bin/changelog-release collect` to merge them in (ADR-0032, `changelog.d/README.md`)
 - Keep secrets, hostnames, LAN addresses and private project data out of the repository. Operational data belongs in `workspace/` (git-ignored) or wherever `AIFACTORY_WORKSPACE` points
 - Commit messages: first line says what and why. Japanese or English are both fine
 

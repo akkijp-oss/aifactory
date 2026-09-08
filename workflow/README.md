@@ -60,13 +60,16 @@ examples/projects/<pj>/           # 同梱サンプルの PJ 定義（kumitate�
 kanban/bin/kb new kumitate bug "題名" --body ticket.md   # チケット起票 → id が出る
 kanban/bin/kb run <id> [--dry-run]                          # runner を呼び、結果で状態を進める
 # runner を直接呼ぶとき（kanban を通さない実験用）
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=秒]]
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず定義と依頼文だけ確認
 ```
 
+- `--keep` は終了後に release しない（中を見たいとき）、`--resume` は貸出中の VM で state.json の次の step から続ける
+- `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す
+
 runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**。
 
-`pr` の直前には `sync` step（`code: sync-base`。runner 内蔵）が入り、`git fetch origin <base>` と `git merge` で **base の最新を取り込む**。並列に走った別 run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにするため（ADR-0031）。衝突したら `git merge --abort` して衝突ファイル名を添え、implementer の `resolve` step に戻す（最大 2 回。3 回目で `human`）。取り込みの後に `docs/adr/` の番号重複も検査する（別ファイルなので git は衝突と見なさないため）。衝突が無ければ gates は回し直さず PR へ進む。
+`pr` の直前には `sync` step（`code: sync-base`。runner 内蔵）が入り、`git fetch origin <base>` と `git merge` で **base の最新を取り込む**。並列に走った別 run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにするため（ADR-0032）。衝突したら `git merge --abort` して衝突ファイル名を添え、implementer の `resolve` step に戻す（最大 2 回。3 回目で `human`）。取り込みの後に `docs/adr/` の番号重複も検査する（別ファイルなので git は衝突と見なさないため）。衝突が無ければ gates は回し直さず PR へ進む。
 
 step の出力は終了を待たず `runs/<run>/agent-<step>-<n>.log` / `code-<step>-<n>.log` に逐次書かれる（agent は `[+MM:SS] ▶ ツール: 引数` / `↳ 結果の先頭` / `result: … cost=$…` の形。生の JSON は同名 `.jsonl`）。`state.json` の `current` が今動いている step とログ名なので、`tail -f` か Web コンソール（`../console/`）で追える（ADR-0014）。
 

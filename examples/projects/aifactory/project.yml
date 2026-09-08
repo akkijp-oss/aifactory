@@ -16,7 +16,7 @@ facts:
   - "設計判断を変えるときは docs/adr/ に新しい番号で 1 枚足す（既存 ADR は書き換えない）。番号は ls docs/adr/ で取り直す"
   - "shell スクリプトは bash -n が通ること。Python は py_compile が通ること。CI（.github/workflows/ci.yml）も同じ組を回す"
   - "秘密情報・ホスト名・私有 PJ 名をリポジトリに書かない。bin/oss-check.sh がゲートで検査する"
-  - "CHANGELOG.md の [Unreleased] を直接編集しない。changelog.d/<チケット番号>-<slug>.md に 1 ファイル 1 項目で書く（書式は changelog.d/README.md。ADR-0031）"
+  - "CHANGELOG.md の [Unreleased] を直接編集しない。changelog.d/<チケット番号>-<slug>.md に 1 ファイル 1 項目で書く（書式は changelog.d/README.md。ADR-0032）"
   - "コミットメッセージは 1 行目に何を・なぜ（日本語で可）"
 review_points:
   - "置き場（パス）の判断を lib/aifactory_paths.py 以外に書いていないか"

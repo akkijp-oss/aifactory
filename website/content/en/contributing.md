@@ -63,7 +63,7 @@ CI (`.github/workflows/ci.yml`) runs the unittests in `console/tests` and `workf
 ## The changelog and releases
 
 `## [Unreleased]` in `CHANGELOG.md` is the one line everybody appends to, so parallel PRs always conflict there.
-Each PR therefore drops a single file into `changelog.d/` instead (ADR-0031; the format is in `changelog.d/README.md`).
+Each PR therefore drops a single file into `changelog.d/` instead (ADR-0032; the format is in `changelog.d/README.md`).
 
 ```markdown
 <!-- changelog.d/239-runner-sync-base.md -->

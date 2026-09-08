@@ -1,4 +1,4 @@
-# ADR 0031: PR を作る直前に base を取り込む／`CHANGELOG` は `changelog.d` に分ける
+# ADR 0032: PR を作る直前に base を取り込む／`CHANGELOG` は `changelog.d` に分ける
 
 - 状態: Accepted
 - 日付: 2026-09-08

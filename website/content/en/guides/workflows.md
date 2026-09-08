@@ -54,7 +54,7 @@ flowchart LR
 
 Boxes with a model name are agent steps (`claude -p` inside the VM); `code` boxes are code steps (control-plane scripts executed against the VM). Dotted lines are send-backs; past the limit the run goes to `human`.
 
-`sync` merges the latest base right before the PR is opened (built into the runner; ADR-0031), so a PR opened after a parallel run's PR was merged does not come out CONFLICTING. A conflict goes back to the implementer (`resolve`), not to a human; only after two failed resolutions does the run go to `human`.
+`sync` merges the latest base right before the PR is opened (built into the runner; ADR-0032), so a PR opened after a parallel run's PR was merged does not come out CONFLICTING. A conflict goes back to the implementer (`resolve`), not to a human; only after two failed resolutions does the run go to `human`.
 
 ## How to choose
 

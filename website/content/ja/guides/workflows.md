@@ -54,7 +54,7 @@ flowchart LR
 
 青い箱はエージェントが担当する工程（VM 内で `claude -p`）、`code` がスクリプトが担当する工程（制御系のスクリプトが必要に応じて VM に接続して実行）。点線は差し戻しで、上限を超えると `human` に抜けます。
 
-`sync` は PR を作る直前に base の最新を取り込む工程です（runner 内蔵。ADR-0031）。並列に走った別の run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにします。衝突したら人間ではなく implementer（`resolve`）に戻して解消させ、2 回解消できなかったときだけ `human` に抜けます。
+`sync` は PR を作る直前に base の最新を取り込む工程です（runner 内蔵。ADR-0032）。並列に走った別の run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにします。衝突したら人間ではなく implementer（`resolve`）に戻して解消させ、2 回解消できなかったときだけ `human` に抜けます。
 
 ## 選び方の目安
 

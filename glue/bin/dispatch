@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """glue/bin/dispatch: kanban の todo を順に取り出して workflow を回す（配車。ただのコード、エージェント不在）。
 
-  glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run]
+  glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]]
 
 - `kb next --json [--pj P]` で最も古い todo を 1 件取り、`kb run <id>` を呼ぶ。終わったら次を取る。todo が無くなれば終了
 - 種別（kind）は kanban が持っているので、ここでの判断は「回せるか」だけ:
@@ -10,6 +10,7 @@
 - 直列で回す（1 回に 1 run）。並列は runs の観察（ゲートが重い）を踏まえて後で
 - 記録は $AIFACTORY_WORKSPACE/logs/dispatch.log（1 行 1 run: 開始 / 終了 / id / pj / kind / 結果ステータス / 所要秒）
 - --once は 1 件だけ。--max N は N 件まで。--dry-run は kb run --dry-run（VM を触らない。状態も進まない）
+- --wait は「プールが満杯なら飛ばす」をやめ、`kb run <id> --wait <分>`（既定 60）で空くまで待たせる。待つのは runner 1 か所（242。ADR-0031）
 """
 import argparse, datetime, json, os, pathlib, subprocess, sys, time
 
@@ -59,6 +60,7 @@ def lent_per_pj():
 def main():
     ap = argparse.ArgumentParser(prog="dispatch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pj"); ap.add_argument("--once", action="store_true"); ap.add_argument("--max", type=int, default=0); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--wait", nargs="?", type=float, const=60, help="プールが満杯の PJ を飛ばさず、空くまで待つ上限（分。既定 60）")
     a = ap.parse_args()
     limit = 1 if a.once else (a.max or 10**9)
     done = 0; skip = set(); busy_pj = set()
@@ -79,12 +81,14 @@ def main():
             worker = next((w for w in workers if w["id"] == project.get("worker")), {})
             if not worker.get("online") or not worker.get("info", {}).get("lifecycle") or worker.get("info", {}).get("base_ready") is False or worker.get("info", {}).get("network_ready") is False or worker.get("lease") or worker.get("operation"):
                 log(f"{tid} {pj}: Pull worker unavailable → skip"); skip.add(tid); continue
-        if not a.dry_run and pj in busy_pj: skip.add(tid); continue
-        if not a.dry_run and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
+        # --wait のときは満杯でも飛ばさない。待つのは runner（kb run --wait）に一本化する（242）
+        if not a.dry_run and not a.wait and pj in busy_pj: skip.add(tid); continue
+        if not a.dry_run and not a.wait and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
             log(f"{tid} {pj}: プール {POOL_PER_PJ} 台すべて貸出中 → この PJ は飛ばす"); busy_pj.add(pj); skip.add(tid); continue
         log(f"start {tid} {pj} {t['kind']} {t['title'][:50]}{' (dry-run)' if a.dry_run else ''}")
         t0 = time.time()
-        rc = subprocess.run([str(KB), "run", str(tid)] + (["--dry-run"] if a.dry_run else [])).returncode
+        rc = subprocess.run([str(KB), "run", str(tid)] + (["--dry-run"] if a.dry_run else [])
+                            + (["--wait", str(a.wait)] if a.wait and not a.dry_run else [])).returncode
         status = next((l.split(None, 2)[1] for l in sh([str(KB), "show", str(tid)]).stdout.splitlines() if l.startswith("status")), "?")
         log(f"end   {tid} {pj} {t['kind']} rc={rc} status={status} {int(time.time() - t0)}s")
         done += 1; skip.add(tid)

@@ -66,7 +66,7 @@ CI（`.github/workflows/ci.yml`）は pull request ごとに `console/tests` と
 ## 変更履歴とリリース
 
 `CHANGELOG.md` の `## [Unreleased]` は、全員が同じ行に箇条書きを足す場所なので、並列に走る PR が必ず衝突します。
-そのため各 PR は `changelog.d/` にファイルを 1 枚置くだけにします（ADR-0031。書式は `changelog.d/README.md`）。
+そのため各 PR は `changelog.d/` にファイルを 1 枚置くだけにします（ADR-0032。書式は `changelog.d/README.md`）。
 
 ```markdown
 <!-- changelog.d/239-runner-sync-base.md -->

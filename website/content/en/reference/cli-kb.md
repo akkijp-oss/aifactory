@@ -11,7 +11,7 @@ kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
 kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
-kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]
+kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [minutes]]
 kb sync <id> [--run DIR]
 kb history <id>
 kb render
@@ -99,13 +99,15 @@ The text itself lives in the body (the file is the source of truth). The history
 ### run
 
 ```bash
-kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
+kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--wait [minutes]]
 ```
 
 1. Error if the project has no `project.yml`. `done` tickets error except with `--dry-run` (`reopen` first)
 2. Sets `in_progress` and records the run directory name (`<date>-<pj>-<id>`; the directory lives under `workspace/runs/`)
 3. Calls `workflow/bin/run <pj> <id> <workflow> <body path> [flags]`. `--workflow` only changes how this run is executed; `kind` is left alone (the history records `workflow → <name>` and `runs/<run>/state.json` holds the authoritative value; ADR-0030). A `--resume` without `--workflow` restarts with the `workflow` from that `state.json`
 4. Afterwards reads `state.json` and advances the state (table below)
+
+With `--wait`, a run whose project pool is full does not fail: it waits for a free VM and then starts (minutes; 60 when the value is omitted). While waiting the ticket stays `in_progress`, and the console board and run page show "waiting for a free VM" with the elapsed time. Only when the limit is exceeded does the ticket go back to `todo`, with the reason in its note (ADR-0031).
 
 | state.json | State | Note |
 |---|---|---|
@@ -114,6 +116,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 | `result: end`, no PR | done | Finished without a PR (research etc.) |
 | `result: human`, no PR | blocked | Handed to a human (wip branch) |
 | `result: failed` | blocked | Could not take a VM, so no step ran (the last line of `error` goes into the note) |
+| `result: failed` with `failure: wait_timeout` | todo | `--wait` ran out before a VM came free. There is nothing to fix, so the ticket goes back to todo |
 | No `finished`, runner exited non-zero | blocked | Runner exited without a record, rc=N |
 
 `--dry-run` leaves the state unchanged. The exit code is the runner's (0 = end or PR present, 2 = human).
