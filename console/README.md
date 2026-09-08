@@ -118,6 +118,7 @@ console/
 ```
 GET  /api/overview                 状態の件数・動いている run / ジョブ・貸出数
 GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・履歴・run・ジョブ
+     どちらも kinds（workflow/kit/workflows/*.yml。`.` / `_` 始まりは出さない）と kind_desc（種別 → 用途）を返す
 GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる
 GET  /api/tickets/<id>/sync-preview[?run=]   状態同期の下見（kb sync --dry-run。前後の状態とメモ、run の後にチケットが更新されたか）
 POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|sync, ...}

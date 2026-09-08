@@ -9,6 +9,7 @@ const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
 const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '';
+let kindDesc = {};   // 種別 → workflow の説明（画面が用途を出す）
 
 /* ---------- 通信・通知 */
 async function api(path, body) {
@@ -126,9 +127,10 @@ async function viewBoard() {
   if (!o) return render(`<div class="err">${esc(T.err.noOverview)}</div>`);
   const by = {}; STATUSES.forEach(s => by[s] = []); t.tickets.forEach(x => (by[x.status] || by.todo).push(x));
   by.done.sort((a, b) => b.updated.localeCompare(a.updated));
-  const live = o.runs_active.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
+  const n = s => by[s].length;                                                  /* 帯も列も同じ絞り込み結果から数える（PJ を選んだら両方が動く） */
+  const live = o.runs_active.filter(r => !pj || r.pj === pj).map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
-  const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${o.counts[s]}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
+  const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
   const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
     <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
   const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty">${esc(tt(T.board.more, { n: list.length - cap }))}</div>` : ''}</section>`;
@@ -136,8 +138,9 @@ async function viewBoard() {
   render(head(esc(T.nav.board), T.sub.board, `
       <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
-    + `<div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${o.counts.blocked}</div></div></div>
-    <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('blocked', by.blocked)}${col('done', by.done, 15)}</div>`);
+    + `<div class="help">${pj ? tt(T.board.scopePj, { pj: esc(pj) }) : esc(T.board.scopeAll)}</div>
+    <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
+    <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);
   schedule(viewBoard, 5000);
 }
 
@@ -179,6 +182,8 @@ async function viewTicket(id, flash) {
     blocked: [stBtn('reopen', T.btn.reopen, 'primary'), stBtn('done', T.btn.done)],
     done: [stBtn('reopen', T.btn.redo)] }[t.status] || [];
   const runHint = t.status === 'done' ? T.help.runDone : t.status === 'in_progress' ? T.help.runInProgress : T.help.runDefault;
+  kindDesc = d.kind_desc || {};
+  const kindKnown = d.kinds.includes(t.kind);                                              /* 台帳に workflow の無い種別が入っていることがある */
   const runBtn = (label, cls, dry) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''}>${esc(label)}</button>`;
   render(crumb('#/board', T.nav.board, tt(T.ticket.crumb, { id: t.id })) + `
     <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
@@ -196,9 +201,10 @@ async function viewTicket(id, flash) {
         </div>
         <div class="panel"><h2>${esc(T.h.move)}</h2><div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveUndo)}</div></div>
         <div class="panel"><h2>${esc(T.h.fix)}<small>kb set</small></h2>
-          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind">${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
+          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
             <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
             <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindDesc[t.kind] || '') : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
           <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
         <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.kind === 'v1' ? `<span class="dot pulse"></span>${since(r.started)}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(T.empty.ticketRuns)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${esc(j.label)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
@@ -286,15 +292,20 @@ async function viewIntake() {
   clearInterval(timer);
   const t = await api('tickets');
   const opt = (list, blank) => (blank != null ? `<option value="">${esc(blank)}</option>` : '') + list.map(x => `<option>${esc(x)}</option>`).join('');
+  kindDesc = t.kind_desc || {};
+  const kind0 = t.kinds.includes('bug') ? 'bug' : (t.kinds[0] || '');                      /* 初期値は並び順の先頭任せにしない */
+  const kindOpt = sel => t.kinds.map(k => `<option ${k === sel ? 'selected' : ''}>${esc(k)}</option>`).join('');
   render(head(esc(T.nav.intake), T.sub.intake) + `
     <div class="grid2">
       <div class="panel"><h2>${esc(T.h.intakeFree)}<small>glue/bin/intake</small></h2>
         <div class="field"><label for="in-text">${esc(T.label.request)}</label><textarea id="in-text" placeholder="${esc(T.label.requestPlaceholder)}"></textarea></div>
-        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj">${opt(t.pjs, T.label.letLlm)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind">${opt(t.kinds, T.label.letLlm)}</select></label>
+        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj">${opt(t.pjs, T.label.letLlm)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind" data-act="kind-help"><option value="">${esc(T.label.letLlm)}</option>${kindOpt(null)}</select></label>
           <label class="help check"><input type="checkbox" id="in-dry"> ${esc(T.label.intakeDry)}</label></div>
+        <div class="help" id="in-kind-help"></div>
         <div class="actions"><button class="primary" data-act="intake">${esc(T.btn.intake)}</button><span class="help">${esc(T.help.intake)}</span></div></div>
       <div class="panel"><h2>${esc(T.h.intakeNew)}<small>kb new</small></h2>
-        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj">${opt(t.pjs)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind">${opt(t.kinds)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100"></label></div>
+        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj">${opt(t.pjs)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(kind0)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100"></label></div>
+        <div class="help" id="new-kind-help">${esc(kindDesc[kind0] || '')}</div>
         <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}"></div>
         <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" class="h140"></textarea></div>
         <div class="actions"><button class="primary" data-act="new">${esc(T.btn.file)}</button><span class="help">${esc(T.help.newTicket)}</span></div></div>
@@ -457,6 +468,7 @@ const actions = {
     const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });
     if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
   },
+  'kind-help': el => { const h = $(el.id + '-help'); if (h) { h.textContent = kindDesc[el.value] || ''; h.className = 'help'; } },
   'run-file': el => { runFile[el.dataset.run] = el.dataset.path; runPicked[el.dataset.run] = true; viewRun(el.dataset.run); },
 };
 document.addEventListener('click', async e => {

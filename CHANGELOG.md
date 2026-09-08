@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - Console: a finished `kb run` job no longer pushes recovery steps for a ticket that has moved on since. `GET /api/jobs/<id>` now carries the ticket's current state and whether it was updated after the job, so the job's *What to do next* panel turns past tense (primary button *Open the ticket*) once the ticket is done or was edited later, and always shows the job's end time next to the ticket's current state. *Sync the state from the run record* now previews itself first: the new `kb sync --dry-run` (and `GET /api/tickets/<id>/sync-preview`) reports the state and note before and after without writing, the dialog shows both and warns in danger colours when the ticket was updated after that run, and the toast offers *Undo*
+- Console board: the pipeline strip counted every project while the columns below it counted only the selected one, so a project filter looked broken. The strip, the "in progress" run list and the columns now all come from the filtered ticket list, the scope is stated above the strip, and the columns follow the strip's order (todo, in progress, review, done, then "waiting for a human" to the side)
+- 種別・workflow・役割の一覧から `.` / `_` 始まりのファイル（macOS の `._bug.yml` など）を除いた。起票の種別の初期値を `bug` にし、種別の用途を画面に出す。台帳に workflow の無い種別が入っているときは注意を出す（console / kb / intake）
 
 ## [0.3.0] - 2026-09-08
 

@@ -14,7 +14,7 @@
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
 
 - pj    : $AIFACTORY_WORKSPACE/projects/<pj>/（無ければ examples/projects/<pj>/）がある PJ
-- kind  : workflow/kit/workflows/<kind>.yml がある種別（chore / bug / feature / hotfix / research / merge-pr）
+- kind  : workflow/kit/workflows/*.yml のうち `.` / `_` 始まりでないもの（chore / bug / feature / hotfix / research / merge-pr / docs）
 - status: todo → in_progress → review → done。人間待ちは blocked
 - チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
 - DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
@@ -52,7 +52,8 @@ def pjs():
 
 def kinds():
     d = REPO / "workflow" / "kit" / "workflows"
-    return sorted(p.stem for p in d.glob("*.yml"))
+    # `.` / `_` 始まり（macOS の `._bug.yml` など）とディレクトリは種別にしない
+    return sorted(p.stem for p in d.glob("*.yml") if p.is_file() and not p.name.startswith((".", "_")))
 
 
 def slugify(title):

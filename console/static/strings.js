@@ -59,7 +59,8 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
-    "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）"
+    "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）",
+    "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
@@ -106,6 +107,7 @@ const T = {
     "dispatchMoved": "配車（未着手を runner に回す）はボードの「配車する」から行います。",
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
     "pjPool": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
+    "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。"
   },
