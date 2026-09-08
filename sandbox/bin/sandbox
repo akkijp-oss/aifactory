@@ -4,7 +4,7 @@
 #   sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
 #   sandbox url <task-id>            http://task-<id>.sb.internal:3000
 #   sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
-#   sandbox release <task-id>        巻き戻して返却
+#   sandbox release <task-id> [--force]  巻き戻して返却（--force: 巻き戻せなくても台帳から消す。手で直した VM 用）
 #   sandbox ls                       貸出状況
 # 運用補助（契約外）:
 #   sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
@@ -26,6 +26,8 @@
 #               PVE_API_CA にクラスタ CA を置くか PVE_API_INSECURE=1。PVE_API_RESOLVE=<node>:8006:<ip> で名前解決を SDN 側の IP に向ける）。
 #               PVE_API_TOKEN があれば API モード
 # 状態: ~/.config/sandbox/state.json（同時 take の直列化に state.json.lock を使う）
+#   rollback は最大 SB_ROLLBACK_TRIES 回（既定 3）・SB_ROLLBACK_WAIT 秒間隔（既定 10）で再試行し、
+#   全部失敗したら release / reset は非 0 で終わる（state は消さない）
 set -euo pipefail
 
 CONF_DIR="$HOME/.config/sandbox"
@@ -282,16 +284,38 @@ EOF
 dns_set() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; echo '$2 task-$1' >> /etc/sandbox/hosts; systemctl reload dnsmasq"; }
 dns_del() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; systemctl reload dnsmasq"; }
 
-rollback() { # vmid ip
-  # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする
-  local i
-  for i in $(seq 1 12); do
-    if [[ -z "$(pve_lock "$1")" ]] && pve_rollback "$1"; then break; fi
-    (( i < 12 )) || die "vm $1: rollback が通らない（ロック: $(pve_lock "$1" || echo none)）"
-    sleep 5
+# rollback の再試行（Proxmox の lock は一過性なので待って試す）。運用で足りなければ env で伸ばす
+: "${SB_ROLLBACK_TRIES:=3}"
+: "${SB_ROLLBACK_WAIT:=10}"
+_rollback_err=""
+rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
+  # die しないで rc を返す。「巻き戻せていないのに released」と言わないため、state を消すかどうかは呼び手が決める（245）
+  # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする。
+  # 無言で再試行すると失敗ログの直後に [ok] が出て「無視した」ように見えるので、失敗のたびに理由を出す
+  local i lock out n=$SB_ROLLBACK_TRIES w=$SB_ROLLBACK_WAIT
+  _rollback_err=""
+  for (( i = 1; i <= n; i++ )); do
+    lock="$(pve_lock "$1" || true)"
+    if [[ -n "$lock" ]]; then
+      _rollback_err="ロック中: $lock"
+    elif out="$(pve_rollback "$1" 2>&1)"; then
+      _rollback_err=""; break
+    else
+      _rollback_err="$(printf '%s' "$out" | tail -1)"; [[ -n "$_rollback_err" ]] || _rollback_err="rollback API が失敗"
+    fi
+    if (( i < n )); then
+      echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err。${w}秒後に再試行" >&2
+      sleep "$w"
+    else
+      echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err" >&2
+      return 1
+    fi
   done
-  [[ "$(pve_status "$1")" == running ]] || pve_start "$1"
-  wait_port "$2" 22 || die "vm $1 ($2): ssh が上がらない"
+  if [[ "$(pve_status "$1")" != running ]] && ! pve_start "$1"; then
+    _rollback_err="vm $1: 起動に失敗"; return 1
+  fi
+  if ! wait_port "$2" 22; then _rollback_err="vm $1 ($2): ssh が上がらない"; return 1; fi
+  return 0
 }
 
 # ---------- take（予約 → 準備 → 確定）
@@ -327,7 +351,9 @@ cmd_take() {
   _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
-  if [[ "$status" != running ]]; then rollback "$vmid" "$ip"; else wait_port "$ip" 22 || rollback "$vmid" "$ip"; fi
+  if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
+    rollback "$vmid" "$ip" || die "vm $vmid: rollback が通らない（$_rollback_err）"
+  fi
   inject_env "$ip" "$task" "$pj"
   dns_set "$task" "$ip"; _reserved_dns=1
   local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
@@ -354,17 +380,32 @@ cmd_reset() {
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   load_pj "$pj"
   echo "[reset] $(state_field "$task" name) → clean"
-  rollback "$vmid" "$ip"
+  rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
   echo "[ok] reset 完了（env 再注入済み）"
 }
 
 cmd_release() {
-  local task=${1:?task-id}
+  local task="" force=0 a
+  for a in "$@"; do
+    case "$a" in
+      --force) force=1 ;;
+      *) if [[ -n "$task" ]]; then die "usage: sandbox release <task-id> [--force]"; fi; task=$a ;;
+    esac
+  done
+  [[ -n "$task" ]] || die "usage: sandbox release <task-id> [--force]"
   local vmid ip; vmid="$(state_field "$task" vmid)"; ip="$(state_field "$task" ip)"
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   echo "[release] $(state_field "$task" name) ← task-$task"
-  rollback "$vmid" "$ip"
+  if ! rollback "$vmid" "$ip"; then
+    # 巻き戻せていない VM を state から消すと、次の take が clean だと思って貸し出す（245）
+    (( force )) || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。state は保持。\`sandbox release $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください（VM を手で直したなら \`sandbox release $task --force\`）"
+    echo "[warn] 巻き戻し失敗を無視して返却（--force）: $_rollback_err" >&2
+    dns_del "$task" || true
+    state_del "$task"
+    echo "[ok] released (--force)"
+    return 0
+  fi
   dns_del "$task"
   state_del "$task"
   echo "[ok] released"
