@@ -51,7 +51,8 @@ def projects():
 
 def kinds():
     out = []
-    for p in sorted((REPO / "workflow" / "kit" / "workflows").glob("*.yml")):
+    # `.` / `_` 始まり（macOS の `._bug.yml` など）は LLM への候補に出さない
+    for p in sorted(q for q in (REPO / "workflow" / "kit" / "workflows").glob("*.yml") if q.is_file() and not q.name.startswith((".", "_"))):
         y = load_yaml(p); out.append((p.stem, y.get("description", "")))
     return out
 

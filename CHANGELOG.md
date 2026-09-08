@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - Console board: the pipeline strip counted every project while the columns below it counted only the selected one, so a project filter looked broken. The strip, the "in progress" run list and the columns now all come from the filtered ticket list, the scope is stated above the strip, and the columns follow the strip's order (todo, in progress, review, done, then "waiting for a human" to the side)
+- 種別・workflow・役割の一覧から `.` / `_` 始まりのファイル（macOS の `._bug.yml` など）を除いた。起票の種別の初期値を `bug` にし、種別の用途を画面に出す。台帳に workflow の無い種別が入っているときは注意を出す（console / kb / intake）
 
 ## [0.3.0] - 2026-09-08
 

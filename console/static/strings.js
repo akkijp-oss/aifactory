@@ -107,6 +107,7 @@ const T = {
     "dispatchMoved": "配車（未着手を runner に回す）はボードの「配車する」から行います。",
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
     "pjPool": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
+    "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。"
   },
