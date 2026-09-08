@@ -141,8 +141,11 @@ async function viewBoard() {
   const inPj = r => !pj || r.pj === pj;                                          /* 記録の無い run は pj が分からないので、PJ を選ぶと外れる */
   const runsRun = o.runs_active.filter(r => r.status === 'running' && inPj(r));  /* 動いている run（state.json あり） */
   const runsNew = ((o.runs_not_started || {}).runs || []).filter(inPj);          /* 工程が始まる前に止まった run。名前だけ出す */
-  const live = (runsRun.length + runsNew.length ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: runsRun.length + runsNew.length, m: runsNew.length }))}</div>` : '')
+  const runsGone = ((o.runs_abandoned || {}).runs || []).filter(inPj);           /* runner が居なくなった run。待っても進まないので pulse を出さない */
+  const nLive = runsRun.length + runsNew.length + runsGone.length;
+  const live = (nLive ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: nLive, m: runsNew.length, a: runsGone.length }))}</div>` : '')
     + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
+    + runsGone.map(r => `<div><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj || '')} ${esc(r.task || '')}</a> · ${r.runner ? `${esc(tt(T.board.liveAbandoned, { t: fmtT(r.runner.finished) }))} <a href="#/job/${esc(r.runner.id)}">${esc(T.btn.openJob)}</a>` : `<span class="tag">${esc(T.result.abandoned)}</span>`}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
@@ -270,7 +273,7 @@ async function viewTicket(id, flash) {
             <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
           <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindDesc[t.kind] || '') : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
           <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
-        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
       </div>
       <div>
@@ -289,12 +292,12 @@ async function viewRuns() {
   render(head(esc(T.nav.runs), T.sub.runs, `<label class="help check"><input type="checkbox" data-act="runs-all" ${showAll ? 'checked' : ''}> ${esc(T.label.runsAll)}</label>`) + `
     <div class="panel"><table><tr><th>${esc(T.th.run)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.step)}</th><th>${esc(T.th.result)}</th><th>PR</th></tr>
     ${list.map(r => `<tr class="link" data-href="#/run/${encodeURIComponent(r.name)}"><td>${runLink(r.name)}</td><td>${esc(r.pj || '')}</td><td>${r.task ? `<a href="#/ticket/${esc(r.task)}">${esc(r.task)}</a>` : ''}</td><td>${esc(r.workflow || '')}</td><td>${fmtT(r.started)}</td>
-      <td>${r.finished ? fmtDur(r.elapsed_s) : r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : ''}</td><td>${r.status === 'not_started' ? '' : (r.steps_done ?? '')}${r.status === 'running' && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
+      <td>${r.finished ? fmtDur(r.elapsed_s) : r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : r.status === 'abandoned' ? esc(span(r.started, r.mtime)) : ''}</td><td>${r.status === 'not_started' ? '' : (r.steps_done ?? '')}${r.status === 'running' && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
     ${!list.length ? `<tr><td colspan="9" class="help">${esc(T.empty.runs)}</td></tr>` : ''}</table></div>`);
   schedule(viewRuns, 10000);
 }
 
-function track(state, wf) {
+function track(state, wf, gone) {
   if (!state || !state.history) return '';
   const h = state.history; const parts = []; let prev = state.started;
   const stepOrder = wf ? wf.steps.map(s => s.id) : [];
@@ -304,7 +307,7 @@ function track(state, wf) {
     parts.push(`<div class="step ${e.ok ? 'ok' : 'ng'}"><div class="nm">${esc(e.step)}</div><div class="ds">${fmtDur(d)}</div></div>`);
   });
   if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
-  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm"><span class="dot pulse"></span>${esc(state.next)}</div><div class="ds">${esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
+  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(state.next)}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
   const plan = wf ? `<div class="help">${esc(T.run.plan)} ${wf.steps.map(s => `${esc(s.id)}${s.role ? `（${esc(s.role)}）` : '（code）'}`).join(' → ')}</div>` : '';
   return `<div class="track">${parts.join('')}</div>${plan}`;
 }
@@ -314,9 +317,11 @@ function track(state, wf) {
 const report = d => ((d.groups || {}).artifacts || []).find(a => a.kind === 'implementer');
 const fileBtn = (run, path, label, cls) => `<button class="${cls || ''}" data-act="run-file" data-run="${esc(run)}" data-path="${esc(path)}">${esc(label)}</button>`;
 function outcomeLead(o, s) {
-  if (o.reason === 'not_started') return T.run.noState;
+  if (o.reason === 'not_started') return s.state_error ? T.run.stateBroken : s.kind === 'v0' ? T.run.v0 : T.run.noState;
   if (o.reason === 'v0') return T.run.v0;
   if (o.reason === 'running') return tt(T.outcome.running, { step: o.stopped_step || s.next || '' });
+  if (o.reason === 'runner_gone') return tt(T.outcome.runner_gone, { end: fmtT((o.job || {}).finished || s.mtime) });
+  if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
   return T.outcome[o.reason] || T.outcome.unknown;
@@ -324,14 +329,22 @@ function outcomeLead(o, s) {
 function outcomePanel(name, d) {
   const o = d.outcome || { reason: 'unknown' }, s = d.summary, tk = d.ticket;
   const stopped = ['loop_limit', 'step_failed', 'unknown'].includes(o.reason);
+  const gone = o.reason === 'runner_gone', job = o.job || null;
   const lines = [outcomeLead(o, s)];
+  if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
   if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
   if (stopped && !o.detail_file) lines.push(T.outcome.noDetail);
   const rep = report(d);
-  const acts = [o.detail_file ? fileBtn(name, o.detail_file, T.btn.openReason, 'primary') : '',
+  const acts = [job ? link(`#/job/${job.id}`, T.btn.openJob, true) : '',
+                o.detail_file ? fileBtn(name, o.detail_file, T.btn.openReason, job ? '' : 'primary') : '',
                 rep ? fileBtn(name, rep.path, T.btn.openReport) : '',
-                s.task ? link(`#/ticket/${s.task}`, T.btn.openTicket) : ''];
+                s.task ? link(`#/ticket/${s.task}`, T.btn.openTicket) : '',
+                gone || o.reason === 'failed_before_start' ? link('#/sandbox', T.btn.openSandbox) : ''];
+  /* 状態を合わせるのは、台帳の run がこの run で、まだ実行中の扱いのときだけ。別の run に進んだ後や人が動かした後は出さない */
+  if (tk && tk.run && runName(tk.run) === name && tk.status === 'in_progress' && (gone || s.result === 'failed'))
+    acts.push(`<button data-act="sync" data-id="${esc(tk.id)}" data-run="${esc(name)}" data-stay="1" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>`);
   const notes = [];
+  if (d.lease) notes.push(tt(T.outcome.lease, { name: d.lease.name || d.lease.pj || '' }));
   if (tk && s.finished) notes.push(tt(T.outcome.ticketNow, { end: fmtT(s.finished), id: tk.id, status: T.status[tk.status] || tk.status, at: fmtT(tk.updated) }));
   if (!s.task) notes.push(T.outcome.noTicket);
   if (tk && tk.run && runName(tk.run) !== name) { notes.push(tt(T.outcome.ticketNewerRun, { id: tk.id, run: runName(tk.run) })); acts.push(link(`#/run/${encodeURIComponent(runName(tk.run))}`, T.btn.openLatestRun)); }
@@ -353,17 +366,17 @@ const runFile = {};   // run 名 → 開いているファイル
 const runPicked = {}; // run 名 → 人がファイルを選んだか（選ぶまでは実行中の工程のログを追う）
 async function viewRun(name) {
   const d = await api(`runs/${encodeURIComponent(name)}`); const s = d.summary, state = d.state;
-  const running = s.status === 'running', notStarted = s.status === 'not_started';
+  const running = s.status === 'running', notStarted = s.status === 'not_started', gone = s.status === 'abandoned';
   const cur = running && state && state.current && state.current.log ? d.files.find(f => f.name === state.current.log) : null;
   if (cur && !runPicked[name]) runFile[name] = cur.path;
   if (!runFile[name]) { const latest = [...d.files].filter(f => /\.(log|md|txt)$/.test(f.name) && f.name !== 'ticket.md').sort((a, b) => b.mtime.localeCompare(a.mtime))[0] || d.files.find(f => f.name === 'state.json') || d.files.find(f => f.name === 'ticket.md'); const pick = (!running && d.outcome && d.outcome.detail_file) || (report(d) || {}).path || (latest || {}).path || null; runFile[name] = s.kind === 'v0' ? d.files[0].path : pick; }
   const f = runFile[name]; const file = f ? await api(`file?path=${encodeURIComponent(f)}&tail=300000`) : null;
-  const trk = track(state, d.workflow);   // 工程が 1 つも無い run（開始前 / v0）では、この段ごと出さない。理由は「結果」が言う
+  const trk = track(state, d.workflow, gone);   // 工程が 1 つも無い run（開始前 / v0）では、この段ごと出さない。理由は「結果」が言う
   render(crumb('#/runs', T.nav.runs, name) + `
-    <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? rst(s.result) : running ? `<span class="st running"><span class="dot pulse"></span>${esc(T.jobState.running)}</span>` : notStarted ? `<span class="tag">${esc(T.run.notStarted)}</span>` : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">${esc(tt(T.ticket.crumb, { id: s.task }))}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
+    <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? rst(s.result) : running ? `<span class="st running"><span class="dot pulse"></span>${esc(T.jobState.running)}</span>` : gone ? rst('abandoned') : notStarted ? `<span class="tag">${esc(T.run.notStarted)}</span>` : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">${esc(tt(T.ticket.crumb, { id: s.task }))}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
     ${outcomePanel(name, d)}
     ${!trk && !(d.jobs && d.jobs.length) ? '' : `<div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${trk}
-      <dl class="kv top">${notStarted ? '' : `<dt>${esc(T.th.started)}</dt><dd>${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${esc(tt(T.run.elapsed, { t: since(s.started) }))}）` : ''}</dd>`}
+      <dl class="kv top"><dt>${esc(T.th.started)}</dt><dd>${s.started ? `${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${esc(tt(T.run.elapsed, { t: since(s.started) }))}）` : ''}` : esc(T.run.noStarted)}</dd>
       ${state && state.error ? `<dt>${esc(T.run.error)}</dt><dd><pre class="log">${esc(state.error)}</pre></dd>` : ''}
       ${s.pr_url ? `<dt>PR</dt><dd><a href="${esc(s.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(s.pr_url)}</a></dd>` : ''}${s.wip_branch ? `<dt>${esc(T.run.wip)}</dt><dd class="mono">origin/${esc(s.wip_branch)}</dd>` : ''}
       ${state && state.loops && Object.keys(state.loops).length ? `<dt>${esc(T.run.loops)}</dt><dd>${Object.entries(state.loops).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}</dd>` : ''}

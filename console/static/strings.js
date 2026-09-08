@@ -6,7 +6,7 @@
 const T = {
   "status": { "todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了" },
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
-  "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）" },
+  "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）", "abandoned": "中断" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
   "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
            "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
@@ -66,7 +66,7 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
-    "runsCount": "実行記録 {n} 件（うち開始前 {m} 件）", "ticketCount": "左の数字はチケットの件数です。",
+    "runsCount": "実行記録 {n} 件（うち開始前 {m} 件、中断 {a} 件）", "liveAbandoned": "中断。runner は {t} に終わっています。", "ticketCount": "左の数字はチケットの件数です。",
     "noLive": "動いている run はありません。", "more": "ほか {n} 件をすべて見る",
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
@@ -83,8 +83,10 @@ const T = {
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
-    "notStarted": "開始前（記録なし）", "error": "失敗の理由",
-    "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
+    "notStarted": "開始前（記録なし）", "error": "失敗の理由", "runnerGone": "runner は終了",
+    "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。",
+    "stateBroken": "state.json を読めませんでした。工程と時刻は分かりません。今の状態はチケットで確かめてください。",
+    "noStarted": "開始時刻は記録にありません。"
   },
   "outcome": {
     "pr_created": "PR ができました。次はレビューです。",
@@ -95,6 +97,10 @@ const T = {
     "waiting": "工程は終わり、人間の判断を待っています。",
     "running": "工程 {step} を実行中です。",
     "unknown": "止まった理由は記録にありません。工程のログを確かめてください。",
+    "runner_gone": "runner は {end} に終わっています。待っても進みません。",
+    "runnerJob": "ジョブ {label} は{state}で、終了コードは {rc} です。",
+    "failed_before_start": "VM の準備で止まりました: {summary}",
+    "lease": "VM {name} は貸出中のままです。",
     "noDetail": "理由を書いたファイルは残っていません。",
     "ticketNow": "この run は {end} に終わりました。チケット {id} の今の状態は「{status}」です（{at} 更新）。",
     "ticketNewerRun": "チケット {id} の最新の実行記録は {run} です。",

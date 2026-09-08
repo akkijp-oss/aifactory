@@ -143,6 +143,9 @@ def kb(*args, stdin=None):
 
 
 # ---------- runs
+RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)-(\d+)(?:-dry)?(?:-attempt\d+)?$")
+
+
 def ts_state(s):
     """runner の state.json の時刻を揃える（画面に出す写しだけ。ファイルは書き換えない）"""
     if not isinstance(s, dict): return s
@@ -160,8 +163,17 @@ def run_summary(d):
         except Exception as e: s = {"_error": str(e)}
     hist = s.get("history") or []
     # state.json が無い run（VM 貸出前に止まった残骸）は「開始前」。実行中と混ぜない（チケット 220）
-    status = "not_started" if not st.exists() else "finished" if s.get("finished") else "running"
-    return {"name": d.name, "kind": "v1", "status": status, "pj": s.get("pj"), "task": s.get("task"), "workflow": s.get("workflow"),
+    # 読めない state.json も「開始前」に寄せ、読めなかったことを state_error で添える（実行中に見せない。チケット 236）
+    status = "not_started" if not st.exists() or s.get("_error") else "finished" if s.get("finished") else "running"
+    # 記録に PJ とチケット番号が無くても、run 名 <日付>-<pj>-<チケット> から補う（ヘッダーの導線と PJ の絞り込みのため）
+    pj, task, from_name = s.get("pj"), s.get("task"), False
+    if not pj or not task:
+        m = RUN_NAME.match(d.name)
+        if m:
+            if not pj: pj, from_name = m.group(1), True
+            if not task: task, from_name = m.group(2), True
+    return {"name": d.name, "kind": "v1", "status": status, "pj": pj, "task": task, "from_name": from_name,
+            "state_error": s.get("_error"), "runner": None, "workflow": s.get("workflow"),
             "branch": s.get("branch"), "base": s.get("base"), "started": ts_aware(s.get("started")), "finished": ts_aware(s.get("finished")),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
@@ -173,9 +185,34 @@ def v0_summary(f):
     head = f.read_text(encoding="utf-8", errors="replace").splitlines()[:8]
     m = re.match(r"^#\s*spin-v0:\s*(\S+)\s*/\s*task\s*(\S+)", head[0] if head else "")
     started = next((l.split(":", 1)[1].strip() for l in head if l.startswith("- 日時")), None)
-    return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None, "workflow": "spin-v0",
+    return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None,
+            "from_name": False, "state_error": None, "runner": None, "workflow": "spin-v0",
             "started": ts_aware(started), "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
             "mtime": ts_file(f)}
+
+
+def run_liveness(s, jobs, tickets):
+    """「実行中」に見える run が、実は runner の居ない残骸かを判定して status を abandoned にする（チケット 236）。
+
+    runner は落ちるときに state.json へ finished を書けないことがある（take の失敗・SIGTERM・VM の再起動）。
+    その run を実行中のまま出すと「待っていれば進む」と読ませるので、console が起動したジョブの終了と突き合わせる。
+    分からないものは running のまま（根拠の無い run を勝手に中断にしない）。"""
+    if s.get("status") != "running": return s
+    name, task, mt = s["name"], s.get("task"), s.get("mtime")
+    cands = [j for j in jobs if j.get("kind") == "kb-run" and j.get("run_hint") == name]
+    if not cands and task:   # run_hint を持たない古いジョブ: チケットが同じで、run の開始より前に始まっていないもの
+        cands = [j for j in jobs if j.get("kind") == "kb-run" and not j.get("run_hint")
+                 and str(j.get("ticket")) == str(task) and not after(s.get("started"), j.get("started"))]
+    if cands:
+        j = cands[0]                                            # JobStore.list() は開始の新しい順
+        # state.json がジョブの終了より後に書かれていれば、別の runner が続きを回している（--resume 等）
+        if j.get("state") != "running" and j.get("finished") and not after(mt, j["finished"]):
+            s["status"] = "abandoned"
+            s["runner"] = {"id": j["id"], "label": j.get("label"), "state": j.get("state"), "rc": j.get("rc"), "finished": j.get("finished")}
+        return s
+    t = tickets.get(name)   # ジョブの記録が無い run: 台帳が結果を反映済み（人間待ち）なら runner は終わっている
+    if t and t.get("status") == "blocked" and after(t.get("updated"), mt): s["status"] = "abandoned"
+    return s
 
 
 def list_runs():
@@ -185,13 +222,31 @@ def list_runs():
         if p.is_dir() and not p.name.startswith("."): out.append(run_summary(p))
         elif p.is_file() and p.suffix == ".md" and p.name.startswith("20"): out.append(v0_summary(p))
     out.sort(key=lambda r: (r.get("started") or r.get("mtime") or ""), reverse=True)
-    return out
+    return apply_liveness(out)
+
+
+def apply_liveness(runs):
+    """実行中に見える run にだけ生死の判定をかける（ジョブと台帳を読むのは 1 件でもあるときだけ）"""
+    live = [r for r in runs if r.get("status") == "running"]
+    if not live: return runs
+    jobs = JobStore.list()
+    tickets = {}
+    for t in rows("SELECT id, status, run, updated FROM tickets WHERE run IS NOT NULL AND run != ''"):
+        tickets[str(t["run"]).rsplit("/", 1)[-1]] = t
+    for r in live: run_liveness(r, jobs, tickets)
+    return runs
 
 
 # ---------- 実行記録の要約（ADR-0025: 停止の理由は表示側で導く。runner の state.json は変えない）
 GATE_FAIL = re.compile(r"^FAIL (\S+)")
 STEP_LOG = re.compile(r"^(agent|code)-(.+)-(\d+)\.log$")
 WORK_DOC = re.compile(r"^work/[^/]+\.(md|txt)$")
+
+
+def last_line(text, n=120):
+    """自由文のエラーから、画面の 1 行に出す要約（最後の空でない行）。長い行は切る"""
+    ls = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    return ls[-1][:n] if ls else None
 
 
 def gate_fails(p):
@@ -211,14 +266,23 @@ def run_outcome(d, s, state, wf, files):
     """「結果・止まった工程・理由の在り処」を、今ある記録（history / loops / gates.txt / ログの有無）だけから導く。
        runner は停止の理由を自由文で残さないので、導けないものは unknown（＝画面では「記録にありません」）にする"""
     o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
-         "gate_fails": [], "fail_count": 0, "loops_hit": False, "pr_url": s.get("pr_url")}
+         "gate_fails": [], "fail_count": 0, "loops_hit": False, "job": None, "error_summary": None, "pr_url": s.get("pr_url")}
     if s.get("kind") == "v0": o["reason"] = "v0"; return o
     if s.get("status") == "not_started": o["reason"] = "not_started"; return o
     state = state or {}
     hist = state.get("history") or []
-    if state.get("_error") or (not hist and s.get("finished")): return o
+    # runner が居なくなった run（チケット 236）: 待っても進まないことと、終わったジョブを先に言う
+    if s.get("status") == "abandoned":
+        o["reason"] = "runner_gone"; o["job"] = s.get("runner")
+        o["stopped_step"] = (state.get("current") or {}).get("step") or state.get("next")
+        return o
     if s.get("status") == "running":
         o["reason"] = "running"; o["stopped_step"] = state.get("next"); return o
+    # 工程が 1 つも始まらないまま失敗した run（take / checkout の失敗）は「記録にありません」ではなく準備段階の失敗
+    if not hist and s.get("finished") and state.get("result") == "failed":
+        o["reason"] = "failed_before_start"; o["stopped_step"] = (state.get("current") or {}).get("step") or "take"
+        o["error_summary"] = last_line(state.get("error")); return o
+    if state.get("_error") or (not hist and s.get("finished")): return o
     if not hist: return o
     if s.get("pr_url"): o["reason"] = "pr_created"; return o
     last = hist[-1]
@@ -292,13 +356,24 @@ def run_detail(name):
     # 対応するチケット
     tr = rows("SELECT id, title, status, pr, run, updated FROM tickets WHERE id = ?", (int(s["task"]),)) if s.get("task") and str(s["task"]).isdigit() else []
     ticket = tr[0] if tr else None
+    apply_liveness([s])                                         # 一覧と同じ規則で「実行中」を見直す（チケット 236）
     # このコンソールから起動したジョブ
     jobs = [j for j in JobStore.list() if j.get("run_hint") == name or (j.get("ticket") and s.get("task") and str(j["ticket"]) == str(s["task"]))]
     try: outcome = run_outcome(d, s, state, wf, files)
     except Exception as e: outcome = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
                                       "gate_fails": [], "fail_count": 0, "loops_hit": False, "pr_url": s.get("pr_url"), "_error": str(e)}
     return {"summary": s, "state": state, "files": files, "workflow": wf, "ticket": ticket, "jobs": jobs[:5],
-            "outcome": outcome, "groups": run_groups(files, wf)}
+            "lease": run_lease(s.get("task")), "outcome": outcome, "groups": run_groups(files, wf)}
+
+
+def run_lease(task):
+    """この run のチケットに VM が貸し出されたままか。止まった run から返却の確認先へ導くために添える"""
+    if not task or not SANDBOX_STATE.exists(): return None
+    try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
+    except Exception: return None
+    v = lent.get(str(task))
+    # since は API が返す時刻なのでオフセットを補う（ADR-0026）
+    return {"task": str(task), "pj": v.get("pj"), "name": v.get("name"), "since": ts_aware(v.get("since"))} if isinstance(v, dict) else None
 
 
 def rel(p):
@@ -528,11 +603,13 @@ def overview():
     runs = [r for r in list_runs() if r["kind"] == "v1" and not r.get("dry")]
     active = [r for r in runs if r["status"] == "running"]
     not_started = [r for r in runs if r["status"] == "not_started"]
+    abandoned = [r for r in runs if r["status"] == "abandoned"]
     lent = {}
     if SANDBOX_STATE.exists():
         try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
         except Exception: lent = {}
     return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:6], "runs_active": active[:6], "runs_not_started": {"n": len(not_started), "runs": not_started[:6]},
+            "runs_abandoned": {"n": len(abandoned), "runs": abandoned[:6]},
             "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
             "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
             "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now(), "tz": tz_info()}
