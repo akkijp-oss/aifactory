@@ -144,6 +144,59 @@ class ApiTest(unittest.TestCase):
         T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
         self.assertIn(T["btn"]["redo"], T["help"]["runDone"], "完了時の案内が、隣に出すボタンの名前と一致していない")
 
+    def test_intake_keeps_draft_across_navigation(self):
+        """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
+
+        `route()` は hash が変わるたび `viewIntake()` を呼び、`render()` が main を作り直す。
+        入力をどこにも保持しないと、起票 → ログ → 起票の往復・再読み込み・戻るで必ず空になる。
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、ソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+
+        def action(name):
+            j = app.index(f"  '{name}': ")
+            m = re.compile(r"\n  '[\w-]+': ").search(app, j + 1)
+            return app[j:m.start() if m else len(app)]
+
+        # 保存先は sessionStorage（同じタブの往復・再読み込み・戻るで残り、タブを閉じれば消える）
+        self.assertIn("sessionStorage", app, "下書きの保存先が無い")
+        self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
+        self.assertTrue(re.search(r"(?:d|draft)\s*=\s*\w*[Dd]raft\w*\(", view), "viewIntake が保存済みの下書きを読んでいない")
+
+        # 9 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
+        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"), ("in-dry", "dry"),
+                         ("new-pj", "newPj"), ("new-kind", "newKind"), ("new-pr", "newPr"),
+                         ("new-title", "title"), ("new-body", "body")):
+            self.assertIn(f'id="{eid}"', view, f"{eid} が起票画面に無い")
+            self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} が下書きの対応表に無い（保存されない）")
+            self.assertTrue(re.search(rf"\b(?:d|draft)\.{key}\b", view), f"{eid} の下書き {key} を描画で復元していない")
+
+        # 破棄の規則: 送信が成功したときだけ、そのパネルの分を消す（失敗したら直して送り直せる）
+        for name in ("intake", "new"):
+            b = action(name)
+            self.assertIn("draftDrop", b, f"actions['{name}'] が送信後に下書きを消していない")
+            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"actions['{name}'] が送信の前に下書きを消している")
+
+        # 破棄は明示操作（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
+        for act in ("intake-clear", "new-clear"):
+            self.assertIn(f"'{act}'", view, f"「下書きを捨てる」（{act}）のボタンが起票画面に無い")
+            self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
+        self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
+
+    def test_run_status_drives_the_ui(self):
+        """実行中かどうかの判定は API の status に寄せる（app.js が `!r.finished` で独自に決めない）。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        for fn in ("async function viewBoard", "async function viewRuns", "async function viewRun("):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn("status ===", body, f"{fn} が status を見ていない")
+            self.assertNotIn("!s.finished", body, f"{fn} が finished から実行中を決めている")
+        self.assertIn("T.run.notStarted", app); self.assertIn("T.run.noState", app)
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
@@ -153,12 +206,34 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 404)
 
     def test_run_detail(self):
-        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         st, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(st, 200); self.assertIn("state.json", [f["name"] for f in d["files"]]); self.assertIsNotNone(d["workflow"])
 
+    def test_run_without_state_is_not_started(self):
+        """ticket.md だけの run ディレクトリ（VM 貸出前に止まった残骸）を「実行中・工程 0」で数えない。
+
+        画面は名前の無い実行リンクと空の「次は」「開始から」を出していた（チケット 220）。
+        """
+        for nm in ("2026-09-07-kumitate-999", "2026-09-07-kumitate-999-attempt1"):
+            d = self.ws / "runs" / nm; d.mkdir(parents=True, exist_ok=True)
+            (d / "ticket.md").write_text("# 調査: 記録の無い run\n", encoding="utf-8")
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == "2026-09-07-kumitate-999")
+        self.assertEqual(row["status"], "not_started"); self.assertIsNone(row["finished"]); self.assertIsNone(row["result"])
+        self.assertTrue(all(x["status"] in ("running", "finished", "not_started") for x in r["runs"]), r["runs"])
+        self.assertEqual([x["status"] for x in r["runs"] if x["kind"] == "v0"] or ["finished"], ["finished"])
+        _, o = self.http.get("/api/overview")
+        self.assertNotIn("2026-09-07-kumitate-999", [x["name"] for x in o["runs_active"]])
+        self.assertTrue(all(x["status"] == "running" for x in o["runs_active"]), o["runs_active"])
+        self.assertGreaterEqual(o["runs_not_started"]["n"], 1)
+        self.assertIn("2026-09-07-kumitate-999", [x["name"] for x in o["runs_not_started"]["runs"]])
+        st, d = self.http.get("/api/runs/2026-09-07-kumitate-999")                    # 不完全な記録でも詳細へ移動できる
+        self.assertEqual(st, 200); self.assertEqual(d["summary"]["status"], "not_started")
+        self.assertIn("ticket.md", [f["name"] for f in d["files"]])
+
     def test_file_roots(self):
-        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         _, d = self.http.get(f"/api/runs/{name}"); path = next(x["path"] for x in d["files"] if x["name"] == "state.json")
         st, f = self.http.get(f"/api/file?path={urllib.parse.quote(path)}&tail=100"); self.assertEqual(st, 200); self.assertTrue(f["truncated"] or f["size"] <= 100)
         for bad in ("../.ssh/id_rsa", "sandbox/bin/sandbox", str(self.ws / "kanban" / "kanban.db"), "/etc/passwd"):
