@@ -25,7 +25,7 @@
 #   API モード  PVE_API_TOKEN + PVE_API_URL + SB_POOL（テナントのリソースプールだけに効く API トークン。制御系 LXC はこちら。
 #               PVE_API_CA にクラスタ CA を置くか PVE_API_INSECURE=1。PVE_API_RESOLVE=<node>:8006:<ip> で名前解決を SDN 側の IP に向ける）。
 #               PVE_API_TOKEN があれば API モード
-# 状態: ~/.config/sandbox/state.json
+# 状態: ~/.config/sandbox/state.json（同時 take の直列化に state.json.lock を使う）
 set -euo pipefail
 
 CONF_DIR="$HOME/.config/sandbox"
@@ -137,10 +137,62 @@ pve_start() { # vmid
   if (( API_MODE )); then local node; node="$(pve_node "$1")"; api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/status/start" | jq -r .)"
   else pve "qm start $1" >/dev/null; fi
 }
+# ---------- state（台帳とロック）
+# 「空き VM を選ぶ → 予約を書く」の間に別プロセスの take が割り込むと同じ VM が二重に貸し出される（2026-09 の 234）。
+# 選定と予約の書き込みは $STATE.lock の排他区間の中でやる。読み取り（ls / ssh など）はロック無しのまま（mv が原子的なので壊れて見えない）
+STATE_LOCK="$STATE.lock"
+_state_locked=0; _lock_style=""; _reserved_task=""; _reserved_dns=""
+state_lock_acquire() {
+  local use_mkdir=0
+  [[ "${SANDBOX_LOCK_MKDIR:-}" == 1 ]] && use_mkdir=1
+  command -v flock >/dev/null 2>&1 || { use_mkdir=1; echo "[warn] flock が無いので mkdir でロックする（$STATE_LOCK.d）" >&2; }
+  if (( use_mkdir )); then   # Mac の既定には flock が無い
+    local i
+    for i in $(seq 1 150); do
+      if mkdir "$STATE_LOCK.d" 2>/dev/null; then _lock_style=mkdir; break; fi
+      sleep 0.2
+    done
+    [[ "$_lock_style" == mkdir ]] || die "state.json のロックが取れない（$STATE_LOCK.d が 30 秒消えない。別の sandbox が動いている？ 動いていなければ rmdir で消す）"
+  else
+    exec 9>"$STATE_LOCK"
+    flock -w 30 9 || die "state.json のロックが取れない（$STATE_LOCK。別の sandbox が動いている？）"
+    _lock_style=flock
+  fi
+  _state_locked=1
+  trap _on_exit EXIT   # $(reserve_vm ...) のサブシェルには親の trap が渡らないので、取った側でも張る
+}
+state_lock_release() {
+  (( _state_locked )) || return 0
+  _state_locked=0
+  if [[ "$_lock_style" == mkdir ]]; then rmdir "$STATE_LOCK.d" 2>/dev/null || true; else exec 9>&-; fi
+  _lock_style=""
+}
+with_state_lock() { # cmd...: 呼び手が既にロックを持っていれば取り直さない
+  if (( _state_locked )); then "$@"; return; fi
+  state_lock_acquire
+  local rc=0; "$@" || rc=$?
+  state_lock_release
+  return "$rc"
+}
+_on_exit() { # 予約したまま落ちたら（rollback 失敗など）予約と DNS を戻す。ロックも返す
+  local rc=$?
+  if [[ -n "$_reserved_task" ]]; then
+    local t="$_reserved_task"; _reserved_task=""
+    [[ -n "$_reserved_dns" ]] && { _reserved_dns=""; dns_del "$t" >/dev/null 2>&1 || true; }
+    state_del "$t" || true
+    echo "[warn] task $t の仮予約を取り消した" >&2
+  fi
+  state_lock_release
+  return "$rc"
+}
+trap _on_exit EXIT
+
 state_get() { jq -r --arg id "$1" '.[$id] // empty | tostring' "$STATE"; }
 state_field() { jq -r --arg id "$1" --arg f "$2" '.[$id][$f] // empty' "$STATE"; }
-state_set() { local tmp; tmp=$(mktemp); jq --arg id "$1" --argjson v "$2" '.[$id]=$v' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
-state_del() { local tmp; tmp=$(mktemp); jq --arg id "$1" 'del(.[$id])' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
+_state_set_raw() { local tmp; tmp=$(mktemp); jq --arg id "$1" --argjson v "$2" '.[$id]=$v' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
+_state_del_raw() { local tmp; tmp=$(mktemp); jq --arg id "$1" 'del(.[$id])' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
+state_set() { with_state_lock _state_set_raw "$@"; }
+state_del() { with_state_lock _state_del_raw "$@"; }
 
 wait_port() { # ip port tries
   local i; for i in $(seq 1 "${3:-40}"); do
@@ -242,11 +294,12 @@ rollback() { # vmid ip
   wait_port "$2" 22 || die "vm $1 ($2): ssh が上がらない"
 }
 
-cmd_take() {
-  local pj=${1:?pj} task=${2:?task-id}
-  load_pj "$pj"
+# ---------- take（予約 → 準備 → 確定）
+# reserve_vm <pj> <task>: ロックの中で空き VM を選び、phase=taking の仮予約を state.json に書いて "vmid name ip status" を返す。
+# ロックの中でやるのは Proxmox の読み取り（pool_list / pve_has_clean）だけ。rollback / ssh / DNS は外でやる
+_reserve_vm_locked() {
+  local pj=$1 task=$2
   [[ -z "$(state_get "$task")" ]] || die "task $task は貸出中（$(state_field "$task" name)）"
-  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj}）" >&2
   local busy; busy="$(jq -r '.[].vmid' "$STATE" | tr '\n' ' ')"
   local pick=""
   while read -r vmid name ip status; do
@@ -255,13 +308,32 @@ cmd_take() {
     pick="$vmid $name $ip $status"; break
   done < <(pool_list "$pj")
   [[ -n "$pick" ]] || die "pj=$pj に空きなし（sandbox ls / proxmox/40-pool.sh $pj 1）"
-  read -r vmid name ip status <<< "$pick"
+  local vmid name ip status; read -r vmid name ip status <<< "$pick"
+  # ロックが効いていれば起きない。効いていないときに二重貸出を素通りさせないための念押し
+  local other; other="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE" | head -1)"
+  [[ -z "$other" ]] || die "vmid $vmid は task $other に貸出中（state.json）"
+  _state_set_raw "$task" "$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
+    '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s,phase:"taking"}')"
+  printf '%s\n' "$pick"
+}
+reserve_vm() { with_state_lock _reserve_vm_locked "$@"; }
+
+cmd_take() {
+  local pj=${1:?pj} task=${2:?task-id}
+  load_pj "$pj"
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj}）" >&2
+  local pick; pick="$(reserve_vm "$pj" "$task")"   # die はサブシェルを抜けるだけなので、空なら止める
+  [[ -n "$pick" ]] || exit 1
+  _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
+  local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
   if [[ "$status" != running ]]; then rollback "$vmid" "$ip"; else wait_port "$ip" 22 || rollback "$vmid" "$ip"; fi
   inject_env "$ip" "$task" "$pj"
-  dns_set "$task" "$ip"
-  state_set "$task" "$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
+  dns_set "$task" "$ip"; _reserved_dns=1
+  local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
     '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s}')"
+  _reserved_task=""; _reserved_dns=""   # 確定。以降の EXIT で消さない
+  state_set "$task" "$rec"
   echo "[ok] task-$task.$SB_DOMAIN  ssh: sandbox ssh $task  url: http://task-$task.$SB_DOMAIN:$APP_PORT"
 }
 

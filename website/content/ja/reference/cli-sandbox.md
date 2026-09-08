@@ -15,7 +15,7 @@ sandbox ls                       貸出状況
 
 | 操作 | 何をするか | 失敗の条件 |
 |---|---|---|
-| `take` | `state.json` からプロジェクトプールの空き VM を選ぶ → `qm rollback clean` → プロジェクトの env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → `state.json` に記録 | 空きなし、プロジェクトの env なし、App が未インストール |
+| `take` | プロジェクトプールの空き VM を選んで `state.json` に予約（ここまで `state.json.lock` の排他区間。同時 take が同じ VM を選ばない） → `qm rollback clean` → プロジェクトの env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → 予約を確定。途中で失敗したら予約を消す | 空きなし、プロジェクトの env なし、App が未インストール |
 | `ssh` | `ssh dev@10.77.1.N`（`SB_JUMP` があれば ProxyJump）。cmd は login shell 経由（`/etc/profile.d/sandbox.sh` で env が読まれる） | VM に届かない |
 | `url` | `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` を表示 | |
 | `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない |
