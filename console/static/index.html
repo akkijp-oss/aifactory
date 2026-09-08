@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aifactory console</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%274%27 fill=%27%230b5d5d%27/%3E%3C/svg%3E">
+<title>AI Factory console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20viewBox=%220%200%2024%2024%22%20xmlns=%22http://www.w3.org/2000/svg%22%3E%3Crect%20width=%2224%22%20height=%2224%22%20rx=%225%22%20fill=%22%230b5d5d%22/%3E%3Cg%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%222.2%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22%3E%3Cpath%20d=%22M3.5%2021h10%22/%3E%3Cpath%20d=%22M8.5%2021v-3.6%22/%3E%3Cpath%20d=%22M8.5%2017.4%2013.2%207.6%22/%3E%3Cpath%20d=%22M13.2%207.6%2019.2%209%22/%3E%3Cpath%20d=%22M19.2%209v3.4%22/%3E%3Cpath%20d=%22M17%2012.4h4.4M17%2012.4v2.8M21.4%2012.4v2.8%22/%3E%3C/g%3E%3Cg%20fill=%22%230b5d5d%22%20stroke=%22%23fff%22%20stroke-width=%221.8%22%3E%3Ccircle%20cx=%228.5%22%20cy=%2217.4%22%20r=%221.9%22/%3E%3Ccircle%20cx=%2213.2%22%20cy=%227.6%22%20r=%221.9%22/%3E%3Ccircle%20cx=%2219.2%22%20cy=%229%22%20r=%221.6%22/%3E%3C/g%3E%3C/svg%3E">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div class="shell">
   <!-- ナビは頻度順（console/UX.md）。文言は strings.js の T から data-t で入る -->
   <nav class="rail" aria-label="main">
-    <a class="brand" href="#/board"><span class="brand-mark" aria-hidden="true"></span>aifactory<small>console</small></a>
+    <a class="brand" href="#/board"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="24" height="24" rx="5" fill="var(--accent)"/><g fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 21h10"/><path d="M8.5 21v-3.6"/><path d="M8.5 17.4 13.2 7.6"/><path d="M13.2 7.6 19.2 9"/><path d="M19.2 9v3.4"/><path d="M17 12.4h4.4M17 12.4v2.8M21.4 12.4v2.8"/></g><g fill="var(--accent)" stroke="#fff" stroke-width="1.8"><circle cx="8.5" cy="17.4" r="1.9"/><circle cx="13.2" cy="7.6" r="1.9"/><circle cx="19.2" cy="9" r="1.6"/></g></svg><span class="brand-text">AI Factory<small>console</small></span></a>
     <a href="#/board" data-nav="board"><span data-t="nav.board"></span><b id="n-board"></b></a>
     <a href="#/intake" data-nav="intake"><span data-t="nav.intake"></span></a>
     <a href="#/runs" data-nav="runs"><span data-t="nav.runs"></span><b id="n-runs"></b></a>
