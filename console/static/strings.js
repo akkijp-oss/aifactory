@@ -104,7 +104,10 @@ const T = {
     "ticket": "チケット", "researcher": "調査", "planner": "計画", "implementer": "報告", "reviewer": "レビュー", "judge": "まとめ", "gates": "検証結果"
   },
   "sandbox": {
-    "count": "{n} 台", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
+    "count": "{n} 台", "countShared": "{n} 件（VM は {m} 台）", "sharedBadge": "共有",
+    "sharedWith": "チケット {tasks} と同じ VM です。",
+    "sharedWarn": "VM {vm}（{vmid}）がチケット {tasks} に同時に貸出中です。同じ VM なので 2 台ではありません。実際の重複か表示のずれかを「一覧を取り直す」で確かめ、どのチケットの作業を残すか決まるまで返却しないでください。",
+    "leasesOnPool": "貸出 {n} 件", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
     "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
@@ -208,7 +211,8 @@ const T = {
       "title": "チケット {task} の VM を返却する",
       "body": "VM {vm} を snapshot clean に巻き戻して返却します。中の変更は消えます。",
       "runWarning": "この VM では run {run} が動いています（工程 {step}）。返却すると run は止まり、途中の作業は失われます。",
-      "noRun": "この VM で動いている run はありません。"
+      "noRun": "この VM で動いている run はありません。",
+      "sharedWarning": "この VM はチケット {others} にも貸出中です。返却すると snapshot clean に巻き戻るので、そのチケットの作業も消えます。台帳からはチケット {task} の行だけが消え、{others} の行は巻き戻った VM を指したまま残ります。"
     },
     "sync": {
       "title": "チケット {id} の状態を実行記録に合わせる",

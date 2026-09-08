@@ -732,6 +732,77 @@ class SandboxLsTest(unittest.TestCase):
         self.assertNotIn("ls.log.text", body)                            # 固定幅の生ログをそのまま出さない
 
 
+class SandboxSharedVmTest(unittest.TestCase):
+    """同じ VM（同じ vmid）が複数チケットに貸出中のときの数え方と明示（チケット 237）。
+
+    台帳（state.json）はコンソールからは読むだけ。ここで確かめるのは「2 件の貸出を 2 台と数えない」ことと、
+    共有している組を画面に渡すことだけで、台帳の直しや返却は一切しない。
+    """
+
+    SHARED = {"221": {"vmid": 9213, "name": "sb-kumitate-01", "ip": "10.77.1.13", "pj": "kumitate", "since": "2026-09-06T10:00:00+09:00"},
+              "222": {"vmid": 9213, "name": "sb-kumitate-01", "ip": "10.77.1.13", "pj": "kumitate", "since": "2026-09-06T11:00:00+09:00"},
+              "223": {"vmid": 9214, "name": "sb-kumitate-02", "ip": "10.77.1.14", "pj": "kumitate", "since": "2026-09-06T12:00:00+09:00"}}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-shared-vm-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+
+    def state(self, lent):
+        (self.tmp / "state.json").write_text(json.dumps(lent), encoding="utf-8")
+
+    def test_shared_vmid_is_counted_once_and_reported(self):
+        """貸出 3 件・VM 2 台。221 と 222 が同じ 9213 だと分かる形で返す"""
+        self.state(self.SHARED)
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["lease_count"], 3)
+        self.assertEqual(d["vm_count"], 2)
+        self.assertEqual(d["shared"], {"9213": ["221", "222"]})
+
+    def test_pj_pool_counts_vms_not_leases(self):
+        """PJ の使用数は台数（2 / 3）。件数は別に持ち、同じ VM を無説明に 2 台と数えない"""
+        self.state(self.SHARED)
+        pj = next(p for p in self.m.core.sandbox_view()["templates"] if p["pj"] == PJ)
+        self.assertEqual(pj["lent"], 2)
+        self.assertEqual(pj["leases"], 3)
+
+    def test_overview_keeps_lent_and_adds_vm_count(self):
+        """ナビの数字は台数にする。既存の lent（件数）は MCP の利用者のために残す"""
+        self.state(self.SHARED)
+        o = self.m.core.overview()
+        self.assertEqual(o["lent"], 3)
+        self.assertEqual(o["vms_lent"], 2)
+
+    def test_no_duplicate_is_not_reported_as_shared(self):
+        self.state({k: v for k, v in self.SHARED.items() if k != "222"})
+        d = self.m.core.sandbox_view()
+        self.assertEqual(d["shared"], {})
+        self.assertEqual(d["vm_count"], d["lease_count"])
+        self.assertEqual(self.m.core.overview()["vms_lent"], 2)
+
+    def test_broken_state_does_not_count(self):
+        """読めない台帳（_error）や dict でない値は台数にも件数にも入れない"""
+        (self.tmp / "state.json").write_text("{ broken", encoding="utf-8")
+        d = self.m.core.sandbox_view()
+        self.assertEqual((d["lease_count"], d["vm_count"], d["shared"]), (0, 0, {}))
+
+    def test_screen_explains_sharing_and_release_impact(self):
+        """画面は共有を明示し、返却の前に影響するチケットを出す（JS は動かせないのでソースを検査する）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
+        for key in ("d.shared", "T.sandbox.sharedWarn", "T.sandbox.sharedBadge", "T.sandbox.sharedWith", "T.sandbox.countShared"):
+            self.assertIn(key, body, key)
+        j = app.index("'sandbox-release':"); rel = app[j: app.index("'job-stop':", j)]
+        for key in ("T.dialog.release.sharedWarning", "shared"):
+            self.assertIn(key, rel, key)
+        self.assertRegex(rel, r"typed:\s*[^,]*shared")                  # 共有なら run が無くても番号入力を求める
+        # 実勢の表（sandbox ls）の貸出先は共有時 `221,222` で来る。1 本のリンクにすると /tickets/(\d+) に合わず開けない
+        self.assertIn("split(',')", body)                               # 1 チケット 1 リンクに分ける
+        vms = body[body.index("d.vms.map"): body.index("T.help.lsAxes")]
+        self.assertNotIn("#/ticket/${esc(v.task)}", vms)                # カンマ区切りのまま 1 本のリンクにしない
+
+
 class AuthDocsTest(unittest.TestCase):
     """CONSOLE_TOKEN（合言葉）付きで起動したときの認証と、/docs/ の配信（ADR-0017）"""
     @classmethod

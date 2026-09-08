@@ -118,7 +118,7 @@ async function refreshNav() {
     const o = await api('overview');
     const c = o.counts; $('n-board').textContent = (c.todo + c.in_progress + c.review + c.blocked) || '';
     $('n-runs').textContent = o.runs_active.length || '';
-    $('n-sandbox').textContent = o.lent || '';
+    $('n-sandbox').textContent = o.vms_lent || '';
     $('n-jobs').textContent = o.jobs_running || '';
     $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6), tz: tzLabel() });
     const note = $('tznote'), differs = !!(o.tz && o.tz.offset && o.tz.offset !== tzOffset());
@@ -387,19 +387,28 @@ async function viewSandbox() {
   const pjOf = name => (d.templates.find(p => name.startsWith(`sb-${p.pj}-`)) || {}).pj || '';   /* VM 名 sb-<pj>-NN から引く。命名が違えば空欄 */
   const power = st => T.power[st] ? `<span class="st ${st === 'running' ? 'done' : 'todo'}">${esc(T.power[st])}</span>` : `<span class="tag">${esc(st)}</span>`;
   const runOf = task => o && o.runs_active.find(r => String(r.task) === String(task));
+  /* 同じ vmid に 2 件以上の貸出がある組（core の sandbox_view が作る）。台帳は読むだけで、ここでは直さない */
+  const shared = d.shared || {};
+  const sharedEntries = Object.entries(shared);
+  const othersOf = task => (Object.values(shared).find(ts => ts.includes(String(task))) || []).filter(t => t !== String(task));
+  const vmOf = vmid => ((lent.find(([, v]) => String(v.vmid) === vmid) || [, {}])[1].name) || '';
+  /* 実勢の表（sandbox ls）の貸出先は、同じ VM に複数の貸出があると `221,222` で来る。
+     1 本のリンクにするとチケットを開けないので、1 チケット 1 リンクに分けて共有の印を添える */
+  const lentToCell = task => { const ts = String(task).split(',').filter(t => t); return ts.map(t => `<a href="#/ticket/${esc(t)}" class="mono">${esc(t)}</a>`).join('、') + (ts.length > 1 ? ` <span class="st blocked">${esc(T.sandbox.sharedBadge)}</span>` : ''); };
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
-    <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(tt(T.sandbox.count, { n: lent.length }))}</small></h2>
-      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${esc(since(v.since))}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
-        <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}" data-vm="${esc(v.name)}" data-run="${run ? esc(run.name) : ''}" data-step="${run && run.current ? esc(run.current.step) : ''}">${esc(T.btn.release)}</button></td></tr>`; }).join('')}</table>
+    <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(sharedEntries.length ? tt(T.sandbox.countShared, { n: d.lease_count, m: d.vm_count }) : tt(T.sandbox.count, { n: lent.length }))}</small></h2>
+      ${sharedEntries.map(([vmid, tasks]) => `<div class="warn">${esc(tt(T.sandbox.sharedWarn, { vm: vmOf(vmid), vmid, tasks: tasks.join('、') }))}</div>`).join('')}
+      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task), others = othersOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）${others.length ? `<div><span class="st blocked">${esc(T.sandbox.sharedBadge)}</span> <span class="help">${esc(tt(T.sandbox.sharedWith, { tasks: others.join('、') }))}</span></div>` : ''}</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${esc(since(v.since))}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
+        <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}" data-vm="${esc(v.name)}" data-run="${run ? esc(run.name) : ''}" data-step="${run && run.current ? esc(run.current.step) : ''}" data-shared="${esc(others.join('、'))}">${esc(T.btn.release)}</button></td></tr>`; }).join('')}</table>
         <div class="help top">${esc(T.help.release)}</div>` : `<div class="help">${esc(T.empty.lent)}</div>`}</div>
     <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(tt(T.sandbox.perPj, { n: d.pool_per_pj }))}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.lent)}</th></tr>
-      ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? `<span class="st done">${esc(T.sandbox.yes)}</span>` : `<span class="st blocked">${esc(T.sandbox.no)}</span>`}</td><td>${p.token_file ? `<span class="st done">${esc(T.sandbox.tokenSaved)}</span>` : `<span class="st todo">${esc(T.sandbox.tokenMissing)}</span>`}</td><td>${p.lent} / ${p.pool}</td></tr>`).join('')}</table>
+      ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? `<span class="st done">${esc(T.sandbox.yes)}</span>` : `<span class="st blocked">${esc(T.sandbox.no)}</span>`}</td><td>${p.token_file ? `<span class="st done">${esc(T.sandbox.tokenSaved)}</span>` : `<span class="st todo">${esc(T.sandbox.tokenMissing)}</span>`}</td><td>${p.lent} / ${p.pool}${p.leases !== p.lent ? ` <span class="help">${esc(tt(T.sandbox.leasesOnPool, { n: p.leases }))}</span>` : ''}</td></tr>`).join('')}</table>
       <div class="help top">${esc(T.help.pjPool)}</div></div>
     <div class="panel"><h2>${esc(T.h.lsResult)}<small>${lsRunning ? esc(T.label.fetching) : d.last_ok_ls ? esc(tt(T.sandbox.lsAt, { t: fmtT(d.last_ok_ls.finished) })) : lsFailed ? '' : esc(T.sandbox.lsNever)}</small></h2>
       ${lsFailed ? `<div class="err">${esc(tt(T.sandbox.lsFailed, { t: fmtT(lsFailed.finished) }))} <a href="#/job/${esc(lsFailed.id)}">${esc(T.btn.openJob)}</a></div>
         <div class="help top">${esc(T.help.lsFailed)}</div>${failLog && failLog.log && tail3(failLog.log.text) ? `<pre class="log small top">${esc(tail3(failLog.log.text))}</pre>` : ''}` : ''}
       ${d.vms.length ? `<table class="top"><tr><th>${esc(T.th.lentTo)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.power)}</th><th>${esc(T.th.lentSince)}</th></tr>
-        ${d.vms.map(v => `<tr><td>${v.task ? `<a href="#/ticket/${esc(v.task)}" class="mono">${esc(v.task)}</a>` : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(pjOf(v.name))}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
+        ${d.vms.map(v => `<tr><td>${v.task ? lentToCell(v.task) : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(pjOf(v.name))}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
         <div class="help top">${esc(T.help.lsAxes)}</div>` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
@@ -696,9 +705,9 @@ const actions = {
   'sandbox-ls': async () => { const r = await api('sandbox/ls', {}); toast(`${esc(T.msg.lsStarted)} <a href="#/job/${esc(r.job.id)}">${esc(T.btn.openJob)}</a>`); viewSandbox(); },
   /* 返却は不可逆・影響大: その VM で run が動いていればチケット番号を打たせる */
   'sandbox-release': async el => {
-    const { task, vm, run, step } = el.dataset;
-    const ok = await ask({ title: tt(T.dialog.release.title, { task }), ok: T.btn.release, danger: true, typed: run ? task : null,
-      body: `<p>${esc(tt(T.dialog.release.body, { task, vm }))}</p>${run ? `<div class="warn">${esc(tt(T.dialog.release.runWarning, { run, step: step || '-' }))}</div>` : `<p class="help">${esc(T.dialog.release.noRun)}</p>`}` });
+    const { task, vm, run, step, shared } = el.dataset;
+    const ok = await ask({ title: tt(T.dialog.release.title, { task }), ok: T.btn.release, danger: true, typed: (run || shared) ? task : null,
+      body: `<p>${esc(tt(T.dialog.release.body, { task, vm }))}</p>${shared ? `<div class="warn">${esc(tt(T.dialog.release.sharedWarning, { task, others: shared }))}</div>` : ''}${run ? `<div class="warn">${esc(tt(T.dialog.release.runWarning, { run, step: step || '-' }))}</div>` : `<p class="help">${esc(T.dialog.release.noRun)}</p>`}` });
     if (!ok) return;
     const r = await api('sandbox/release', { task }); go(`#/job/${r.job.id}`);
   },
