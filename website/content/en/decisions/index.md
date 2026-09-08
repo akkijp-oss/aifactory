@@ -61,3 +61,5 @@ Kept under "things we want" in `docs/ledger.md`. They become ADRs once work star
 - [ADR 0024: Standalone Linux worker](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0024-standalone-linux-worker.md)
 
 - [ADR 0026: Timestamps carry a UTC offset](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0026-timestamps-carry-utc-offset.md)
+
+- [ADR 0030: Control-plane gh tokens come from the GitHub App; kind is the type, workflow is how it ran](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0030-control-plane-gh-token-from-app.md)

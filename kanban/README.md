@@ -43,6 +43,7 @@ $kb render                                                              # BOARD.
 ```
 
 - `pj` は `$AIFACTORY_WORKSPACE/projects/<pj>/`（無ければ同梱サンプル `examples/projects/<pj>/`）がある PJ、`kind` は `workflow/kit/workflows/<kind>.yml` がある種別（chore / bug / feature / hotfix / research / merge-pr）。どちらも起票時に検証する
+- `kind` は「何の仕事か」、run の `workflow` は「今回どう回したか」。`kb run --workflow X` は `kind` を書き換えず、履歴に `workflow → X` を残す（種別を変えるのは `kb set --kind`。ADR-0030）
 - id は 3 桁以上の連番（`MAX(id)+1`、最小 100）。DNS 名 `task-{id}.sb.internal` に使える
 - `run` 列には run ディレクトリ名（例 `2026-09-06-kumitate-206`）が入る。実体は `$AIFACTORY_WORKSPACE/runs/<NAME>/`。`kb sync --run` / `kb set --run` もこの名前で指定する
 - `kb run` の結果判定: `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`

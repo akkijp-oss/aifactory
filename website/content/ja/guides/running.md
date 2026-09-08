@@ -37,7 +37,7 @@ dispatch は、チケットに登録されたプロジェクトと種別を使�
 
 ```bash
 kanban/bin/kb run 204                    # kind と同じ workflow で
-kanban/bin/kb run 204 --workflow chore   # workflow を変える（kind も書き換わる）
+kanban/bin/kb run 204 --workflow chore   # 今回だけ別の workflow で回す（kind は変わらない）
 kanban/bin/kb run 204 --dry-run          # 定義と依頼文の確認だけ
 kanban/bin/kb run 204 --keep             # 終わっても VM を返さない（中を見たいとき）
 kanban/bin/kb run 204 --resume           # 貸出中の VM で、state.json の次の step から続ける

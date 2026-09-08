@@ -104,7 +104,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 
 1. Error if the project has no `project.yml`. `done` tickets error except with `--dry-run` (`reopen` first)
 2. Sets `in_progress` and records the run directory name (`<date>-<pj>-<id>`; the directory lives under `workspace/runs/`)
-3. Calls `workflow/bin/run <pj> <id> <workflow> <body path> [flags]`. Passing `--workflow` also updates `kind`
+3. Calls `workflow/bin/run <pj> <id> <workflow> <body path> [flags]`. `--workflow` only changes how this run is executed; `kind` is left alone (the history records `workflow → <name>` and `runs/<run>/state.json` holds the authoritative value; ADR-0030). A `--resume` without `--workflow` restarts with the `workflow` from that `state.json`
 4. Afterwards reads `state.json` and advances the state (table below)
 
 | state.json | State | Note |

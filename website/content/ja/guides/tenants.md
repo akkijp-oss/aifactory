@@ -89,7 +89,7 @@ SB_TENANT=acme sandbox/proxmox/run.sh 50-firewall.sh
 ssh aifactory@ctl.acme.sb.internal
 sandbox token set <pj>                      # Claude Code の長期トークン（claude setup-token の出力）
 ~/aifactory/sandbox/bin/gh-app-setup        # GitHub App（ブラウザ操作は手元で。作った app.env と private-key.pem を ~/.config/sandbox/gh-app/ に）
-vi ~/.config/aifactory/ctl.env              # CLAUDE_CODE_OAUTH_TOKEN（intake が制御系で 1 回 LLM を呼ぶ）、GH_TOKEN（runner の gh pr view 用）
+vi ~/.config/aifactory/ctl.env              # CLAUDE_CODE_OAUTH_TOKEN（intake が制御系で 1 回 LLM を呼ぶ）。GH_TOKEN は App があれば空でよい
 sudo systemctl restart aifactory-console
 ```
 

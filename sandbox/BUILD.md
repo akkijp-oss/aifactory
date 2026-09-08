@@ -161,7 +161,7 @@ ssh "$PVE_HOST" 'pct exec 9001 -- curl -s -o /dev/null -w "%{http_code}\n" http:
 - [ ] `aifactory-console` と `aifactory-gh-refresh.timer` が active
 - [ ] `sandbox ls`（API モード）がエラーなく返る
 - [ ] コンソールが合言葉なしで 401 を返す
-- [ ] 🧑 貸出先（または自分）が LXC の中で secrets を入れる: `sandbox token set <pj>`、`sandbox/bin/gh-app-setup`（ブラウザ操作は手元で）、`~/.config/aifactory/ctl.env` の `CLAUDE_CODE_OAUTH_TOKEN`（intake 用）と `GH_TOKEN`（runner の `gh pr view` 用）
+- [ ] 🧑 貸出先（または自分）が LXC の中で secrets を入れる: `sandbox token set <pj>`、`sandbox/bin/gh-app-setup`（ブラウザ操作は手元で）、`~/.config/aifactory/ctl.env` の `CLAUDE_CODE_OAUTH_TOKEN`（intake 用）。`GH_TOKEN` は GitHub App があれば空でよい（runner が `sandbox gh-app token <pj>` で払い出す。ADR-0030）
 - [ ] tailnet（Step 2b 承認後）から `http://ctl.sb.internal:8765/?token=<CONSOLE_TOKEN>` でコンソール、`/docs/` でサイトが開く
 
 注意: 制御系の ssh 鍵は **これ以降に作るプール**（`40-pool.sh` が cloud-init の sshkeys で入れる）と **これ以降に焼くテンプレート**に入る。既にプールがある環境で後から 2d を足したときは、テンプレートを焼き直さずに `45-pool-keys.sh` で既存のプール VM に鍵を入れる（guest agent で `authorized_keys` に追記 → `clean` を取り直す。貸出中は `LENT` で除外）:

@@ -70,7 +70,7 @@ flowchart LR
 | 枠組み（CLI・Proxmox スクリプト・base 層・雛形） | このリポジトリ `sandbox/` | 公開物。環境固有の値を書かない |
 | PJ 定義 `project.yml` / `provision.sh` / `gates.sh` | `$AIFACTORY_WORKSPACE/projects/<pj>/` | 私有。無ければ `examples/projects/<pj>/`（同梱サンプル。`kumitate` = akkijp/kumitate）を探す。探索順は workspace → examples |
 | 実機の状態（VMID・IP・構築日・所見） | `$AIFACTORY_WORKSPACE/docs/STATUS.md` | `STATUS.md` を写して埋める |
-| 制御側の設定 | `~/.config/sandbox/env`（`templates/env.example`）、`~/.config/sandbox/pj/<pj>.env`、`~/.config/sandbox/gh-app/`。制御系 LXC ではさらに `~/.config/aifactory/ctl.env`（コンソールの合言葉・intake 用トークン） | 秘密情報はここだけ。Mac でも制御系 LXC でも同じ置き場 |
+| 制御側の設定 | `~/.config/sandbox/env`（`templates/env.example`）、`~/.config/sandbox/pj/<pj>.env`、`~/.config/sandbox/gh-app/`。制御系 LXC ではさらに `~/.config/aifactory/ctl.env`（コンソールの合言葉・intake 用トークン。`console/bin/mcp` も起動時にここを読む） | 秘密情報はここだけ。Mac でも制御系 LXC でも同じ置き場 |
 | 別テナントの設定（メンテナの手元） | `~/.config/sandbox/tenants/<tenant>.env`（`SB_TENANT=<tenant>` で `run.sh` と `sandbox` が読む。状態は `<tenant>.state.json`） | 構築はメンテナ、日常運用はそのテナントの制御系 LXC |
 
 `AIFACTORY_WORKSPACE` の既定はリポジトリ直下の `workspace/`（`.gitignore` 済み）。
@@ -120,7 +120,7 @@ flowchart LR
 
 構築（メンテナ）: `~/.config/sandbox/tenants/<t>.env` に `PVE_HOST` / `SB_NET` / `SB_VMID_BASE` を書き、`SB_TENANT=<t> sandbox/proxmox/run.sh 05-tenant.sh` → `10-sdn.sh` → `20-gateway-lxc.sh` → `25-control-lxc.sh` → `30`〜`50`（`BUILD.md`）。`05` がプール・ロール・ユーザー・ACL、`25` が制御系 LXC（API トークンを発行して LXC に直接書く）。
 
-制御系 LXC の中（貸出先）: `~/aifactory`（checkout）、`~/workspace`、`~/.config/sandbox/env`（API モード）、`~/.config/aifactory/ctl.env`（コンソールの合言葉 `CONSOLE_TOKEN`、intake 用 `CLAUDE_CODE_OAUTH_TOKEN`、runner 用 `GH_TOKEN`）。常駐は systemd（`aifactory-console`、`aifactory-gh-refresh.timer`）。入口は `http://ctl.<domain>:8765/?token=<合言葉>`（docs は `/docs/`）と `ssh aifactory@ctl.<domain>`。
+制御系 LXC の中（貸出先）: `~/aifactory`（checkout）、`~/workspace`、`~/.config/sandbox/env`（API モード）、`~/.config/aifactory/ctl.env`（コンソールの合言葉 `CONSOLE_TOKEN`、intake 用 `CLAUDE_CODE_OAUTH_TOKEN`、runner 用 `GH_TOKEN`。App があれば `GH_TOKEN` は空でよい。ADR-0030）。常駐は systemd（`aifactory-console`、`aifactory-gh-refresh.timer`）。入口は `http://ctl.<domain>:8765/?token=<合言葉>`（docs は `/docs/`）と `ssh aifactory@ctl.<domain>`。
 
 ## 命名・採番・アドレス（既定。変えるなら ADR か環境変数）
 
