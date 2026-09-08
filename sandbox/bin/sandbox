@@ -14,6 +14,7 @@
 #   sandbox token clear <pj|global> [claude|gh] トークンを消す
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
+#   sandbox idle-stop [--hours N] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（既定 3 時間。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
 # GitHub トークン: ~/.config/sandbox/gh-app/{app.env,private-key.pem} があれば take / reinject / gh-app refresh のたびに
 #   その PJ のリポジトリ（pj/<pj>.env の GH_REPO）だけに効く 1 時間有効の installation token を払い出して注入する（ADR-0008）。
 #   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
@@ -93,7 +94,7 @@ vm()  { local ip=$1; shift; ssh "${SSH_OPTS[@]}" "dev@$ip" "$@"; }
 
 die() { echo "[error] $*" >&2; exit 1; }
 
-# ---------- Proxmox の操作（ssh / API の 2 実装。呼ぶ側はこの 6 つだけ使う）
+# ---------- Proxmox の操作（ssh / API の 2 実装。呼ぶ側はこの 9 つだけ使う）
 api() { # method path [curl args...] → .data（JSON）
   local m=$1 path=$2; shift 2
   local ca=(); [[ -n "${PVE_API_CA:-}" ]] && ca=(--cacert "$PVE_API_CA"); [[ "${PVE_API_INSECURE:-}" == 1 ]] && ca=(-k)
@@ -143,10 +144,30 @@ pve_start() { # vmid
   if (( API_MODE )); then local node; node="$(pve_node "$1")"; api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/status/start" | jq -r .)"
   else pve "qm start $1" >/dev/null; fi
 }
+# 以下 3 つは idle-stop（252）が使う。止める側は shutdown（guest agent / ACPI）→ 落ちなければ stop の 2 段。
+# forceStop は使わない: ログで「行儀よく止まった」と「叩き落とした」を区別できるようにする
+pve_uptime() { # vmid → 起動からの秒数。取れなければ空（= 不明。呼ぶ側は安全側に倒して止めない）
+  if (( API_MODE )); then api GET "/nodes/$(pve_node "$1")/qemu/$1/status/current" | jq -r '.uptime // empty'
+  else pve "qm status $1 --verbose" 2>/dev/null | sed -n 's/^uptime: //p'; fi
+}
+pve_shutdown() { # vmid → 120 秒で止まらなければ非 0
+  if (( API_MODE )); then local node; node="$(pve_node "$1")"
+    api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/status/shutdown" --data-urlencode timeout=120 | jq -r .)"
+  else pve "qm shutdown $1 --timeout 120" >/dev/null; fi
+}
+pve_stop() { # vmid（電源を落とす。shutdown が効かなかったときだけ）
+  if (( API_MODE )); then local node; node="$(pve_node "$1")"; api_wait "$node" "$(api POST "/nodes/$node/qemu/$1/status/stop" | jq -r .)"
+  else pve "qm stop $1" >/dev/null; fi
+}
 # ---------- state（台帳とロック）
 # 「空き VM を選ぶ → 予約を書く」の間に別プロセスの take が割り込むと同じ VM が二重に貸し出される（2026-09 の 234）。
 # 選定と予約の書き込みは $STATE.lock の排他区間の中でやる。読み取り（ls / ssh など）はロック無しのまま（mv が原子的なので壊れて見えない）
 STATE_LOCK="$STATE.lock"
+# ロックの待ち時間（秒）。idle-stop は shutdown が終わるまでロックを持つので、take 側の待ちはその分伸びる（252）
+: "${SB_LOCK_WAIT:=150}"
+# 台帳の隣に置く 2 つ。state.json（貸出の正本）には混ぜない
+LAST_USED="${STATE%state.json}last-used.json"       # vmid → 最後に take / reset / release / reinject した時刻（ADR-0026 の書式）
+IDLE_STOP_FILE="${STATE%state.json}idle-stop.json"  # 直近の idle-stop の結果（ls / console / MCP が「節電で停止中」を出すのに読む）
 _state_locked=0; _lock_style=""; _reserved_task=""; _reserved_dns=""
 state_lock_acquire() {
   local use_mkdir=0
@@ -154,14 +175,14 @@ state_lock_acquire() {
   command -v flock >/dev/null 2>&1 || { use_mkdir=1; echo "[warn] flock が無いので mkdir でロックする（$STATE_LOCK.d）" >&2; }
   if (( use_mkdir )); then   # Mac の既定には flock が無い
     local i
-    for i in $(seq 1 150); do
+    for i in $(seq 1 $(( SB_LOCK_WAIT * 5 ))); do
       if mkdir "$STATE_LOCK.d" 2>/dev/null; then _lock_style=mkdir; break; fi
       sleep 0.2
     done
-    [[ "$_lock_style" == mkdir ]] || die "state.json のロックが取れない（$STATE_LOCK.d が 30 秒消えない。別の sandbox が動いている？ 動いていなければ rmdir で消す）"
+    [[ "$_lock_style" == mkdir ]] || die "state.json のロックが取れない（$STATE_LOCK.d が $SB_LOCK_WAIT 秒消えない。別の sandbox が動いている？ 動いていなければ rmdir で消す）"
   else
     exec 9>"$STATE_LOCK"
-    flock -w 30 9 || die "state.json のロックが取れない（$STATE_LOCK。別の sandbox が動いている？）"
+    flock -w "$SB_LOCK_WAIT" 9 || die "state.json のロックが取れない（$STATE_LOCK。別の sandbox が動いている？）"
     _lock_style=flock
   fi
   _state_locked=1
@@ -199,6 +220,23 @@ _state_set_raw() { local tmp; tmp=$(mktemp); jq --arg id "$1" --argjson v "$2" '
 _state_del_raw() { local tmp; tmp=$(mktemp); jq --arg id "$1" 'del(.[$id])' "$STATE" > "$tmp" && mv "$tmp" "$STATE"; }
 state_set() { with_state_lock _state_set_raw "$@"; }
 state_del() { with_state_lock _state_del_raw "$@"; }
+
+# 最終利用の記録（252）。take / reset / release / reinject のたびに呼ぶ。返却した VM も「今使った」ことにするので、
+# 返却直後に idle-stop が止めてしまうことはない
+_touch_used_raw() {
+  local tmp; tmp=$(mktemp)
+  [[ -f "$LAST_USED" ]] || echo '{}' > "$LAST_USED"
+  jq --arg v "$1" --arg t "$(date -Iseconds)" '.[$v]=$t' "$LAST_USED" > "$tmp" && mv "$tmp" "$LAST_USED"
+}
+touch_used() { [[ -n "${1:-}" ]] || return 0; with_state_lock _touch_used_raw "$1"; }
+# ls / status の脚注。`[` 始まりなので console の parse_ls は捨てる（表の列は増やさない）
+idle_stop_note() {
+  [[ -f "$IDLE_STOP_FILE" ]] || return 0
+  local n; n="$(jq -r '(.stopped // []) | length' "$IDLE_STOP_FILE" 2>/dev/null || echo 0)"
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  (( n > 0 )) || return 0
+  echo "[idle-stop] $n 台が節電で停止中（次の take で起動、+30〜60 秒）。最終実行 $(jq -r '.last_run // "?"' "$IDLE_STOP_FILE")"
+}
 
 wait_port() { # ip port tries
   local i; for i in $(seq 1 "${3:-40}"); do
@@ -305,7 +343,7 @@ rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
   # die しないで rc を返す。「巻き戻せていないのに released」と言わないため、state を消すかどうかは呼び手が決める（245）
   # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする。
   # 無言で再試行すると失敗ログの直後に [ok] が出て「無視した」ように見えるので、失敗のたびに理由を出す
-  local i lock out n=$SB_ROLLBACK_TRIES w=$SB_ROLLBACK_WAIT
+  local i lock out n=$SB_ROLLBACK_TRIES w=$SB_ROLLBACK_WAIT started=0 t0=$SECONDS
   _rollback_err=""
   for (( i = 1; i <= n; i++ )); do
     lock="$(pve_lock "$1" || true)"
@@ -324,10 +362,13 @@ rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
       return 1
     fi
   done
-  if [[ "$(pve_status "$1")" != running ]] && ! pve_start "$1"; then
-    _rollback_err="vm $1: 起動に失敗"; return 1
+  # idle-stop（252）が止めた VM はここで起動する。黙って 30〜60 秒待つと runner のログでは固まったように見えるので、待った理由を出す
+  if [[ "$(pve_status "$1")" != running ]]; then
+    pve_start "$1" || { _rollback_err="vm $1: 起動に失敗"; return 1; }
+    started=1
   fi
   if ! wait_port "$2" 22; then _rollback_err="vm $1 ($2): ssh が上がらない"; return 1; fi
+  if (( started )); then echo "[start] vm $1: 停止中だったので起動した（$(( SECONDS - t0 )) 秒）"; fi
   return 0
 }
 
@@ -380,6 +421,7 @@ cmd_take() {
     '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s}')"
   _reserved_task=""; _reserved_dns=""   # 確定。以降の EXIT で消さない
   state_set "$task" "$rec"
+  touch_used "$vmid"
   echo "[ok] task-$task.$SB_DOMAIN  ssh: sandbox ssh $task  url: http://task-$task.$SB_DOMAIN:$APP_PORT"
 }
 
@@ -402,6 +444,7 @@ cmd_reset() {
   echo "[reset] $(state_field "$task" name) → clean"
   rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
+  touch_used "$vmid"
   echo "[ok] reset 完了（env 再注入済み）"
 }
 
@@ -423,11 +466,13 @@ cmd_release() {
     echo "[warn] 巻き戻し失敗を無視して返却（--force）: $_rollback_err" >&2
     dns_del "$task" || true
     state_del "$task"
+    touch_used "$vmid"
     echo "[ok] released (--force)"
     return 0
   fi
   dns_del "$task"
   state_del "$task"
+  touch_used "$vmid"
   echo "[ok] released"
 }
 
@@ -562,6 +607,7 @@ cmd_reinject() {
     [[ -n "$ip" ]] || die "task $task は未貸出"
     load_pj "$pj"
     inject_env "$ip" "$task" "$pj"
+    touch_used "$(state_field "$task" vmid)"
     echo "[ok] task-$task ($(state_field "$task" name)): env 再注入。claude を使っている場合は VM 内で再起動"
   done
 }
@@ -604,6 +650,119 @@ cmd_gh_app() {
   esac
 }
 
+# ---------- idle-stop（使われていないプール VM を止める。次の take が起動し直す。252）
+# 止めるのは「貸出中でない・最終利用から N 時間経った」プール VM だけ。制御系の ctl / gw は LXC なので
+# pve_vms（API モードは qemu 限定）にも名前の除外にも掛からず、対象に入らない。
+# 判定 → shutdown 完了まで 1 台ずつ $STATE.lock を持つ: ロックを出た直後に take が予約すると、その VM は
+# まだ running・ssh も生きているので rollback() の起動待ちを飛ばし、直後に落ちて run が死ぬ。
+_epoch() { # ISO 8601（オフセット付き。ADR-0026）→ epoch 秒。読めなければ空
+  date -d "$1" +%s 2>/dev/null && return 0
+  local s=$1; s="${s%:*}${s##*:}"   # BSD date の %z はコロン付きオフセットを読めない
+  date -j -f '%Y-%m-%dT%H:%M:%S%z' "$s" +%s 2>/dev/null || true
+}
+_hm() { printf '%dh%02dm' $(( $1 / 3600 )) $(( $1 % 3600 / 60 )); }
+idle_hours_for() { # pj 既定 → その PJ の SB_IDLE_STOP_HOURS
+  # load_pj は env を累積 source するので、PJ A の値が PJ B に漏れないようサブシェルで読む
+  ( load_pj "$1" >/dev/null 2>&1 || true; echo "${SB_IDLE_STOP_HOURS:-$2}" )
+}
+# _idle_stop_one vmid name hours now dry → 判定を $_idle_verdict に入れる（stopped / lent / fresh / unknown / off / fail）。
+# 止めた VM の記録（idle-stop.json 用）は $_idle_entry に JSON で入る
+_idle_verdict=""; _idle_entry=""
+_idle_stop_one() {
+  local vmid=$1 name=$2 h=$3 now=$4 dry=$5
+  _idle_verdict=unknown; _idle_entry=""
+  if (( h == 0 )); then _idle_verdict=off; return 0; fi
+  local task; task="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE" | paste -sd, -)"
+  if [[ -n "$task" ]]; then _idle_verdict=lent; return 0; fi
+  local last="" since="" src=""
+  [[ -f "$LAST_USED" ]] && last="$(jq -r --arg v "$vmid" '.[$v] // empty' "$LAST_USED")"
+  if [[ -n "$last" ]]; then since="$(_epoch "$last")"; src="最終利用"; fi
+  if [[ -z "$since" ]]; then   # 記録が無い VM は「起動からの時間」で代用する
+    local up; up="$(pve_uptime "$vmid" </dev/null || true)"
+    if [[ "$up" =~ ^[0-9]+$ ]] && (( up > 0 )); then since=$(( now - up )); src="起動から"; fi
+  fi
+  if [[ -z "$since" ]]; then
+    echo "[idle-stop] $name ($vmid): 見送り（最終利用の記録なし・uptime も不明）"
+    _idle_verdict=unknown; return 0
+  fi
+  local age=$(( now - since )); (( age < 0 )) && age=0
+  if (( age < h * 3600 )); then _idle_verdict=fresh; return 0; fi
+  if (( dry )); then
+    echo "[idle-stop] $name ($vmid): 止める（$src $(_hm "$age") 前、${h}h 超）※ --dry-run なので止めない"
+    _idle_verdict=stopped; return 0
+  fi
+  echo "[idle-stop] $name ($vmid): shutdown（$src $(_hm "$age") 前、${h}h 超）"
+  if ! pve_shutdown "$vmid" </dev/null; then
+    echo "[warn] $name ($vmid): shutdown が 120 秒で止まらず stop" >&2
+    if ! pve_stop "$vmid" </dev/null; then
+      echo "[warn] $name ($vmid): stop も失敗。この VM は止めない" >&2
+      _idle_verdict=fail; return 0
+    fi
+  fi
+  _idle_entry="$(jq -nc --arg v "$vmid" --arg n "$name" --arg a "$(date -Iseconds)" --arg l "$last" \
+    '{vmid:($v|tonumber), name:$n, at:$a, last_used:(if $l == "" then null else $l end)}')"
+  _idle_verdict=stopped; return 0
+}
+
+cmd_idle_stop() { # [--hours N] [--dry-run]
+  local hours="" dry=0
+  while (( $# )); do
+    case "$1" in
+      --hours) hours=${2:?--hours には時間数が要る}; shift 2 ;;
+      --hours=*) hours=${1#*=}; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) die "usage: sandbox idle-stop [--hours N] [--dry-run]" ;;
+    esac
+  done
+  [[ -n "$hours" ]] || hours="${SB_IDLE_STOP_HOURS:-3}"
+  [[ "$hours" =~ ^[0-9]+$ ]] || die "idle-stop: 時間数は 0 以上の整数（受け取った値: $hours）"
+  if (( hours == 0 )); then echo "[idle-stop] 無効（SB_IDLE_STOP_HOURS=0）。何もしない"; return 0; fi
+  local all; all="$(pve_vms | awk -v p="^$SB_PREFIX-" '$2 ~ p && $2 !~ /-(base|gw|ctl)$/ && $2 !~ /-tpl-/ {print $1, $2, $3}')"
+  local now; now="$(date +%s)"
+  local n_stop=0 n_lent=0 n_fresh=0 n_unknown=0 n_off=0 n_fail=0 total=0
+  local mine="[]" vmid name status pj h
+  while read -r vmid name status; do
+    [[ -n "$vmid" ]] || continue
+    [[ "$status" == running ]] || continue    # 既に止まっている VM は数えない（前回止めた分は下の still で引き継ぐ）
+    total=$(( total + 1 ))
+    pj="$(sed -n "s/^$SB_PREFIX-\(.*\)-[0-9][0-9]*\$/\1/p" <<< "$name")"
+    h="$hours"
+    if [[ -n "$pj" ]]; then h="$(idle_hours_for "$pj" "$hours")"; fi
+    [[ "$h" =~ ^[0-9]+$ ]] || h="$hours"
+    if (( dry )); then
+      _idle_stop_one "$vmid" "$name" "$h" "$now" 1 || true
+    else
+      # 判定 → shutdown 完了までロックを持つ（take が予約した直後の VM を止めないため）
+      state_lock_acquire
+      _idle_stop_one "$vmid" "$name" "$h" "$now" 0 || true
+      state_lock_release
+    fi
+    case "$_idle_verdict" in
+      stopped) n_stop=$(( n_stop + 1 )); [[ -n "$_idle_entry" ]] && mine="$(jq -c --argjson e "$_idle_entry" '. + [$e]' <<< "$mine")" ;;
+      lent) n_lent=$(( n_lent + 1 )) ;;
+      fresh) n_fresh=$(( n_fresh + 1 )) ;;
+      off) n_off=$(( n_off + 1 )) ;;
+      fail) n_fail=$(( n_fail + 1 )) ;;
+      *) n_unknown=$(( n_unknown + 1 )) ;;
+    esac
+  done <<< "$all"
+  local sum="[idle-stop] 対象 $total 台: 停止 $n_stop / 貸出中 $n_lent / 未経過 $n_fresh / 不明 $n_unknown"
+  (( n_off )) && sum="$sum / 対象外 $n_off"
+  (( n_fail )) && sum="$sum / 失敗 $n_fail"
+  echo "$sum"
+  (( dry )) && return 0
+  # 「今回止めた」+「前回の一覧のうち今も止まっているもの」。take が起動した VM は次の実行で自然に消える
+  local prev="[]" ids
+  [[ -f "$IDLE_STOP_FILE" ]] && prev="$(jq -c '.stopped // []' "$IDLE_STOP_FILE" 2>/dev/null || echo '[]')"
+  ids="$(awk '$3 == "stopped" {print $1}' <<< "$all" | jq -Rc 'select(length > 0)' | jq -sc .)"
+  local list; list="$(jq -nc --argjson prev "$prev" --argjson mine "$mine" --argjson ids "$ids" \
+    '($mine | map(.vmid|tostring)) as $new
+     | $mine + ($prev | map(select((.vmid|tostring) as $v | ($ids | index($v)) != null and ($new | index($v)) == null)))')"
+  local tmp; tmp="$(mktemp)"
+  jq -nc --arg h "$hours" --arg t "$(date -Iseconds)" --argjson s "$list" \
+    '{hours:($h|tonumber), last_run:$t, stopped:$s}' > "$tmp" && mv "$tmp" "$IDLE_STOP_FILE"
+}
+
 cmd_ls() {
   printf '%-8s %-14s %-6s %-12s %-9s %s\n' TASK VM VMID IP STATUS SINCE
   local all; all="$(pve_vms | awk -v p="^$SB_PREFIX-" '$2 ~ p && $2 !~ /-(base|gw|ctl)$/ && $2 !~ /-tpl-/ {print $1, $2, $3}')"
@@ -615,6 +774,7 @@ cmd_ls() {
     local since=""; [[ -n "$task" ]] && since="$(state_field "${task%%,*}" since)"
     printf '%-8s %-14s %-6s %-12s %-9s %s\n' "${task:--}" "$name" "$vmid" "$ip" "$status" "$since"
   done <<< "$all"
+  idle_stop_note
 }
 
 # 定義台数（設定）と実体台数（Proxmox）を分けて出す。「pool 3」だけを見て 3 本同時に走らせると take で落ちる（241）
@@ -634,6 +794,7 @@ cmd_status() { # [pj]
     free=$(( actual - lent )); (( free < 0 )) && free=0    # 実体と貸出は取得の時点が違う。空きは 0 で止める
     printf '%-14s %-8s %-7s %-5s %s\n' "$pj" "$defined" "$actual" "$lent" "$free"
   done <<< "$list"
+  idle_stop_note
 }
 
 case "${1:-}" in
@@ -647,5 +808,6 @@ case "${1:-}" in
   token) shift; cmd_token "$@" ;;
   reinject) shift; cmd_reinject "$@" ;;
   gh-app) shift; cmd_gh_app "$@" ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  idle-stop) shift; cmd_idle_stop "$@" ;;
+  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

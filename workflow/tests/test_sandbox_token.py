@@ -17,6 +17,7 @@ TOKEN2 = 'dummy-token-eeeeffffgggghhhh-0002'
 FAKES = '''
 load_pj() { CUR_PJ=$1; }
 state_field() { echo "x"; }
+touch_used() { :; }   # 最終利用の記録（252）。切り出しの外にあるので空にする
 ghapp_ready() { return 1; }
 inject_env() { echo "$2" >> "$CALLS"; return 0; }
 systemctl() { echo "systemctl $*" >> "$CALLS"; [[ "$1" == list-unit-files ]] && echo "aifactory-console.service enabled"; return 0; }
