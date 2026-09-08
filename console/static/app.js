@@ -71,8 +71,12 @@ const dlgOpen = () => $('dlg').open || $('help').open;
 const pad = n => String(n).padStart(2, '0');
 function fmtT(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d)) return iso; return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function fmtDur(s) { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); if (s < 60) return tt(T.time.sec, { n: s }); const m = Math.floor(s / 60); if (m < 60) return tt(T.time.min, { n: m }); return tt(T.time.hourMin, { h: Math.floor(m / 60), m: m % 60 }); }
-function since(iso) { return iso ? fmtDur((Date.now() - new Date(iso)) / 1000) : ''; }
-function sec(a, b) { return (new Date(b || Date.now()) - new Date(a)) / 1000; }
+/* 経過時間は「オフセット付きの記録」と「今」の差だけで決まる。API は必ずオフセットを付けて返す（ADR-0026）ので、ブラウザーの時間帯が何であれ同じ値になる */
+function sec(a, b) { if (!a) return null; const t = Date.parse(a); if (isNaN(t)) return NaN; const e = b ? Date.parse(b) : Date.now(); return isNaN(e) ? NaN : (e - t) / 1000; }
+function since(iso) { const s = sec(iso); return s == null ? T.time.unknown : isNaN(s) ? String(iso) : s < -60 ? T.time.ahead : fmtDur(s); }
+function span(a, b) { const s = sec(a, b); return s == null ? T.time.unknown : isNaN(s) ? T.time.unknown : fmtDur(s); }
+function tzOffset() { const m = -new Date().getTimezoneOffset(), a = Math.abs(m); return `${m < 0 ? '-' : '+'}${pad(Math.floor(a / 60))}:${pad(a % 60)}`; }
+function tzLabel() { const o = `UTC${tzOffset()}`; let n = ''; try { n = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date()).find(p => p.type === 'timeZoneName').value; } catch (e) { n = ''; } return (!n || /^(GMT|UTC)/.test(n)) ? o : `${n} ${o}`; }
 function st(s) { return `<span class="st ${esc(s)}">${esc(T.status[s] || s)}</span>`; }
 function rst(r) { return `<span class="st ${esc(r)}">${esc(T.result[r] || r)}</span>`; }
 function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'running' ? '<span class="dot pulse"></span>' : ''}${esc(T.jobState[j.state] || j.state)}</span>`; }
@@ -116,7 +120,10 @@ async function refreshNav() {
     $('n-runs').textContent = o.runs_active.length || '';
     $('n-sandbox').textContent = o.vms_lent || '';
     $('n-jobs').textContent = o.jobs_running || '';
-    $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6) });
+    $('clock').textContent = tt(T.nav.updated, { t: fmtT(o.now).slice(6), tz: tzLabel() });
+    const note = $('tznote'), differs = !!(o.tz && o.tz.offset && o.tz.offset !== tzOffset());
+    note.textContent = differs ? tt(T.nav.tzDiffers, { tz: o.tz.label || o.tz.offset }) : '';
+    note.hidden = !differs;
     return o;
   } catch (e) { return null; }
 }
@@ -135,7 +142,7 @@ async function viewBoard() {
   const runsRun = o.runs_active.filter(r => r.status === 'running' && inPj(r));  /* 動いている run（state.json あり） */
   const runsNew = ((o.runs_not_started || {}).runs || []).filter(inPj);          /* 工程が始まる前に止まった run。名前だけ出す */
   const live = (runsRun.length + runsNew.length ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: runsRun.length + runsNew.length, m: runsNew.length }))}</div>` : '')
-    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: since(r.current.since) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: since(r.started) })}</div>`).join('')
+    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '');
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
@@ -183,7 +190,7 @@ async function dispatchDialog() {
 /* ---------- チケットの一覧（ボードの完了列に出しきれない過去分も、ここで探す）
    読むだけの画面なので確認もトーストも無い。絞り込みは URL のクエリを正とし、
    詳細から「戻る」で条件がそのまま戻る。5 秒更新はしない（開いたとき 1 回だけ取る） */
-let tkAll = [], tkFilter = { q: '', pj: '', status: '' }, tkDebounce = null;
+let tkAll = [], tkFilter = { q: '', pj: '', status: '' }, qDebounce = null;
 function tkMatch(x) {
   const q = tkFilter.q.trim().toLowerCase();
   if (tkFilter.pj && x.pj !== tkFilter.pj) return false;
@@ -263,7 +270,7 @@ async function viewTicket(id, flash) {
             <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
           <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindDesc[t.kind] || '') : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
           <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
-        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${since(r.started)}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
       </div>
       <div>
@@ -282,7 +289,7 @@ async function viewRuns() {
   render(head(esc(T.nav.runs), T.sub.runs, `<label class="help check"><input type="checkbox" data-act="runs-all" ${showAll ? 'checked' : ''}> ${esc(T.label.runsAll)}</label>`) + `
     <div class="panel"><table><tr><th>${esc(T.th.run)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.step)}</th><th>${esc(T.th.result)}</th><th>PR</th></tr>
     ${list.map(r => `<tr class="link" data-href="#/run/${encodeURIComponent(r.name)}"><td>${runLink(r.name)}</td><td>${esc(r.pj || '')}</td><td>${r.task ? `<a href="#/ticket/${esc(r.task)}">${esc(r.task)}</a>` : ''}</td><td>${esc(r.workflow || '')}</td><td>${fmtT(r.started)}</td>
-      <td>${r.finished ? fmtDur(r.elapsed_s) : r.status === 'running' ? `<span class="dot pulse"></span>${since(r.started)}` : ''}</td><td>${r.status === 'not_started' ? '' : (r.steps_done ?? '')}${r.status === 'running' && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
+      <td>${r.finished ? fmtDur(r.elapsed_s) : r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : ''}</td><td>${r.status === 'not_started' ? '' : (r.steps_done ?? '')}${r.status === 'running' && r.next ? ` → ${esc(r.next)}` : ''}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? '<span class="tag">v0</span>' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : `<span class="st running">${esc(T.jobState.running)}</span>`}</td><td>${r.pr_url ? `<a href="${esc(r.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(r.pr_url.replace(/^.*\/pull\//, '#'))}</a>` : ''}</td></tr>`).join('')}
     ${!list.length ? `<tr><td colspan="9" class="help">${esc(T.empty.runs)}</td></tr>` : ''}</table></div>`);
   schedule(viewRuns, 10000);
 }
@@ -391,7 +398,7 @@ async function viewSandbox() {
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
     <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(sharedEntries.length ? tt(T.sandbox.countShared, { n: d.lease_count, m: d.vm_count }) : tt(T.sandbox.count, { n: lent.length }))}</small></h2>
       ${sharedEntries.map(([vmid, tasks]) => `<div class="warn">${esc(tt(T.sandbox.sharedWarn, { vm: vmOf(vmid), vmid, tasks: tasks.join('、') }))}</div>`).join('')}
-      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task), others = othersOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）${others.length ? `<div><span class="st blocked">${esc(T.sandbox.sharedBadge)}</span> <span class="help">${esc(tt(T.sandbox.sharedWith, { tasks: others.join('、') }))}</span></div>` : ''}</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${since(v.since)}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
+      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task), others = othersOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）${others.length ? `<div><span class="st blocked">${esc(T.sandbox.sharedBadge)}</span> <span class="help">${esc(tt(T.sandbox.sharedWith, { tasks: others.join('、') }))}</span></div>` : ''}</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${esc(since(v.since))}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
         <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}" data-vm="${esc(v.name)}" data-run="${run ? esc(run.name) : ''}" data-step="${run && run.current ? esc(run.current.step) : ''}" data-shared="${esc(others.join('、'))}">${esc(T.btn.release)}</button></td></tr>`; }).join('')}</table>
         <div class="help top">${esc(T.help.release)}</div>` : `<div class="help">${esc(T.empty.lent)}</div>`}</div>
     <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(tt(T.sandbox.perPj, { n: d.pool_per_pj }))}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.lent)}</th></tr>
@@ -483,7 +490,7 @@ async function viewJobs() {
   const d = await api('jobs');
   render(head(esc(T.nav.jobs), T.sub.jobs) + `
     <div class="panel"><table><tr><th>${esc(T.th.state)}</th><th>${esc(T.th.what)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.rc)}</th><th>${esc(T.th.ticket)}</th></tr>
-    ${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td><td>${fmtDur(sec(j.started, j.finished))}</td><td class="mono">${j.rc ?? ''}</td><td>${j.ticket ? `<a href="#/ticket/${j.ticket}">${j.ticket}</a>` : ''}</td></tr>`).join('')}
+    ${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td><td>${esc(span(j.started, j.finished))}</td><td class="mono">${j.rc ?? ''}</td><td>${j.ticket ? `<a href="#/ticket/${j.ticket}">${j.ticket}</a>` : ''}</td></tr>`).join('')}
     ${!d.jobs.length ? `<tr><td colspan="6" class="help">${esc(T.empty.jobs)}</td></tr>` : ''}</table></div>`);
   schedule(viewJobs, 3000);
 }
@@ -525,19 +532,86 @@ async function viewJob(id, first) {
     <div class="head"><h1>${esc(j.label)}</h1>${jst(j)}${j.ticket ? `<a href="#/ticket/${j.ticket}">${esc(tt(T.ticket.crumb, { id: j.ticket }))}</a>` : ''}${j.run_hint ? runLink(j.run_hint) : ''}<span class="spacer"></span>${j.state === 'running' ? `<button class="danger" data-act="job-stop" data-id="${esc(j.id)}">${esc(T.btn.stop)}</button>` : ''}</div>
     ${j.note ? `<div class="warn">${esc(j.note)}</div>` : ''}
     ${jobNext(j, buf.text, d.ticket)}
-    <div class="panel"><dl class="kv"><dt>${esc(T.th.command)}</dt><dd class="mono">${esc(j.cmd.join(' '))}</dd><dt>${esc(T.th.started)}</dt><dd>${fmtT(j.started)}${j.finished ? ` → ${fmtT(j.finished)}` : ''}（${fmtDur(sec(j.started, j.finished))}）</dd><dt>${esc(T.th.pidRc)}</dt><dd class="mono">${j.pid} / ${j.rc ?? '—'}</dd></dl></div>
+    <div class="panel"><dl class="kv"><dt>${esc(T.th.command)}</dt><dd class="mono">${esc(j.cmd.join(' '))}</dd><dt>${esc(T.th.started)}</dt><dd>${fmtT(j.started)}${j.finished ? ` → ${fmtT(j.finished)}` : ''}（${esc(span(j.started, j.finished))}）</dd><dt>${esc(T.th.pidRc)}</dt><dd class="mono">${j.pid} / ${j.rc ?? '—'}</dd></dl></div>
     <div class="panel"><div class="logbar"><span>${esc(T.h.output)}</span><span class="spacer"></span>${j.state === 'running' ? `<span><span class="dot pulse"></span>${esc(T.job.following)}</span>` : ''}</div><pre class="log" id="joblog">${esc(buf.text) || esc(T.empty.jobLog)}</pre></div>`);
   const pre = $('joblog'); if (pre && atBottom) pre.scrollTop = pre.scrollHeight;
   if (j.state === 'running') schedule(() => viewJob(id, false), 2000); else clearInterval(timer);
 }
 
-/* ---------- ログ・設定 */
-async function viewLogs() {
-  const d = await api('logs');
-  const block = (name, f) => `<div class="panel"><h2>${esc(name)}<small class="mono">logs/${esc(name)}.log</small></h2>${f ? `<pre class="log small">${esc(f.text) || esc(T.empty.log)}</pre>` : `<div class="help">${esc(T.empty.logFile)}</div>`}</div>`;
-  render(head(esc(T.nav.logs), T.sub.logs) + block('intake', d.intake) + block('dispatch', d.dispatch));
-  schedule(viewLogs, 10000);
+/* ---------- ログ（起票と配車の記録）
+   行の項目分けは core.py（logs_view の entries。ADR-0027）。画面は表を主にし、原文は下に畳んで残す。
+   絞り込みは URL のクエリを正とし、10 秒更新では表だけを描き直す（打っている途中でフォーカスが飛ばないように） */
+const LOG_SOURCES = ['intake', 'dispatch'];
+let lgAll = [], lgTotal = 0, lgRaw = {}, lgFilter = { q: '', pj: '', src: '' };
+function lgMatch(x) {
+  if (lgFilter.pj && x.pj !== lgFilter.pj) return false;
+  if (lgFilter.src && x.source !== lgFilter.src) return false;
+  const q = lgFilter.q.trim();
+  if (!q) return true;
+  return /^\d+$/.test(q) && x.tid != null && String(x.tid).startsWith(q);   /* 番号だけで両方のログを串刺しにする（前方一致） */
 }
+/* 結果の列: 起票は種別と確度、配車は状態の印（rc / status の生表記は出さない） */
+function lgResult(x) {
+  if (x.event === 'intake') return esc(x.kind) + (x.confidence == null ? '' : ` <span class="help">${esc(tt(T.logs.confidence, { v: x.confidence }))}</span>`);
+  return x.status ? st(x.status) : '';
+}
+/* 理由の列: 導けた行は日本語に、導けなかった行（その他）は原文を等幅でそのまま */
+function lgReason(x) {
+  if (x.event === 'end') return esc(tt(T.logs.endDetail, { code: x.rc, t: fmtDur(x.elapsed_s) }));
+  if (x.event === 'skip') return esc(tt(T.logs.reason[x.reason] || x.reason, { n: x.detail }));
+  if (x.event === 'other') return `<span class="mono">${esc(x.reason)}</span>`;
+  if (x.event === 'intake') return esc(x.reason) + (x.model ? ` <span class="help mono">${esc(x.model)}</span>` : '');
+  return esc(x.reason);
+}
+function lgRender() {
+  const box = $('lg-list'); if (!box) return;
+  const list = lgAll.filter(lgMatch);
+  const cells = x => `<td>${fmtT(x.at)}</td><td>${esc(T.logs.event[x.event] || x.event)}${x.dry_run ? ` <span class="tag">${esc(T.logs.dryRun)}</span>` : ''}</td>`
+    + `<td>${esc(x.pj)}</td><td class="mono">${x.tid == null ? '' : `<a href="#/ticket/${x.tid}" class="mono">${esc(x.tid)}</a>`}</td>`
+    + `<td>${lgResult(x)}</td><td>${lgReason(x)}</td>`;
+  const row = x => x.tid == null ? `<tr>${cells(x)}</tr>` : `<tr class="link" data-href="#/ticket/${x.tid}">${cells(x)}</tr>`;
+  box.innerHTML = `<div class="help">${esc(tt(T.logs.count, { n: list.length, m: lgAll.length }))}${lgTotal > lgAll.length ? ` ${esc(tt(T.logs.capped, { n: lgAll.length }))}` : ''}</div>`
+    + (list.length ? `<table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.process)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.ticket)}</th><th>${esc(T.th.result)}</th><th>${esc(T.th.reason)}</th></tr>${list.map(row).join('')}</table>`
+      : `<div class="empty">${esc(T.empty.logs)}</div>`);
+}
+function lgSync() {
+  const p = new URLSearchParams();
+  for (const k of ['q', 'pj', 'src']) if (lgFilter[k]) p.set(k, lgFilter[k]);
+  const h = '#/logs' + (p.toString() ? '?' + p : '');
+  history.replaceState(null, '', h); lastRoute = h;
+}
+async function lgLoad() {
+  const d = await api('logs');
+  lgAll = d.entries || []; lgTotal = d.total || 0;
+  lgRaw = { intake: d.intake, dispatch: d.dispatch };
+}
+/* 定期更新: 表と原文の中身だけ入れ替える（絞り込みの入力欄は作り直さない） */
+async function lgRefresh() {
+  await lgLoad(); lgRender();
+  for (const name of LOG_SOURCES) { const pre = $(`lg-raw-${name}`); if (pre && lgRaw[name]) pre.textContent = lgRaw[name].text || T.empty.log; }
+}
+async function viewLogs(q) {
+  clearInterval(timer);
+  const p = new URLSearchParams(q || '');
+  lgFilter = { q: p.get('q') || '', pj: p.get('pj') || '', src: p.get('src') || '' };
+  await lgLoad();
+  const pjs = [...new Set(lgAll.map(x => x.pj).filter(Boolean))].sort();
+  const opt = (list, blank, sel, label) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option value="${esc(x)}" ${x === sel ? 'selected' : ''}>${esc(label ? label[x] || x : x)}</option>`).join('');
+  const raw = name => `<div class="panel"><h2>${esc(T.logs.source[name])}<small class="mono">logs/${esc(name)}.log</small></h2>`
+    + `${lgRaw[name] ? `<pre class="log small" id="lg-raw-${name}">${esc(lgRaw[name].text) || esc(T.empty.log)}</pre>` : `<div class="help">${esc(T.empty.logFile)}</div>`}</div>`;
+  render(head(esc(T.nav.logs), T.sub.logs) + `
+    <div class="row filters">
+      <label class="field">${esc(T.label.tid)}<input type="text" id="lg-q" class="w220" inputmode="numeric" placeholder="${esc(T.label.tidPlaceholder)}" value="${esc(lgFilter.q)}"></label>
+      <label class="field">${esc(T.label.pj)}<select data-act="logs-pj">${opt(pjs, T.label.allPj, lgFilter.pj)}</select></label>
+      <label class="field">${esc(T.label.logSrc)}<select data-act="logs-src">${opt(LOG_SOURCES, T.label.allLogSrc, lgFilter.src, T.logs.source)}</select></label>
+    </div>
+    <div class="panel" id="lg-list"></div>
+    <details class="files"><summary>${esc(T.h.rawLog)}</summary>${LOG_SOURCES.map(raw).join('')}</details>`);
+  lgRender();
+  schedule(lgRefresh, 10000);
+}
+
+/* ---------- 設定 */
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
   render(head(esc(T.nav.config), T.sub.config) + `
@@ -557,6 +631,8 @@ const actions = {
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
+  'logs-pj': el => { lgFilter.pj = el.value; lgSync(); lgRender(); },
+  'logs-src': el => { lgFilter.src = el.value; lgSync(); lgRender(); },
   'runs-all': el => { localStorage.setItem('runs-all', el.checked ? '1' : '0'); viewRuns(); },
   'dispatch': () => dispatchDialog(),
   'help': () => showHelp(),
@@ -649,11 +725,17 @@ document.addEventListener('click', async e => {
   e.preventDefault();
   try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
-document.addEventListener('input', e => {                                                  /* 検索欄は click の委譲に渡さない（data-act は actions に手のある名前だけ） */
-  const el = e.target.closest('#tk-q'); if (!el) return;
-  clearTimeout(tkDebounce); tkDebounce = setTimeout(() => {
-    if (!location.hash.startsWith('#/tickets')) return;                                    /* 打った直後に画面を離れたら、遅れて URL を書き戻さない */
-    tkFilter.q = el.value; tkSync(); tkRender();
+/* 検索欄は click の委譲に渡さない（data-act は actions に手のある名前だけ）。画面ごとの「番号で絞る」欄をここに集める */
+const Q_FIELDS = {
+  'tk-q': { route: '#/tickets', set: v => { tkFilter.q = v; tkSync(); tkRender(); } },
+  'lg-q': { route: '#/logs', set: v => { lgFilter.q = v; lgSync(); lgRender(); } },
+};
+document.addEventListener('input', e => {
+  const el = e.target.closest('#tk-q, #lg-q'); if (!el) return;
+  const f = Q_FIELDS[el.id];
+  clearTimeout(qDebounce); qDebounce = setTimeout(() => {
+    if (!location.hash.startsWith(f.route)) return;                                        /* 打った直後に画面を離れたら、遅れて URL を書き戻さない */
+    f.set(el.value);
   }, 150);
 });
 document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
@@ -692,7 +774,7 @@ async function route() {
     else if (seg[0] === 'intake') await viewIntake();
     else if (seg[0] === 'jobs') await viewJobs();
     else if (seg[0] === 'job') await viewJob(seg[1], true);
-    else if (seg[0] === 'logs') await viewLogs();
+    else if (seg[0] === 'logs') await viewLogs(q);
     else if (seg[0] === 'config') await viewConfig();
     else if (seg[0] === 'file') await viewFile(q);
     else render(`<div class="err">${esc(tt(T.err.noRoute, { h }))}</div>`);
