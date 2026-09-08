@@ -168,7 +168,7 @@ class ApiTest(unittest.TestCase):
         JS を動かす基盤が無いので、ボードの帯と同じくソースを検査する。
         """
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
-        i = app.index("async function viewTicket")
+        i = app.index("async function viewTicket(")
         body = app[i:app.index("\n}", i)]
         self.assertRegex(body, r"canRun\s*=[^;\n]*status\s*!==\s*'done'", "実行できるかを status から決めていない")
         self.assertRegex(body, r"const runBtn = \([^)]*disabled[^)]*\)", "runBtn が押せない状態を受け取れない")
@@ -245,7 +245,7 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertRegex(app, r"function jobLink\(j\)[^\n]*<a href=\"#/job/", "ジョブ名を <a> にする jobLink が無い")
         for fn, helper in (("async function viewRuns", "runLink("), ("async function viewJobs", "jobLink("),
-                           ("async function viewTicket", "jobLink(")):
+                           ("async function viewTicket(", "jobLink(")):
             i = app.index(fn); body = app[i:app.index("\n}", i)]
             self.assertIn(helper, body, f"{fn} の一覧が名前をリンクにしていない（{helper}）")
             self.assertIn('tr class="link" data-href', body, f"{fn} の行クリック（tr.link data-href）が消えている")
