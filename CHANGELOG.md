@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+- Console: a finished `kb run` job no longer pushes recovery steps for a ticket that has moved on since. `GET /api/jobs/<id>` now carries the ticket's current state and whether it was updated after the job, so the job's *What to do next* panel turns past tense (primary button *Open the ticket*) once the ticket is done or was edited later, and always shows the job's end time next to the ticket's current state. *Sync the state from the run record* now previews itself first: the new `kb sync --dry-run` (and `GET /api/tickets/<id>/sync-preview`) reports the state and note before and after without writing, the dialog shows both and warns in danger colours when the ticket was updated after that run, and the toast offers *Undo*
+
 ## [0.3.0] - 2026-09-08
 
 ### Added
