@@ -22,12 +22,13 @@ flowchart TD
 | `kb run` says `no project.yml` | The project has no definition | Steps 3 and 4 of [Add a project](guides/add-project.md) |
 | `kb run` says `done; use kb reopen` | A finished ticket | `kb reopen <id>` |
 | dispatch skips everything | The whole pool is lent, or no project.yml | `sandbox ls`, `kb list --status blocked` |
+| The screen says free but `take` finds nothing | Only the defined size was read; the actual size is smaller | Compare DEFINED and ACTUAL in `sandbox status <pj>`. Dispatch schedules against the defined size, so a short actual size fails in take |
 
 ## sandbox
 
 | Symptom | Look at | Fix |
 |---|---|---|
-| `take` reports no free VM | `sandbox ls` | `release` lent VMs you do not need. Grow the pool if still short |
+| `take` reports no free VM | The breakdown in the error (defined / actual / lent / not built / no clean snapshot), `sandbox status <pj>` | `release` lent VMs you do not need. If the actual size is below the defined one, add VMs with `40-pool.sh <pj> <missing count>`, then `45-pool-keys.sh` |
 | `take` fails on the GitHub App | `sandbox gh-app status` | Install through the link if not installed. Check `GH_REPO` in `pj/<pj>.env` |
 | `task-xxx.sb.internal` does not resolve | `dig sb-gw.sb.internal`, Tailscale split DNS | Has split DNS disappeared? `ssh root@10.77.0.2 systemctl status dnsmasq` |
 | Cannot ping 10.77.0.2 | Route approval in the Tailscale console. `pct exec 9000 -- journalctl -u tailscaled -n 20` | `Drop: … no rules matched` means add a grant for `10.77.0.0/16` to the ACL. In a hurry, `SB_JUMP=<same value as PVE_HOST>` in `~/.config/sandbox/env` |
@@ -42,7 +43,7 @@ flowchart TD
 
 | Symptom | Look at | Fix |
 |---|---|---|
-| Authentication error | Tail of `agent-<step>-<n>.log`; `env \| grep CLAUDE_CODE_OAUTH_TOKEN` in the VM | `claude setup-token` → `sandbox token set <pj>` → `sandbox reinject <id>` |
+| Authentication error | Tail of `agent-<step>-<n>.log`; `env \| grep CLAUDE_CODE_OAUTH_TOKEN` in the VM | On the control plane: `claude setup-token` → `sandbox token rotate` (every project, `ctl.env` and `reinject --all` in one command) |
 | Missing `outputs`, step failed | Tail of the same log | The agent overlooked the output location ("Outputs (required)" in the prompt), timeout, or a tool was refused. Raise `timeout_min` or make the ticket smaller |
 | Changes outside the scope | `work/report.md`, `review.md` | State the scope in the ticket. Gates already red on base go in `known_red_gates` |
 | The planner wrote STOP | Top of `work/plan.md` | The request is unclear, contradictory or dangerous. Answer the questions and fix the ticket |

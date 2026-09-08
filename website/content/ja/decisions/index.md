@@ -64,4 +64,4 @@ flowchart LR
 
 - [ADR 0026: 記録する時刻はオフセット付き ISO 8601 にする](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0026-timestamps-carry-utc-offset.md)
 
-- [ADR 0029: 制御系の gh トークンは GitHub App から都度払い出す／kind は種別、workflow は実行方法](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0029-control-plane-gh-token-from-app.md)
+- [ADR 0030: 制御系の gh トークンは GitHub App から都度払い出す／kind は種別、workflow は実行方法](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0030-control-plane-gh-token-from-app.md)

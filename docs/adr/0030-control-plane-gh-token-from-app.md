@@ -1,4 +1,4 @@
-# ADR 0029: 制御系の `gh` トークンは GitHub App から都度払い出す／`kind` は種別、`workflow` は実行方法
+# ADR 0030: 制御系の `gh` トークンは GitHub App から都度払い出す／`kind` は種別、`workflow` は実行方法
 
 - 状態: Accepted
 - 日付: 2026-09-08

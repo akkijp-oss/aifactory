@@ -78,7 +78,8 @@ flowchart LR
 | The model | `workflow/kit/routes.env` (per class). One step: `model_class` in the yml. One run: `CLAUDE_MODEL` | As specified |
 | The PR target branch | `base_branch` / `hotfix_base` / `workflow_overrides` in `project.yml` | That project |
 | intake's classification habits | The prompt text in `glue/bin/intake`, or a `kind:` line at the top of the request | At filing |
-| Pool size | `sandbox/proxmox/40-pool.sh`, `POOL_PER_PJ` in `glue/bin/dispatch` | That project's parallelism |
+| Pool size (actual) | `sandbox/proxmox/40-pool.sh <pj> <count>` (what you create is the actual size) | That project's parallelism |
+| Pool size (defined) | The `SANDBOX_POOL_PER_PJ` environment variable (default 3), read by `glue/bin/dispatch`, `sandbox status` and the console sandbox screen. A defined size larger than the actual one makes `take` fail with no free VM | Dispatch and display |
 | Claude token renewal | `sandbox token set <pj>` (`sandbox reinject <id>` while lent) | That project |
 | Proxmox host or address space | `~/.config/sandbox/env` (`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`); on the Proxmox side `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`. The naming rules in `sandbox/README.md` + an ADR | Everything |
 | Where operational data lives | Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` | Everything |

@@ -9,6 +9,7 @@ kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]
 kb sync <id> [--run DIR]
@@ -80,6 +81,21 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 
 `--pr` を変更すると、runner が参照する本文の `pr:` 行も更新されます。`--run` には、`workspace/runs/` からの相対パスで run ディレクトリ名を指定します。`--kind` は、指定した種別が存在するか確認されます。変更はすべて履歴に残り、`BOARD.md` が再生成されます。
 
+`kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。
+
+### append
+
+```bash
+kb append 204 --section "PM 補足" --text "218 の `._*` は AppleDouble"
+kb append 204 --section "PM 補足" < memo.md      # --text がなければ標準入力から読む
+```
+
+チケット本文の**末尾**に追記します。`--section` を付けると `## <見出し>` を先に書きます。本文が空、またはチケットの本文ファイルがなければエラー（終了コード 1）です。
+
+挿入位置は末尾に固定しています。`## 完了条件` の手前に入れないのは、節を見分ける仕組みが `kb` になく、末尾なら変更が 1 か所で済むためです。後から書き足したものは見出しで見分けます。
+
+追記そのものは本文（ファイルが正本）に残ります。履歴には `body  - → append 24字 (PM 補足)` の形で、いつ・どれだけ足したかだけが残ります（`history` は `field` / `old` / `new` の 3 列で、差分は保持しません）。
+
 ### run
 
 ```bash
@@ -88,7 +104,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 
 1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
 2. 状態を `in_progress` に、run ディレクトリ名（`<日付>-<pj>-<id>`。実体は `workspace/runs/` の下）を記録
-3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` は今回の実行方法だけを変え、`kind` は変わりません（履歴に `workflow → <名前>` が残り、`runs/<run>/state.json` の `workflow` が正。ADR-0029）。`--workflow` なしの `--resume` は、その `state.json` の `workflow` で再開します
+3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` は今回の実行方法だけを変え、`kind` は変わりません（履歴に `workflow → <名前>` が残り、`runs/<run>/state.json` の `workflow` が正。ADR-0030）。`--workflow` なしの `--resume` は、その `state.json` の `workflow` で再開します
 4. 終わったら `state.json` を読んで状態を進める（下表）
 
 | state.json | 状態 | メモ |

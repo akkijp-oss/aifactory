@@ -146,7 +146,7 @@ CONSOLE_HOST=$IP
 CONSOLE_PORT=8765
 # intake（自由文 → チケット）が claude -p を制御系で 1 回呼ぶ。VM 内の agent 用トークンとは別に、ここにも長期トークンを置く（claude setup-token）
 CLAUDE_CODE_OAUTH_TOKEN=
-# runner が制御系で gh pr view / gh を使うときのトークン。GitHub App（sandbox gh-app）が設定済みなら空でよい（runner が sandbox gh-app token <pj> で払い出す。ADR-0029）。App が無いときだけ fine-grained PAT を入れる
+# runner が制御系で gh pr view / gh を使うときのトークン。GitHub App（sandbox gh-app）が設定済みなら空でよい（runner が sandbox gh-app token <pj> で払い出す。ADR-0030）。App が無いときだけ fine-grained PAT を入れる
 GH_TOKEN=
 EOT
   chown $U:$U "$CTLENV"; chmod 600 "$CTLENV"

@@ -43,7 +43,7 @@ journalctl -u aifactory-console -f
 | ボード | 工程の帯（未着手 → 実行中 → レビュー待ち → 完了、横に人間待ち）と 5 列のカード。動いている run はここに出る | 起票（起票画面へ）/ **配車する**（ダイアログ。PJ・件数・dry-run を選び、押す前に「次に回るチケット」を見せる。未着手が無ければ押せない） |
 | チケット | 本文・履歴・関連する run・ジョブ | `kb run`（ダイアログで PJ・workflow・所要を確認。dry-run は離して置く / --keep / --resume）/ 状態を進める（`kb start|review|done|reopen|block`。**確認なし、トーストの「元に戻す」**で前の状態へ。人間待ちだけメモを聞くダイアログ）/ `kb set`（種別・PR・メモ）/ `kb sync`（押す前に対象 run と前後の状態・メモを見せる。run の後にチケットが更新されていれば警告） |
 | 実行記録 | `$AIFACTORY_WORKSPACE/runs/` の一覧。run の工程トラック（step ごとの合否と所要、戻し ↺、終端 end / human）・ファイル・ログ。実行中は `state.json` の `current` が指す step のログを自動で開いて 5 秒ごとに追い読み（ADR-0014） | — |
-| sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml / トークンファイルの有無、プールの使用数）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
+| sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml / トークンファイルの有無、プールの定義 / 実体 / 貸出 / 空き）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
 | 起票 | — | 自由文 → `glue/bin/intake` / 整った本文 → `kb new`（配車はボードへ移した） |
 | ジョブ | このコンソールが起動した CLI の一覧と出力（2 秒ごとに追い読み）。終わると**「次にすること」**（intake → できたチケットを開く / run 停止 → 状態を実行記録に合わせる / 返却 → sandbox） | 止める（ダイアログ。プロセスグループに SIGTERM） |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
@@ -52,7 +52,7 @@ journalctl -u aifactory-console -f
 
 ## MCP（AI セッションからの読み書き）
 
-`console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読んで、未設定の環境変数だけ補う。ssh 越し（`mcp-remote`）の非ログイン環境でも、systemd のコンソール（`EnvironmentFile`）と同じ secrets で子プロセスを起こすため（ADR-0029）。`GH_TOKEN` は GitHub App があれば空でよく、runner が `sandbox gh-app token <pj>` で払い出す。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
+`console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読んで、未設定の環境変数だけ補う。ssh 越し（`mcp-remote`）の非ログイン環境でも、systemd のコンソール（`EnvironmentFile`）と同じ secrets で子プロセスを起こすため（ADR-0030）。`GH_TOKEN` は GitHub App があれば空でよく、runner が `sandbox gh-app token <pj>` で払い出す。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
 
 ```bash
 claude mcp list                                   # aifactory が見える（プロジェクトスコープ）
@@ -73,10 +73,10 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
-| `ticket_action` | start / review / done / reopen / block / set / sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
+| `ticket_action` | start / review / done / reopen / block / set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
-| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実勢（ジョブ）/ 返却（ジョブ） |
+| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
 
@@ -124,7 +124,8 @@ GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・
      どちらも kinds（workflow/kit/workflows/*.yml。`.` / `_` 始まりは出さない）と kind_desc（種別 → 用途）を返す
 GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる
 GET  /api/tickets/<id>/sync-preview[?run=]   状態同期の下見（kb sync --dry-run。前後の状態とメモ、run の後にチケットが更新されたか）
-POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|sync, ...}
+POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|append|sync, ...}
+     append は {text, section?} で本文の末尾に追記（history に body の行が残る）。set の note はキーがあれば空文字列でも渡す（= メモを消す）
      sync は既定で書かない（dry_run 既定 true。前後を返すだけ）。書くには dry_run: false を明示する
 POST /api/tickets/<id>/run         kb run をジョブで {dry_run, workflow, keep, resume}
 GET  /api/runs  /api/runs/<name>   実行記録  GET /api/file?path=&tail=|offset=   限られた根の下のファイル

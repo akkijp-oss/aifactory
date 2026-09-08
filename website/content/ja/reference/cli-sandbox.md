@@ -11,6 +11,7 @@ sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
 sandbox release <task-id> [--force]  巻き戻して返却（--force: 巻き戻せなくても台帳から消す）
 sandbox ls                       プール VM の一覧（貸出先 / IP / 稼働状態）
+sandbox status [pj]              プールの台数（定義 / 実体 / 貸出 / 空き）
 ```
 
 | 操作 | 何をするか | 失敗の条件 |
@@ -21,6 +22,7 @@ sandbox ls                       プール VM の一覧（貸出先 / IP / 稼�
 | `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない、巻き戻しに失敗（貸出は継続したまま非0で終わる） |
 | `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は既定で 3 回・10 秒間隔まで待ってリトライし（`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`）、失敗は毎回 stderr に出る | 巻き戻しに失敗（非0で終わり `state.json` に残す。次の一手はメッセージに出る）。`--force` を付けると巻き戻せなくても削除する（人が手で直した VM 用） |
 | `ls` | `TASK VM VMID IP STATUS SINCE`。TASK は貸出先の task-id（貸出なしは `-`）、STATUS は Proxmox の電源状態（running / stopped）で貸出とは別の軸。返却しても VM は止めないので、貸出 0 台でも running が並ぶ | |
+| `status` | `PJ DEFINED ACTUAL LENT FREE`。DEFINED は設定の定義台数（`SANDBOX_POOL_PER_PJ`、既定 3）、ACTUAL は Proxmox に実在する VM の台数、LENT は台帳の貸出台数、FREE は `ACTUAL - LENT`（0 で下げ止まり）。引数の `pj` でその 1 行だけ出す | |
 
 `sandbox ls` の出力例:
 
@@ -30,11 +32,28 @@ TASK     VM             VMID   IP           STATUS    SINCE
 -        sb-kumitate-02 9205   10.77.1.5    running
 ```
 
+「定義台数」（設定の値）と「実体台数」（Proxmox に実在する VM の数）は別物です。定義だけを見て同時に走らせると、実体が足りないぶんが `take` の「空きなし」になります。`sandbox status` は 2 つを分けて出します:
+
+```
+PJ             DEFINED  ACTUAL  LENT  FREE
+aifactory      3        2       2     0
+kumitate       3        3       0     3
+```
+
+空きなしの `take` は内訳と次の一手を出します:
+
+```
+[error] pj=aifactory に空きなし: 定義 3 台・実体 2 台・貸出 2 台（未構築 1 台 / clean 無し 0 台）。返却を待つ（sandbox ls）か、proxmox/40-pool.sh aifactory 1 で足してください
+```
+
+`clean 無し` は snapshot `clean` が無くて飛ばした台数です。この状態は `sandbox ls` からは分からないので、コンソールと `sandbox status` の「空き」には数えたまま出ます。
+
 ## 認証情報の管理と更新
 
 ```
 sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
-sandbox token show [pj]                     どのトークンが効いているか（マスク表示）
+sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
+sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 sandbox token clear <pj|global> [claude|gh] トークンを消す
 sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
@@ -47,7 +66,10 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | `token set <pj>` | `~/.config/sandbox/pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN` |
 | `token set <pj> gh` | 同 `GH_TOKEN`（App 未設定時のフォールバック） |
 | `token set global` | `~/.config/sandbox/env`（全プロジェクトの既定） |
-| `token show [pj]` | 効いているトークンの出どころとマスク表示 |
+| `token rotate [claude\|gh]` | `~/.config/sandbox/env` と、その鍵を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env` |
+| `token show [pj]` | 効いているトークンの出どころとマスク表示、保存からの日数、実行ホストが制御系かどうか |
+
+期限切れの差し替えは制御系（`ctl.env` のあるホスト）で `sandbox token rotate` を 1 回。更新した場所を一覧で出したあと、`ctl.env` を更新したときは `aifactory-console` を再起動し（`sudo -n` が通らなければコマンドを表示）、貸出中の VM があれば `reinject --all` まで行います（ADR-0029）。VM の中で動いている `claude` は、従来どおり VM 内で再起動が要ります。
 
 ### gh-app
 

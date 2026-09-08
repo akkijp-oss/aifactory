@@ -20,12 +20,13 @@ sandbox gh-app status                    # App と install が生きているか
 
 ```bash
 claude setup-token
-sandbox token set <pj>                   # 保存
+sandbox token rotate                     # global・鍵を持つ全 PJ・ctl.env をまとめて更新し、console 再起動と reinject --all まで
+sandbox token set <pj>                   # 1 プロジェクトだけ保存し直すとき
 sandbox reinject <id>                    # 貸出中の VM にも反映（巻き戻しなし）
 sandbox reinject --all
 ```
 
-期限はメモ（`workspace/docs/` など）に書いておく運用です。
+`sandbox token rotate` は制御系（`~/.config/aifactory/ctl.env` のあるホスト）で実行します。保存した日は各ファイルにコメントで残るので、`sandbox token show` の「発行から N 日」で期限が近いことに気づけます。
 
 ### GitHub のトークン（自動）
 
@@ -43,7 +44,8 @@ App の権限を足したとき（Actions: Read など）は、各 installation 
 | やりたいこと | コマンド |
 |---|---|
 | 貸出状況 | `sandbox ls` |
-| 空きなしで `take` が失敗 | `sandbox ls` で貸出中を確認 → 不要なら `release`。それでも足りなければ台数を増やす |
+| 定義台数と実体台数の食い違いを見る | `sandbox status [pj]`（`PJ DEFINED ACTUAL LENT FREE`）。コンソールの sandbox 画面と MCP の `sandbox_status` も同じ 4 つを出す |
+| 空きなしで `take` が失敗 | エラー文の内訳（定義 / 実体 / 貸出 / 未構築 / clean 無し）を読む → 貸出中で不要なものを `release`、実体が足りなければ台数を増やす |
 | 台数を増やす | `TPL_VMID=911x sandbox/proxmox/run.sh 40-pool.sh <pj> <台数>` → `50-firewall.sh`。`lvs pve/data` の `data%` を見る |
 | 汚れた VM を作り直す | `qm destroy <vmid>` → `40-pool.sh`。`clean` がない VM は `reset` できない |
 | 貸出中の VM を触らない | `~/.config/sandbox/state.json` を読んで飛ばす（`50-firewall.sh` は `LENT=` で飛ばせる） |
@@ -79,12 +81,12 @@ sandbox release 999
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | なければ破棄して `40-pool.sh` |
 | VM から外に出られない | `iptables -t nat -S \| grep 10.77`、`pve-firewall status` | SDN 再適用 `pvesh set /cluster/sdn`。LAN・他 VM・tailnet 宛ては仕様で不可 |
 | Mac から VM に届かない（ファイアウォール有効化後） | `/etc/pve/firewall/<vmid>.fw`、`qm config <vmid> \| grep firewall` | `50-firewall.sh` を再実行 |
-| Claude Code が認証エラー | VM 内 `env \| grep CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` → `sandbox token set` → `reinject` |
+| Claude Code が認証エラー | VM 内 `env \| grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show` の発行日数 | `claude setup-token` → `sandbox token rotate`（全 PJ・`ctl.env`・再注入まで 1 コマンド） |
 | Proxmox ホストが落ちた | `ssh $PVE_HOST` 不可、`pvecm nodes`（クラスタなら別ノードから） | 電源を入れる（WoL / IPMI / 物理ボタン）。プールは onboot=0 なので手で `qm start` |
 
 ## 定期メンテナンス
 
 - 月 1: base テンプレートの OS 更新
-- トークンの期限が近づいたら `claude setup-token`
+- トークンの期限が近づいたら（`sandbox token show` の発行日数）`claude setup-token` → `sandbox token rotate`
 - `workspace/runs/` が増えたら、古い run を消すか別置きにする（記録としては `state.json` と `work/` があれば十分）
 - 完了したチケットが増えても、通常は削除する必要はありません。履歴は `kb list --all` で確認できます

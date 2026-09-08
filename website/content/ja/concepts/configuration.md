@@ -78,7 +78,8 @@ flowchart LR
 | 使うモデル | `workflow/kit/routes.env`（クラス単位）。1 工程なら yml の `model_class`、1 回なら `CLAUDE_MODEL` | 指定した範囲 |
 | PR の宛先ブランチ | `project.yml` の `base_branch` / `hotfix_base` / `workflow_overrides` | そのプロジェクト |
 | チケットの分類基準 | `glue/bin/intake` のプロンプト、または依頼文の先頭に `kind:` 行 | チケット作成時 |
-| プール台数 | `sandbox/proxmox/40-pool.sh`、`glue/bin/dispatch` の `POOL_PER_PJ` | そのプロジェクトの並列数 |
+| プール台数（実体） | `sandbox/proxmox/40-pool.sh <pj> <台数>`（作った台数がそのまま実体） | そのプロジェクトの並列数 |
+| プール台数（定義） | 環境変数 `SANDBOX_POOL_PER_PJ`（既定 3）。`glue/bin/dispatch`、`sandbox status`、コンソールの sandbox 画面が同じ値を読む。実体より多いと `take` が空きなしで落ちる | 配車と表示 |
 | Claude トークンの更新 | `sandbox token set <pj>`（貸出中は `sandbox reinject <id>`） | そのプロジェクト |
 | Proxmox ホストや IP 空間 | `~/.config/sandbox/env`（`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`）、Proxmox 側は `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`。`sandbox/README.md` の命名規則 + ADR | 全体 |
 | 作業データの置き場 | 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace` | 全体 |
