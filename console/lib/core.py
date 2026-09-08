@@ -690,10 +690,98 @@ def op_job_stop(jid):
     return {"ok": True, "message": msg}
 
 
+# ---------- ログ（起票・配車）
+# intake.log / dispatch.log の行は「console が読む契約」（ADR-0027）。glue 側の形式は変えず、ここで項目に分解する。
+# どの規則にも当てはまらない行は event="other" にして原文（raw / reason）をそのまま出す（推測で埋めない。ADR-0025 と同じ姿勢）。
+LOG_ENTRY = {"at": "", "source": "", "event": "other", "tid": None, "pj": "", "kind": "", "status": None,
+             "rc": None, "elapsed_s": None, "confidence": None, "model": "", "reason": "", "detail": "",
+             "dry_run": False, "raw": ""}
+# dispatch.log の本文（日時の後ろ）。glue/bin/dispatch が書く 6 種類。上から順に当てる
+DISPATCH_RULES = (
+    ("end", re.compile(r"^end\s+(?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+) rc=(?P<rc>-?\d+) status=(?P<status>\S+) (?P<elapsed_s>\d+)s$")),
+    ("start", re.compile(r"^start (?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+) ?(?P<title>.*)$")),
+    ("blocked", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+) (?P<kind>\S+): project\.yml 無し → blocked$")),
+    ("worker_unavailable", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+): Pull worker unavailable → skip$")),
+    ("pool_busy", re.compile(r"^(?P<tid>\d+) (?P<pj>\S+): プール (?P<detail>\d+) 台すべて貸出中 → この PJ は飛ばす$")),
+    ("idle", re.compile(r"^todo が無い")),
+)
+DRY_RUN_MARK = " (dry-run)"
+
+
+def log_entry(**kw):
+    e = dict(LOG_ENTRY); e.update(kw); return e
+
+
+def as_int(v):
+    try: return int(v)
+    except (TypeError, ValueError): return None
+
+
+def as_float(v):
+    try: return float(v)
+    except (TypeError, ValueError): return None
+
+
+def log_other(line, source):
+    """規則に当てはまらない行。日時だけ切り出し、本文は原文のまま出す（隠さない・推測で埋めない）"""
+    at, tab, body = line.partition("\t")
+    if not tab: at, body = "", line
+    return log_entry(at=at, source=source, event="other", reason=body, raw=line)
+
+
+def parse_intake_line(line):
+    """intake.log の 1 行（日時 / id / pj / kind / confidence / model / reason の 7 列、tab 区切り）"""
+    if not line.strip(): return None
+    c = line.split("\t", 6)
+    if len(c) < 7: return log_other(line, "intake")
+    at, tid, pj, kind, conf, model, reason = c
+    return log_entry(at=at, source="intake", event="intake", tid=as_int(tid), pj=pj, kind=kind,
+                     confidence=as_float(conf), model=model, reason=reason, raw=line)
+
+
+def parse_dispatch_line(line):
+    """dispatch.log の 1 行（日時 tab 本文）。本文は行の種類ごとに列が違うので規則を順に当てる"""
+    if not line.strip(): return None
+    at, tab, body = line.partition("\t")
+    if not tab: return log_other(line, "dispatch")                  # 日時が無い行も原文として残す
+    for name, rx in DISPATCH_RULES:
+        m = rx.match(body)
+        if not m: continue
+        g = m.groupdict()
+        e = log_entry(at=at, source="dispatch", raw=line, tid=as_int(g.get("tid")), pj=g.get("pj") or "", kind=g.get("kind") or "")
+        if name == "end":
+            e.update(event="end", rc=as_int(g["rc"]), status=g["status"], elapsed_s=as_int(g["elapsed_s"]))
+        elif name == "start":
+            title = g.get("title") or ""
+            if title == DRY_RUN_MARK.strip(): title = ""; e["dry_run"] = True      # 題名が空の dry-run（印だけ残る）
+            elif title.endswith(DRY_RUN_MARK): title = title[: -len(DRY_RUN_MARK)]; e["dry_run"] = True
+            e.update(event="start", reason=title)
+        elif name == "blocked":
+            e.update(event="blocked", status="blocked")
+        elif name == "idle":
+            e.update(event="idle")
+        else:
+            e.update(event="skip", reason=name, detail=g.get("detail") or "")
+        return e
+    return log_other(line, "dispatch")
+
+
 def logs_view():
-    out = {}
+    """生のログ（intake / dispatch）と、そこから導いた行の一覧（entries、新しい順）を返す。
+
+    entries は画面の表と絞り込みが読む。生の text は「元のログを見る」と MCP の logs ツールが使うので消さない。
+    """
+    out = {}; rows = []
     for name in ("intake", "dispatch"):
         data, _ = read_file(str(LOGS / f"{name}.log"), tail=200_000); out[name] = data
+        if not data: continue
+        lines = data["text"].splitlines()
+        if data.get("truncated") and lines: lines = lines[1:]        # tail の切れ目。先頭の不完全な 1 行は捨てる
+        parse = parse_intake_line if name == "intake" else parse_dispatch_line
+        rows += [e for e in (parse(l) for l in lines) if e]
+    rows = [e for _, e in sorted(enumerate(rows), key=lambda t: (t[1]["at"], t[0]), reverse=True)]
+    out["total"] = len(rows)
+    out["entries"] = rows[:1000]                                     # 画面は新しい分だけ。件数は total で言う
     return out
 
 

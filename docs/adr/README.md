@@ -38,3 +38,4 @@
 - [0025: 実行記録の停止理由はコンソール側で導く](0025-run-outcome-derived-in-console.md)
 
 - [0026: 記録する時刻はオフセット付き ISO 8601 にする](0026-timestamps-carry-utc-offset.md)
+- [0027: 起票・配車のログの表はコンソール側で導く](0027-logs-table-derived-in-console.md)

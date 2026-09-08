@@ -307,6 +307,81 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
         self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
 
+    def test_logs_are_derived_into_rows(self):
+        """起票・配車のログを、項目名つきの表にできる形（entries）にして返す（チケット 230、ADR-0027）。
+
+        dispatch.log は行の種類ごとに列が違い（tid の無い行もある）、intake.log は 7 列固定。分解は
+        コンソール側で一度だけ行い、glue のログ形式は変えない。どの規則にも当てはまらない行は隠さず
+        event="other" として原文を残す（推測で埋めない）。生の text は「元のログを見る」と MCP が使うので消さない。
+        """
+        logs = self.ws / "logs"; logs.mkdir(parents=True, exist_ok=True)
+        (logs / "dispatch.log").write_text(
+            "2026-09-07T10:00:01\ttodo が無い（または全部飛ばした）。終了\n"
+            "2026-09-07T10:00:02\t204 kumitate bug: project.yml 無し → blocked\n"
+            "2026-09-07T10:00:03\t205 kumitate: Pull worker unavailable → skip\n"
+            "2026-09-07T10:00:04\t206 kumitate: プール 3 台すべて貸出中 → この PJ は飛ばす\n"
+            "2026-09-07T10:00:05\tstart 207 kumitate feature ログ画面を表にする (dry-run)\n"
+            "2026-09-07T10:00:06\tend   207 kumitate feature rc=2 status=todo 93s\n"
+            "2026-09-07T10:00:07\tこれから足される種類の行\n", encoding="utf-8")
+        (logs / "intake.log").write_text(
+            "2026-09-07T09:00:01\t203\tkumitate\tbug\t0.9\tmodel-x\t題名と本文が整っている\n"
+            "2026-09-07T09:00:02\t204\tkumitate\tfeature\t0.97\tmodel-x\tPJ の指定があった\n", encoding="utf-8")
+        st, d = self.http.get("/api/logs")
+        self.assertEqual(st, 200)
+        self.assertEqual(d["total"], 9); self.assertEqual(len(d["entries"]), 9)
+        rows = d["entries"]
+        self.assertEqual([r["at"] for r in rows], sorted((r["at"] for r in rows), reverse=True), "新しい順に並んでいない")
+        one = lambda src, ev: next(r for r in rows if r["source"] == src and r["event"] == ev)
+
+        idle = one("dispatch", "idle")
+        self.assertIsNone(idle["tid"]); self.assertEqual(idle["pj"], "")                     # tid / pj の無い行も落とさない
+        blocked = one("dispatch", "blocked")
+        self.assertEqual((blocked["tid"], blocked["pj"], blocked["kind"], blocked["status"]), (204, PJ, "bug", "blocked"))
+        skips = sorted((r for r in rows if r["event"] == "skip"), key=lambda r: r["tid"])
+        self.assertEqual([(r["tid"], r["reason"]) for r in skips], [(205, "worker_unavailable"), (206, "pool_busy")])
+        self.assertEqual(skips[1]["detail"], "3")                                            # 台数は項目にして持つ
+        start = one("dispatch", "start")
+        self.assertEqual((start["tid"], start["kind"], start["dry_run"]), (207, "feature", True))
+        self.assertEqual(start["reason"], "ログ画面を表にする")                              # dry-run の印は題名から外す
+        end = one("dispatch", "end")
+        self.assertEqual((end["tid"], end["status"], end["rc"], end["elapsed_s"]), (207, "todo", 2, 93))
+        other = one("dispatch", "other")
+        self.assertEqual(other["reason"], "これから足される種類の行"); self.assertIn("これから足される", other["raw"])
+        intake = [r for r in rows if r["source"] == "intake"]
+        self.assertEqual([(r["tid"], r["kind"], r["confidence"], r["model"]) for r in intake],
+                         [(204, "feature", 0.97, "model-x"), (203, "bug", 0.9, "model-x")])
+        self.assertEqual(intake[0]["reason"], "PJ の指定があった")
+        self.assertIn("rc=2", d["dispatch"]["text"]); self.assertIn("0.97", d["intake"]["text"])   # 原文も残っている
+
+    def test_logs_screen_is_a_table_that_links_to_tickets(self):
+        """ログの 1 行から対象チケットへ直接移動でき、項目名・絞り込み・原文がそろっている（チケット 230）。
+
+        JS を動かす基盤が無いので、test_list_rows_have_real_links と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewLogs")
+        view = app[i:app.index("\n}", i)]
+        for key in ("q", "pj", "src"):
+            self.assertIn(f"p.get('{key}')", view, f"絞り込み条件 {key} を URL から読んでいない（詳細から戻ると条件が消える）")
+        self.assertIn('id="lg-q"', view, "チケット番号で絞る欄が無い")
+        self.assertIn("T.h.rawLog", view, "元のログを見る導線が無い")
+        self.assertIn('<pre class="log small" id="lg-raw-', view, "原文（生のログ）を残していない")
+        self.assertIn("schedule(lgRefresh", view, "定期更新が表だけの描き直しになっていない")
+        self.assertNotIn("schedule(viewLogs", app, "10 秒ごとに画面全体を作り直すと、絞り込みの入力が飛ぶ")
+        i = app.index("function lgRender")
+        render = app[i:app.index("\n}", i)]
+        self.assertIn('<a href="#/ticket/', render, "チケット番号が本物のリンクになっていない（Tab で届かない）")
+        self.assertIn('tr class="link" data-href', render, "行クリックでチケットを開けない")
+        self.assertIn("T.logs.count", render, "件数（何件中の何件か）を出していない")
+        self.assertIn("T.empty.logs", render, "0 件のときの案内が無い")
+        for key in ("T.th.at", "T.th.process", "T.label.pj", "T.th.ticket", "T.th.result", "T.th.reason"):
+            self.assertIn(key, render, f"列名 {key} が表に無い")
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        for path, v in (("logs.endDetail", T["logs"]["endDetail"]), ("logs.event.end", T["logs"]["event"]["end"])):
+            for word in ("rc", "status"):
+                self.assertNotIn(word, v, f"{path} に開発者の語彙が残っている（{word}）")
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
@@ -894,6 +969,21 @@ class KitListingTest(unittest.TestCase):
     def test_dot_files_are_not_candidates(self):
         self.assertEqual(self.core.kinds(self.kit), ["bug"])
         self.assertEqual(self.core.roles(self.kit), ["planner"])
+
+
+class DispatchLineTest(unittest.TestCase):
+    """dispatch.log の 1 行の分解（HTTP を経由せず parse_dispatch_line を直接。ADR-0027）"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-logline-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_dry_run_start_without_title(self):
+        """題名が空の dry-run（印だけが残る行）でも dry-run と分かる。印を題名として出さない"""
+        e = self.core.parse_dispatch_line("2026-09-07T10:00:05\tstart 207 kumitate feature (dry-run)")
+        self.assertEqual((e["event"], e["tid"], e["dry_run"], e["reason"]), ("start", 207, True, ""))
 
 
 if __name__ == "__main__":
