@@ -97,7 +97,8 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 | `pr_url` present | review | PR URL |
 | `result: end`, no PR | done | Finished without a PR (research etc.) |
 | `result: human`, no PR | blocked | Handed to a human (wip branch) |
-| No `finished` / crashed | blocked | Runner crashed rc=N |
+| `result: failed` | blocked | Could not take a VM, so no step ran (the last line of `error` goes into the note) |
+| No `finished`, runner exited non-zero | blocked | Runner exited without a record, rc=N |
 
 `--dry-run` leaves the state unchanged. The exit code is the runner's (0 = end or PR present, 2 = human).
 

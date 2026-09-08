@@ -31,6 +31,7 @@ workflow/
 
 $AIFACTORY_WORKSPACE/                 # 運用データ（既定 <repo>/workspace/、git 追跡外）
 ├── runs/<date>-<pj>-<task>/      # 実行記録: ticket.md / state.json / prompt-*.md / agent-*.log / code-*.log / work/（回収した artifact）
+│                                 # state.json は ticket.md と同時に作る。take（VM 取得）で落ちた run にも `result: failed` と `error`（理由）が残る
 │                                 # agent-*.jsonl は生イベント。agent-*.log / code-*.log は step の途中から逐次書かれる（ADR-0014）
 │                                 # このディレクトリ名が kanban の run 列に入る
 ├── kanban/tickets/               # チケット本文（採番と状態は kanban）

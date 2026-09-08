@@ -15,7 +15,7 @@ sandbox ls                       lending status
 
 | Operation | What it does | Fails when |
 |---|---|---|
-| `take` | Picks a free VM of the project's pool from `state.json` → `qm rollback clean` → writes the project env and a GitHub App token to `/run/sandbox/env` → registers in dnsmasq on sb-gw → records in `state.json` | No free VM, no project env, App not installed |
+| `take` | Picks a free VM of the project's pool and reserves it in `state.json` (this much runs inside the `state.json.lock` critical section, so concurrent takes never pick the same VM) → `qm rollback clean` → writes the project env and a GitHub App token to `/run/sandbox/env` → registers in dnsmasq on sb-gw → confirms the reservation. A failure on the way drops the reservation | No free VM, no project env, App not installed |
 | `ssh` | `ssh dev@10.77.1.N` (ProxyJump if `SB_JUMP` is set). cmd runs through a login shell (`/etc/profile.d/sandbox.sh` loads the env) | VM unreachable |
 | `url` | Prints `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` | |
 | `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean` |

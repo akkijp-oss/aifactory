@@ -261,7 +261,9 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
     s = json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
     pr = None
     if "finished" not in s:
-        status, note = "in_progress", f"runner 実行中（次の step: {s.get('next', '?')}）"
+        # rc≠0 なら runner はもう居ない。記録が無いまま `実行中` で放置しない（238。kb sync は rc=0 なので従来どおり）
+        if rc != 0: status, note = "blocked", f"runner が記録を残さず終了 rc={rc}。原因を直して kb reopen → kb run"
+        else: status, note = "in_progress", f"runner 実行中（次の step: {s.get('next', '?')}）"
     else:
         result, pr_url, wip = s.get("result"), s.get("pr_url") or "", s.get("wip_branch") or ""
         m = re.search(r"/pull/(\d+)", pr_url); pr = int(m.group(1)) if m else None
@@ -269,6 +271,10 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
         if "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
         elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
         elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
+        elif result == "failed":
+            # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
+            why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
+            status, note = "blocked", f"VM を取得できず開始前に終了: {why}。原因を直して kb reopen → kb run"
         elif result == "human": status, note = "blocked", f"人間へ（wip: origin/{wip}）" if wip else "人間へ（PR 無し）"
         else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
     if dry:

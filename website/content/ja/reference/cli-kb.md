@@ -97,7 +97,8 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 | `pr_url` あり | review | PR 待ち URL |
 | `result: end`、PR なし | done | PR なしで終了（research 等） |
 | `result: human`、PR なし | blocked | 人間へ（wip ブランチ） |
-| `finished` なし / 異常終了 | blocked | runner が異常終了 rc=N |
+| `result: failed` | blocked | VM を取得できず工程が始まらなかった（`error` の最終行をメモに残す） |
+| `finished` なし、runner が rc≠0 | blocked | runner が記録を残さず終了 rc=N |
 
 `--dry-run` ではチケットの状態を変更しません。終了コードは runner の値をそのまま返します。0 は正常終了または PR の作成完了、2 は PR がない状態での `human` 終了を表します。
 

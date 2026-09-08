@@ -6,7 +6,7 @@
 const T = {
   "status": { "todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了" },
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
-  "result": { "end": "終了", "human": "人間へ" },
+  "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分" },
   "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
            "updated": "更新 {t}", "shortcuts": "? でショートカット" },
@@ -70,7 +70,7 @@ const T = {
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
-    "notStarted": "開始前（記録なし）",
+    "notStarted": "開始前（記録なし）", "error": "失敗の理由",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
   },
   "sandbox": {
@@ -90,6 +90,9 @@ const T = {
     },
     "tickets": "条件に合うチケットはありません。番号や題名を短くするか、PJ と状態を「すべて」にしてください。",
     "ticketRuns": "まだありません。上の「実行する」で作られます。",
+    "ticketRunsNoProjectYml": "まだありません。project.yml を置くと実行できるようになります。",
+    "ticketRunsBusy": "まだありません。動いているジョブが終わると、ここに出ます。",
+    "ticketRunsDone": "ありません。やり直すには、上の「未着手に戻す（やり直す）」を押してください。",
     "runs": "まだありません。チケットの「実行する」か、ボードの「配車する」で作られます。",
     "jobs": "まだありません。起票・実行・配車・返却を押すと、ここに出ます。",
     "jobLog": "まだ出力がありません。数秒お待ちください。",
@@ -104,8 +107,10 @@ const T = {
     "noProjectYml": "{pj} に project.yml が無いため、runner は動かせません。$AIFACTORY_WORKSPACE/projects/{pj}/project.yml を書いてください。",
     "runBusy": "このチケットのジョブが動いています。終わるのを待ってください:",
     "runDefault": "VM を 1 台貸し出し、工程を順に回します。終わると状態は自動で進みます。",
-    "runDone": "完了したチケットです。実行するには、先に「未着手に戻す」を押してください。",
+    "runDone": "完了したチケットです。実行するには、先に「未着手に戻す（やり直す）」を押してください。",
     "runInProgress": "実行中の扱いになっています。別の run が動いていないか確かめてから実行してください。",
+    "runReview": "レビュー待ちです。もう一度回すなら、内容を確かめてから実行してください。",
+    "runBlocked": "人間待ちです。メモに書いた原因を直してから実行してください。",
     "dryRun": "VM を触らず、依頼文と手順を組むだけです。状態は変わりません。",
     "moveUndo": "押すとすぐ変わります。トーストの「元に戻す」で前の状態に戻せます。",
     "syncTitle": "runs/<run>/state.json を読み直して、チケットの状態を合わせます。",
