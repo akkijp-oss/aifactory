@@ -124,13 +124,51 @@ class ApiTest(unittest.TestCase):
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
+    def test_done_overflow_leads_to_ticket_list(self):
+        """ボードの完了列からあふれた分が、CLI ではなく画面（#/tickets）に続く。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        board = app[app.index("async function viewBoard"):app.index("\n}", app.index("async function viewBoard"))]
+        self.assertIn("#/tickets", board, "完了列からあふれた分を見る導線が画面に無い（CLI の案内だけで終わっている）")
+        self.assertIn("T.btn.openTickets", board, "ボードから一覧へ行くボタンが無い")
+        self.assertRegex(app, r"seg\[0\] === 'tickets'", "route() に #/tickets が無い")
+
+        src = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
+        self.assertNotIn("kb list", T["board"]["more"], "あふれた分の案内が CLI のコマンドのままになっている")
+
+        i = app.index("async function viewTickets")
+        view = app[i:app.index("\n}", i)]
+        for key in ("q", "pj", "status"):
+            self.assertIn(f"p.get('{key}')", view, f"絞り込み条件 {key} を URL から読んでいない（詳細から戻ると条件が消える）")
+        render = app[app.index("function tkRender"):app.index("\n}", app.index("function tkRender"))]
+        self.assertIn("T.tickets.count", render, "件数（何件中の何件か）を出していない")
+        self.assertIn("T.empty.tickets", render, "0 件のときの案内が無い")
+
+    def test_every_data_act_has_a_handler(self):
+        """`data-act` は必ず `actions` に手がある名前だけにする。
+
+        click の委譲（`document.addEventListener('click', ...)`）は SELECT と checkbox 以外の
+        `[data-act]` をすべて `actions[...]` に回すので、手の無い名前を書くと押した瞬間に
+        TypeError → 赤いトースト、さらに `disabled` の切り替えでフォーカスが外れる。
+        JS を動かす基盤が無いので、ソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        block = app[app.index("const actions = {"):app.index("\n};", app.index("const actions = {"))]
+        handlers = set(re.findall(r"^  '?([\w-]+)'?:", block, re.M))
+        used = set(re.findall(r'data-act="([\w-]+)"', app))
+        self.assertTrue(handlers, "actions の手を読み取れていない（テストの前提が壊れている）")
+        self.assertEqual(used - handlers, set(), "actions に手の無い data-act がある（押すとエラーのトーストが出る）")
+
     def test_ticket_run_area_follows_status(self):
         """チケットの実行エリアが今の状態に合う（完了で押せる緑ボタン、ボタンが無い画面での「上の実行する」案内を防ぐ）。
 
         JS を動かす基盤が無いので、ボードの帯と同じくソースを検査する。
         """
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
-        i = app.index("async function viewTicket")
+        i = app.index("async function viewTicket(")
         body = app[i:app.index("\n}", i)]
         self.assertRegex(body, r"canRun\s*=[^;\n]*status\s*!==\s*'done'", "実行できるかを status から決めていない")
         self.assertRegex(body, r"const runBtn = \([^)]*disabled[^)]*\)", "runBtn が押せない状態を受け取れない")
@@ -196,6 +234,25 @@ class ApiTest(unittest.TestCase):
             self.assertIn("status ===", body, f"{fn} が status を見ていない")
             self.assertNotIn("!s.finished", body, f"{fn} が finished から実行中を決めている")
         self.assertIn("T.run.notStarted", app); self.assertIn("T.run.noState", app)
+
+    def test_list_rows_have_real_links(self):
+        """一覧の行から詳細を開く導線を、行クリックだけでなく本物の `<a>` にする（チケット 224）。
+
+        行は `<tr class="link" data-href>` で、名前セルが素の `<td>` だと Tab で届かず、
+        読み上げでも link に見えない。同じ行のチケット番号・PR だけがリンクに見えるのを直す。
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertRegex(app, r"function jobLink\(j\)[^\n]*<a href=\"#/job/", "ジョブ名を <a> にする jobLink が無い")
+        for fn, helper in (("async function viewRuns", "runLink("), ("async function viewJobs", "jobLink("),
+                           ("async function viewTicket(", "jobLink(")):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn(helper, body, f"{fn} の一覧が名前をリンクにしていない（{helper}）")
+            self.assertIn('tr class="link" data-href', body, f"{fn} の行クリック（tr.link data-href）が消えている")
+        i = app.index("async function route")
+        body = app[i:app.index("\n}", i)]
+        self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
+        self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
 
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
@@ -309,6 +366,31 @@ class ApiTest(unittest.TestCase):
         st, d = self.http.get("/api/runs/2026-09-07-kumitate-999")                    # 不完全な記録でも詳細へ移動できる
         self.assertEqual(st, 200); self.assertEqual(d["summary"]["status"], "not_started")
         self.assertIn("ticket.md", [f["name"] for f in d["files"]])
+
+    def test_run_failed_before_start_is_finished_with_reason(self):
+        """take が失敗した run（工程が 1 つも始まっていない）は「失敗」として終わった記録に見える（チケット 238）。
+
+        state.json を最初から書くようにしたので、こういう run は「開始前（記録なし）」でも「実行中」でもない。
+        """
+        name = "2026-09-07-kumitate-998"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "ticket.md").write_text("# 調査: take が失敗した run\n", encoding="utf-8")
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "998", "workflow": "research", "branch": "sandbox/998-research-x", "base": "develop",
+            "started": "2026-09-07T10:00:00", "finished": "2026-09-07T10:00:05", "elapsed_s": 5, "history": [], "loops": {},
+            "result": "failed", "next": "human", "current": None, "pr_url": "", "wip_branch": "",
+            "error": "command failed (1): ['sandbox', 'take', 'kumitate', '998']\n[error] pj=kumitate に空きなし"}, ensure_ascii=False), encoding="utf-8")
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == name)
+        self.assertEqual(row["status"], "finished"); self.assertEqual(row["result"], "failed"); self.assertEqual(row["pj"], PJ)
+        _, o = self.http.get("/api/overview")
+        self.assertNotIn(name, [x["name"] for x in o["runs_active"]])
+        self.assertNotIn(name, [x["name"] for x in o["runs_not_started"]["runs"]])
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200); self.assertEqual(d["summary"]["result"], "failed")
+        self.assertIn("空きなし", d["state"]["error"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.run.error", app)                                             # 詳細に失敗の理由が出る
 
     def test_file_roots(self):
         _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
