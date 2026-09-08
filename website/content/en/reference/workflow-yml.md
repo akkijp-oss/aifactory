@@ -19,7 +19,7 @@
 |---|---|---|
 | `id` | string (`^[a-z][a-z0-9_-]*$`) | Step name. Used as a transition target. Required |
 | `role` | planner / implementer / reviewer / researcher | Agent step. Constitution in `roles/<role>.md`, model from the role's default class |
-| `code` | string | Code step. Path relative to `kit/steps/`. Runs on the Mac and enters the VM with `sandbox ssh` |
+| `code` | string | Code step. Path relative to `kit/steps/`. Runs on the control plane and enters the VM with `sandbox ssh`. The special value `sync-base` (merging the latest base right before the PR) is built into the runner and has no file in `kit/steps/` |
 | `brief` | string (Markdown) | Extra instruction for this step, appended after the role constitution |
 | `model_class` | judgment / research / coding | Overrides the role's default class |
 | `inputs` | array of artifact | Read from `~/work/<id>/` in the VM and attached to the prompt. The reviewer also gets the diff automatically |
@@ -58,7 +58,7 @@ Either a string or an object.
 
     ```yaml
     name: bug
-    description: Bug fix. plan → reproduction test → fix → gates → review → PR
+    description: Bug fix. plan → reproduction test → fix → gates → review → merge base → PR
     inputs: [ticket.md]
     steps:
       - id: plan
@@ -83,8 +83,18 @@ Either a string or an object.
         role: reviewer
         inputs: [plan.md, report.md, gates.txt]
         outputs: [review.md]
-        on_pass: pr
+        on_pass: sync
         on_fail: { goto: implement, max_loops: 1, else: human }
+      - id: sync
+        code: sync-base
+        on_pass: pr
+        on_fail: { goto: resolve, max_loops: 2, else: human }
+      - id: resolve
+        role: implementer
+        brief: |
+          **Sent back by the base merge.** Resolve only what sent you back; never touch or widen the PR's own change.
+        outputs: [git, report.md]
+        next: gates
       - id: pr
         code: pr-create.sh
         inputs: [plan.md, report.md, review.md, gates.txt]

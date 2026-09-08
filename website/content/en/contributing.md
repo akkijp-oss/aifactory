@@ -33,7 +33,7 @@ This repository is published under Apache-2.0 ([akkijp-oss/aifactory](https://gi
 | Operations (lend, return, failures) | `sandbox/OPERATIONS.md` |
 | Reasons for design decisions | `docs/adr/NNNN-*.md` |
 | Traps encountered | "traps and handling" in `workflow/README.md` |
-| User-facing change history | `CHANGELOG.md` |
+| User-facing change history | `changelog.d/<ticket>-<slug>.md` (never edit `CHANGELOG.md` directly) |
 | Notes on your own environment | `$AIFACTORY_WORKSPACE/docs/` (outside the repository) |
 | Readable renderings for people | `docs/*.html`, this site (`website/`) |
 
@@ -57,7 +57,28 @@ CI (`.github/workflows/ci.yml`) runs the unittests in `console/tests` and `workf
 - "What and why" on line 1 of the message, with decisions and measurements in the body
 - Run records (`workspace/runs/`) and the ledger (`workspace/kanban/kanban.db`) live in the workspace and are **not tracked** by the repository. Do not include them in a PR
 - Do not push to main directly: branch and open a pull request. Merging is a human decision (agents do not push)
-- A PR that changes the design comes with one ADR. A user-visible change gets one line in `CHANGELOG.md`
+- A PR that changes the design comes with one ADR. Pick its number with `ls docs/adr/` right before you write it (a PR running in parallel takes the same number otherwise)
+- A user-visible change gets one file in `changelog.d/<ticket>-<slug>.md`, one entry per file. The `## [Unreleased]` section of `CHANGELOG.md` is never edited directly
+
+## The changelog and releases
+
+`## [Unreleased]` in `CHANGELOG.md` is the one line everybody appends to, so parallel PRs always conflict there.
+Each PR therefore drops a single file into `changelog.d/` instead (ADR-0032; the format is in `changelog.d/README.md`).
+
+```markdown
+<!-- changelog.d/239-runner-sync-base.md -->
+### Fixed
+- One user-visible change
+```
+
+The headings are `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`. Only a release collects them:
+
+```bash
+bin/changelog-release collect --dry-run   # preview what would land in Unreleased
+bin/changelog-release collect             # merge into Unreleased and delete changelog.d/*.md
+```
+
+Then close `## [Unreleased]` as `## [X.Y.Z] - YYYY-MM-DD`, open an empty `## [Unreleased]` above it, commit as `release: vX.Y.Z` and tag it.
 
 ## Extra notes for AI sessions
 

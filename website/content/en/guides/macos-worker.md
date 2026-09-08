@@ -146,6 +146,6 @@ A documentation task was run on 2026-09-07 using an M1 Mac mini with 16 GB RAM, 
 
 The guest does not share host directories, clipboard, or audio. Softnet blocks private IPv4, link-local, and tailnet destinations. The worker configures public DNS on the guest's `Ethernet` service and disables IPv6. That service name and working guest sudo access are prerequisites.
 
-Supported code steps are currently `gates.sh` and `pr-create.sh`. `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation; total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
+Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation; total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
 
 See [Mac and Windows computer use](computer-use.md) to add desktop interaction.

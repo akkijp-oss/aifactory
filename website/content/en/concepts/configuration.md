@@ -42,7 +42,7 @@ flowchart LR
 | `workflow/kit/roles/_common.md` | runner → agent (prompt layer 1) | Rules shared by every role (no push, stay in scope, no secrets) | Low |
 | `workflow/kit/roles/<role>.md` | runner → agent (layer 2) | The role's constitution: duties, prohibitions, output shape | Low |
 | `workflow/kit/routes.env` | runner, intake | Class → model (judgment = Fable / research = Sonnet / coding = Opus) | Low. The maintainer's decision |
-| `workflow/kit/steps/*.sh` | runner (code steps) | gates.sh (runs the project's gates in the VM), pr-create.sh, pr-merge.sh | Low |
+| `workflow/kit/steps/*.sh` | runner (code steps) | gates.sh (runs the project's gates in the VM), pr-create.sh, pr-merge.sh. `sync-base` (merging the latest base before the PR) is built into the runner and has no file | Low |
 | `workflow/kit/schema/*.json` | runner | Validity of workflow yml and project.yml | Low |
 | `workspace/projects/<pj>/project.yml` | runner (layer 4), dispatch (presence only), intake (project list), the console | The project's facts and policy. Falls back to `examples/projects/<pj>/` | Medium |
 | `workspace/projects/<pj>/gates.sh` | kit/steps/gates.sh (in the VM) | The project's quality gates | Medium |

@@ -27,7 +27,7 @@ def backend(Run):
         backend_label = "Mac VM"
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh"}
+            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"}
             if unsupported: raise ValueError("unsupported pull-worker code steps: " + ", ".join(sorted(unsupported)))
             self.work = str(pathlib.PurePosixPath(self.project["app_dir"]).parent / "work" / self.task)
             self.env_file = str(pathlib.PurePosixPath(self.work) / "runtime.env")
@@ -202,6 +202,8 @@ def backend(Run):
         def run_code(self, step):
             if self.dry: return True, "(dry-run)"
             name = step["code"]
+            # sync-base は runner 内蔵で、POSIX の git しか使わないので本体の実装がそのまま動く（チケット 239）
+            if name == "sync-base": return self.run_sync(step)
             log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
             self.set_current(step["id"], "code", log_path.name)
             if name == "gates.sh":

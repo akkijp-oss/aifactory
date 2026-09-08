@@ -35,7 +35,7 @@ aifactory は Apache-2.0 ライセンスで公開されており、[GitHub の�
 | 運用（貸出・返却・障害） | `sandbox/OPERATIONS.md` |
 | 設計判断の理由 | `docs/adr/NNNN-*.md` |
 | 過去に起きた問題 | `workflow/README.md` の「踏んだ罠と対処」 |
-| 利用者向けの変更履歴 | `CHANGELOG.md` |
+| 利用者向けの変更履歴 | `changelog.d/<チケット番号>-<slug>.md`（`CHANGELOG.md` は直接編集しない） |
 | 自分の環境のメモ | `$AIFACTORY_WORKSPACE/docs/`（リポジトリ外） |
 | 利用者向けの解説 | `docs/*.html`、このサイト（`website/`） |
 
@@ -60,7 +60,28 @@ CI（`.github/workflows/ci.yml`）は pull request ごとに `console/tests` と
 - メッセージは「何を・なぜ」を 1 行目に。本文に判断と実測を残す
 - 実行記録（`workspace/runs/`）と台帳（`workspace/kanban/kanban.db`）は workspace にあり、リポジトリでは**追跡しない**。PR に含めない
 - 変更は main へ直接 push せず、ブランチを切って pull request にする。マージは人間が判断する（エージェントは push しない）
-- 設計を変える PR には ADR を 1 枚添える。利用者に見える変更は `CHANGELOG.md` に 1 行足す
+- 設計を変える PR には ADR を 1 枚添える。ADR の番号は書く直前に `ls docs/adr/` で取り直す（並列に走る PR と番号がぶつかる）
+- 利用者に見える変更は `changelog.d/<チケット番号>-<slug>.md` に 1 ファイル 1 項目で書く。`CHANGELOG.md` の `## [Unreleased]` は直接編集しない
+
+## 変更履歴とリリース
+
+`CHANGELOG.md` の `## [Unreleased]` は、全員が同じ行に箇条書きを足す場所なので、並列に走る PR が必ず衝突します。
+そのため各 PR は `changelog.d/` にファイルを 1 枚置くだけにします（ADR-0032。書式は `changelog.d/README.md`）。
+
+```markdown
+<!-- changelog.d/239-runner-sync-base.md -->
+### Fixed
+- 利用者に見える変更を 1 項目
+```
+
+見出しは `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`。リリースするときだけ、次の順で閉じます。
+
+```bash
+bin/changelog-release collect --dry-run   # 何が Unreleased に載るか下見する
+bin/changelog-release collect             # Unreleased に集約し、changelog.d/*.md を消す
+```
+
+そのあと `## [Unreleased]` を `## [X.Y.Z] - YYYY-MM-DD` に閉じ、空の `## [Unreleased]` を上に作って `release: vX.Y.Z` のコミットにし、タグを打ちます。
 
 ## AI セッションへの補足
 

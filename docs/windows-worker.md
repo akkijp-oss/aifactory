@@ -78,7 +78,7 @@ gates: gates.ps1
 
 `app_dir` はワーカーの `work_root` に `/app` を付けた値。実行時は `work_root/<lease>/app` に置き換える。成果物は同じlease内の `work/<task>` に保存する。プロジェクト用のGitHub AppとClaude認証設定も制御系に用意する。
 
-任意の `provision.ps1` は認証注入・clone前に一般ユーザーで実行する。管理者権限が必要なツールは事前にVMへ導入する。`gates.ps1` はPowerShellスクリプトとして用意し、外部コマンド失敗時は `exit $LASTEXITCODE` などで非ゼロを返す。workflowのstep名 `gates.sh` は共通の識別子として残り、WindowsではPJの `.ps1` を呼び出す。`pr-create.sh` もWindows用Git/gh処理へ対応する。`merge-pr` は未対応。
+任意の `provision.ps1` は認証注入・clone前に一般ユーザーで実行する。管理者権限が必要なツールは事前にVMへ導入する。`gates.ps1` はPowerShellスクリプトとして用意し、外部コマンド失敗時は `exit $LASTEXITCODE` などで非ゼロを返す。workflowのstep名 `gates.sh` は共通の識別子として残り、WindowsではPJの `.ps1` を呼び出す。`pr-create.sh` もWindows用Git/gh処理へ対応する。`merge-pr` は未対応。PR直前のbase取り込み（`sync-base`）はPOSIXシェル前提のためWindowsでは飛ばす（従来どおりbaseを取り込まずPRを作る）。
 
 ```powershell
 $ErrorActionPreference='Stop'

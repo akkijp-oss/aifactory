@@ -66,7 +66,7 @@ gates: gates.ps1
 
 `app_dir` must be `<work_root>/app`; the runner translates it to `<work_root>/<lease>/app`. Artifacts go into `<work_root>/<lease>/work/<task>`. Configure project-scoped GitHub App and Claude credentials on the control plane.
 
-Optional `provision.ps1` runs as the ordinary task account before credentials and cloning. Preinstall tools that require Administrator privileges. Use a `.ps1` gate and propagate external command failures explicitly with `exit $LASTEXITCODE`. The shared workflow step identifier remains `gates.sh`; the Windows backend invokes the project's PowerShell gate. PR creation uses native Git and gh. Automatic PR merge is unsupported.
+Optional `provision.ps1` runs as the ordinary task account before credentials and cloning. Preinstall tools that require Administrator privileges. Use a `.ps1` gate and propagate external command failures explicitly with `exit $LASTEXITCODE`. The shared workflow step identifier remains `gates.sh`; the Windows backend invokes the project's PowerShell gate. PR creation uses native Git and gh. Automatic PR merge is unsupported. The pre-PR base merge (`sync-base`) assumes a POSIX shell and is skipped on Windows, so the PR is opened without merging the base, as before.
 
 Create and run a ticket through MCP or `kb run <id>`. Dispatch skips offline or occupied workers. Each worker owns one run lease at a time.
 

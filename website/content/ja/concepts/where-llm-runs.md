@@ -53,6 +53,7 @@ flowchart LR
 | `dispatch` | Python | todo を取り、project.yml とプール空きを見て `kb run` |
 | runner 本体 | Python | 定義の検証、依頼文の組み立て、ssh、transition、記録 |
 | `gates.sh` / `pr-create.sh` / `pr-merge.sh` | bash | テスト実行、push、PR、マージ |
+| `sync-base`（runner 内蔵） | Python + git | PR 直前の base 取り込みと、`docs/adr/` の番号重複の検査 |
 | `sandbox` CLI | bash | VM の貸出、巻き戻し、トークン注入、DNS |
 | Proxmox 側スクリプト | bash | SDN、LXC、テンプレート、プール、ファイアウォール |
 

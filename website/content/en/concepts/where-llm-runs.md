@@ -51,6 +51,7 @@ Yellow marks where the LLM lives.
 | `dispatch` | Python | Takes a todo, checks project.yml and pool availability, calls `kb run` |
 | The runner | Python | Validates definitions, assembles prompts, ssh, transitions, records |
 | `gates.sh` / `pr-create.sh` / `pr-merge.sh` | bash | Runs tests, push, PR, merge |
+| `sync-base` (built into the runner) | Python + git | Merges the latest base before the PR and checks `docs/adr/` for duplicate numbers |
 | `sandbox` CLI | bash | VM lending, rollback, token injection, DNS |
 | Proxmox scripts | bash | SDN, LXC, templates, pool, firewall |
 

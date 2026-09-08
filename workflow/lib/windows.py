@@ -130,6 +130,9 @@ def backend(Run):
         def run_code(self, step):
             if self.dry: return True, '(dry-run)'
             name = step['code']
+            # sync-base（base 取り込み）は POSIX の sb を前提にした runner 内蔵の実装で、ここの sb は PowerShell。
+            # Windows 実機で確かめられないので従来どおりの挙動のまま素通りさせる（チケット 239）
+            if name == 'sync-base': return True, 'Windows: base 取り込み（sync-base）は未対応なので飛ばした'
             log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
             self.set_current(step['id'], 'code', log_path.name)
             if name == 'gates.sh':

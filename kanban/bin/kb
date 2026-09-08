@@ -312,7 +312,11 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
             status, note = "blocked", f"VM を取得できず開始前に終了: {why}。原因を直して kb reopen → kb run"
-        elif result == "human": status, note = "blocked", f"人間へ（wip: origin/{wip}）" if wip else "人間へ（PR 無し）"
+        elif result == "human":
+            # 止まった理由（どの step で・なぜ）を板だけ見て分かるようにする（239）。理由が無い run は従来どおり
+            why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or [""])[-1][:160]
+            status = "blocked"
+            note = ("人間へ" + (f"（wip: origin/{wip}）" if wip else "（PR 無し）")) + (f": {why}" if why else "")
         else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
     if dry:
         r = get(c, tid)

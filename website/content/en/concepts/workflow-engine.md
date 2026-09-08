@@ -46,8 +46,18 @@ steps:
     role: reviewer
     inputs: [plan.md, report.md, gates.txt]
     outputs: [review.md]
-    on_pass: pr
+    on_pass: sync
     on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: sync
+    code: sync-base                # code step, built into the runner: merge the latest base before the PR
+    on_pass: pr
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: resolve
+    role: implementer              # a conflict goes back to the implementer, not to a human
+    outputs: [git, report.md]
+    next: gates
 
   - id: pr
     code: pr-create.sh
@@ -89,7 +99,7 @@ flowchart TD
 | Start | Reads `kit/workflows/<wf>.yml` and the project's `project.yml` (`workspace/projects/<pj>/` → `examples/projects/<pj>/`), validates schemas. Branch `sandbox/<id>-<wf>-<slug>`. Creates `workspace/runs/<date>-<pj>-<id>/` (moving an existing one to `-attemptN`) |
 | take | `sandbox take <pj> <id>`. Fetches base in the VM and creates the work branch. For merge-pr, checks out the PR head |
 | agent step | Assembles the prompt, keeps a copy in `workspace/runs/`, places it at `/home/dev/prompt.md` in the VM, and runs `cd $SANDBOX_APP_DIR && timeout <N>m claude -p "$(cat prompt.md)" --model <model>`. Pass if every file in `outputs` exists afterwards |
-| code step | Runs `kit/steps/<script>` on the Mac with env `PJ TASK RUN_DIR PROJECT_DIR GATES WORK APP_DIR BASE BRANCH WORKFLOW TITLE PR_NUMBER KNOWN_RED`. Pass on exit code 0 |
+| code step | Runs `kit/steps/<script>` on the control plane with env `PJ TASK RUN_DIR PROJECT_DIR GATES WORK APP_DIR BASE BRANCH WORKFLOW TITLE PR_NUMBER KNOWN_RED`. Pass on exit code 0 |
 | transition | Looks at `next` / `on_pass` / `on_fail`. Counts `goto` loops in `loops` of `state.json`; past `max_loops` goes to `else` |
 | send-back | Attaches the previous result (gate logs, review content) as "Previous result (fix this)" to the next prompt. States "report, do not fix" for gates already red on base |
 | end | If `human`, pushes to `origin/sandbox/<id>-<wf>-wip` to preserve the work. Collects `~/work/<id>/` into `workspace/runs/…/work/`. `sandbox release` |
@@ -127,10 +137,11 @@ Each role has a default class, and classes resolve to model names in `workflow/k
 
 Three levels of override: the step's `model_class` > the environment variable `CLAUDE_MODEL` (one-off) > default. "Judgement on Fable, web research on Sonnet, implementation on Opus" is the maintainer's decision (2026-09-06). Change `routes.env` to use other models.
 
-## The three code steps
+## The four code steps
 
 | Script | What it does | Fails when |
 |---|---|---|
 | `gates.sh` | Copies the project's `gates.sh` to the VM and runs it. Downgrades FAILs in `known_red_gates` to INFO. Writes the result to `~/work/<id>/gates.txt` | Any FAIL remains |
 | `pr-create.sh` | Checks for commits → push → `gh pr create` with the artifacts as the body → writes the URL to `~/work/<id>/pr_url` | No commits, push failed |
 | `pr-merge.sh` | Checks for leftover conflict markers → checks base is merged in → pushes to the head → posts gate and review results as a PR comment → `gh pr merge` | Markers left, base not merged in, merge failed |
+| `sync-base` | **Built into the runner** (no file in `kit/steps/`). `git fetch origin <base>`, then `git merge` unless it is already merged in. On a conflict it records the conflicting file names and runs `git merge --abort`; afterwards it checks `docs/adr/` for duplicate numbers | A conflict, a duplicate ADR number, or a failed fetch |

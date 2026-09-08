@@ -9,7 +9,7 @@
 | **base** (template) | The VM template shared by every project, `sb-base` (9100) |
 | **blocked** | Ticket state: waiting for a human. The note says why |
 | **clean** | The snapshot name of pool VMs. The baseline before lending (app running, firewall included, RAM included) |
-| **code step** | A workflow step performed by a script. `gates.sh` / `pr-create.sh` / `pr-merge.sh` |
+| **code step** | A workflow step performed by a script. `gates.sh` / `pr-create.sh` / `pr-merge.sh`, plus the runner's built-in `sync-base` |
 | **class** | A kind of work: judgment / research / coding. Resolved to a model name in `routes.env` |
 | **dispatch** | The glue scheduler. Runs todo items in order with `kb run`. Plain code |
 | **dry run** | A run that touches no VM: schema validation and prompt assembly only |

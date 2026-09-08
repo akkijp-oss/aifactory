@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""bin/changelog-release: changelog.d/ の 1 ファイル 1 項目を CHANGELOG.md の `## [Unreleased]` に集約する（チケット 239）。
+
+  bin/changelog-release collect [--dry-run]      changelog.d/*.md を Unreleased に足して、元のファイルを消す
+  bin/changelog-release check [--base <ref>]     CHANGELOG.md の Unreleased を直接編集していないか（ゲート用）
+
+なぜ分けるか: 並列に走った run が全部 `## [Unreleased]` の同じ行に箇条書きを足すので、先にマージされた PR が
+1 本あるだけで後発の PR が必ず CONFLICTING になる。1 run 1 ファイル（`changelog.d/<チケット番号>-<slug>.md`）なら
+git 的に別ファイルなので衝突しない。集約はリリース（`release: vX.Y.Z` のコミット）を作る人・スクリプトが 1 回だけ行う。
+
+changelog.d/<チケット番号>-<slug>.md の書式（Keep a Changelog の見出し + 箇条書き）:
+
+    ### Added
+    - 利用者に見える変更を 1 項目
+
+見出しは Added / Changed / Deprecated / Removed / Fixed / Security。複数あってよい。
+集約の順: ファイル名の昇順（= チケット番号の順）。Unreleased に無い見出しは Keep a Changelog の並びで作る。
+"""
+import argparse
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CHANGELOG = ROOT / "CHANGELOG.md"
+ENTRIES = ROOT / "changelog.d"
+# Keep a Changelog の並び。Unreleased に無い見出しはこの順で作る
+ORDER = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
+UNRELEASED = re.compile(r"^## \[Unreleased\]\s*$", re.M)
+SECTION = re.compile(r"^### (.+?)\s*$")
+
+
+def entry_files(d=None):
+    """changelog.d/*.md（README.md は書式の説明なので集約しない）をファイル名の昇順で"""
+    d = d or ENTRIES
+    if not d.is_dir(): return []
+    return sorted(p for p in d.glob("*.md") if p.name != "README.md")
+
+
+def parse_entry(text):
+    """1 ファイルを {見出し: [行, ...]} にする。見出しの外に書かれた本文は Added 扱いにする"""
+    out, section = {}, None
+    for line in text.splitlines():
+        m = SECTION.match(line)
+        if m:
+            section = m.group(1)
+            out.setdefault(section, [])
+            continue
+        if not line.strip(): continue
+        out.setdefault(section or "Added", []).append(line.rstrip())
+    return {k: v for k, v in out.items() if v}
+
+
+def split_unreleased(text):
+    """CHANGELOG.md を (前, Unreleased の中身, 後) に切る。Unreleased が無ければ ValueError"""
+    m = UNRELEASED.search(text)
+    if not m: raise ValueError("CHANGELOG.md に `## [Unreleased]` が無い")
+    body_start = m.end()
+    nxt = re.search(r"^## ", text[body_start:], re.M)
+    end = body_start + (nxt.start() if nxt else len(text[body_start:]))
+    return text[:body_start], text[body_start:end], text[end:]
+
+
+def rank(name, seen):
+    """見出しの並び順。Keep a Changelog の 6 つはその順、知らない見出しは出てきた順で後ろ"""
+    return (ORDER.index(name), 0) if name in ORDER else (len(ORDER), seen)
+
+
+def merge_sections(body, additions):
+    """Unreleased の中身に、見出しごとの行を足した中身を返す。既にある見出しにはその末尾へ足す"""
+    preamble, blocks, order, current = [], {}, [], None
+    for line in body.splitlines():
+        m = SECTION.match(line)
+        if m:
+            current = m.group(1)
+            if current not in blocks: blocks[current] = []; order.append(current)
+            continue
+        if current is None:
+            if line.strip(): preamble.append(line.rstrip())
+        else:
+            blocks[current].append(line.rstrip())
+    for name in sorted(additions, key=lambda n: rank(n, len(order))):
+        if name not in blocks: blocks[name] = []; order.append(name)
+        while blocks[name] and not blocks[name][-1].strip(): blocks[name].pop()
+        blocks[name] += additions[name]
+    parts = ["\n".join(preamble)] if preamble else []
+    for name in sorted(order, key=lambda n: rank(n, order.index(n))):
+        lines = list(blocks.get(name, []))
+        while lines and not lines[-1].strip(): lines.pop()
+        parts.append(f"### {name}\n" + "\n".join(lines) if lines else f"### {name}")
+    return "\n\n" + "\n\n".join(parts) + "\n\n" if parts else "\n\n"
+
+
+def collect(dry_run=False):
+    files = entry_files()
+    if not files:
+        print("[changelog] changelog.d に項目が無い。CHANGELOG.md は触らない")
+        return 0
+    additions = {}
+    for f in files:
+        for name, lines in parse_entry(f.read_text(encoding="utf-8")).items():
+            additions.setdefault(name, []).extend(lines)
+    text = CHANGELOG.read_text(encoding="utf-8")
+    head, body, tail = split_unreleased(text)
+    merged = head + merge_sections(body, additions) + tail.lstrip("\n")
+    for f in files: print(f"[changelog] {f.relative_to(ROOT)} → Unreleased（{', '.join(sorted(parse_entry(f.read_text(encoding='utf-8'))))}）")
+    if dry_run:
+        print("--- CHANGELOG.md の Unreleased（下見）")
+        print(split_unreleased(merged)[1].strip())
+        return 0
+    CHANGELOG.write_text(merged, encoding="utf-8")
+    for f in files: f.unlink()
+    print(f"[changelog] {len(files)} 件を集約して changelog.d から消した。CHANGELOG.md を確認してコミットすること")
+    return 0
+
+
+def git(*args):
+    return subprocess.run(["git", *args], cwd=str(ROOT), text=True, capture_output=True)
+
+
+def check(base):
+    """CHANGELOG.md の Unreleased を直接編集していないか。集約（changelog.d の削除を伴う）は許す"""
+    r = git("diff", "--name-status", f"{base}...HEAD")
+    if r.returncode:
+        print(f"[changelog] {base} と比べられないので検査を飛ばす: {(r.stderr or '').strip()[-200:]}")
+        return 0
+    changed = [l.split("\t") for l in r.stdout.splitlines() if l.strip()]
+    touched = [c for c in changed if c[-1] == "CHANGELOG.md"]
+    if not touched:
+        print("[changelog] CHANGELOG.md は触っていない")
+        return 0
+    removed = [c for c in changed if c[0].startswith("D") and c[-1].startswith("changelog.d/")]
+    if removed:
+        print(f"[changelog] リリースの集約（changelog.d を {len(removed)} 件消している）なので CHANGELOG.md の編集は正しい")
+        return 0
+    print("FAIL CHANGELOG.md の `## [Unreleased]` を直接編集している。")
+    print("     並列に走る run が同じ行を足すと必ず衝突するので、changelog.d/<チケット番号>-<slug>.md に 1 ファイル 1 項目で書くこと")
+    print("     （書式は changelog.d/README.md。リリース時に bin/changelog-release collect が集約する）")
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="changelog-release", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    p = sp.add_parser("collect"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("check"); p.add_argument("--base", default="origin/main")
+    a = ap.parse_args()
+    return collect(a.dry_run) if a.cmd == "collect" else check(a.base)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

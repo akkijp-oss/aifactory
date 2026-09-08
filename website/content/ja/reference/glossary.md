@@ -11,7 +11,7 @@
 | **base**（テンプレート） | 全 PJ 共通の VM テンプレート `sb-base`（9100） |
 | **blocked** | チケットの状態。人間待ち。メモに理由 |
 | **clean** | プール VM のスナップショット名。貸出前の基準状態（アプリ起動済み、firewall 込み、RAM 込み） |
-| **code step** | スクリプトが担当する工程。`gates.sh` / `pr-create.sh` / `pr-merge.sh` |
+| **code step** | スクリプトが担当する工程。`gates.sh` / `pr-create.sh` / `pr-merge.sh` と、runner 内蔵の `sync-base` |
 | **クラス** | 作業の種類。judgment / research / coding。`routes.env` でモデル名に解決 |
 | **dispatch** | glue の実行の割り当て。todo を順に `kb run` する。スクリプト |
 | **dry-run** | VM を触らず、定義の検証と依頼文の組み立てだけ行う実行 |
