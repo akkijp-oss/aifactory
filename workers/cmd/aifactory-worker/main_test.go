@@ -140,7 +140,22 @@ func TestPullProbeRetriesWithoutDuplicateExecution(t *testing.T) {
 			t.Error(r.URL.Path)
 		}
 	}))
-	for i := 0; i < 50; i++ {
+	// The first tick polls op1, marks it fresh in the journal and starts execute in the background.
+	if err := w.tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for execute to finish (it closes w.done) instead of polling on wall-clock time: once
+	// done is closed the event and result.json are on disk, however slow the filesystem is.
+	// White box: w.done is created by tick when the operation is fresh and closed by execute.
+	select {
+	case <-w.done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("probe did not finish")
+	}
+	// Deterministic from here, no sleeping: tick 2 ships the event and gets 503 from complete,
+	// tick 3 completes. Stop at the first accepted completion; a further tick would poll op1
+	// again and re-send complete.
+	for i := 0; i < 5; i++ {
 		w.tick(context.Background())
 		mu.Lock()
 		done := accepted
@@ -148,7 +163,6 @@ func TestPullProbeRetriesWithoutDuplicateExecution(t *testing.T) {
 		if done {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	mu.Lock()
 	defer mu.Unlock()
