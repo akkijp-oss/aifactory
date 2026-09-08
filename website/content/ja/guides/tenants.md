@@ -97,7 +97,8 @@ sudo systemctl restart aifactory-console
 
 ## 運用の要点
 
-- コードの更新（LXC の中）: `cd ~/aifactory && git pull && sandbox/bin/install.sh && (cd website && .venv/bin/mkdocs build -q) && sudo systemctl restart aifactory-console`
+- コードの更新（LXC の中）: `cd ~/aifactory && bin/ctl-update`。origin/main の最新まで進めて、`sandbox` CLI・ドキュメント・コンソールを配備し、疎通と配備した版まで出します。`--ref <sha|tag>` で任意の版、`--no-docs` でドキュメントのビルドを飛ばす、`--dry-run` で内容だけ確認。`sudo` は頭で 1 回だけ聞かれます
+- 制御系の `~/aifactory` は **clean な checkout** で運用します。汚れていると `bin/ctl-update` は配備せずに止まり、退避 → `git clone` し直しの手順を出します（詳しくは `sandbox/OPERATIONS.md`）
 - API トークンの作り直し: メンテナが `SB_TENANT=acme sandbox/proxmox/run.sh 25-control-lxc.sh`
 - `sandbox ls` が `Proxmox API … が失敗`: LXC から `curl --cacert ~/.config/sandbox/pve-ca.pem --resolve <node>:8006:10.78.0.1 https://<node>:8006/api2/json/version` が通るか（証明書の SAN はノード名なので `PVE_API_RESOLVE` で SDN 側の IP に向けている）、firewall group `sb-acme-ctl` の OUT が自テナントの /16 を許可しているか
 - 未決（ADR-0017）: テナントの片付け手順の自動化、テナント別の RAM / ディスク上限、制御系の自動更新
