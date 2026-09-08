@@ -12,6 +12,7 @@
 | メンテナ（ホスト管理者） | 手元の Mac。別テナントは `SB_TENANT=<t>` を付ける（`~/.config/sandbox/tenants/<t>.env`） | ssh モード（`PVE_HOST` に root）。構築スクリプト（`proxmox/run.sh`）はこちらだけ |
 
 **1 テナントに制御系は 1 つ**。貸出台帳（`~/.config/sandbox/state.json`）は制御系ごとに別なので、Mac と制御系 LXC の両方から同じプールに `take` すると二重貸出になる。制御系 LXC に寄せたら Mac 側では `take` しない（`ls` は読むだけなので可）。
+同じ制御系の中でなら `take` は安全で、空き VM の選定と台帳への予約は `state.json.lock`（`flock`。無い環境は `state.json.lock.d`）で直列化される。`kb run` を同時に何本立てても同じ VM が 2 つの task に貸し出されることはない（2026-09 の 234）。プールが尽きたときは後発が「空きなし」で失敗する。
 
 制御系 LXC の常駐は systemd: `systemctl status aifactory-console aifactory-gh-refresh.timer`、ログは `journalctl -u aifactory-console -f`。コードを更新したら LXC の中で `cd ~/aifactory && git pull && sandbox/bin/install.sh && (cd website && .venv/bin/mkdocs build -q) && sudo systemctl restart aifactory-console`。
 
