@@ -34,7 +34,8 @@ TASK     VM             VMID   IP           STATUS    SINCE
 
 ```
 sandbox token set <pj|global> [claude|gh]   enter a token interactively and save it (default claude), into the per-project file
-sandbox token show [pj]                     which token is in effect (masked)
+sandbox token rotate [claude|gh]            replace the token in the global file, every project file and ctl.env from one prompt
+sandbox token show [pj]                     which token is in effect (masked), how old it is, and whether this host is the control plane
 sandbox token clear <pj|global> [claude|gh] remove a token
 sandbox reinject <task-id>|--all            re-inject the current settings into lent VMs (no rollback; for key rotation)
 sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print an installation token for <pj> / reissue GH_TOKEN to every lent VM
@@ -47,7 +48,10 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print a
 | `token set <pj>` | `CLAUDE_CODE_OAUTH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` |
 | `token set <pj> gh` | `GH_TOKEN` in the same file (fallback when the App is not configured) |
 | `token set global` | `~/.config/sandbox/env` (default for every project) |
-| `token show [pj]` | Source and masked value of the effective token |
+| `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env` |
+| `token show [pj]` | Source and masked value of the effective token, days since it was saved, and whether this host is the control plane |
+
+Rotate an expired token with a single `sandbox token rotate` on the control plane (the host that has `ctl.env`). It lists every file it updated, restarts `aifactory-console` when `ctl.env` changed (printing the command instead if `sudo -n` does not work), and finishes with `reinject --all` when VMs are lent out (ADR-0029). A `claude` process already running inside a VM still has to be restarted there.
 
 ### gh-app
 

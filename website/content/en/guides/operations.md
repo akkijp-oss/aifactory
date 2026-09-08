@@ -20,12 +20,13 @@ Long-lived tokens from `claude setup-token` expire. When one does, agent steps f
 
 ```bash
 claude setup-token
-sandbox token set <pj>                   # save
+sandbox token rotate                     # update the global file, every project file holding the key and ctl.env, then restart the console and reinject --all
+sandbox token set <pj>                   # save one project only
 sandbox reinject <id>                    # push it into a VM that is already lent (no rollback)
 sandbox reinject --all
 ```
 
-The convention is to note the expiry somewhere handy (for example `workspace/docs/`).
+Run `sandbox token rotate` on the control plane (the host that has `~/.config/aifactory/ctl.env`). The day each token was saved is recorded as a comment in the file, so `sandbox token show` can tell you how many days ago that was.
 
 ### GitHub token (automatic)
 
@@ -79,12 +80,12 @@ sandbox release 999
 | `reset` fails | Does `qm listsnapshot 92NN` show `clean`? | If not, destroy and rebuild with `40-pool.sh` |
 | VM has no internet | `iptables -t nat -S \| grep 10.77`, `pve-firewall status` | Reapply SDN with `pvesh set /cluster/sdn`. LAN / other VMs / tailnet are unreachable by design |
 | Mac cannot reach a VM (after enabling the firewall) | `/etc/pve/firewall/<vmid>.fw`, `qm config <vmid> \| grep firewall` | Rerun `50-firewall.sh` |
-| Claude Code authentication error | `env \| grep CLAUDE_CODE_OAUTH_TOKEN` inside the VM | `claude setup-token` → `sandbox token set` → `reinject` |
+| Claude Code authentication error | `env \| grep CLAUDE_CODE_OAUTH_TOKEN` inside the VM; the age shown by `sandbox token show` | `claude setup-token` → `sandbox token rotate` (every project, `ctl.env` and re-injection in one command) |
 | The Proxmox host is down | `ssh $PVE_HOST` fails, `pvecm nodes` (from another node if clustered) | Power it on (WoL / IPMI / the physical button). The pool has onboot=0, so `qm start` by hand |
 
 ## Periodic maintenance
 
 - Monthly: OS update of the base template
-- Renew with `claude setup-token` as the token's expiry approaches
+- Renew with `claude setup-token` → `sandbox token rotate` as the token's expiry approaches (watch the age in `sandbox token show`)
 - When `workspace/runs/` grows, delete or archive old runs (`state.json` and `work/` are enough as records)
 - When `done` items pile up in `workspace/kanban/BOARD.md`, look back with `kb list --all` and then stop worrying (the DB is small)
