@@ -77,8 +77,10 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実勢（ジョブ）/ 返却（ジョブ） |
-| `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（上限 570 秒）・停止 |
+| `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
+
+`job_wait` は既定 60 秒・上限 300 秒待つ。終わらなければ `state` が `running` のまま返るので、長く待ちたいときは繰り返し呼ぶ（Claude Code は 120 秒でバックグラウンド化するので、それ以上待たせる意味が薄い）。待っている間も他のツールは別スレッドで即応する（ADR-0028）。
 
 resources: `aifactory://board`（BOARD.md）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）。
 
