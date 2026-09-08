@@ -197,6 +197,25 @@ class ApiTest(unittest.TestCase):
             self.assertNotIn("!s.finished", body, f"{fn} が finished から実行中を決めている")
         self.assertIn("T.run.notStarted", app); self.assertIn("T.run.noState", app)
 
+    def test_list_rows_have_real_links(self):
+        """一覧の行から詳細を開く導線を、行クリックだけでなく本物の `<a>` にする（チケット 224）。
+
+        行は `<tr class="link" data-href>` で、名前セルが素の `<td>` だと Tab で届かず、
+        読み上げでも link に見えない。同じ行のチケット番号・PR だけがリンクに見えるのを直す。
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertRegex(app, r"function jobLink\(j\)[^\n]*<a href=\"#/job/", "ジョブ名を <a> にする jobLink が無い")
+        for fn, helper in (("async function viewRuns", "runLink("), ("async function viewJobs", "jobLink("),
+                           ("async function viewTicket", "jobLink(")):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn(helper, body, f"{fn} の一覧が名前をリンクにしていない（{helper}）")
+            self.assertIn('tr class="link" data-href', body, f"{fn} の行クリック（tr.link data-href）が消えている")
+        i = app.index("async function route")
+        body = app[i:app.index("\n}", i)]
+        self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
+        self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
