@@ -88,9 +88,25 @@ const T = {
     "notStarted": "開始前（記録なし）", "error": "失敗の理由", "runnerGone": "runner は終了",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。",
     "stateBroken": "state.json を読めませんでした。工程と時刻は分かりません。今の状態はチケットで確かめてください。",
-    "noStarted": "開始時刻は記録にありません。"
+    "noStarted": "開始時刻は記録にありません。",
+    "planHelp": "各工程が何をするか", "planCode": "機械", "planReads": "読む: {files}", "planWrites": "書く: {files}",
+    "planOnFail": "通らなければ {step} に戻します（最大 {n} 回。超えたら人間待ち）。", "planOnFailHuman": "通らなければ人間待ちになります。",
+    "planBrief": "この workflow での指示: {brief}", "planUnknown": "この工程の説明はまだありません。workflow の定義を確かめてください。"
   },
   "step": { "wait-vm": "VM の空き待ち" },
+  "stepDesc": {
+    "research": "チケットに関係する既存コード・過去の決定（docs / ADR）・外部仕様を集め、research.md にまとめます。",
+    "design": "調査を踏まえて設計し、この PR で入れる範囲を plan.md に書きます。",
+    "plan": "何をどう直すかを決め、計画を plan.md に書きます。",
+    "implement": "計画に沿ってコードを変えてコミットし、やったことを report.md に書きます。",
+    "gates": "PJ のゲート（テスト・lint など）を VM で走らせ、結果を gates.txt に残します。赤があれば実装に戻します。",
+    "review": "計画との整合と、既存の約束を破っていないかを見て、判定を review.md に書きます。",
+    "sync": "PR を作る直前に base ブランチを取り込みます。衝突や ADR 番号の重複があれば解消の工程に回します。",
+    "resolve": "base の取り込みで戻された理由（衝突・ADR 番号の重複）だけを解消します。本来の変更は広げません。",
+    "pr": "成果物をまとめて PR を作り、人間のレビューに渡します。",
+    "merge": "PR ブランチへ push し、base へマージします。",
+    "judge": "調査の要点と次の一手を判断して summary.md に書きます。"
+  },
   "outcome": {
     "pr_created": "PR ができました。次はレビューです。",
     "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",

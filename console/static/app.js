@@ -132,7 +132,14 @@ async function refreshNav() {
   } catch (e) { return null; }
 }
 function schedule(fn, ms) { clearInterval(timer); timer = setInterval(async () => { if (location.hash === lastRoute && !editing() && !dlgOpen()) await fn(); }, ms); }
-function render(html) { const y = window.scrollY; main.innerHTML = html; window.scrollTo(0, y); }
+/* 定期更新は innerHTML の差し替えなので、開いていた折りたたみ（details）は同じ並びなら開いたままにする */
+function render(html) {
+  const y = window.scrollY, open = [...main.querySelectorAll('details')].map(d => d.open);
+  main.innerHTML = html;
+  const ds = main.querySelectorAll('details');
+  if (ds.length === open.length) ds.forEach((d, i) => { if (open[i]) d.open = true; });
+  window.scrollTo(0, y);
+}
 
 /* ---------- ボード */
 async function viewBoard() {
@@ -317,8 +324,26 @@ function track(state, wf, gone) {
   });
   if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
   else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(nowStep(state))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
-  const plan = wf ? `<div class="help">${esc(T.run.plan)} ${wf.steps.map(s => `${esc(s.id)}${s.role ? `（${esc(s.role)}）` : '（code）'}`).join(' → ')}</div>` : '';
-  return `<div class="track">${parts.join('')}</div>${plan}`;
+  return `<div class="track">${parts.join('')}</div>${planBlock(wf)}`;
+}
+
+/* 「定義:」の行は工程の並びだけ。各工程が何をするかは折りたたみに出す（id の英単語だけでは分からないため）。
+   説明は id ごとの定型（T.stepDesc）+ workflow の yml に書かれた brief / inputs / outputs / on_fail */
+const stepDesc = s => (T.stepDesc && T.stepDesc[s.id]) || T.run.planUnknown;
+function planBlock(wf) {
+  if (!wf || !wf.steps) return '';
+  const line = wf.steps.map(s => `<span title="${esc(stepDesc(s))}">${esc(s.id)}${s.role ? `（${esc(s.role)}）` : '（code）'}</span>`).join(' → ');
+  const rows = wf.steps.map(s => {
+    const f = s.on_fail, notes = [];
+    if (s.inputs && s.inputs.length) notes.push(tt(T.run.planReads, { files: s.inputs.join(', ') }));
+    if (s.outputs && s.outputs.length) notes.push(tt(T.run.planWrites, { files: s.outputs.join(', ') }));
+    if (f && typeof f === 'object' && f.goto) notes.push(tt(T.run.planOnFail, { step: f.goto, n: f.max_loops || 1 }));
+    else if (f === 'human') notes.push(T.run.planOnFailHuman);
+    const brief = s.brief ? String(s.brief).replace(/\*\*|`/g, '').trim() : '';
+    return `<li><b>${esc(s.id)}</b> <span class="tag">${esc(s.role || s.code || T.run.planCode)}</span> ${esc(stepDesc(s))}
+      ${brief ? `<div class="brief">${esc(tt(T.run.planBrief, { brief }))}</div>` : ''}${notes.length ? `<div class="help">${esc(notes.join(' '))}</div>` : ''}</li>`;
+  });
+  return `<div class="help">${esc(T.run.plan)} ${line}</div><details class="plan"><summary>${esc(T.run.planHelp)}</summary><ol>${rows.join('')}</ol></details>`;
 }
 
 /* 実行記録の冒頭に出す「結果」。止まった理由は API（core.run_outcome）が導いたものだけを使い、画面では history を読み直さない。

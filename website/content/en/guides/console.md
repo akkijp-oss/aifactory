@@ -53,6 +53,8 @@ flowchart LR
 
 ## Following a running run
 
+Below the step track, *Definition:* lists the steps of the workflow in order. Step ids are bare English words, so the *What each step does* fold under it explains every step: what it does, the workflow-specific instruction (the `brief` in the yml), the files it reads and writes, and where a failure sends it back to (and after how many loops it waits for a human). Hovering a step in the list shows the same explanation.
+
 While a run is in progress its screen refreshes every 5 seconds and automatically opens **the log of the step that is running** (the `agent-*.log` / `code-*.log` named by `current` in `state.json`). For agent steps the runner turns the `claude -p` event stream into a readable log:
 
 ```

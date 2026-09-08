@@ -14,7 +14,7 @@ import json, pathlib, re, unittest
 
 STATIC = pathlib.Path(__file__).resolve().parents[1] / "static"
 WORKFLOWS = pathlib.Path(__file__).resolve().parents[2] / "workflow" / "kit" / "workflows"
-SENTENCE_GROUPS = ("msg", "err", "empty", "help", "sub", "next", "banner", "kind")
+SENTENCE_GROUPS = ("msg", "err", "empty", "help", "sub", "next", "banner", "kind", "stepDesc")
 DIALOG_LABEL_KEYS = ("title",)            # ダイアログの中で文でない鍵（ok はボタンとして検査）
 FORBIDDEN = {
     "下さい": "補助動詞はひらがな（ください）", "出来": "ひらがな（できる）", "頂": "補助動詞はひらがな（いただく）", "致し": "二重敬語の温床（します）",
@@ -107,6 +107,16 @@ class StringsTest(unittest.TestCase):
         kinds = {f.stem for f in WORKFLOWS.glob("*.yml") if not f.name.startswith((".", "_"))}
         self.assertGreater(len(kinds), 3, WORKFLOWS)
         self.assertEqual(sorted(kinds - set(self.T["kind"])), [], "kind.* に説明の無い種別がある")
+
+    def test_step_desc_covers_every_step(self):
+        """実行記録の「各工程が何をするか」は stepDesc.* が正本。kit に工程が増えたらここが落ちて追記を促す"""
+        import yaml
+        ids = set()
+        for f in WORKFLOWS.glob("*.yml"):
+            if f.name.startswith((".", "_")): continue
+            ids |= {s["id"] for s in (yaml.safe_load(f.read_text(encoding="utf-8")) or {}).get("steps", [])}
+        self.assertGreater(len(ids), 5, WORKFLOWS)
+        self.assertEqual(sorted(ids - set(self.T["stepDesc"])), [], "stepDesc.* に説明の無い工程がある")
 
     def test_body_placeholder_shows_the_shape(self):
         v = self.T["label"]["bodyPlaceholder"]

@@ -210,6 +210,12 @@ pre.log.small { max-height: 40vh; }
 .panel h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 12px 0 4px; }
 .panel h3:first-of-type { margin-top: 0; }
 details.files { margin-top: 12px; }
+details.plan { margin: 6px 0 12px; }
+details.plan summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+details.plan ol { margin: 6px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+details.plan .tag { margin-right: 2px; }
+details.plan .brief { color: var(--muted); font-size: 12px; white-space: pre-line; margin-top: 2px; }
+details.plan .help { margin-top: 2px; font-size: 12px; }
 details.files summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 
 /* 通知。可逆な操作のあとは「元に戻す」を並べる */
