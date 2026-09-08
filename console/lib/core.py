@@ -140,10 +140,95 @@ def list_runs():
     return out
 
 
+# ---------- 実行記録の要約（ADR-0025: 停止の理由は表示側で導く。runner の state.json は変えない）
+GATE_FAIL = re.compile(r"^FAIL (\S+)")
+STEP_LOG = re.compile(r"^(agent|code)-(.+)-(\d+)\.log$")
+WORK_DOC = re.compile(r"^work/[^/]+\.(md|txt)$")
+
+
+def gate_fails(p):
+    """work/gates.txt から赤いゲートの名前を拾う。kit/steps/gates.sh の書式 `FAIL <ゲート名>` に依る。
+       赤があると同じファイルの後ろに `=== <ゲート>.log (tail 60)` とログ末尾が続くので、そこから先は見ない（ログ中の FAIL を拾わないため）"""
+    out = []
+    try: text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError: return out
+    for line in text.splitlines():
+        if line.startswith("=== "): break
+        m = GATE_FAIL.match(line)
+        if m: out.append(m.group(1))
+    return out
+
+
+def run_outcome(d, s, state, wf, files):
+    """「結果・止まった工程・理由の在り処」を、今ある記録（history / loops / gates.txt / ログの有無）だけから導く。
+       runner は停止の理由を自由文で残さないので、導けないものは unknown（＝画面では「記録にありません」）にする"""
+    o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
+         "gate_fails": [], "fail_count": 0, "loops_hit": False, "pr_url": s.get("pr_url")}
+    if s.get("kind") == "v0": o["reason"] = "v0"; return o
+    if s.get("status") == "not_started": o["reason"] = "not_started"; return o
+    state = state or {}
+    hist = state.get("history") or []
+    if state.get("_error") or (not hist and s.get("finished")): return o
+    if s.get("status") == "running":
+        o["reason"] = "running"; o["stopped_step"] = state.get("next"); return o
+    if not hist: return o
+    if s.get("pr_url"): o["reason"] = "pr_created"; return o
+    last = hist[-1]
+    if last.get("ok") is False:
+        step = last.get("step"); o["stopped_step"] = step; o["stopped_index"] = len(hist) - 1
+        o["fail_count"] = sum(1 for e in hist if e.get("step") == step and e.get("ok") is False)
+        sd = next((x for x in (wf or {}).get("steps") or [] if x.get("id") == step), {})
+        on_fail = sd.get("on_fail")
+        if isinstance(on_fail, dict) and on_fail.get("goto"):
+            o["loops_hit"] = (state.get("loops") or {}).get(f"{step}->{on_fail['goto']}", 0) >= on_fail.get("max_loops", 1)
+        o["reason"] = "loop_limit" if o["loops_hit"] else "step_failed"
+        by_name = {f["name"]: f for f in files}
+        if "gates.txt" in (sd.get("outputs") or []) and "work/gates.txt" in by_name:
+            o["gate_fails"] = gate_fails(d / "work" / "gates.txt")
+            o["detail_file"] = by_name["work/gates.txt"]["path"]
+        for kind in ("agent", "code"):                          # ログが消えている run では detail_file は None のまま
+            nm = f"{kind}-{step}-{o['stopped_index']}.log"
+            if not o["detail_file"] and nm in by_name: o["detail_file"] = by_name[nm]["path"]
+        return o
+    o["reason"] = {"end": "ended", "human": "waiting"}.get(s.get("result"), "unknown")
+    return o
+
+
+def run_groups(files, wf):
+    """ファイルを目的別に分ける。成果物の名前は決め打ちせず workflow 定義の outputs から引く（workflow が増えても崩れない）。
+       kind は role 名（researcher / planner / …）か code step の id（gates）。分からないものは None で名前だけ出す"""
+    by_name = {f["name"]: f for f in files}
+    used, arts = set(), []
+
+    def add(name, kind, step=None):
+        f = by_name.get(name)
+        if not f or name in used: return False
+        used.add(name); arts.append({**f, "step": step, "kind": kind}); return True
+
+    add("work/ticket.md", "ticket") or add("ticket.md", "ticket")   # VM から回収した写しが無ければ runner が置いた元を出す
+    for stp in (wf or {}).get("steps") or []:
+        for out in stp.get("outputs") or []:
+            if out in ("git", "pr_url"): continue
+            add(f"work/{out}", stp.get("role") or stp.get("id"), stp.get("id"))
+    for f in files:                                             # outputs に無い work/*.md も成果物として出す（v0 や古い run）
+        if f["name"] not in used and WORK_DOC.match(f["name"]): used.add(f["name"]); arts.append({**f, "step": None, "kind": None})
+    logs, other = [], []
+    for f in files:
+        if f["name"] in used: continue
+        m = STEP_LOG.match(f["name"])
+        if m: logs.append({**f, "kind": m.group(1), "step": m.group(2), "index": int(m.group(3))})
+        else: other.append(f)
+    logs.sort(key=lambda x: (x["index"], x["name"]))
+    return {"artifacts": arts, "step_logs": logs, "other": other}
+
+
 def run_detail(name):
     d = RUNS / name
     if not d.exists() or not d.resolve().is_relative_to(RUNS.resolve()): return None
-    if d.is_file(): return {"summary": v0_summary(d), "files": [{"path": rel(d), "size": d.stat().st_size}], "state": None, "workflow": None}
+    if d.is_file():
+        s = v0_summary(d)
+        return {"summary": s, "files": [{"path": rel(d), "name": d.name, "size": d.stat().st_size}], "state": None, "workflow": None,
+                "outcome": run_outcome(d, s, None, None, []), "groups": {"artifacts": [], "step_logs": [], "other": []}}
     s = run_summary(d)
     state = {}
     if (d / "state.json").exists():
@@ -158,11 +243,15 @@ def run_detail(name):
         wp = REPO / "workflow" / "kit" / "workflows" / f"{s['workflow']}.yml"
         if wp.exists(): wf = load_yaml(wp)
     # 対応するチケット
-    tr = rows("SELECT id, title, status, pr, run FROM tickets WHERE id = ?", (int(s["task"]),)) if s.get("task") and str(s["task"]).isdigit() else []
+    tr = rows("SELECT id, title, status, pr, run, updated FROM tickets WHERE id = ?", (int(s["task"]),)) if s.get("task") and str(s["task"]).isdigit() else []
     ticket = tr[0] if tr else None
     # このコンソールから起動したジョブ
     jobs = [j for j in JobStore.list() if j.get("run_hint") == name or (j.get("ticket") and s.get("task") and str(j["ticket"]) == str(s["task"]))]
-    return {"summary": s, "state": state, "files": files, "workflow": wf, "ticket": ticket, "jobs": jobs[:5]}
+    try: outcome = run_outcome(d, s, state, wf, files)
+    except Exception as e: outcome = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
+                                      "gate_fails": [], "fail_count": 0, "loops_hit": False, "pr_url": s.get("pr_url"), "_error": str(e)}
+    return {"summary": s, "state": state, "files": files, "workflow": wf, "ticket": ticket, "jobs": jobs[:5],
+            "outcome": outcome, "groups": run_groups(files, wf)}
 
 
 def rel(p):

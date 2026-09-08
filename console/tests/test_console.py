@@ -267,6 +267,84 @@ class ApiTest(unittest.TestCase):
         st, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(st, 200); self.assertIn("state.json", [f["name"] for f in d["files"]]); self.assertIsNotNone(d["workflow"])
 
+    def _fixture_run(self, name, state=None, files=None):
+        """runs/<name>/ を手で組む（runner を回さずに history や gates.txt の形を作る）。日付は 2020 年にして、種の run より後ろに並べる"""
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        if state is not None: (d / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        for r, text in (files or {}).items():
+            f = d / r; f.parent.mkdir(parents=True, exist_ok=True); f.write_text(text, encoding="utf-8")
+        return name
+
+    def _state(self, hist, **kw):
+        return {"pj": PJ, "task": self.seed, "workflow": "feature", "branch": "sandbox/x", "base": "main",
+                "started": "2020-01-01T09:00:00", "finished": "2020-01-01T10:00:00", "elapsed_s": 3600,
+                "result": "human", "pr_url": "", "next": "human", "current": None, "loops": {},
+                "history": [{"step": st, "ok": ok, "next": "x", "at": "2020-01-01T09:10:00"} for st, ok in hist], **kw}
+
+    def test_run_outcome_loop_limit(self):
+        """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
+        hist = [("research", True), ("design", True), ("implement", True), ("gates", False),
+                ("implement", True), ("gates", False), ("implement", True), ("gates", False)]
+        name = self._fixture_run("2026-09-07-kumitate-998", self._state(hist, loops={"gates->implement": 2}), {
+            "work/gates.txt": "PASS lint\nFAIL test\n\n=== test.log (tail 60)\nFAIL something-in-log\n",
+            "work/ticket.md": "# x\n", "work/plan.md": "# 計画\n", "work/report.md": "# 報告\n",
+            "code-gates-7.log": "gates\n", "agent-implement-6.log": "implement\n",
+            "agent-implement-6.jsonl": "{}\n", "prompt-implement-6.md": "依頼文\n", "linux.lock": ""})
+        st, d = self.http.get(f"/api/runs/{name}"); self.assertEqual(st, 200)
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "loop_limit"); self.assertEqual(o["stopped_step"], "gates")
+        self.assertEqual(o["stopped_index"], 7); self.assertEqual(o["fail_count"], 3); self.assertTrue(o["loops_hit"])
+        self.assertEqual(o["gate_fails"], ["test"])                       # ログ末尾の添付にある FAIL は拾わない
+        self.assertTrue(o["detail_file"].endswith("work/gates.txt"), o["detail_file"])
+        g = d["groups"]
+        self.assertEqual([a["kind"] for a in g["artifacts"]], ["ticket", "planner", "implementer", "gates"])
+        self.assertEqual([a["name"] for a in g["artifacts"]], ["work/ticket.md", "work/plan.md", "work/report.md", "work/gates.txt"])
+        self.assertEqual([x["name"] for x in g["step_logs"]], ["agent-implement-6.log", "code-gates-7.log"])
+        other = [x["name"] for x in g["other"]]
+        for nm in ("state.json", "agent-implement-6.jsonl", "prompt-implement-6.md", "linux.lock"): self.assertIn(nm, other)
+        self.assertEqual(d["ticket"]["id"], self.seed); self.assertIn("updated", d["ticket"])   # チケットの「今」を出すのに要る
+
+    def test_run_outcome_pr_and_unknown(self):
+        """PR まで進んだ run は pr_created。記録が足りない run は unknown（推測しない）"""
+        ok = [("research", True), ("design", True), ("implement", True), ("gates", True), ("review", True), ("pr", True)]
+        name = self._fixture_run("2026-09-07-kumitate-997", self._state(ok, pr_url="https://example.invalid/pull/1"),
+                                 {"work/report.md": "# 報告\n", "agent-implement-2.log": "x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "pr_created"); self.assertIsNone(d["outcome"]["stopped_step"])
+        self.assertEqual([a["kind"] for a in d["groups"]["artifacts"]], ["implementer"])
+
+        name = self._fixture_run("2026-09-07-kumitate-996", self._state([]), {"work/ticket.md": "# x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "unknown"); self.assertIsNone(d["outcome"]["detail_file"])
+
+        name = self._fixture_run("2026-09-07-kumitate-995", None, {"ticket.md": "# x\n"})   # VM 貸出前は work/ が無い
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "not_started")
+        self.assertEqual([(a["name"], a["kind"]) for a in d["groups"]["artifacts"]], [("ticket.md", "ticket")])
+
+    def test_run_outcome_step_failed_points_at_the_step_log(self):
+        """ゲート以外の工程で止まった run は、その工程のログを「理由を読む」の先にする"""
+        hist = [("research", True), ("design", False)]
+        name = self._fixture_run("2026-09-07-kumitate-994", self._state(hist),
+                                 {"agent-design-1.log": "落ちた\n", "work/research.md": "# 調査\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "step_failed"); self.assertEqual(o["stopped_step"], "design")
+        self.assertEqual(o["gate_fails"], []); self.assertTrue(o["detail_file"].endswith("agent-design-1.log"))
+        self.assertFalse(o["loops_hit"])
+
+    def test_run_outcome_drives_the_run_view(self):
+        """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewRun("); body = app[i:app.index("\n}", i)]
+        self.assertIn("d.outcome", body, "viewRun が API の outcome を使っていない")
+        self.assertIn("outcomePanel(name, d)", body, "冒頭の「結果」パネルを出していない")
+        j = app.index("function outcomePanel("); panel = app[j:app.index("\n}", j)]
+        self.assertIn("T.outcome", panel)
+        for src in (body, panel):
+            self.assertNotIn("ok === false", src, "画面が history から止まった工程を決めている")
+            self.assertNotIn(".history", src, "画面が history を読み直している")
+
     def test_run_without_state_is_not_started(self):
         """ticket.md だけの run ディレクトリ（VM 貸出前に止まった残骸）を「実行中・工程 0」で数えない。
 

@@ -76,7 +76,8 @@ function st(s) { return `<span class="st ${esc(s)}">${esc(T.status[s] || s)}</sp
 function rst(r) { return `<span class="st ${esc(r)}">${esc(T.result[r] || r)}</span>`; }
 function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'running' ? '<span class="dot pulse"></span>' : ''}${esc(T.jobState[j.state] || j.state)}</span>`; }
 function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${esc(t.pr)}</a>` : `#${esc(t.pr)}`; }
-function runLink(run) { if (!run) return ''; const n = run.replace(/^workflow\/runs\//, ''); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
+const runName = run => String(run || '').replace(/^workflow\/runs\//, '');
+function runLink(run) { if (!run) return ''; const n = runName(run); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
 function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
 function editing() { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}<span class="spacer"></span>${right || ''}</div>`;
@@ -300,6 +301,46 @@ function track(state, wf) {
   return `<div class="track">${parts.join('')}</div>${plan}`;
 }
 
+/* 実行記録の冒頭に出す「結果」。止まった理由は API（core.run_outcome）が導いたものだけを使い、画面では history を読み直さない。
+   導けなかったものは unknown として「記録にありません」と出す（ADR-0025） */
+const report = d => ((d.groups || {}).artifacts || []).find(a => a.kind === 'implementer');
+const fileBtn = (run, path, label, cls) => `<button class="${cls || ''}" data-act="run-file" data-run="${esc(run)}" data-path="${esc(path)}">${esc(label)}</button>`;
+function outcomeLead(o, s) {
+  if (o.reason === 'not_started') return T.run.noState;
+  if (o.reason === 'v0') return T.run.v0;
+  if (o.reason === 'running') return tt(T.outcome.running, { step: o.stopped_step || s.next || '' });
+  if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
+  if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
+  return T.outcome[o.reason] || T.outcome.unknown;
+}
+function outcomePanel(name, d) {
+  const o = d.outcome || { reason: 'unknown' }, s = d.summary, tk = d.ticket;
+  const stopped = ['loop_limit', 'step_failed', 'unknown'].includes(o.reason);
+  const lines = [outcomeLead(o, s)];
+  if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
+  if (stopped && !o.detail_file) lines.push(T.outcome.noDetail);
+  const rep = report(d);
+  const acts = [o.detail_file ? fileBtn(name, o.detail_file, T.btn.openReason, 'primary') : '',
+                rep ? fileBtn(name, rep.path, T.btn.openReport) : '',
+                s.task ? link(`#/ticket/${s.task}`, T.btn.openTicket) : ''];
+  const notes = [];
+  if (tk && s.finished) notes.push(tt(T.outcome.ticketNow, { end: fmtT(s.finished), id: tk.id, status: T.status[tk.status] || tk.status, at: fmtT(tk.updated) }));
+  if (!s.task) notes.push(T.outcome.noTicket);
+  if (tk && tk.run && runName(tk.run) !== name) { notes.push(tt(T.outcome.ticketNewerRun, { id: tk.id, run: runName(tk.run) })); acts.push(link(`#/run/${encodeURIComponent(runName(tk.run))}`, T.btn.openLatestRun)); }
+  return `<div class="panel next"><h2>${esc(T.h.outcome)}</h2><p>${esc(lines.join(''))}</p><div class="actions">${acts.filter(Boolean).join('')}</div>${notes.length ? `<div class="help top">${esc(notes.join(''))}</div>` : ''}</div>`;
+}
+/* ファイルは目的別に 3 段（成果物 / 工程のログ / その他は畳む）。分類は API の groups（workflow の outputs 由来） */
+function runFiles(name, d, cur) {
+  const g = d.groups || { artifacts: [], step_logs: [], other: [] };
+  const one = (x, label) => `<a href="#" data-act="run-file" data-run="${esc(name)}" data-path="${esc(x.path)}" class="${x.path === cur ? 'active' : ''}">${label ? `<span class="lbl">${esc(label)}</span>` : ''}<span class="nm">${esc(x.name || x.path)}</span><span>${(x.size / 1024).toFixed(x.size > 10240 ? 0 : 1)}K</span></a>`;
+  const listed = g.artifacts.length + g.step_logs.length + g.other.length;
+  const box = (items, fn) => `<div class="filelist">${items.map(fn).join('')}</div>`;
+  return `<div class="panel"><h2>${esc(T.h.files)}<small>runs/${esc(name)}/</small></h2>
+    ${g.artifacts.length ? `<h3>${esc(T.h.artifacts)}</h3>${box(g.artifacts, x => one(x, T.artifact[x.kind] || x.kind || ''))}` : ''}
+    ${g.step_logs.length ? `<h3>${esc(T.h.stepLogs)}</h3>${box(g.step_logs, x => one(x, ''))}` : ''}
+    ${g.other.length ? `<details class="files"><summary>${esc(tt(T.h.otherFiles, { n: g.other.length }))}</summary>${box(g.other, x => one(x, ''))}</details>` : ''}
+    ${listed ? '' : box(d.files, x => one(x, ''))}</div>`;
+}
 const runFile = {};   // run 名 → 開いているファイル
 const runPicked = {}; // run 名 → 人がファイルを選んだか（選ぶまでは実行中の工程のログを追う）
 async function viewRun(name) {
@@ -307,17 +348,19 @@ async function viewRun(name) {
   const running = s.status === 'running', notStarted = s.status === 'not_started';
   const cur = running && state && state.current && state.current.log ? d.files.find(f => f.name === state.current.log) : null;
   if (cur && !runPicked[name]) runFile[name] = cur.path;
-  if (!runFile[name]) { const pick = [...d.files].filter(f => /\.(log|md|txt)$/.test(f.name) && f.name !== 'ticket.md').sort((a, b) => b.mtime.localeCompare(a.mtime))[0] || d.files.find(f => f.name === 'state.json') || d.files.find(f => f.name === 'ticket.md'); runFile[name] = s.kind === 'v0' ? d.files[0].path : (pick ? pick.path : null); }
+  if (!runFile[name]) { const latest = [...d.files].filter(f => /\.(log|md|txt)$/.test(f.name) && f.name !== 'ticket.md').sort((a, b) => b.mtime.localeCompare(a.mtime))[0] || d.files.find(f => f.name === 'state.json') || d.files.find(f => f.name === 'ticket.md'); const pick = (!running && d.outcome && d.outcome.detail_file) || (report(d) || {}).path || (latest || {}).path || null; runFile[name] = s.kind === 'v0' ? d.files[0].path : pick; }
   const f = runFile[name]; const file = f ? await api(`file?path=${encodeURIComponent(f)}&tail=300000`) : null;
+  const trk = track(state, d.workflow);   // 工程が 1 つも無い run（開始前 / v0）では、この段ごと出さない。理由は「結果」が言う
   render(crumb('#/runs', T.nav.runs, name) + `
     <div class="head"><h1 class="mono">${esc(name)}</h1>${s.result ? rst(s.result) : running ? `<span class="st running"><span class="dot pulse"></span>${esc(T.jobState.running)}</span>` : notStarted ? `<span class="tag">${esc(T.run.notStarted)}</span>` : ''}${s.task ? `<a href="#/ticket/${esc(s.task)}">${esc(tt(T.ticket.crumb, { id: s.task }))}${d.ticket ? `: ${esc(d.ticket.title)}` : ''}</a>` : ''}</div>
-    <div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${track(state, d.workflow) || `<div class="help">${esc(notStarted ? T.run.noState : T.run.v0)}</div>`}
+    ${outcomePanel(name, d)}
+    ${!trk && !(d.jobs && d.jobs.length) ? '' : `<div class="panel"><h2>${esc(T.h.track)}<small>${esc(s.workflow || '')}${s.branch ? ` / ${esc(s.branch)} → ${esc(s.base)}` : ''}</small></h2>${trk}
       <dl class="kv top">${notStarted ? '' : `<dt>${esc(T.th.started)}</dt><dd>${fmtT(s.started)}${s.finished ? ` → ${fmtT(s.finished)}（${fmtDur(s.elapsed_s)}）` : running ? `（${esc(tt(T.run.elapsed, { t: since(s.started) }))}）` : ''}</dd>`}
       ${state && state.error ? `<dt>${esc(T.run.error)}</dt><dd><pre class="log">${esc(state.error)}</pre></dd>` : ''}
       ${s.pr_url ? `<dt>PR</dt><dd><a href="${esc(s.pr_url.split(' ')[0])}" target="_blank" rel="noopener">${esc(s.pr_url)}</a></dd>` : ''}${s.wip_branch ? `<dt>${esc(T.run.wip)}</dt><dd class="mono">origin/${esc(s.wip_branch)}</dd>` : ''}
       ${state && state.loops && Object.keys(state.loops).length ? `<dt>${esc(T.run.loops)}</dt><dd>${Object.entries(state.loops).map(([k, v]) => `${esc(k)} ×${v}`).join(', ')}</dd>` : ''}
-      ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>
-    <div class="panel"><h2>${esc(T.h.files)}<small>runs/${esc(name)}/</small></h2><div class="filelist">${d.files.map(x => `<a href="#" data-act="run-file" data-run="${esc(name)}" data-path="${esc(x.path)}" class="${x.path === f ? 'active' : ''}">${esc(x.name || x.path)}<span>${(x.size / 1024).toFixed(x.size > 10240 ? 0 : 1)}K</span></a>`).join('')}</div></div>
+      ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>`}
+    ${runFiles(name, d, f)}
     ${file ? `<div class="panel"><div class="logbar"><span class="mono" title="${esc(file.path)}">${esc((d.files.find(x => x.path === file.path) || {}).name || file.path.split('/').pop())}</span>${file.truncated ? `<span>${esc(T.run.truncated)}</span>` : ''}<span class="spacer"></span>${running ? `<span><span class="dot pulse"></span>${cur && file.path === cur.path ? esc(tt(T.run.following, { step: state.current.step, kind: state.current.kind })) + ' ' : ''}${esc(T.run.refresh)}</span>` : ''}</div>
       ${/\.md$/.test(file.path) && !/prompt-/.test(file.path) ? md(file.text) : `<pre class="log" id="runlog">${esc(file.text)}</pre>`}</div>` : ''}`);
   const pre = $('runlog'); if (pre && running) pre.scrollTop = pre.scrollHeight;
