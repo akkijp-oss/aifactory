@@ -12,6 +12,9 @@ sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
 STATIC = HERE / "static"
 JOBS = paths.JOBS                                              # テストでは CONSOLE_JOBS で差し替える
 KB = REPO / "kanban" / "bin" / "kb"
+KIT = REPO / "workflow" / "kit"
+WORKFLOWS = KIT / "workflows"
+ROLES = KIT / "roles"
 KB_ROOT = paths.KB_ROOT
 DB = KB_ROOT / "kanban.db"
 RUNS = paths.RUNS
@@ -70,8 +73,22 @@ def project_yml(pj):
     return (d / "project.yml") if d else (paths.PROJECT_DIRS[0] / pj / "project.yml")
 
 
-def kinds():
-    return sorted(p.stem for p in (REPO / "workflow" / "kit" / "workflows").glob("*.yml"))
+def _names(d, suffix):
+    """kit のディレクトリを走査して候補名を返す。`.` / `_` 始まり（macOS の `._bug.yml` など）とディレクトリは候補にしない"""
+    return sorted(p.stem for p in pathlib.Path(d).glob("*" + suffix) if p.is_file() and not p.name.startswith((".", "_")))
+
+
+def kinds(d=None):
+    return _names(d or WORKFLOWS, ".yml")
+
+
+def roles(d=None):
+    return _names(d or ROLES, ".md")
+
+
+def kind_desc(ks=None):
+    """種別 → workflow yml の description。画面が種別の用途を出すために使う"""
+    return {k: (load_yaml(WORKFLOWS / f"{k}.yml").get("description") or "") for k in (ks if ks is not None else kinds())}
 
 
 def kb(*args, stdin=None):
@@ -340,7 +357,8 @@ def tickets_list(pj=None, status=None, all_=True):
     if pj: sql += " AND pj = ?"; p.append(pj)
     if status: sql += " AND status = ?"; p.append(status)
     elif not all_: sql += " AND status != 'done'"
-    return {"tickets": rows(sql + " ORDER BY id", p), "pjs": pjs(), "kinds": kinds(), "labels": STATUS_LABEL}
+    ks = kinds()
+    return {"tickets": rows(sql + " ORDER BY id", p), "pjs": pjs(), "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL}
 
 
 def ticket_next(pj=None):
@@ -361,8 +379,9 @@ def ticket_detail(tid):
     hist = rows("SELECT at, field, old, new FROM history WHERE ticket = ? ORDER BY id", (tid,))
     runs = [r for r in list_runs() if str(r.get("task")) == str(tid) and r.get("pj") == t["pj"]]
     jobs = [j for j in JobStore.list() if j.get("ticket") == tid][:10]
+    ks = kinds()
     return {"ticket": t, "body": body, "file": str(f.relative_to(REPO)) if f.exists() and f.resolve().is_relative_to(REPO.resolve()) else str(f),
-            "history": hist, "runs": runs, "jobs": jobs, "kinds": kinds(), "labels": STATUS_LABEL, "project_yml": py.exists()}
+            "history": hist, "runs": runs, "jobs": jobs, "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL, "project_yml": py.exists()}
 
 
 def ticket_action(tid, b):
@@ -476,9 +495,9 @@ def logs_view():
 def config_view():
     wfs = []
     for k in kinds():
-        y = load_yaml(REPO / "workflow" / "kit" / "workflows" / f"{k}.yml")
+        y = load_yaml(WORKFLOWS / f"{k}.yml")
         wfs.append({"name": k, "description": y.get("description", ""), "steps": [{"id": s.get("id"), "role": s.get("role"), "code": s.get("code")} for s in y.get("steps", [])], "start": y.get("start")})
-    routes = dict(l.split("=", 1) for l in (REPO / "workflow" / "kit" / "routes.env").read_text().splitlines() if l and not l.startswith("#") and "=" in l)
-    roles = sorted(p.stem for p in (REPO / "workflow" / "kit" / "roles").glob("*.md") if not p.stem.startswith("_"))
+    routes = dict(l.split("=", 1) for l in (KIT / "routes.env").read_text().splitlines() if l and not l.startswith("#") and "=" in l)
+    rs = roles()
     git = subprocess.run(["git", "status", "--short", "--branch"], cwd=str(REPO), text=True, capture_output=True, errors="replace").stdout
-    return {"workflows": wfs, "routes": routes, "roles": roles, "templates": sandbox_view()["templates"], "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
+    return {"workflows": wfs, "routes": routes, "roles": rs, "templates": sandbox_view()["templates"], "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
