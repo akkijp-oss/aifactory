@@ -223,6 +223,41 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+    def test_intake_shows_project_yml_readiness(self):
+        """起票画面が、PJ を選んだ時点で「配車すると人間待ちになるか」を出せる。
+
+        判定は sandbox / チケット画面と同じ project.yml の有無。project.yml が無くても provision.sh だけで PJ 候補には入るので、
+        候補に出るが実行できない PJ が API 越しに区別できることを確かめる。表示は色だけに頼らず、起票そのものは止めない。
+        """
+        noyml = self.ws / "projects" / "noyml"
+        noyml.mkdir(parents=True)
+        (noyml / "provision.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        try:
+            _, t = self.http.get("/api/tickets")
+            self.assertIn("pj_ready", t, "/api/tickets が PJ の準備状態を返していない")
+            self.assertEqual(sorted(t["pj_ready"]), sorted(t["pjs"]), "候補の PJ と準備状態の対象がずれている")
+            self.assertTrue(t["pj_ready"][PJ], f"project.yml のある {PJ} が準備不足になっている")
+            self.assertIn("noyml", t["pjs"], "provision.sh だけの PJ が候補から消えている（起票は妨げない）")
+            self.assertFalse(t["pj_ready"]["noyml"], "project.yml の無い PJ が準備済みになっている")
+        finally:
+            shutil.rmtree(noyml, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        self.assertIn("pj_ready", view, "viewIntake が API の準備状態を読んでいない")
+        for eid in ("in-pj", "new-pj"):
+            self.assertTrue(re.search(rf'id="{eid}" data-act="pj-help"', view), f"{eid} を変えても準備状態が更新されない")
+            self.assertIn(f'id="{eid}-help"', view, f"{eid} の準備状態を出す行が無い")
+        self.assertIn("'pj-help':", app, "actions に pj-help が無い（選び直しても表示が変わらない）")
+        # 色だけに頼らない: 準備済み / 準備不足のどちらも文字のバッジと本文で読める
+        for key in ("T.intake.pjReadyBadge", "T.intake.pjNotReadyBadge", "T.help.pjReady", "T.help.pjNotReady"):
+            self.assertIn(key, app, f"{key} を使っていない（状態が色でしか分からない）")
+        self.assertIn("#/sandbox", app, "準備状態を確かめる先への導線が無い")
+        # 準備不足でも backlog には積める: 送信ボタンを押せなくしない
+        for act in ("intake", "new"):
+            self.assertFalse(re.search(rf'data-act="{act}"[^>]*disabled', view), f"準備不足の PJ で「{act}」を押せなくしている")
+
     def test_run_status_drives_the_ui(self):
         """実行中かどうかの判定は API の status に寄せる（app.js が `!r.finished` で独自に決めない）。
 

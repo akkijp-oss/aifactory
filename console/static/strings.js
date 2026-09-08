@@ -69,6 +69,7 @@ const T = {
   },
   "tickets": { "count": "{n} 件（全 {m} 件）" },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
+  "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
@@ -124,6 +125,8 @@ const T = {
   "help": {
     "noTodo": "未着手のチケットがありません。先に起票してください。",
     "noProjectYml": "{pj} に project.yml が無いため、runner は動かせません。$AIFACTORY_WORKSPACE/projects/{pj}/project.yml を書いてください。",
+    "pjReady": "{pj} には project.yml があります。配車すると runner が動きます。",
+    "pjNotReady": "{pj} に project.yml が無いため、起票はできますが、配車すると人間待ちになります。$AIFACTORY_WORKSPACE/projects/{pj}/project.yml を書いてください。",
     "runBusy": "このチケットのジョブが動いています。終わるのを待ってください:",
     "runDefault": "VM を 1 台貸し出し、工程を順に回します。終わると状態は自動で進みます。",
     "runDone": "完了したチケットです。実行するには、先に「未着手に戻す（やり直す）」を押してください。",

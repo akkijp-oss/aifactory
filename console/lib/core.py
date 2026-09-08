@@ -457,7 +457,10 @@ def tickets_list(pj=None, status=None, all_=True):
     if status: sql += " AND status = ?"; p.append(status)
     elif not all_: sql += " AND status != 'done'"
     ks = kinds()
-    return {"tickets": rows(sql + " ORDER BY id", p), "pjs": pjs(), "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL}
+    ps = pjs()
+    # 起票画面が「配車すると人間待ちになる PJ」を選ぶ前に言えるように、判定は sandbox / チケットと同じ project.yml の有無で返す
+    return {"tickets": rows(sql + " ORDER BY id", p), "pjs": ps, "pj_ready": {x: project_yml(x).exists() for x in ps},
+            "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL}
 
 
 def ticket_next(pj=None):
