@@ -59,13 +59,16 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
+    "runsCount": "実行記録 {n} 件（うち開始前 {m} 件）", "ticketCount": "左の数字はチケットの件数です。",
     "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）",
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
     "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
-    "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。"
+    "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
+    "notStarted": "開始前（記録なし）",
+    "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。"
   },
   "sandbox": {
     "count": "{n} 台", "perPj": "PJ あたり {n} 台", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
@@ -118,6 +121,7 @@ const T = {
     "undone": "チケット {id} を{to}に戻しました。",
     "saved": "チケット {id} を保存しました。",
     "synced": "チケット {id} の状態を実行記録に合わせました。",
+    "syncUndone": "チケット {id} の状態とメモを{to}に戻しました。",
     "filed": "チケット {id} を起票しました。",
     "stopSent": "止める合図（SIGTERM）を送りました。終わるまで数秒かかることがあります。",
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
@@ -161,6 +165,12 @@ const T = {
       "runWarning": "この VM では run {run} が動いています（工程 {step}）。返却すると run は止まり、途中の作業は失われます。",
       "noRun": "この VM で動いている run はありません。"
     },
+    "sync": {
+      "title": "チケット {id} の状態を実行記録に合わせる",
+      "body": "実行記録 {run} の結果を読み直して、チケットの状態とメモを書き換えます。",
+      "newer": "チケット {id} は、この run が終わった後の {at} に更新されています。実行すると、その更新は上書きされます。",
+      "same": "前と後で変わるところはありません。"
+    },
     "stop": {
       "title": "ジョブを止める",
       "body": "プロセスグループに SIGTERM を送ります。kb run の途中なら、VM は貸出中のまま残ることがあります。",
@@ -176,6 +186,8 @@ const T = {
     "runDone": "run は終わりました。実行記録で工程と結果を確かめてください。",
     "runDry": "dry-run が終わりました。状態は変わっていません。組まれた依頼文は実行記録で読めます。",
     "runStopped": "run は途中で止まりました。チケットの状態を実行記録に合わせ、VM が貸出中のままなら sandbox で返却してください。",
+    "runStoppedOld": "run は途中で止まりましたが、チケット {id} はその後「{status}」になっています。今どうなっているかはチケットで確かめてください。",
+    "stateLine": "このジョブは {end} に終わりました。チケット {id} の今の状態は「{status}」です（{at} 更新）。",
     "dispatchDone": "配車は終わりました。回したチケットはボードと実行記録に出ています。",
     "dispatchFailed": "配車はできませんでした。出力を確かめてください。",
     "releaseDone": "VM を返却しました。貸出中の一覧から消えています。",

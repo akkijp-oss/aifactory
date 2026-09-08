@@ -40,11 +40,11 @@ flowchart LR
 | Screen | What you see | What you can press |
 |---|---|---|
 | Board | The pipeline strip (todo → in progress → review → done, with "waiting for a human" to the side) and five columns of cards in the same order. Running runs appear under "in progress" with the current step and elapsed time. The strip, the columns and the runs all follow the project filter, and the scope is stated above the strip | File a ticket (goes to File), dispatch (a dialog to pick project, count and dry run; it shows the ticket that will be picked before you confirm, and cannot be pressed when there is no todo) |
-| Ticket | Body (Markdown), state history, related runs and jobs | `kb run` (a dialog shows project, workflow and expected duration first; dry run / `--keep` / `--resume`), move the state (start / review / done / back to todo / waiting for a human; no confirmation, the toast offers *Undo*), fix the kind, PR number and note, sync the state from the run record |
+| Ticket | Body (Markdown), state history, related runs and jobs | `kb run` (a dialog shows project, workflow and expected duration first; dry run / `--keep` / `--resume`), move the state (start / review / done / back to todo / waiting for a human; no confirmation, the toast offers *Undo*), fix the kind, PR number and note, sync the state from the run record (before it runs you see the target run and the state and note before and after; a warning if the ticket was updated after that run) |
 | Runs | The list of `workspace/runs/` and, per run, the step track (pass / fail and duration per step, loops ↺, terminal end / human). File list and logs | — |
 | sandbox | Lent VMs (task, VM name, IP, project, time since lending, app URL) and the project list (whether project.yml and the token file exist, pool usage) | `sandbox ls` (ssh to Proxmox, a few seconds), `sandbox release` (if a run is active on that VM you must type the ticket number first) |
 | File | The draft you are typing (request text, project, kind, dry run, title, body, PR number). It survives a detour to another screen, a reload and the browser's back button (within the same tab only; closing the tab discards it). When a draft is restored, a line at the top of the screen says so | Free text → `intake`, a well-formed body → `kb new`. Dispatch lives on the board. *Discard the draft* clears it explicitly (the toast offers *Undo*). On a successful submit, only that panel's draft is cleared |
-| Jobs | The CLI processes this console started. Output is followed every 2 seconds. A finished job shows *What to do next* (open the created ticket, sync the state of a stopped run, and so on) | Stop (SIGTERM to the process group) |
+| Jobs | The CLI processes this console started. Output is followed every 2 seconds. A finished job shows *What to do next* (open the created ticket, sync the state of a stopped run, and so on) plus one line with the job's end time and the ticket's current state. When the ticket has moved on since the job (done, or edited later), the wording is past tense and the primary button becomes *Open the ticket* | Stop (SIGTERM to the process group) |
 | Logs | `workspace/logs/intake.log` / `workspace/logs/dispatch.log` | — |
 | Settings | Workflow steps, the model routes (`routes.env`), `git status` | — |
 
@@ -70,7 +70,7 @@ While a run is in progress its screen refreshes every 5 seconds and automaticall
 - **Long operations are jobs.** `kb run` can take more than an hour, so the console detaches it as a child process and streams its output to `console/jobs/<id>/log` (not tracked by git)
 - **Duplicates are rejected.** A second `kb run` for the same ticket, a second `dispatch`, or a `release` for a task with a running job is refused inside a lock
 - **Readable files are limited** to the workspace (`runs/`, `kanban/tickets/`, `logs/`, `projects/`), `examples/projects/`, `workflow/kit/` and `console/jobs/`. Token contents are never shown
-- **Confirmation scales with risk.** Moving a ticket's state applies immediately and the toast offers *Undo*. Real runs and dispatch open a dialog that shows what will happen (the ticket to be picked, the project, the expected duration). Releasing a VM and stopping a job use a danger-styled dialog, and when a run is active on that VM you must type the ticket number
+- **Confirmation scales with risk.** Moving a ticket's state applies immediately and the toast offers *Undo*. Real runs and dispatch open a dialog that shows what will happen (the ticket to be picked, the project, the expected duration). Syncing the state overwrites the ticket, so the state and note before and after are shown first. Releasing a VM and stopping a job use a danger-styled dialog, and when a run is active on that VM you must type the ticket number
 - Navigation is ordered by how often each screen is used (board / file / runs / jobs / sandbox / logs / settings). Press ++g++ then a letter (++b++ board, ++i++ file, ++r++ runs, ++j++ jobs, ++s++ sandbox, ++l++ logs, ++c++ settings) to jump; ++question++ lists the shortcuts
 - The rules for UI text (buttons are verbs, sentences are polite, one glossary) live in `console/UX.md` in the repository. The decision record is ADR-0019
 
@@ -89,6 +89,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/overview` | Counts per state, running runs and jobs, number of lent VMs |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | List / body, history, runs, jobs |
 | `GET /api/next[?pj=]` | The todo `kb next` would pick for dispatch, or `null` |
+| `GET /api/tickets/<id>/sync-preview[?run=]` | A preview of the state sync (`kb sync --dry-run`): state and note before and after, and whether the ticket was updated after that run |
 | `POST /api/tickets` | `kb new` |
 | `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr}` |
 | `POST /api/tickets/<id>/run` | `kb run` as a job. `{dry_run, workflow, keep, resume}` |

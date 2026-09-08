@@ -165,6 +165,18 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+    def test_run_status_drives_the_ui(self):
+        """実行中かどうかの判定は API の status に寄せる（app.js が `!r.finished` で独自に決めない）。
+
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        for fn in ("async function viewBoard", "async function viewRuns", "async function viewRun("):
+            i = app.index(fn); body = app[i:app.index("\n}", i)]
+            self.assertIn("status ===", body, f"{fn} が status を見ていない")
+            self.assertNotIn("!s.finished", body, f"{fn} が finished から実行中を決めている")
+        self.assertIn("T.run.notStarted", app); self.assertIn("T.run.noState", app)
+
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]
         st, d = self.http.get(f"/api/tickets/{tid}")
@@ -174,12 +186,34 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 404)
 
     def test_run_detail(self):
-        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         st, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(st, 200); self.assertIn("state.json", [f["name"] for f in d["files"]]); self.assertIsNotNone(d["workflow"])
 
+    def test_run_without_state_is_not_started(self):
+        """ticket.md だけの run ディレクトリ（VM 貸出前に止まった残骸）を「実行中・工程 0」で数えない。
+
+        画面は名前の無い実行リンクと空の「次は」「開始から」を出していた（チケット 220）。
+        """
+        for nm in ("2026-09-07-kumitate-999", "2026-09-07-kumitate-999-attempt1"):
+            d = self.ws / "runs" / nm; d.mkdir(parents=True, exist_ok=True)
+            (d / "ticket.md").write_text("# 調査: 記録の無い run\n", encoding="utf-8")
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == "2026-09-07-kumitate-999")
+        self.assertEqual(row["status"], "not_started"); self.assertIsNone(row["finished"]); self.assertIsNone(row["result"])
+        self.assertTrue(all(x["status"] in ("running", "finished", "not_started") for x in r["runs"]), r["runs"])
+        self.assertEqual([x["status"] for x in r["runs"] if x["kind"] == "v0"] or ["finished"], ["finished"])
+        _, o = self.http.get("/api/overview")
+        self.assertNotIn("2026-09-07-kumitate-999", [x["name"] for x in o["runs_active"]])
+        self.assertTrue(all(x["status"] == "running" for x in o["runs_active"]), o["runs_active"])
+        self.assertGreaterEqual(o["runs_not_started"]["n"], 1)
+        self.assertIn("2026-09-07-kumitate-999", [x["name"] for x in o["runs_not_started"]["runs"]])
+        st, d = self.http.get("/api/runs/2026-09-07-kumitate-999")                    # 不完全な記録でも詳細へ移動できる
+        self.assertEqual(st, 200); self.assertEqual(d["summary"]["status"], "not_started")
+        self.assertIn("ticket.md", [f["name"] for f in d["files"]])
+
     def test_file_roots(self):
-        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1")
+        _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         _, d = self.http.get(f"/api/runs/{name}"); path = next(x["path"] for x in d["files"] if x["name"] == "state.json")
         st, f = self.http.get(f"/api/file?path={urllib.parse.quote(path)}&tail=100"); self.assertEqual(st, 200); self.assertTrue(f["truncated"] or f["size"] <= 100)
         for bad in ("../.ssh/id_rsa", "sandbox/bin/sandbox", str(self.ws / "kanban" / "kanban.db"), "/etc/passwd"):
@@ -204,6 +238,46 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "nope"})[0], 400)
         hist = self.http.get(f"/api/tickets/{tid}")[1]["history"]
         self.assertTrue(any(h["field"] == "kind" and h["new"] == "chore" for h in hist))
+
+    def _put_job(self, jid, **over):
+        """終わったジョブの記録を CONSOLE_JOBS に直接置く（JobStore はディスクの meta.json を読む）"""
+        meta = {"id": jid, "kind": "kb-run", "label": "kb run", "cmd": [str(KB), "run"], "ticket": None, "run_hint": None,
+                "pid": 1, "started": "2000-01-01T00:00:00", "finished": "2000-01-01T00:00:00", "rc": 1, "state": "failed"}
+        meta.update(over)
+        d = self.tmp / "jobs" / jid; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return jid
+
+    def test_job_view_carries_current_ticket_state(self):
+        """過去の失敗ジョブには、チケットの「今」の状態を添えて返す（画面が古い復旧案内を主表示しないため）"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "bug", "title": "不具合: 過去の失敗ジョブ", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        jid = self._put_job("20000101-000000-kb-run", ticket=tid, label=f"kb run {tid}")
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "done"})[0], 200)
+        st, v = self.http.get(f"/api/jobs/{jid}")
+        self.assertEqual(st, 200); self.assertIsNotNone(v["ticket"])
+        self.assertEqual(v["ticket"]["id"], tid); self.assertEqual(v["ticket"]["status"], "done")
+        self.assertTrue(v["ticket"]["updated_after_job"])                       # ジョブが終わった後に人が完了にした
+        jid2 = self._put_job("20000101-000001-kb-run")                          # チケットを持たないジョブ
+        self.assertIsNone(self.http.get(f"/api/jobs/{jid2}")[1]["ticket"])
+
+    def test_sync_preview_does_not_write(self):
+        """状態を合わせる前の下見（kb sync --dry-run）: 前後が分かり、チケットは書き換わらない"""
+        tid = self.seed
+        _, r = self.http.get("/api/runs")
+        run = next(x["name"] for x in r["runs"] if str(x.get("task")) == str(tid))
+        before = self.http.get(f"/api/tickets/{tid}")[1]
+        st, p = self.http.get(f"/api/tickets/{tid}/sync-preview?run={urllib.parse.quote(run)}")
+        self.assertEqual(st, 200, p)
+        self.assertEqual(p["run"], run); self.assertEqual(p["before"]["status"], "todo"); self.assertEqual(p["after"]["status"], "done")
+        self.assertTrue(p["changes"]); self.assertFalse(p["updated_after_run"]); self.assertEqual(p["ticket"]["id"], tid)
+        after = self.http.get(f"/api/tickets/{tid}")[1]
+        self.assertEqual(after["ticket"]["status"], "todo")                     # 下見は書き込まない
+        self.assertEqual(after["ticket"]["updated"], before["ticket"]["updated"])
+        self.assertEqual(len(after["history"]), len(before["history"]))
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: run の無いチケット", "body": "x"})
+        with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get(f"/api/tickets/{d['id']}/sync-preview")
+        self.assertEqual(cm.exception.code, 400); self.assertIn("--run", json.loads(cm.exception.read())["error"])
 
     def test_new_ticket(self):
         st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: console テスト", "body": "本文\n\n## 完了条件\n- summary.md"})
