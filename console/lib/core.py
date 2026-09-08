@@ -21,7 +21,8 @@ RUNS = paths.RUNS
 LOGS = paths.LOGS
 SANDBOX_STATE = pathlib.Path.home() / ".config" / "sandbox" / "state.json"
 SANDBOX_PJ_DIR = pathlib.Path.home() / ".config" / "sandbox" / "pj"
-POOL_PER_PJ = 3
+POOL_PER_PJ = int(os.environ.get("SANDBOX_POOL_PER_PJ") or 3)   # 「定義台数」の正本は glue/bin/dispatch と同じ環境変数（241）
+LS_STALE_S = 600                                                # `sandbox ls` の結果がこれより古ければ「古い」と添える（229）
 STATUSES = ["todo", "in_progress", "review", "blocked", "done"]
 STATUS_LABEL = {"todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了"}
 # 画面から読めるファイルの根（これ以外は 403）
@@ -409,14 +410,33 @@ def sandbox_env():
     return out
 
 
-def parse_ls(text):
+VM_NAME = re.compile(r"^sb-(?P<mid>.+)-\d+$")   # sb-<t>-<pj>-NN（ADR-0017）と旧命名 sb-<pj>-NN の両方
+TENANT = re.compile(r"^[a-z0-9]{1,6}$")         # テナントの slug（sandbox/proxmox/_tenant.sh）
+
+
+def pj_of_vm(name, known):
+    """VM 名から PJ を引く。既知の PJ（known）に当たったものだけ返し、当たらなければ None。
+
+    テナント部分は任意（`sb-main-aifactory-01` も `sb-kumitate-01` も数える）。PJ 名にハイフンがあってもよいように
+    長い一致を優先する。`-base` / `-gw` / `-ctl` / `-tpl-` は CLI の ls が既に除いている。
+    """
+    m = VM_NAME.match(name or "")
+    if not m: return None
+    mid = m.group("mid")
+    hit = [p for p in known if mid == p or (mid.endswith("-" + p) and TENANT.match(mid[:-len(p) - 1]))]
+    return max(hit, key=len) if hit else None
+
+
+def parse_ls(text, known=None):
     """`sandbox ls` のジョブログを VM 1 台 = 1 件の dict に分ける。
 
     CLI は固定幅の printf で出す（sandbox/bin/sandbox の cmd_ls）。VM 名・IP・時刻に空白は入らないので空白で区切る。
     捨てる行: ジョブ先頭の `$ ...`、`[error]` のような注記、見出し（TASK ...）、列数が合わない行。
     読めない行は黙って捨てる（生ログはジョブの記録にそのまま残る）。task が `-`（貸出なし）のときは None。
     同じ VM に複数の貸出があると CLI は 1 台 1 行のまま task を `221,222` と並べるので、戻りの task もカンマ区切りになる。
+    pj は VM 名から引く（known を渡さなければ既知の PJ すべて）。当たらなければ None。
     """
+    known = pjs() if known is None else known
     out = []
     for line in (text or "").splitlines():
         s = line.strip()
@@ -425,7 +445,7 @@ def parse_ls(text):
         if f[0] == "TASK" or not 5 <= len(f) <= 6: continue
         task, name, vmid, ip, status = f[:5]
         out.append({"task": None if task == "-" else task, "name": name, "vmid": vmid, "ip": ip,
-                    "status": status, "since": f[5] if len(f) == 6 else None})
+                    "status": status, "since": f[5] if len(f) == 6 else None, "pj": pj_of_vm(name, known)})
     return out
 
 
@@ -451,27 +471,43 @@ def sandbox_view():
     # 貸出は「1 チケット = 1 件」、VM は vmid の異なり。同じ VM を 2 台と数えないために分けて持つ（チケット 237）
     by_vmid = leases_by_vmid(lent)
     shared = {vmid: tasks for vmid, tasks in by_vmid.items() if len(tasks) > 1}
-    tpl = []
-    for pj in pjs():
-        py = project_yml(pj)
-        y = load_yaml(py) if py.exists() else None
-        mine = {t: v for t, v in lent.items() if isinstance(v, dict) and v.get("pj") == pj}
-        tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
-                    "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
-                    "lent": len(leases_by_vmid(mine)), "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
-                    "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
+    known = pjs()
     ls_jobs = [j for j in JobStore.list() if j.get("kind") == "sandbox-ls"]   # 新しい順
     last_ls = ls_jobs[0] if ls_jobs else None                                 # 直近（失敗・実行中も含む）。画面は取得中 / 成功 / 失敗 / 未取得を分けて出す
     last_ok_ls = next((j for j in ls_jobs if j.get("rc") == 0), None)          # 表に出せる最後の成功。失敗しても前回の表は残す
     vms = []
     if last_ok_ls:
         log = JOBS / last_ok_ls["id"] / "log"
-        if log.exists(): vms = parse_ls(log.read_text(encoding="utf-8", errors="replace"))
+        if log.exists(): vms = parse_ls(log.read_text(encoding="utf-8", errors="replace"), known)
+    # 「実体」は最後に成功した ls の時点の台数。ls を一度も取れていなければ数を作らない（0 台と言い切らない）
+    actual = {pj: sum(1 for v in vms if v["pj"] == pj) for pj in known} if last_ok_ls else {}
+    tpl = []
+    for pj in known:
+        py = project_yml(pj)
+        y = load_yaml(py) if py.exists() else None
+        mine = {t: v for t, v in lent.items() if isinstance(v, dict) and v.get("pj") == pj}
+        n_lent = len(leases_by_vmid(mine))
+        n_actual = actual.get(pj)                     # ls が無ければ None（未取得）
+        # 実体と貸出は取得の時点が違う（ls に出ない VM が台帳にあることもある）。空きは 0 で止める
+        free = max(n_actual - n_lent, 0) if n_actual is not None else None
+        unbuilt = max(POOL_PER_PJ - n_actual, 0) if n_actual is not None else None
+        tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
+                    "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
+                    "lent": n_lent, "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
+                    "pool_defined": POOL_PER_PJ, "pool_actual": n_actual, "free": free, "unbuilt": unbuilt,
+                    "hint": f"未構築 {unbuilt} 台。proxmox/40-pool.sh {pj} {unbuilt} で足せます" if unbuilt else None,
+                    "pool": POOL_PER_PJ, "known_red_gates": (y or {}).get("known_red_gates") or []})
+    fetched = ts_aware(last_ok_ls["finished"]) if last_ok_ls and last_ok_ls.get("finished") else None
+    age = None
+    if fetched:
+        try: age = int((datetime.datetime.now().astimezone() - ts_dt(fetched)).total_seconds())
+        except ValueError: age = None
     e = sandbox_env()
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
     return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
             "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
-            "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms}
+            "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms,
+            "ls_fetched": fetched, "ls_age_s": age, "ls_stale": bool(age is not None and age > LS_STALE_S)}
 
 
 # ---------- jobs

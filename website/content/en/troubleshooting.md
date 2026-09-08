@@ -22,12 +22,13 @@ flowchart TD
 | `kb run` says `no project.yml` | The project has no definition | Steps 3 and 4 of [Add a project](guides/add-project.md) |
 | `kb run` says `done; use kb reopen` | A finished ticket | `kb reopen <id>` |
 | dispatch skips everything | The whole pool is lent, or no project.yml | `sandbox ls`, `kb list --status blocked` |
+| The screen says free but `take` finds nothing | Only the defined size was read; the actual size is smaller | Compare DEFINED and ACTUAL in `sandbox status <pj>`. Dispatch schedules against the defined size, so a short actual size fails in take |
 
 ## sandbox
 
 | Symptom | Look at | Fix |
 |---|---|---|
-| `take` reports no free VM | `sandbox ls` | `release` lent VMs you do not need. Grow the pool if still short |
+| `take` reports no free VM | The breakdown in the error (defined / actual / lent / not built / no clean snapshot), `sandbox status <pj>` | `release` lent VMs you do not need. If the actual size is below the defined one, add VMs with `40-pool.sh <pj> <missing count>`, then `45-pool-keys.sh` |
 | `take` fails on the GitHub App | `sandbox gh-app status` | Install through the link if not installed. Check `GH_REPO` in `pj/<pj>.env` |
 | `task-xxx.sb.internal` does not resolve | `dig sb-gw.sb.internal`, Tailscale split DNS | Has split DNS disappeared? `ssh root@10.77.0.2 systemctl status dnsmasq` |
 | Cannot ping 10.77.0.2 | Route approval in the Tailscale console. `pct exec 9000 -- journalctl -u tailscaled -n 20` | `Drop: … no rules matched` means add a grant for `10.77.0.0/16` to the ACL. In a hurry, `SB_JUMP=<same value as PVE_HOST>` in `~/.config/sandbox/env` |

@@ -161,7 +161,7 @@ class ApiTest(unittest.TestCase):
         st, v = self.http.get("/api/sandbox")
         self.assertEqual(st, 200); self.assertEqual(v["last_ok_ls"]["id"], jid); self.assertEqual(v["last_ls"]["id"], jid)
         self.assertEqual(v["vms"], [{"task": None, "name": "sb-kumitate-long-name-99", "vmid": "9299",
-                                     "ip": "10.77.1.9", "status": "running", "since": None}])
+                                     "ip": "10.77.1.9", "status": "running", "since": None, "pj": None}])
 
     def test_error_messages_say_what_to_do(self):
         """エラー文は「何が起きたか」の後に「どうすればよいか」（console/UX.md）"""
@@ -873,7 +873,7 @@ class SandboxLsTest(unittest.TestCase):
         vms = self.m.core.parse_ls(self.HEAD + self.ROWS)
         self.assertEqual(len(vms), 2)
         self.assertEqual(vms[0], {"task": "229", "name": "sb-kumitate-01", "vmid": "9204", "ip": "10.77.1.4",
-                                  "status": "running", "since": "2026-09-06T12:00:07+09:00"})
+                                  "status": "running", "since": "2026-09-06T12:00:07+09:00", "pj": "kumitate"})
         self.assertEqual(vms[1]["name"], "sb-kumitate-long-name-99")     # 14 文字を超えて列がずれても名前は欠けない
         self.assertIsNone(vms[1]["task"]); self.assertIsNone(vms[1]["since"]); self.assertEqual(vms[1]["status"], "stopped")
 
@@ -984,6 +984,110 @@ class SandboxSharedVmTest(unittest.TestCase):
         self.assertIn("split(',')", body)                               # 1 チケット 1 リンクに分ける
         vms = body[body.index("d.vms.map"): body.index("T.help.lsAxes")]
         self.assertNotIn("#/ticket/${esc(v.task)}", vms)                # カンマ区切りのまま 1 本のリンクにしない
+
+
+class SandboxPoolCountTest(unittest.TestCase):
+    """プールの「定義台数」と「実体台数」を分けて数える（チケット 241）。
+
+    定義は設定の値、実体は最後に成功した `sandbox ls` に出た VM の数。ずれると take が「空きなし」で落ちるので、
+    画面と MCP には 4 つ（定義 / 実体 / 貸出 / 空き）を別々に渡す。Proxmox も VM も使わず、偽の ls ログで確かめる。
+    """
+
+    HEAD = "TASK     VM             VMID   IP           STATUS    SINCE\n"
+    # aifactory は定義 3 台に対して実体 2 台（テナント命名 sb-main-...。ADR-0017）
+    TWO = ("9201     sb-main-aifactory-01 9201 10.77.1.1 running   2026-09-06T10:00:00+09:00\n"
+           "-        sb-main-aifactory-02 9202 10.77.1.2 stopped\n")
+    LENT = {"233": {"vmid": 9201, "name": "sb-main-aifactory-01", "ip": "10.77.1.1", "pj": "aifactory", "since": "2026-09-06T10:00:00+09:00"},
+            "234": {"vmid": 9202, "name": "sb-main-aifactory-02", "ip": "10.77.1.2", "pj": "aifactory", "since": "2026-09-06T11:00:00+09:00"}}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-pool-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+
+    def state(self, lent):
+        (self.tmp / "state.json").write_text(json.dumps(lent), encoding="utf-8")
+
+    def job(self, log, finished=None, jid="20260907-090000-sandbox-ls", rc=0):
+        """sandbox ls のジョブ記録を手で置く（SandboxLsTest の job() と同じ流儀）"""
+        finished = finished or self.m.core.now()
+        d = self.m.core.JOBS / jid; d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"id": jid, "kind": "sandbox-ls", "label": "sandbox ls", "cmd": ["sandbox", "ls"],
+                                                 "ticket": None, "run_hint": None, "pid": 1, "started": finished,
+                                                 "finished": finished, "rc": rc, "state": "done" if rc == 0 else "failed"}), encoding="utf-8")
+        (d / "log").write_text("$ sandbox ls\n" + log, encoding="utf-8")
+
+    def pj(self, name="aifactory"):
+        return next(p for p in self.m.core.sandbox_view()["templates"] if p["pj"] == name)
+
+    def ago(self, minutes):
+        return (datetime.datetime.now().astimezone() - datetime.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+    def test_pj_of_vm_reads_tenant_and_old_names(self):
+        """VM 名から PJ を引く。テナント付き（sb-main-aifactory-01）と旧命名（sb-kumitate-01）の両方"""
+        known = ["aifactory", "kumitate"]
+        self.assertEqual(self.m.core.pj_of_vm("sb-main-aifactory-01", known), "aifactory")
+        self.assertEqual(self.m.core.pj_of_vm("sb-kumitate-01", known), "kumitate")
+        self.assertIsNone(self.m.core.pj_of_vm("sb-main-aifactory-01", ["kumitate"]))   # 別 PJ に数えない
+        self.assertIsNone(self.m.core.pj_of_vm("sb-kumitate-long-name-99", known))      # 知らない PJ は付けない
+        self.assertIsNone(self.m.core.pj_of_vm("sb-main-gw", known))
+
+    def test_ls_rows_carry_the_pj(self):
+        self.assertEqual([v["pj"] for v in self.m.core.parse_ls(self.HEAD + self.TWO, ["aifactory"])], ["aifactory", "aifactory"])
+
+    def test_defined_and_actual_are_separate(self):
+        """定義 3 台・実体 2 台・貸出 2 台なら空きは 0。未構築 1 台と次の一手を添える"""
+        self.state(self.LENT); self.job(self.HEAD + self.TWO)
+        p = self.pj()
+        self.assertEqual((p["pool_defined"], p["pool_actual"], p["lent"], p["free"], p["unbuilt"]), (3, 2, 2, 0, 1))
+        self.assertIn("40-pool.sh aifactory 1", p["hint"])
+        self.assertEqual(p["pool"], p["pool_defined"])                  # 既存の鍵は残す（MCP の利用者を壊さない）
+
+    def test_other_pj_vms_are_not_counted(self):
+        """aifactory の VM を kumitate に数えない"""
+        self.state({}); self.job(self.HEAD + self.TWO)
+        k = self.pj("kumitate")
+        self.assertEqual((k["pool_actual"], k["lent"], k["free"], k["unbuilt"]), (0, 0, 0, 3))
+
+    def test_old_naming_is_counted(self):
+        self.state({}); self.job(self.HEAD + "-        sb-kumitate-01 9204 10.77.1.4 running\n")
+        self.assertEqual(self.pj("kumitate")["pool_actual"], 1)
+        self.assertEqual(self.pj("aifactory")["pool_actual"], 0)
+
+    def test_actual_is_unknown_until_ls_succeeds(self):
+        """成功した ls が無ければ実体は「未取得」。0 台と言い切らない"""
+        self.state(self.LENT)
+        p = self.pj()
+        self.assertEqual(p["pool_defined"], 3); self.assertEqual(p["lent"], 2)
+        self.assertIsNone(p["pool_actual"]); self.assertIsNone(p["free"]); self.assertIsNone(p["unbuilt"]); self.assertIsNone(p["hint"])
+        self.assertIsNone(self.m.core.sandbox_view()["ls_fetched"])
+
+    def test_free_never_goes_negative(self):
+        """ls に出ない VM が台帳にあっても空きは 0 で止める（実体と貸出は取得時刻がずれる）"""
+        self.state({**self.LENT, "235": {"vmid": 9203, "name": "sb-main-aifactory-03", "ip": "10.77.1.3", "pj": "aifactory", "since": "x"}})
+        self.job(self.HEAD + self.TWO)
+        p = self.pj()
+        self.assertEqual((p["pool_actual"], p["lent"], p["free"]), (2, 3, 0))
+
+    def test_stale_ls_is_flagged_with_its_time(self):
+        """古い一覧は取得時刻とともに古いと言う（229 の完了条件と揃える）"""
+        self.state({}); self.job(self.HEAD + self.TWO, finished=self.ago(11))
+        d = self.m.core.sandbox_view()
+        self.assertTrue(d["ls_stale"]); self.assertGreater(d["ls_age_s"], 600); self.assertTrue(OFFSET_ISO.match(d["ls_fetched"]))
+        self.job(self.HEAD + self.TWO, finished=self.ago(1), jid="20260907-100000-sandbox-ls")
+        d = self.m.core.sandbox_view()
+        self.assertFalse(d["ls_stale"]); self.assertLess(d["ls_age_s"], 600)
+
+    def test_screen_separates_defined_from_actual(self):
+        """画面は 4 つを別の列にし、VM 名からの PJ 推測をやめて core の値を使う（JS は動かせないのでソースを検査する）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
+        for key in ("p.pool_defined", "p.pool_actual", "p.free", "p.unbuilt", "d.ls_stale", "d.ls_fetched",
+                    "T.th.poolDefined", "T.th.poolActual", "T.th.free", "T.sandbox.unbuilt", "T.sandbox.actualUnknown"):
+            self.assertIn(key, body, key)
+        self.assertNotIn("sb-${p.pj}-", body)                           # 名前の前方一致で PJ を当てない（テナント名で外れる）
+        self.assertIn("v.pj", body)
 
 
 class AuthDocsTest(unittest.TestCase):

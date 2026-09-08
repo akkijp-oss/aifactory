@@ -22,12 +22,13 @@ flowchart TD
 | `kb run` が `project.yml が無い` | そのプロジェクトに定義書がない | [プロジェクトを追加する](guides/add-project.md) の 3 と 4 |
 | `kb run` が `done。やり直すなら kb reopen` | 完了済みチケット | `kb reopen <id>` |
 | dispatch が全部飛ばす | プールが全部貸出中、または project.yml なし | `sandbox ls`、`kb list --status blocked` |
+| 表示は「空き」なのに `take` が空きなし | 定義台数（設定）だけを見ていて実体が足りない | `sandbox status <pj>` で DEFINED と ACTUAL を比べる。dispatch は定義台数で配車するので、実体が少ないと take で落ちる |
 
 ## sandbox
 
 | 症状 | 見るところ | 対処 |
 |---|---|---|
-| `take` が「空きなし」 | `sandbox ls` | 貸出中で不要なものを `release`。足りなければプールを増やす |
+| `take` が「空きなし」 | エラー文の内訳（定義 / 実体 / 貸出 / 未構築 / clean 無し）、`sandbox status <pj>` | 貸出中で不要なものを `release`。実体が定義より少なければ `40-pool.sh <pj> <未構築の台数>` で足す（そのあと `45-pool-keys.sh`） |
 | `take` が GitHub App のエラー | `sandbox gh-app status` | 未インストールならインストールリンクから。`pj/<pj>.env` の `GH_REPO` を確認 |
 | `task-xxx.sb.internal` が解けない | `dig sb-gw.sb.internal`、Tailscale の split DNS | split DNS が消えていないか。`ssh root@10.77.0.2 systemctl status dnsmasq` |
 | 10.77.0.2 に ping 不可 | Tailscale 管理コンソールの route 承認。`pct exec 9000 -- journalctl -u tailscaled -n 20` | `Drop: … no rules matched` なら ACL に `10.77.0.0/16` の grant を足す。急ぎなら `~/.config/sandbox/env` に `SB_JUMP=<PVE_HOST と同じ値>` |

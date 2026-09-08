@@ -44,7 +44,8 @@ App の権限を足したとき（Actions: Read など）は、各 installation 
 | やりたいこと | コマンド |
 |---|---|
 | 貸出状況 | `sandbox ls` |
-| 空きなしで `take` が失敗 | `sandbox ls` で貸出中を確認 → 不要なら `release`。それでも足りなければ台数を増やす |
+| 定義台数と実体台数の食い違いを見る | `sandbox status [pj]`（`PJ DEFINED ACTUAL LENT FREE`）。コンソールの sandbox 画面と MCP の `sandbox_status` も同じ 4 つを出す |
+| 空きなしで `take` が失敗 | エラー文の内訳（定義 / 実体 / 貸出 / 未構築 / clean 無し）を読む → 貸出中で不要なものを `release`、実体が足りなければ台数を増やす |
 | 台数を増やす | `TPL_VMID=911x sandbox/proxmox/run.sh 40-pool.sh <pj> <台数>` → `50-firewall.sh`。`lvs pve/data` の `data%` を見る |
 | 汚れた VM を作り直す | `qm destroy <vmid>` → `40-pool.sh`。`clean` がない VM は `reset` できない |
 | 貸出中の VM を触らない | `~/.config/sandbox/state.json` を読んで飛ばす（`50-firewall.sh` は `LENT=` で飛ばせる） |

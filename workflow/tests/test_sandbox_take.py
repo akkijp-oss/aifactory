@@ -5,6 +5,7 @@ Proxmox を呼ぶ関数は偽装し、sandbox/bin/sandbox から state / take �
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,14 +42,14 @@ class SandboxTakeTest(unittest.TestCase):
                 'die() { echo "[error] $*" >&2; exit 1; }\n' % (self.dir, self.state))
         return head + body + fakes + tail
 
-    def ls_script(self):
-        """cmd_ls だけを Proxmox 抜きで走らせる（pve_vms / pool_ip を偽装）"""
+    def ls_script(self, fakes=None, tail='cmd_ls\n'):
+        """cmd_ls / cmd_status だけを Proxmox 抜きで走らせる（pve_vms / pool_ip を偽装）"""
         text = SCRIPT.read_text()
         body = text[text.index('cmd_ls() {'):text.index('case "${1:-}" in')]
-        return (self.script(fakes=FAKES + 'SB_PREFIX=sb-t\n'
+        return (self.script(fakes=fakes or (FAKES + 'SB_PREFIX=sb-t\n'
                             'pve_vms() { echo "9213 sb-t-pj-01 running"; }\n'
-                            'pool_ip() { echo 10.77.1.1; }\n')
-                + body + 'cmd_ls\n')
+                            'pool_ip() { echo 10.77.1.1; }\n'))
+                + body + tail)
 
     def run_take(self, tasks, fakes=FAKES, env=None):
         script = self.script(fakes, tail='cmd_take "$@"\n')
@@ -106,6 +107,69 @@ class SandboxTakeTest(unittest.TestCase):
         rows = [l.split() for l in r.stdout.splitlines() if l.strip() and not l.startswith('TASK')]
         self.assertEqual(len(rows), 1, r.stdout)                 # 行が割れない（console の parse_ls は列数の合わない行を捨てる）
         self.assertEqual(rows[0][:4], ['221,222', 'sb-t-pj-01', '9213', '10.77.1.1'])
+
+    def take_one(self, task, fakes=FAKES):
+        """take を 1 本ずつ走らせる（内訳の文言を見るので、並行ではなく順番に）"""
+        return self.run_take([task], fakes=fakes)[0]
+
+    def test_take_error_reports_pool_breakdown(self):
+        """空きなしのエラーは内訳（定義 / 実体 / 貸出）と次の一手を言う（241）"""
+        self.assertEqual(self.take_one('101')[0], 0)
+        self.assertEqual(self.take_one('102')[0], 0)
+        rc, out, err = self.take_one('103')
+        self.assertNotEqual(rc, 0, out)
+        for want in ('空きなし', '定義 3 台', '実体 2 台', '貸出 2 台', '未構築 1 台', '40-pool.sh pj 1'):
+            self.assertIn(want, err, err)
+
+    def test_take_error_counts_vms_without_a_clean_snapshot(self):
+        """clean が無くて飛ばした台数も内訳に出す（返却待ちか手直しかを分けるため）"""
+        no_clean = FAKES.replace('pve_has_clean() { sleep 0.5; return 0; }\n',
+                                 'pve_has_clean() { if [[ "$1" == 9202 ]]; then return 1; fi; return 0; }\n')
+        self.assertEqual(self.take_one('101', fakes=no_clean)[0], 0)
+        rc, out, err = self.take_one('102', fakes=no_clean)
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('貸出 1 台', err)
+        self.assertIn('clean 無し 1 台', err)
+
+    def test_status_separates_defined_from_actual(self):
+        """sandbox status は PJ ごとに 定義 / 実体 / 貸出 / 空き を別の列で出す（241）"""
+        pathlib.Path(self.state).write_text(
+            '{"101":{"vmid":9201,"name":"sb-t-pj-01","ip":"10.77.1.1","pj":"pj","since":"x"}}')
+        fakes = (FAKES.replace('pool_list() { echo "9201 sb-t-pj-01 10.77.1.1 stopped"; echo "9202 sb-t-pj-02 10.77.1.2 stopped"; }\n', '')
+                 + 'SB_PREFIX=sb-t\n'
+                 'pve_vms() { echo "9201 sb-t-pj-01 running"; echo "9202 sb-t-pj-02 stopped"; echo "9299 sb-t-base stopped"; }\n'
+                 'pool_ip() { echo 10.77.1.1; }\n')
+        r = subprocess.run(['bash', '-c', self.ls_script(fakes=fakes, tail='cmd_status\n')],
+                           text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = [l.split() for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(rows[0], ['PJ', 'DEFINED', 'ACTUAL', 'LENT', 'FREE'])
+        self.assertEqual([row for row in rows[1:] if row[0] == 'pj'], [['pj', '3', '2', '1', '1']], r.stdout)
+
+    def test_status_reads_the_defined_size_from_the_environment(self):
+        """定義台数の正本は SANDBOX_POOL_PER_PJ（dispatch と同じ変数）"""
+        pathlib.Path(self.state).write_text('{}')
+        fakes = (FAKES.replace('pool_list() { echo "9201 sb-t-pj-01 10.77.1.1 stopped"; echo "9202 sb-t-pj-02 10.77.1.2 stopped"; }\n', '')
+                 + 'SB_PREFIX=sb-t\n'
+                 'pve_vms() { echo "9201 sb-t-pj-01 running"; }\n'
+                 'pool_ip() { echo 10.77.1.1; }\n')
+        r = subprocess.run(['bash', '-c', self.ls_script(fakes=fakes, tail='cmd_status pj\n')], text=True,
+                           env=dict(os.environ, SANDBOX_POOL_PER_PJ='5'), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = [l.split() for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(rows[1], ['pj', '5', '1', '0', '1'], r.stdout)
+
+    def test_usage_excerpt_covers_status(self):
+        """引数無しのときに出る使い方（末尾の sed の行範囲）に status が入っている。
+
+        設定ファイルが要るので CLI は起動できない。範囲を読み取って同じ行を切り出す
+        """
+        text = SCRIPT.read_text()
+        m = re.search(r"sed -n '(\d+),(\d+)p'", text)
+        self.assertIsNotNone(m, '使い方を出す sed が見つからない')
+        excerpt = text.splitlines()[int(m.group(1)) - 1:int(m.group(2))]
+        self.assertTrue(all(l.startswith('#') for l in excerpt), excerpt[-3:])   # 範囲が使い方コメントの外に出ていない
+        self.assertIn('sandbox status', '\n'.join(excerpt))
 
     def test_release_deletes_under_lock(self):
         pathlib.Path(self.state).write_text(
