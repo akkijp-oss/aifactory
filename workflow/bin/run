@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """workflow/bin/run: workflow 定義（kit/workflows/<name>.yml）を読んで、sandbox VM の中で step を順に実行する runner（v1）。
 
-  workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+  workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=秒]]
 
 - pj        : $AIFACTORY_WORKSPACE/projects/<pj>/project.yml（無ければ examples/projects/<pj>/）がある PJ
 - task-id   : sandbox take に渡す ID（3 桁など）
@@ -11,6 +11,9 @@
 - 置き場（PJ 定義 / runs/）は lib/aifactory_paths.py が決める（AIFACTORY_WORKSPACE。既定は <repo>/workspace/）
 - --keep    : 終了後に release しない（中を見たいとき）
 - --resume  : 既に貸出中の VM で、state.json の次の step から続ける
+- --wait    : プールに空きが無い（sandbox take が「空きなし」）とき、失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限を指定。チケット 242）
+              待っている間は state.json の `current` が `wait-vm`（console のジョブ一覧・run 画面・MCP に「VM の空き待ち」と出る）。
+              再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す
 
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
 step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
@@ -44,6 +47,20 @@ def sh(cmd, check=True, capture=True, input_text=None, env=None):
     if check and r.returncode != 0:
         raise RuntimeError(f"command failed ({r.returncode}): {cmd}\n{(r.stderr or '')[-2000:]}")
     return r
+
+# sandbox take が「プールに空きが無い」と言うときの目印（sandbox/bin/sandbox の die 文言）。ここを変えるなら sandbox 側も一緒に直す
+POOL_BUSY = "に空きなし"
+
+
+class PoolBusy(RuntimeError):
+    """sandbox take がプール満杯で失敗した（待てば空く見込みがある失敗。--wait のときだけ再試行する）"""
+
+
+class PoolTimeout(RuntimeError):
+    """--wait の上限まで待っても空きが出なかった。チケットは todo に戻す（kb が failure: wait_timeout を見る）"""
+    def __init__(self, msg, waited_s):
+        super().__init__(msg); self.waited_s = waited_s
+
 
 SECRET_LINE = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY)\s*=|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-", re.I)
 
@@ -140,8 +157,9 @@ def run_name(pj, task, dry=False, resume=False):
 
 
 class Run:
-    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False):
+    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
+        self.wait_s = wait_s        # プールに空きが無いときに待つ上限（秒。0 なら待たずに失敗する）
         self.project_dir = paths.project_dir(pj) or die(f"PJ {pj} の定義が無い（{' / '.join(str(d / pj) for d in paths.PROJECT_DIRS)}）")
         (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
         self.project = load_yaml(self.project_dir / "project.yml")
@@ -223,7 +241,14 @@ class Run:
     # ---------- lifecycle
     def take(self):
         if self.dry or self.resume: return
-        self.log("take"); print(sh(["sandbox", "take", self.pj, self.task]).stdout.strip().splitlines()[-1])
+        self.log("take")
+        r = sh(["sandbox", "take", self.pj, self.task], check=False)
+        if r.returncode != 0:
+            why = scrub((r.stderr or "") + (r.stdout or "")).strip()[-2000:]
+            # 「空きなし」だけは待てば解ける失敗なので分けて上げる（--wait。チケット 242）。他の take 失敗は従来どおり即 failed
+            if POOL_BUSY in why: raise PoolBusy(why)
+            raise RuntimeError(f"command failed ({r.returncode}): sandbox take {self.pj} {self.task}\n{why}")
+        print(((r.stdout or "").strip().splitlines() or [""])[-1])
         self.taken = True   # ここから先で落ちたら VM を返す（238）
         self.sb(f"mkdir -p {self.work}")
         if self.pr_number:
@@ -231,6 +256,30 @@ class Run:
         else:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
+    def take_waiting(self):
+        """--wait のとき、プールに空きが出るまで take を呼び直す。待っている間は state.json の current を wait-vm にして
+        console（ボードの実行中欄・run 画面）と MCP に「VM の空き待ち（n 分）」と見せる。
+        再試行は sandbox 側のロック（234）の外なので安全。上限を超えたら PoolTimeout（= failure: wait_timeout）"""
+        poll = float(os.environ.get("AIFACTORY_WAIT_POLL_S") or 30)
+        started = None
+        while True:
+            try:
+                return self.take()
+            except PoolBusy as e:
+                if not self.wait_s: raise
+                if started is None:
+                    started = time.time()
+                    # since は待ち始めの 1 度だけ（毎回書き直すと console の経過時間が振り出しに戻る）
+                    self.state["current"] = {"step": "wait-vm", "kind": "wait", "log": None,
+                                             "since": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+                    self.save()
+                waited = int(time.time() - started)
+                why = ([l.strip() for l in str(e).splitlines() if l.strip()] or ["(理由なし)"])[-1]
+                if waited >= self.wait_s:
+                    raise PoolTimeout(f"VM の空き待ちが上限 {self.wait_s // 60} 分（{self.wait_s} 秒）を超えました。{waited} 秒待機: {why}", waited)
+                self.log(f"VM 空き待ち {waited // 60} 分（上限 {self.wait_s // 60} 分）: {why}")
+                time.sleep(poll)
+
     def release(self):
         if self.dry: return
         # artifact 回収
@@ -383,12 +432,14 @@ class Run:
             self.state["loops"][key] = n + 1; return t["goto"]
         return t.get("else", "human")
 
-    def fail_before_start(self, e):
+    def fail_before_start(self, e, failure=None, waited_s=None):
         """take（VM の取得と準備）で落ちたときの終わり方。工程は 1 つも走っていないので、記録に理由を残して人間へ返す（チケット 238）。
-        記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう"""
+        記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう。
+        failure（今は "wait_timeout" だけ）は「同じ failed でも扱いが違う終わり方」の目印。kb はこれを見てチケットを todo に戻す（242）"""
         err = scrub(str(e))[-1500:]
         self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
                            "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
+        if failure: self.state.update({"failure": failure, "waited_s": int(waited_s or 0)})
         self.save()
         self.log(f"take failed: {([l for l in err.splitlines() if l.strip()] or ['(理由なし)'])[-1]}")
         # take が通った後（fetch など）で落ちると VM は貸出中のまま。sandbox backend では返す（take 自体が失敗したなら貸出は無い）。
@@ -405,7 +456,9 @@ class Run:
         self.t0 = time.time()
         self.log(f"workflow {self.wf_name}: " + " → ".join(s["id"] for s in self.wf["steps"]) + f"  (branch {self.branch} → {self.base})")
         try:
-            self.take()
+            self.take_waiting()
+        except PoolTimeout as e:
+            return self.fail_before_start(e, failure="wait_timeout", waited_s=e.waited_s)
         except Exception as e:
             return self.fail_before_start(e)
         cur = self.state["next"]; retry_note = ""; result = "end"
@@ -449,4 +502,8 @@ if __name__ == "__main__":
         else:
             from linux import backend
         runner = backend(Run)
-    sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags).main())
+    wait_s = 0
+    for f in flags:
+        if f == "--wait": wait_s = 3600
+        elif f.startswith("--wait="): wait_s = int(f.split("=", 1)[1])
+    sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags, wait_s=wait_s).main())

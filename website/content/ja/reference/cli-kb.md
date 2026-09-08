@@ -11,7 +11,7 @@ kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
 kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
-kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]
+kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]
 kb sync <id> [--run DIR]
 kb history <id>
 kb render
@@ -99,13 +99,15 @@ kb append 204 --section "PM 補足" < memo.md      # --text がなければ標�
 ### run
 
 ```bash
-kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
+kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]
 ```
 
 1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
 2. 状態を `in_progress` に、run ディレクトリ名（`<日付>-<pj>-<id>`。実体は `workspace/runs/` の下）を記録
 3. `workflow/bin/run <pj> <id> <workflow> <本文のパス> [flags]` を呼ぶ。`--workflow` は今回の実行方法だけを変え、`kind` は変わりません（履歴に `workflow → <名前>` が残り、`runs/<run>/state.json` の `workflow` が正。ADR-0030）。`--workflow` なしの `--resume` は、その `state.json` の `workflow` で再開します
 4. 終わったら `state.json` を読んで状態を進める（下表）
+
+`--wait` を付けると、VM のプールに空きがないときに失敗せず、空くまで待ってから実行します（分。値を省くと 60 分）。待っている間、チケットは `in_progress` のままで、コンソールとボードには「VM の空き待ち」と経過時間が出ます。上限を超えたときだけチケットは `todo` に戻り、理由がメモに残ります（ADR-0031）。
 
 | state.json | 状態 | メモ |
 |---|---|---|
@@ -114,6 +116,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume]
 | `result: end`、PR なし | done | PR なしで終了（research 等） |
 | `result: human`、PR なし | blocked | 人間へ（wip ブランチ） |
 | `result: failed` | blocked | VM を取得できず工程が始まらなかった（`error` の最終行をメモに残す） |
+| `result: failed`、`failure: wait_timeout` | todo | `--wait` の上限まで待っても空きが出なかった。直す所はないので未着手に戻す |
 | `finished` なし、runner が rc≠0 | blocked | runner が記録を残さず終了 rc=N |
 
 `--dry-run` ではチケットの状態を変更しません。終了コードは runner の値をそのまま返します。0 は正常終了または PR の作成完了、2 は PR がない状態での `human` 終了を表します。

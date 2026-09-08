@@ -11,6 +11,8 @@ const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: '
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
+const stepName = id => (T.step && T.step[id]) || id;   // 工程の id は英単語のまま読める。表示名を決めた特別な工程（VM の空き待ち）だけ言い換える
+const nowStep = st => (T.step && st.current && T.step[st.current.step]) || st.next;   // 実行中の帯に出す工程。表示名を決めた工程のときだけ current を優先する
 let pjReady = {};    // PJ → project.yml があるか（起票画面が、配車で人間待ちになる PJ を先に知らせる）
 
 /* ---------- 通信・通知 */
@@ -150,7 +152,7 @@ async function viewBoard() {
   const nLive = runsRun.length + runsNew.length + runsGone.length;
   const moreRuns = (o.runs_active_n || runsRun.length) - runsRun.length;        /* サーバーの上限からあふれた「実行中」の件数 */
   const live = (nLive ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: nLive, m: runsNew.length, a: runsGone.length }))}</div>` : '')
-    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(r.current.step), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
+    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(stepName(r.current.step)), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
     + runsGone.map(r => `<div><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj || '')} ${esc(r.task || '')}</a> · ${r.runner ? `${esc(tt(T.board.liveAbandoned, { t: fmtT(r.runner.finished) }))} <a href="#/job/${esc(r.runner.id)}">${esc(T.btn.openJob)}</a>` : `<span class="tag">${esc(T.result.abandoned)}</span>`}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '')
@@ -314,7 +316,7 @@ function track(state, wf, gone) {
     parts.push(`<div class="step ${e.ok ? 'ok' : 'ng'}"><div class="nm">${esc(e.step)}</div><div class="ds">${fmtDur(d)}</div></div>`);
   });
   if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
-  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(state.next)}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
+  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(nowStep(state))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
   const plan = wf ? `<div class="help">${esc(T.run.plan)} ${wf.steps.map(s => `${esc(s.id)}${s.role ? `（${esc(s.role)}）` : '（code）'}`).join(' → ')}</div>` : '';
   return `<div class="track">${parts.join('')}</div>${plan}`;
 }
@@ -329,6 +331,7 @@ function outcomeLead(o, s) {
   if (o.reason === 'running') return tt(T.outcome.running, { step: o.stopped_step || s.next || '' });
   if (o.reason === 'runner_gone') return tt(T.outcome.runner_gone, { end: fmtT((o.job || {}).finished || s.mtime) });
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
+  if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
   return T.outcome[o.reason] || T.outcome.unknown;

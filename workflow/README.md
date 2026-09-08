@@ -59,9 +59,12 @@ examples/projects/<pj>/           # 同梱サンプルの PJ 定義（kumitate�
 kanban/bin/kb new kumitate bug "題名" --body ticket.md   # チケット起票 → id が出る
 kanban/bin/kb run <id> [--dry-run]                          # runner を呼び、結果で状態を進める
 # runner を直接呼ぶとき（kanban を通さない実験用）
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=秒]]
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず定義と依頼文だけ確認
 ```
+
+- `--keep` は終了後に release しない（中を見たいとき）、`--resume` は貸出中の VM で state.json の次の step から続ける
+- `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す
 
 runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は Mac 側で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**。
 

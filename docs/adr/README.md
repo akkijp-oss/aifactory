@@ -42,3 +42,4 @@
 - [0028: MCP の job_wait は読み取りスレッドから外して待つ](0028-mcp-job-wait-runs-off-the-reader-thread.md)
 - [0029: 長期トークンの差し替えは `sandbox token rotate` 1 コマンドで、global・全 PJ・`ctl.env` を同時に更新する](0029-token-rotate-across-pj-and-ctl-env.md)
 - [0030: 制御系の gh トークンは GitHub App から都度払い出す／kind は種別、workflow は実行方法](0030-control-plane-gh-token-from-app.md)
+- [0031: VM の空き待ちは runner が 1 か所で行う／上限超過は未着手に戻す](0031-wait-for-a-free-vm-in-the-runner.md)

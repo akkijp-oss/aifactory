@@ -52,7 +52,7 @@ The output of `kb new` (id and body path). With `--dry-run`, the JSON.
 ## dispatch
 
 ```
-dispatch [--pj P] [--once] [--max N] [--dry-run]
+dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [minutes]]
 ```
 
 | Argument | Meaning |
@@ -61,6 +61,7 @@ dispatch [--pj P] [--once] [--max N] [--dry-run]
 | `--once` | One ticket only |
 | `--max N` | Up to N tickets (default unlimited) |
 | `--dry-run` | `kb run --dry-run`. No VM, no state change |
+| `--wait [minutes]` | Do not skip a project whose pool is full; let `kb run --wait <minutes>` wait for a free VM (minutes; 60 when the value is omitted) |
 
 ### Behaviour
 
@@ -71,7 +72,7 @@ flowchart TD
   B -->|yes| C{project.yml exists?}
   C -->|no| D[kb block with the reason → next]
   C -->|yes| E{Pool has a free VM?<br>lent count in sandbox ls < 3}
-  E -->|no| F[Skip this project → next]
+  E -->|no| F[Skip this project → next<br>with --wait, run kb run --wait instead]
   E -->|yes| G[kb run id]
   G --> H[dispatch.log: start / end / rc / state / seconds]
   H --> I{--once / --max reached?}
@@ -83,6 +84,7 @@ flowchart TD
 - Makes no decisions. The kind is held by kanban
 - Pool size is `POOL_PER_PJ = 3` (match the number created with `40-pool.sh`)
 - `--dry-run` skips the pool check
+- `--wait` skips it too. Waiting happens in one place, the runner (`kb run --wait` → `workflow/bin/run --wait`; ADR-0031). A ticket that runs out of time goes back to `todo`, so the next `dispatch` can pick it up again
 
 ### Output
 

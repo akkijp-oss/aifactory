@@ -24,12 +24,15 @@ glue/bin/dispatch --once                 # 最も古い todo を 1 件
 glue/bin/dispatch --max 3                # 3 件まで
 glue/bin/dispatch --pj kumitate          # PJ を絞る
 glue/bin/dispatch --dry-run              # VM を触らず、依頼文の組み立てだけ
+glue/bin/dispatch --wait 60              # プールが満杯でも飛ばさず、空くまで最大 60 分待つ
 ```
 
 dispatch は、チケットに登録されたプロジェクトと種別を使って実行します。実行前に確認する条件は、次の 2 つです。
 
 - そのプロジェクトに `project.yml`（`$AIFACTORY_WORKSPACE/projects/<pj>/`、なければ `examples/projects/<pj>/`）が**ない** → `blocked` にして次へ（メモに理由を書く）
 - そのプロジェクトのプール（3 台）が**全部貸出中** → そのプロジェクトは飛ばして次のプロジェクトの todo へ
+
+`--wait` を付けると 2 つ目の確認をやめ、`kb run --wait <分>` で空くまで待たせます。プールより多い件数をまとめて流したいとき、人が終了を見張って次を手で起動しなくてよくなります。
 
 チケットは 1 件ずつ順に処理します。たとえば検証に 60 分かかるチケットがあれば、それが終わるまで次のチケットは実行されません。
 
@@ -41,6 +44,7 @@ kanban/bin/kb run 204 --workflow chore   # 今回だけ別の workflow で回す
 kanban/bin/kb run 204 --dry-run          # 定義と依頼文の確認だけ
 kanban/bin/kb run 204 --keep             # 終わっても VM を返さない（中を見たいとき）
 kanban/bin/kb run 204 --resume           # 貸出中の VM で、state.json の次の step から続ける
+kanban/bin/kb run 204 --wait             # プールに空きがなければ、空くまで待つ（既定 60 分。`--wait 30` で 30 分）
 ```
 
 `kb run` は状態を `in_progress` にして runner を呼び、終わったら `state.json` を読んで状態を進めます。
@@ -52,6 +56,9 @@ kanban/bin/kb run 204 --resume           # 貸出中の VM で、state.json の�
 | PR なしで `end`（research など） | `done` | PR なしで終了 |
 | `human` で PR なし | `blocked` | 人間へ。成果は `origin/sandbox/<id>-<wf>-wip` に退避 |
 | runner が異常終了 | `blocked` | rc と次の工程 |
+| `--wait` の上限まで待っても空きなし | `todo` | 直す所はないので未着手に戻す。空いたらまた回せる（ADR-0031） |
+
+`--wait` で待っている間、チケットは `in_progress` のままで、コンソールのボードと実行記録には「VM の空き待ち」と経過時間が出ます。
 
 ## 実行中に見えるもの
 

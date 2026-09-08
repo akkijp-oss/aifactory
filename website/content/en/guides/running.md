@@ -24,12 +24,15 @@ glue/bin/dispatch --once                 # the oldest todo, one ticket
 glue/bin/dispatch --max 3                # up to 3
 glue/bin/dispatch --pj kumitate          # restrict to a project
 glue/bin/dispatch --dry-run              # assemble prompts only, no VM
+glue/bin/dispatch --wait 60              # do not skip a full pool: wait up to 60 minutes for a free VM
 ```
 
 dispatch makes no decisions. It checks only two things.
 
 - The project has **no** `project.yml` (in `$AIFACTORY_WORKSPACE/projects/<pj>/`, or `examples/projects/<pj>/` as a fallback) → mark `blocked` (with the reason in the note) and move on
 - **All** of the project's pool (3 VMs) is lent out → skip the project and look for the next project's todo
+
+`--wait` drops the second check and lets `kb run --wait <minutes>` wait for a free VM instead. When you want to push more tickets through than the pool holds, nobody has to watch for runs to finish and start the next one by hand.
 
 It is sequential. The next ticket does not start until the current one finishes. A run whose gates take 60 minutes makes the others wait.
 
@@ -41,6 +44,7 @@ kanban/bin/kb run 204 --workflow chore   # run once with a different workflow (t
 kanban/bin/kb run 204 --dry-run          # validate definitions and assemble prompts only
 kanban/bin/kb run 204 --keep             # do not release the VM afterwards (to look inside)
 kanban/bin/kb run 204 --resume           # continue from the next step in state.json on the VM already lent
+kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is full (60 minutes; `--wait 30` for 30)
 ```
 
 `kb run` sets the state to `in_progress`, calls the runner, then reads `state.json` when it finishes and advances the state.
@@ -52,6 +56,9 @@ kanban/bin/kb run 204 --resume           # continue from the next step in state.
 | `end` without a PR (research etc.) | `done` | Finished without a PR |
 | `human` without a PR | `blocked` | Handed to a human. Work is preserved on `origin/sandbox/<id>-<wf>-wip` |
 | The runner crashed | `blocked` | Exit code and the next step |
+| `--wait` ran out with no free VM | `todo` | Nothing to fix, so it goes back to todo and can be run again later (ADR-0031) |
+
+While `--wait` waits, the ticket stays `in_progress`, and the console board and run record show "waiting for a free VM" with the elapsed time.
 
 ## What you can see while it runs
 

@@ -303,7 +303,11 @@ def run_outcome(d, s, state, wf, files):
     # 工程が 1 つも始まらないまま失敗した run（take / checkout の失敗）は「記録にありません」ではなく準備段階の失敗
     if not hist and s.get("finished") and state.get("result") == "failed":
         o["reason"] = "failed_before_start"; o["stopped_step"] = (state.get("current") or {}).get("step") or "take"
-        o["error_summary"] = last_line(state.get("error")); return o
+        o["error_summary"] = last_line(state.get("error"))
+        # VM の空きを待ったが出なかった run（チケット 242）。直す所は無く、チケットは未着手に戻っている
+        if state.get("failure") == "wait_timeout":
+            o["reason"] = "wait_timeout"; o["stopped_step"] = "wait-vm"; o["waited_s"] = int(state.get("waited_s") or 0)
+        return o
     if state.get("_error") or (not hist and s.get("finished")): return o
     if not hist: return o
     if s.get("pr_url"): o["reason"] = "pr_created"; return o
@@ -794,6 +798,7 @@ def ticket_run(tid, b):
     if b.get("workflow"): cmd += ["--workflow", b["workflow"]]
     for f in ("dry_run", "keep", "resume"):
         if b.get(f): cmd.append("--" + f.replace("_", "-"))
+    if b.get("wait"): cmd += ["--wait", str(int(b["wait"]))]   # VM の空き待ちの上限（分。242）
     label = f"kb run {tid}" + (" --dry-run" if b.get("dry_run") else "") + (" --resume" if b.get("resume") else "")
     hint = f"{datetime.date.today().isoformat()}-{t[0]['pj']}-{tid}" + ("-dry" if b.get("dry_run") else "")
     if b.get("resume") and not b.get("dry_run") and t[0].get("run"):
@@ -831,6 +836,7 @@ def op_dispatch(b):
     if b.get("once"): cmd.append("--once")
     elif b.get("max"): cmd += ["--max", str(int(b["max"]))]
     if b.get("dry_run"): cmd.append("--dry-run")
+    if b.get("wait"): cmd += ["--wait", str(int(b["wait"]))]   # VM の空き待ちの上限（分。242）
     serial = (lambda j: None) if b.get("dry_run") else (lambda j: f"dispatch（ジョブ {j['id']}）が既に実行中です。直列で回す約束なので、終わるまで待ってください" if j.get("kind") == "dispatch" else None)
     return {"job": JobStore.start("dispatch", cmd, "dispatch " + " ".join(cmd[1:]), conflict=serial)}
 

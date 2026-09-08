@@ -644,6 +644,25 @@ class ApiTest(unittest.TestCase):
         self.assertIn("T.run.error", app)                                             # 詳細に失敗の理由が出る
         self.assertIn("T.outcome.failed_before_start", app)
 
+    def test_run_that_waited_for_a_free_vm_is_not_a_human_problem(self):
+        """--wait の上限まで待っても空きが出なかった run（チケット 242）。準備段階の失敗と区別して見せる"""
+        name = "2026-09-07-kumitate-997"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "ticket.md").write_text("# 調査: 空きを待った run\n", encoding="utf-8")
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "997", "workflow": "research", "branch": "sandbox/997-research-x", "base": "develop",
+            "started": "2026-09-07T10:00:00", "finished": "2026-09-07T11:00:05", "elapsed_s": 3605, "history": [], "loops": {},
+            "result": "failed", "next": "human", "current": None, "pr_url": "", "wip_branch": "",
+            "failure": "wait_timeout", "waited_s": 3600,
+            "error": "VM の空き待ちが上限 60 分（3600 秒）を超えました。3600 秒待機: [error] pj=kumitate に空きなし"}, ensure_ascii=False), encoding="utf-8")
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200)
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "wait_timeout"); self.assertEqual(o["stopped_step"], "wait-vm")
+        self.assertEqual(o["waited_s"], 3600)
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.wait_timeout", app)
+
     def test_run_whose_job_ended_is_abandoned(self):
         """起動したジョブが終わっているのに finished が書かれていない run は「実行中」ではなく「中断」（チケット 236）。
 
