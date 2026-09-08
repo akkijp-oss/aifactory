@@ -57,6 +57,8 @@ In the "git" column, **workspace** means it lives in `$AIFACTORY_WORKSPACE` (def
 | Reasons for design decisions | `docs/adr/NNNN-*.md` (append only) | The next session | repo |
 | Notes about your own environment (hosts, power, token expiry, etc.) | `workspace/docs/` | Whoever builds | workspace |
 
+Timestamps written into records are ISO 8601 with a UTC offset (`2026-09-08T00:21:00+00:00`), so that whoever reads them does not have to guess the time zone. Older records without an offset are read as the local time of the host that wrote them (the web console fills the offset in as it reads; the record itself is left alone). The decision is ADR-0026 ([Design decisions](../decisions/index.md)).
+
 ## Which one is the source of truth
 
 | Subject | Source of truth | Derived |

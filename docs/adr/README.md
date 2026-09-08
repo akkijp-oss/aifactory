@@ -36,3 +36,5 @@
 - [0024: 単体Linuxワーカー](0024-standalone-linux-worker.md)
 
 - [0025: 実行記録の停止理由はコンソール側で導く](0025-run-outcome-derived-in-console.md)
+
+- [0026: 記録する時刻はオフセット付き ISO 8601 にする](0026-timestamps-carry-utc-offset.md)

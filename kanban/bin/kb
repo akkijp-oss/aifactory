@@ -43,7 +43,8 @@ def die(msg, code=1):
 
 
 def now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
+    """記録する時刻はオフセット付き（ADR-0026）。読む側（console）が時間帯を推し量らずに済む"""
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def pjs():
