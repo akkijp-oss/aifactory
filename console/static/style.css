@@ -77,6 +77,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .col.s-review h2 { border-bottom-color: var(--review); }
 .col.s-blocked h2 { border-bottom-color: var(--blocked); }
 .col.s-done h2 { border-bottom-color: var(--done); }
+/* 人間待ちは流れの外。帯の .cell.side と同じ地色にして「横に置いた列」と分かるようにする */
+.col.s-blocked { background: var(--ground); }
+.col.s-blocked .card:hover { background: var(--panel); }
 .col .empty { padding: 18px 12px; color: var(--muted); font-size: 12.5px; }
 .card { display: block; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); color: var(--ink); }
 .card:last-child { border-bottom: 0; }

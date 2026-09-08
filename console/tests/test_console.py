@@ -6,7 +6,7 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import importlib.machinery, importlib.util, json, os, pathlib, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
@@ -82,6 +82,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200); self.assertTrue(o["db"]); self.assertEqual(set(o["counts"]), {"todo", "in_progress", "review", "blocked", "done"})
         self.assertEqual(o["paths"]["workspace"], str(self.ws)); self.assertFalse(o["paths"]["legacy"])
         _, t = self.http.get("/api/tickets"); self.assertGreater(len(t["tickets"]), 0); self.assertIn("bug", t["kinds"])
+        _, tp = self.http.get(f"/api/tickets?pj={PJ}"); self.assertGreater(len(tp["tickets"]), 0)
+        self.assertEqual({x["pj"] for x in tp["tickets"]}, {PJ})                      # 絞り込みはサーバー側で効いている
         self.assertTrue(all(not k.startswith((".", "_")) for k in t["kinds"]), t["kinds"])   # `._bug` のようなごみを候補に出さない
         self.assertIn("kind_desc", t); self.assertTrue(t["kind_desc"]["bug"])                # 画面が種別の用途を説明できる
         _, r = self.http.get("/api/runs"); self.assertTrue(any(x["kind"] == "v1" for x in r["runs"]))
@@ -108,6 +110,19 @@ class ApiTest(unittest.TestCase):
             with urllib.request.urlopen(self.http.base + p, timeout=10) as r:
                 self.assertEqual(r.status, 200, p); self.assertIn(ctype, r.headers["Content-Type"], p); body = r.read().decode("utf-8")
             if p == "/": self.assertLess(body.index("strings.js"), body.index("app.js")); self.assertIn('charset="utf-8"', body); self.assertIn('lang="ja"', body)
+
+    def test_board_strip_and_columns_share_source(self):
+        """ボードの帯と列が同じ絞り込み結果から数える（PJ を選ぶと帯だけ全体のままになるのを防ぐ）。
+
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、test_strings.py と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewBoard")
+        body = app[i:app.index("\n}", i)]
+        self.assertNotIn("o.counts", body, "帯が overview の全体集計を読んでいる。絞り込み済みの by から数える")
+        self.assertEqual(re.findall(r"col\('(\w+)'", body), ["todo", "in_progress", "review", "done", "blocked"],
+                         "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
+        for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
 
     def test_ticket_detail(self):
         _, t = self.http.get("/api/tickets"); tid = t["tickets"][0]["id"]

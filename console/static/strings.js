@@ -59,7 +59,8 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
-    "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）"
+    "noLive": "動いている run はありません。", "more": "ほか {n} 件（コマンド kb list --all で一覧できます）",
+    "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}"
   },
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "run": {
