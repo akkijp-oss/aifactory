@@ -8,7 +8,7 @@ The sandbox is fully described by the five operations of the `sandbox` CLI. This
 
 | Operation | Guarantee |
 |---|---|
-| `take <pj> <task-id>` | Reserves one clean VM reachable at `task-<id>.sb.internal`. Injects the task id and auth tokens into the VM. Exits non-zero if none is free |
+| `take <pj> <task-id>` | Reserves one clean VM reachable at `task-<id>.sb.internal`. Injects the task id and auth tokens into the VM. Starts the VM and waits for ssh if it was stopped to save power. Exits non-zero if none is free |
 | `ssh <task-id> [cmd]` | Logs in as user `dev` (runs cmd and returns if given) |
 | `url <task-id>` | The app URL: `http://task-<id>.sb.internal:3000` |
 | `reset <task-id>` | Rolls the VM back to snapshot `clean`. Stays lent |
@@ -58,6 +58,15 @@ flowchart LR
 - `clean` is taken with the app already listening on :3000 and the firewall configured, so the app opens in a browser right after take
 - Templates have two layers: base (shared) and project (Ruby / Node versions, dependencies, seed). Versions differ per project, so templates are per project
 - VMs run the app natively, without Docker (ADR-0002): Rails runs as is, with fewer surprises
+
+### VMs nobody uses get stopped (idle-stop)
+
+Left alone, a pool VM that is not lent out stays `running` and holds CPU and memory. A systemd timer on the control plane calls `sandbox idle-stop` every 15 minutes, stopping the pool VMs that are **not lent out and were last used more than 3 hours ago** (default, configurable; ADR-0033).
+
+- Nothing was added to start them again. `rollback()` — which `take` / `reset` / `release` all go through — already starts a stopped VM and waits for ssh, so the next `take` brings it back. That costs an extra 30–60 seconds and logs `[start] vm <vmid>: 停止中だったので起動した（N 秒）`
+- Last use is kept in a separate `last-used.json`. The lending ledger (`state.json`) drops the entry on return, so it cannot say how long a returned VM has been idle. With no record the VM's `uptime` stands in; if that is unavailable too, the VM is left running
+- `state.json.lock` is held per VM from the verdict until the VM has actually stopped. Releasing it earlier would let `take` reserve the same VM while it is still `running` — it would skip the boot wait, then lose power under the run
+- The control-plane `ctl` / `gw` are LXCs, so they are never in scope (the pool listing is qemu only)
 
 ## Network
 

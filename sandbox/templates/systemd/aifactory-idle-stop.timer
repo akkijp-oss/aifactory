@@ -1,0 +1,10 @@
+[Unit]
+Description=aifactory sandbox: look for idle pool VMs every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Unit=aifactory-idle-stop.service
+
+[Install]
+WantedBy=timers.target

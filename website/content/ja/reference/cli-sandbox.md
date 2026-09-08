@@ -14,6 +14,8 @@ sandbox ls                       プール VM の一覧（貸出先 / IP / 稼�
 sandbox status [pj]              プールの台数（定義 / 実体 / 貸出 / 空き）
 ```
 
+運用補助として `sandbox idle-stop [--hours N] [--dry-run]` があります（使われていない VM を止める。下記）。
+
 | 操作 | 何をするか | 失敗の条件 |
 |---|---|---|
 | `take` | プロジェクトプールの空き VM を選んで `state.json` に予約（ここまで `state.json.lock` の排他区間。同時 take が同じ VM を選ばない） → `qm rollback clean` → プロジェクトの env と GitHub App トークンを `/run/sandbox/env` に → sb-gw の dnsmasq に登録 → 予約を確定。途中で失敗したら予約を消す | 空きなし、プロジェクトの env なし、App が未インストール |
@@ -21,7 +23,7 @@ sandbox status [pj]              プールの台数（定義 / 実体 / 貸出 /
 | `url` | `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` を表示 | |
 | `reset` | `qm rollback clean` → env 再注入。貸出は継続 | `clean` がない、巻き戻しに失敗（貸出は継続したまま非0で終わる） |
 | `release` | reset → DNS 登録を外す → `state.json` から削除。rollback のロック競合は既定で 3 回・10 秒間隔まで待ってリトライし（`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`）、失敗は毎回 stderr に出る | 巻き戻しに失敗（非0で終わり `state.json` に残す。次の一手はメッセージに出る）。`--force` を付けると巻き戻せなくても削除する（人が手で直した VM 用） |
-| `ls` | `TASK VM VMID IP STATUS SINCE`。TASK は貸出先の task-id（貸出なしは `-`）、STATUS は Proxmox の電源状態（running / stopped）で貸出とは別の軸。返却しても VM は止めないので、貸出 0 台でも running が並ぶ | |
+| `ls` | `TASK VM VMID IP STATUS SINCE`。TASK は貸出先の task-id（貸出なしは `-`）、STATUS は Proxmox の電源状態（running / stopped）で貸出とは別の軸。返却してもすぐには止まらないので、貸出 0 台でも running が並ぶ。節電で止まっている VM があれば表の後に `[idle-stop] N 台が節電で停止中` の 1 行が付く | |
 | `status` | `PJ DEFINED ACTUAL LENT FREE`。DEFINED は設定の定義台数（`SANDBOX_POOL_PER_PJ`、既定 3）、ACTUAL は Proxmox に実在する VM の台数、LENT は台帳の貸出台数、FREE は `ACTUAL - LENT`（0 で下げ止まり）。引数の `pj` でその 1 行だけ出す | |
 
 `sandbox ls` の出力例:
@@ -47,6 +49,39 @@ kumitate       3        3       0     3
 ```
 
 `clean 無し` は snapshot `clean` が無くて飛ばした台数です。この状態は `sandbox ls` からは分からないので、コンソールと `sandbox status` の「空き」には数えたまま出ます。
+
+## 使われていない VM を止める（`idle-stop`）
+
+貸し出されていないプール VM は、CPU とメモリを占有したまま起動し続けます。`sandbox idle-stop` は、**貸出中でなく、最後に使われてから一定時間が経った**プール VM を止めます（ADR-0033）。制御系 LXC の systemd timer `aifactory-idle-stop.timer` が 15 分ごとに呼びます。
+
+```
+sandbox idle-stop [--hours N] [--dry-run]
+```
+
+| 項目 | 内容 |
+|---|---|
+| 対象 | `sb-<t>-<pj>-NN` の qemu VM で、いま running のもの。制御系の `ctl` / `gw` は LXC なので対象外。`-base` / `-tpl-` も除く |
+| 止める条件 | 貸出台帳（`state.json`）に vmid が無く、最終利用から `N` 時間以上経っている |
+| `N` の既定 | `--hours` > `SB_IDLE_STOP_HOURS` > `3`。`0` で無効。`pj/<pj>.env` に書けば PJ 別に上書きできる（常時起動にしたい PJ 用） |
+| 最終利用 | `~/.config/sandbox/last-used.json`（`take` / `reset` / `release` / `reinject` のたびに更新）。記録が無ければ VM の `uptime` で代用し、それも取れなければ**止めない** |
+| 止め方 | `status/shutdown`（timeout 120 秒。guest agent / ACPI）→ 止まらなければ `status/stop` |
+| 記録 | `~/.config/sandbox/idle-stop.json`（`hours` / `last_run` / `stopped[]`）。`sandbox ls` の脚注、コンソール、MCP `sandbox_status` がここを読む |
+| `--dry-run` | 判定だけ出して止めない。記録も書かない |
+
+出力例:
+
+```
+[idle-stop] sb-main-kumitate-02 (9205): shutdown（最終利用 3h12m 前、3h 超）
+[idle-stop] 対象 3 台: 停止 1 / 貸出中 1 / 未経過 1 / 不明 0
+```
+
+**起こすためのコマンドはありません**。止まった VM は次の `take` が自動で起動します（`rollback` が ssh の起動を待ちます）。起動に 30〜60 秒ほど余分にかかり、そのあいだ次の 1 行がログに出ます:
+
+```
+[start] vm 9205: 停止中だったので起動した（42 秒）
+```
+
+判定から停止の完了までは `state.json.lock` を 1 台ずつ保持します。`take` が予約した直後の VM を止めてしまわないためで、そのぶん同時に走る `take` の待ちは最大 `SB_LOCK_WAIT` 秒（既定 150）まで伸びます。
 
 ## 認証情報の管理と更新
 
@@ -85,9 +120,9 @@ CLI は、必要な権限のうち GitHub App に許可されているものを�
 
 | ファイル | 内容 |
 |---|---|
-| `~/.config/sandbox/env` | `SB_TENANT`（既定 `main`。`SB_PREFIX` = `sb-<t>`、`SB_DOMAIN` = `<t>.sb.internal`、`SB_POOL` = `sb-<t>` を導く）/ `PVE_HOST`（Proxmox ホストの ssh エイリアス。ssh モードで必須、既定なし）または `PVE_API_URL` + `PVE_API_TOKEN`（API モード。テナントのプール限定のトークン。`PVE_API_CA` か `PVE_API_INSECURE=1`。ADR-0017）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定なし）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）。ひな形 `sandbox/templates/env.example` |
+| `~/.config/sandbox/env` | `SB_TENANT`（既定 `main`。`SB_PREFIX` = `sb-<t>`、`SB_DOMAIN` = `<t>.sb.internal`、`SB_POOL` = `sb-<t>` を導く）/ `PVE_HOST`（Proxmox ホストの ssh エイリアス。ssh モードで必須、既定なし）または `PVE_API_URL` + `PVE_API_TOKEN`（API モード。テナントのプール限定のトークン。`PVE_API_CA` か `PVE_API_INSECURE=1`。ADR-0017）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定なし）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）/ `SB_IDLE_STOP_HOURS`（使われていない VM を止めるまでの時間。既定 3、`0` で無効）。ひな形 `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | 別テナントの設定（メンテナの手元）。`SB_TENANT=<t>` で `sandbox` と `proxmox/run.sh` が読む。状態は `<t>.state.json`、PJ 別設定は `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、（フォールバック用 `GH_TOKEN`） |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、（フォールバック用 `GH_TOKEN`）、`SB_IDLE_STOP_HOURS`（この PJ だけ上書き） |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App。`sandbox/bin/gh-app-setup` が作る |
 | `~/.config/sandbox/state.json` | 貸出台帳。`{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*` の ssh 設定。ひな形 `ssh_config.example` |

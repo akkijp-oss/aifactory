@@ -488,6 +488,23 @@ def leases_by_vmid(lent):
     return {vmid: sorted(tasks, key=_task_key) for vmid, tasks in by.items()}
 
 
+def idle_stop_view():
+    """~/.config/sandbox/idle-stop.json（sandbox CLI の idle-stop が書く）。無ければ None。
+
+    「稼働状態が停止中」の理由が節電なのか壊れているのかは、この一覧に vmid があるかどうかでしか分からない。
+    読むだけで、止める・起こすはコンソールからはしない（次の貸出が起こす）。
+    """
+    p = SANDBOX_STATE.parent / "idle-stop.json"
+    if not p.exists(): return None
+    try: d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception: return None
+    if not isinstance(d, dict): return None
+    stopped = [v for v in (d.get("stopped") or []) if isinstance(v, dict)]
+    return {"hours": d.get("hours"), "last_run": ts_aware(d.get("last_run")) if d.get("last_run") else None,
+            "stopped": [{"vmid": str(v.get("vmid")), "name": v.get("name"),
+                         "at": ts_aware(v["at"]) if v.get("at") else None, "last_used": v.get("last_used")} for v in stopped]}
+
+
 def sandbox_view():
     lent = {}
     if SANDBOX_STATE.exists():
@@ -532,7 +549,8 @@ def sandbox_view():
     return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
             "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
             "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms,
-            "ls_fetched": fetched, "ls_age_s": age, "ls_stale": bool(age is not None and age > LS_STALE_S)}
+            "ls_fetched": fetched, "ls_age_s": age, "ls_stale": bool(age is not None and age > LS_STALE_S),
+            "idle_stop": idle_stop_view()}
 
 
 # ---------- jobs

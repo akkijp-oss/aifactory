@@ -437,7 +437,13 @@ async function viewSandbox() {
   const poolAt = !d.ls_fetched ? T.sandbox.actualNever
     : d.ls_stale ? tt(T.sandbox.actualStale, { t: fmtT(d.ls_fetched), n: Math.floor(d.ls_age_s / 60) })
     : tt(T.sandbox.actualAt, { t: fmtT(d.ls_fetched) });
-  const power = st => T.power[st] ? `<span class="st ${st === 'running' ? 'done' : 'todo'}">${esc(T.power[st])}</span>` : `<span class="tag">${esc(st)}</span>`;
+  /* 停止中の VM が「節電で止めた（次の貸出で起きる）」のか「起きてこない」のかは、idle-stop の一覧に載っているかどうかで分ける */
+  const idle = d.idle_stop || null;
+  const idleIds = new Set((idle && idle.stopped || []).map(v => String(v.vmid)));
+  const power = (st, vmid) => {
+    if (st === 'stopped' && idleIds.has(String(vmid))) return `<span class="st todo" title="${esc(T.help.idleStop)}">${esc(T.power.idle)}</span>`;
+    return T.power[st] ? `<span class="st ${st === 'running' ? 'done' : 'todo'}">${esc(T.power[st])}</span>` : `<span class="tag">${esc(st)}</span>`;
+  };
   const runOf = task => o && o.runs_active.find(r => String(r.task) === String(task));
   /* 同じ vmid に 2 件以上の貸出がある組（core の sandbox_view が作る）。台帳は読むだけで、ここでは直さない */
   const shared = d.shared || {};
@@ -461,8 +467,9 @@ async function viewSandbox() {
       ${lsFailed ? `<div class="err">${esc(tt(T.sandbox.lsFailed, { t: fmtT(lsFailed.finished) }))} <a href="#/job/${esc(lsFailed.id)}">${esc(T.btn.openJob)}</a></div>
         <div class="help top">${esc(T.help.lsFailed)}</div>${failLog && failLog.log && tail3(failLog.log.text) ? `<pre class="log small top">${esc(tail3(failLog.log.text))}</pre>` : ''}` : ''}
       ${d.vms.length ? `<table class="top"><tr><th>${esc(T.th.lentTo)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.power)}</th><th>${esc(T.th.lentSince)}</th></tr>
-        ${d.vms.map(v => `<tr><td>${v.task ? lentToCell(v.task) : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(v.pj || '')}</td><td>${power(v.status)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
-        <div class="help top">${esc(T.help.lsAxes)}</div>` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
+        ${d.vms.map(v => `<tr><td>${v.task ? lentToCell(v.task) : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(v.pj || '')}</td><td>${power(v.status, v.vmid)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
+        <div class="help top">${esc(T.help.lsAxes)}</div>
+        ${idle && idle.hours ? `<div class="help">${esc(tt(T.help.idleStopAxes, { h: idle.hours }))}</div>` : ''}` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
 

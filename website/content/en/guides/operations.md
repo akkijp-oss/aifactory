@@ -30,7 +30,7 @@ Run `sandbox token rotate` on the control plane (the host that has `~/.config/ai
 
 ### GitHub token (automatic)
 
-GitHub App installation tokens expire after one hour. The launchd job `com.aifactory.sandbox.gh-refresh` reissues them to every lent VM every 45 minutes, and the runner reissues before each code step. By hand:
+GitHub App installation tokens expire after one hour. The systemd timer `aifactory-gh-refresh.timer` on the control plane reissues them to every lent VM every 45 minutes, and the runner reissues before each code step. By hand:
 
 ```bash
 sandbox gh-app refresh                   # every lent VM
@@ -49,6 +49,19 @@ When you add permissions to the App (such as Actions: Read), each installation m
 | Grow the pool | `TPL_VMID=911x sandbox/proxmox/run.sh 40-pool.sh <pj> <count>` → `50-firewall.sh`. Watch `data%` in `lvs pve/data` |
 | Rebuild a dirty VM | `qm destroy <vmid>` → `40-pool.sh`. A VM without `clean` cannot `reset` |
 | Never touch lent VMs | Read `~/.config/sandbox/state.json` and skip them (`50-firewall.sh` accepts `LENT=`) |
+
+### VMs nobody uses stop by themselves
+
+A pool VM that is not lent out is stopped 3 hours (default) after it was last used. The systemd timer `aifactory-idle-stop.timer` on the control plane calls `sandbox idle-stop` every 15 minutes (ADR-0033). A `stopped` STATUS in `sandbox ls` is therefore usually power saving, not a fault; the table is followed by `[idle-stop] N 台が節電で停止中`.
+
+**You do not need to start them by hand.** The next `take` does it and logs `[start] vm <vmid>: 停止中だったので起動した（N 秒）` (30–60 seconds extra).
+
+```bash
+sandbox idle-stop --dry-run              # see what would be stopped, without stopping it
+journalctl -u aifactory-idle-stop        # the timer's log
+```
+
+To keep VMs running, put `SB_IDLE_STOP_HOURS=0` in `~/.config/sandbox/env` (everything) or in `~/.config/sandbox/pj/<pj>.env` (that project only). To change the window, write the number of hours instead of `3`.
 
 ## Updating templates
 

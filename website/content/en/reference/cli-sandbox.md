@@ -14,6 +14,8 @@ sandbox ls                       list the pool VMs (who it is lent to / IP / pow
 sandbox status [pj]              pool sizes (defined / actual / lent / free)
 ```
 
+There is also `sandbox idle-stop [--hours N] [--dry-run]` as an operational aid (stops VMs nobody is using; see below).
+
 | Operation | What it does | Fails when |
 |---|---|---|
 | `take` | Picks a free VM of the project's pool and reserves it in `state.json` (this much runs inside the `state.json.lock` critical section, so concurrent takes never pick the same VM) → `qm rollback clean` → writes the project env and a GitHub App token to `/run/sandbox/env` → registers in dnsmasq on sb-gw → confirms the reservation. A failure on the way drops the reservation | No free VM, no project env, App not installed |
@@ -21,7 +23,7 @@ sandbox status [pj]              pool sizes (defined / actual / lent / free)
 | `url` | Prints `http://task-<id>.<SB_DOMAIN>:<APP_PORT>` | |
 | `reset` | `qm rollback clean` → re-inject env. Stays lent | No `clean`; the rollback failed (exits non-zero, the VM stays lent) |
 | `release` | reset → remove DNS → delete from `state.json`. On rollback lock contention it waits and retries, 3 times 10 seconds apart by default (`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT`), printing every failure to stderr | The rollback failed (exits non-zero and keeps the entry in `state.json`; the message tells you what to do next). `--force` deletes the entry even when the rollback failed, for a VM you fixed by hand |
-| `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it, so `running` rows appear even when nothing is lent | |
+| `ls` | `TASK VM VMID IP STATUS SINCE`. TASK is the task-id it is lent to (`-` when not lent); STATUS is the Proxmox power state (running / stopped), a separate axis from lending. Returning a VM does not stop it right away, so `running` rows appear even when nothing is lent. When VMs are stopped to save power, a line `[idle-stop] N 台が節電で停止中` follows the table | |
 | `status` | `PJ DEFINED ACTUAL LENT FREE`. DEFINED is the configured size (`SANDBOX_POOL_PER_PJ`, default 3), ACTUAL is how many VMs really exist on Proxmox, LENT is how many the ledger hands out, FREE is `ACTUAL - LENT` (floored at 0). Pass `pj` to print only that row | |
 
 Example `sandbox ls` output:
@@ -47,6 +49,39 @@ A `take` that finds nothing free prints the breakdown and the next move:
 ```
 
 *clean 無し* counts VMs skipped because they have no `clean` snapshot. `sandbox ls` cannot see that, so those VMs still count as free in the console and in `sandbox status`.
+
+## Stopping VMs nobody is using (`idle-stop`)
+
+A pool VM that is not lent out keeps holding CPU and memory while it runs. `sandbox idle-stop` stops the pool VMs that are **not lent out and have not been used for a while** (ADR-0033). The systemd timer `aifactory-idle-stop.timer` on the control-plane LXC calls it every 15 minutes.
+
+```
+sandbox idle-stop [--hours N] [--dry-run]
+```
+
+| Item | Detail |
+|---|---|
+| Scope | qemu VMs named `sb-<t>-<pj>-NN` that are currently running. The control-plane `ctl` / `gw` are LXCs and never match; `-base` and `-tpl-` are excluded too |
+| Stops when | The vmid is absent from the ledger (`state.json`) and the last use was `N` hours ago or more |
+| Default `N` | `--hours` > `SB_IDLE_STOP_HOURS` > `3`. `0` disables it. Put it in `pj/<pj>.env` to override per project (for a project you want always on) |
+| Last use | `~/.config/sandbox/last-used.json`, updated by `take` / `reset` / `release` / `reinject`. With no record it falls back to the VM's `uptime`; if that is unavailable too, the VM is **left running** |
+| How it stops | `status/shutdown` (120 s timeout; guest agent / ACPI), then `status/stop` if that did not take |
+| Record | `~/.config/sandbox/idle-stop.json` (`hours` / `last_run` / `stopped[]`). The `sandbox ls` footnote, the console and the MCP `sandbox_status` read it |
+| `--dry-run` | Prints the verdicts without stopping anything and without writing the record |
+
+Example output:
+
+```
+[idle-stop] sb-main-kumitate-02 (9205): shutdown（最終利用 3h12m 前、3h 超）
+[idle-stop] 対象 3 台: 停止 1 / 貸出中 1 / 未経過 1 / 不明 0
+```
+
+**There is no command to start a VM back up.** The next `take` does it: `rollback` starts a stopped VM and waits for ssh. That costs an extra 30–60 seconds, and this line appears in the log:
+
+```
+[start] vm 9205: 停止中だったので起動した（42 秒）
+```
+
+`state.json.lock` is held per VM from the verdict until the VM has actually stopped, so a VM that `take` has just reserved is never shut down under it. A concurrent `take` therefore waits up to `SB_LOCK_WAIT` seconds (default 150).
 
 ## Operational helpers (outside the contract)
 
@@ -85,9 +120,9 @@ The permissions requested are "those we want that the App actually holds". Add a
 
 | File | Contents |
 |---|---|
-| `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`). Skeleton `sandbox/templates/env.example` |
+| `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`) / `SB_IDLE_STOP_HOURS` (hours of disuse before a VM is stopped; default 3, `0` disables). Skeleton `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | Another tenant's settings on the maintainer's machine. `SB_TENANT=<t>` makes `sandbox` and `proxmox/run.sh` read it; state goes to `<t>.state.json`, per-project files to `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, (fallback `GH_TOKEN`) |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, (fallback `GH_TOKEN`), `SB_IDLE_STOP_HOURS` (override for this project only) |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App. Created by `sandbox/bin/gh-app-setup` |
 | `~/.config/sandbox/state.json` | Lending table. `{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | ssh settings for `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*`. Skeleton `ssh_config.example` |
