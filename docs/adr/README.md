@@ -34,3 +34,5 @@
 - [0023: 専用VMのcomputer-use](0023-computer-use.md)
 
 - [0024: 単体Linuxワーカー](0024-standalone-linux-worker.md)
+
+- [0025: 実行記録の停止理由はコンソール側で導く](0025-run-outcome-derived-in-console.md)

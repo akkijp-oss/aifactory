@@ -237,6 +237,41 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+    def test_intake_shows_project_yml_readiness(self):
+        """起票画面が、PJ を選んだ時点で「配車すると人間待ちになるか」を出せる。
+
+        判定は sandbox / チケット画面と同じ project.yml の有無。project.yml が無くても provision.sh だけで PJ 候補には入るので、
+        候補に出るが実行できない PJ が API 越しに区別できることを確かめる。表示は色だけに頼らず、起票そのものは止めない。
+        """
+        noyml = self.ws / "projects" / "noyml"
+        noyml.mkdir(parents=True)
+        (noyml / "provision.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        try:
+            _, t = self.http.get("/api/tickets")
+            self.assertIn("pj_ready", t, "/api/tickets が PJ の準備状態を返していない")
+            self.assertEqual(sorted(t["pj_ready"]), sorted(t["pjs"]), "候補の PJ と準備状態の対象がずれている")
+            self.assertTrue(t["pj_ready"][PJ], f"project.yml のある {PJ} が準備不足になっている")
+            self.assertIn("noyml", t["pjs"], "provision.sh だけの PJ が候補から消えている（起票は妨げない）")
+            self.assertFalse(t["pj_ready"]["noyml"], "project.yml の無い PJ が準備済みになっている")
+        finally:
+            shutil.rmtree(noyml, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        self.assertIn("pj_ready", view, "viewIntake が API の準備状態を読んでいない")
+        for eid in ("in-pj", "new-pj"):
+            self.assertTrue(re.search(rf'id="{eid}" data-act="pj-help"', view), f"{eid} を変えても準備状態が更新されない")
+            self.assertIn(f'id="{eid}-help"', view, f"{eid} の準備状態を出す行が無い")
+        self.assertIn("'pj-help':", app, "actions に pj-help が無い（選び直しても表示が変わらない）")
+        # 色だけに頼らない: 準備済み / 準備不足のどちらも文字のバッジと本文で読める
+        for key in ("T.intake.pjReadyBadge", "T.intake.pjNotReadyBadge", "T.help.pjReady", "T.help.pjNotReady"):
+            self.assertIn(key, app, f"{key} を使っていない（状態が色でしか分からない）")
+        self.assertIn("#/sandbox", app, "準備状態を確かめる先への導線が無い")
+        # 準備不足でも backlog には積める: 送信ボタンを押せなくしない
+        for act in ("intake", "new"):
+            self.assertFalse(re.search(rf'data-act="{act}"[^>]*disabled', view), f"準備不足の PJ で「{act}」を押せなくしている")
+
     def test_run_status_drives_the_ui(self):
         """実行中かどうかの判定は API の status に寄せる（app.js が `!r.finished` で独自に決めない）。
 
@@ -280,6 +315,84 @@ class ApiTest(unittest.TestCase):
         _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         st, d = self.http.get(f"/api/runs/{name}")
         self.assertEqual(st, 200); self.assertIn("state.json", [f["name"] for f in d["files"]]); self.assertIsNotNone(d["workflow"])
+
+    def _fixture_run(self, name, state=None, files=None):
+        """runs/<name>/ を手で組む（runner を回さずに history や gates.txt の形を作る）。日付は 2020 年にして、種の run より後ろに並べる"""
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        if state is not None: (d / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        for r, text in (files or {}).items():
+            f = d / r; f.parent.mkdir(parents=True, exist_ok=True); f.write_text(text, encoding="utf-8")
+        return name
+
+    def _state(self, hist, **kw):
+        return {"pj": PJ, "task": self.seed, "workflow": "feature", "branch": "sandbox/x", "base": "main",
+                "started": "2020-01-01T09:00:00", "finished": "2020-01-01T10:00:00", "elapsed_s": 3600,
+                "result": "human", "pr_url": "", "next": "human", "current": None, "loops": {},
+                "history": [{"step": st, "ok": ok, "next": "x", "at": "2020-01-01T09:10:00"} for st, ok in hist], **kw}
+
+    def test_run_outcome_loop_limit(self):
+        """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
+        hist = [("research", True), ("design", True), ("implement", True), ("gates", False),
+                ("implement", True), ("gates", False), ("implement", True), ("gates", False)]
+        name = self._fixture_run("2026-09-07-kumitate-998", self._state(hist, loops={"gates->implement": 2}), {
+            "work/gates.txt": "PASS lint\nFAIL test\n\n=== test.log (tail 60)\nFAIL something-in-log\n",
+            "work/ticket.md": "# x\n", "work/plan.md": "# 計画\n", "work/report.md": "# 報告\n",
+            "code-gates-7.log": "gates\n", "agent-implement-6.log": "implement\n",
+            "agent-implement-6.jsonl": "{}\n", "prompt-implement-6.md": "依頼文\n", "linux.lock": ""})
+        st, d = self.http.get(f"/api/runs/{name}"); self.assertEqual(st, 200)
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "loop_limit"); self.assertEqual(o["stopped_step"], "gates")
+        self.assertEqual(o["stopped_index"], 7); self.assertEqual(o["fail_count"], 3); self.assertTrue(o["loops_hit"])
+        self.assertEqual(o["gate_fails"], ["test"])                       # ログ末尾の添付にある FAIL は拾わない
+        self.assertTrue(o["detail_file"].endswith("work/gates.txt"), o["detail_file"])
+        g = d["groups"]
+        self.assertEqual([a["kind"] for a in g["artifacts"]], ["ticket", "planner", "implementer", "gates"])
+        self.assertEqual([a["name"] for a in g["artifacts"]], ["work/ticket.md", "work/plan.md", "work/report.md", "work/gates.txt"])
+        self.assertEqual([x["name"] for x in g["step_logs"]], ["agent-implement-6.log", "code-gates-7.log"])
+        other = [x["name"] for x in g["other"]]
+        for nm in ("state.json", "agent-implement-6.jsonl", "prompt-implement-6.md", "linux.lock"): self.assertIn(nm, other)
+        self.assertEqual(d["ticket"]["id"], self.seed); self.assertIn("updated", d["ticket"])   # チケットの「今」を出すのに要る
+
+    def test_run_outcome_pr_and_unknown(self):
+        """PR まで進んだ run は pr_created。記録が足りない run は unknown（推測しない）"""
+        ok = [("research", True), ("design", True), ("implement", True), ("gates", True), ("review", True), ("pr", True)]
+        name = self._fixture_run("2026-09-07-kumitate-997", self._state(ok, pr_url="https://example.invalid/pull/1"),
+                                 {"work/report.md": "# 報告\n", "agent-implement-2.log": "x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "pr_created"); self.assertIsNone(d["outcome"]["stopped_step"])
+        self.assertEqual([a["kind"] for a in d["groups"]["artifacts"]], ["implementer"])
+
+        name = self._fixture_run("2026-09-07-kumitate-996", self._state([]), {"work/ticket.md": "# x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "unknown"); self.assertIsNone(d["outcome"]["detail_file"])
+
+        name = self._fixture_run("2026-09-07-kumitate-995", None, {"ticket.md": "# x\n"})   # VM 貸出前は work/ が無い
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "not_started")
+        self.assertEqual([(a["name"], a["kind"]) for a in d["groups"]["artifacts"]], [("ticket.md", "ticket")])
+
+    def test_run_outcome_step_failed_points_at_the_step_log(self):
+        """ゲート以外の工程で止まった run は、その工程のログを「理由を読む」の先にする"""
+        hist = [("research", True), ("design", False)]
+        name = self._fixture_run("2026-09-07-kumitate-994", self._state(hist),
+                                 {"agent-design-1.log": "落ちた\n", "work/research.md": "# 調査\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "step_failed"); self.assertEqual(o["stopped_step"], "design")
+        self.assertEqual(o["gate_fails"], []); self.assertTrue(o["detail_file"].endswith("agent-design-1.log"))
+        self.assertFalse(o["loops_hit"])
+
+    def test_run_outcome_drives_the_run_view(self):
+        """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewRun("); body = app[i:app.index("\n}", i)]
+        self.assertIn("d.outcome", body, "viewRun が API の outcome を使っていない")
+        self.assertIn("outcomePanel(name, d)", body, "冒頭の「結果」パネルを出していない")
+        j = app.index("function outcomePanel("); panel = app[j:app.index("\n}", j)]
+        self.assertIn("T.outcome", panel)
+        for src in (body, panel):
+            self.assertNotIn("ok === false", src, "画面が history から止まった工程を決めている")
+            self.assertNotIn(".history", src, "画面が history を読み直している")
 
     def test_run_without_state_is_not_started(self):
         """ticket.md だけの run ディレクトリ（VM 貸出前に止まった残骸）を「実行中・工程 0」で数えない。
