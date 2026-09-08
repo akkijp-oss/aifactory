@@ -673,7 +673,7 @@ const actions = {
     } } });
     viewTicket(id, true);
   },
-  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() || undefined }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
   /* 状態を合わせるのは半可逆・影響大（状態とメモを上書きする）: 下見（kb sync --dry-run）で前後を見せてから */
   'sync': async el => {
     const id = el.dataset.id, run = el.dataset.run || '';
@@ -691,7 +691,7 @@ const actions = {
     await api(`tickets/${id}/action`, { action: 'sync', run: run || undefined, dry_run: false });   /* ダイアログで前後を見せた後なので、ここで初めて書く */
     const b = p.before;
     toast(esc(tt(T.msg.synced, { id })), { action: { label: T.btn.undo, run: async () => {
-      await api(`tickets/${id}/action`, { action: 'set', status: b.status, note: b.note || undefined });
+      await api(`tickets/${id}/action`, { action: 'set', status: b.status, note: b.note || '' });
       toast(esc(tt(T.msg.syncUndone, { id, to: T.status[b.status] || b.status })));
       if (location.hash === `#/ticket/${id}`) viewTicket(id, true);
     } } });

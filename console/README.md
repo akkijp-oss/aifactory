@@ -73,7 +73,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
-| `ticket_action` | start / review / done / reopen / block / set / sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
+| `ticket_action` | start / review / done / reopen / block / set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実勢（ジョブ）/ 返却（ジョブ） |
@@ -124,7 +124,8 @@ GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・
      どちらも kinds（workflow/kit/workflows/*.yml。`.` / `_` 始まりは出さない）と kind_desc（種別 → 用途）を返す
 GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる
 GET  /api/tickets/<id>/sync-preview[?run=]   状態同期の下見（kb sync --dry-run。前後の状態とメモ、run の後にチケットが更新されたか）
-POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|sync, ...}
+POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|append|sync, ...}
+     append は {text, section?} で本文の末尾に追記（history に body の行が残る）。set の note はキーがあれば空文字列でも渡す（= メモを消す）
      sync は既定で書かない（dry_run 既定 true。前後を返すだけ）。書くには dry_run: false を明示する
 POST /api/tickets/<id>/run         kb run をジョブで {dry_run, workflow, keep, resume}
 GET  /api/runs  /api/runs/<name>   実行記録  GET /api/file?path=&tail=|offset=   限られた根の下のファイル

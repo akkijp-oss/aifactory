@@ -36,7 +36,8 @@ $kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]             # workfl
 $kb sync <id> [--run NAME] [--dry-run]                                  # runs/<NAME>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
 $kb start|review|done|reopen <id> [--note TEXT]                         # 手で状態を進める
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
-$kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目
+$kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目（`--note ''` でメモを空に戻す）
+$kb append <id> [--section S] [--text T]                                # 本文の末尾に追記（--text が無ければ stdin）
 $kb history <id>                                                        # 変更履歴
 $kb render                                                              # BOARD.md を再生成
 ```
@@ -47,6 +48,9 @@ $kb render                                                              # BOARD.
 - `kb run` の結果判定: `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`
 - take 失敗を `todo` に戻さず `blocked` にするのは、`glue/bin/dispatch` が古い順に `todo` を拾うため。プールが埋まっている間は同じチケットを取り直して失敗し続ける。理由を `note` に残して人間に返し、直したら `kb reopen` → `kb run` で戻す
 - `--pr` を変えると本文の `pr:` 行も書き換える（runner は本文の `pr:` を読むため）
+- `kb append` は**本文の末尾**に足す。`--section` を付けると `## <見出し>` を先に書く（例 `## PM 補足`）。「`## 完了条件` の手前」には入れない: 節を見分ける仕組みが `kb` に無く、末尾なら diff が 1 か所で済むため。見出しで後から書き足したものだと分かる
+- 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
+- `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
 - テストは `KB_ROOT=<別ディレクトリ>`（または `AIFACTORY_WORKSPACE` ごと）で DB・tickets・BOARD の置き場を差し替えて行う
 
 ## sandbox / workflow に約束すること

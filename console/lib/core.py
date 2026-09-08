@@ -664,20 +664,27 @@ def ticket_detail(tid):
 
 
 def ticket_action(tid, b):
-    act = b.get("action")
+    act = b.get("action"); stdin = None
     if act in ("start", "review", "done", "reopen", "block"):
         if act == "block" and not b.get("note"): raise ApiError("人間待ちにするには、何を待っているかを note に書いてください")
         args = [act, tid] + (["--note", b["note"]] if b.get("note") else [])
     elif act == "set":
         args = ["set", tid]
-        for k in ("status", "pr", "note", "kind"):
+        # note だけは「キーが無い＝触らない / 空文字列＝消す」。他は空を未指定として無視する（kb が die するため）
+        if "note" in b and b["note"] is not None: args += ["--note", b["note"]]
+        for k in ("status", "pr", "kind"):
             if b.get(k) not in (None, ""): args += [f"--{k}", b[k]]
         if b.get("run"): args += ["--run", b["run"]]
         if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run のどれかを指定してください")
+    elif act == "append":
+        text = b.get("text")
+        if not text or not str(text).strip(): raise ApiError("追記する本文がありません。text に本文を入れてください")
+        args = ["append", tid] + (["--section", b["section"]] if b.get("section") else [])
+        stdin = str(text)
     elif act == "sync":
         return sync_apply(tid, b)
-    else: raise ApiError(f"操作 {act} はありません。start / review / done / reopen / block / set / sync のどれかを指定してください")
-    rc, out, err = kb(*args)
+    else: raise ApiError(f"操作 {act} はありません。start / review / done / reopen / block / set / append / sync のどれかを指定してください")
+    rc, out, err = kb(*args, stdin=stdin)
     if rc != 0: raise ApiError((err or out).strip() or f"kb {act} が失敗 rc={rc}")
     return {"rc": rc, "stdout": out, "stderr": err}
 

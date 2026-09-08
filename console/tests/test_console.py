@@ -730,6 +730,34 @@ class ApiTest(unittest.TestCase):
         hist = self.http.get(f"/api/tickets/{tid}")[1]["history"]
         self.assertTrue(any(h["field"] == "kind" and h["new"] == "chore" for h in hist))
 
+    def test_append_writes_body_and_history(self):
+        """本文への追記は末尾に見出しつきで入り、history に body 行として残る"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: 本文追記", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "append", "text": "裏取り: AppleDouble", "section": "PM 補足"})
+        self.assertEqual(st, 200, d)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertIn("## PM 補足", v["body"]); self.assertIn("裏取り: AppleDouble", v["body"])
+        self.assertGreater(v["body"].index("## PM 補足"), v["body"].index("## 完了条件"))   # 挿入位置は末尾
+        self.assertTrue(any(h["field"] == "body" and (h["new"] or "").startswith("append") for h in v["history"]))
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "append", "section": "PM 補足"})
+        self.assertEqual(st, 400, d); self.assertIn("text", d["error"])                      # 本文が無ければ拒む
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "append", "text": "  "})
+        self.assertEqual(st, 400, d)
+
+    def test_set_note_can_be_cleared(self):
+        """note は「キーが無い＝触らない / 空文字列＝消す」。従来は空を未指定として無視していた"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: メモを空に戻す", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "note": "x"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["note"], "x")
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["note"], "x")     # note キーが無ければ触らない
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "note": ""})[0], 200)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertIn(v["ticket"]["note"], (None, ""))
+        self.assertTrue(any(h["field"] == "note" and h["old"] == "x" and not h["new"] for h in v["history"]))
+
     def _put_job(self, jid, **over):
         """終わったジョブの記録を CONSOLE_JOBS に直接置く（JobStore はディスクの meta.json を読む）"""
         meta = {"id": jid, "kind": "kb-run", "label": "kb run", "cmd": [str(KB), "run"], "ticket": None, "run_hint": None,

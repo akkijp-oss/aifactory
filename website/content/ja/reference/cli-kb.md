@@ -9,6 +9,7 @@ kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]
 kb sync <id> [--run DIR]
@@ -79,6 +80,21 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 ```
 
 `--pr` を変更すると、runner が参照する本文の `pr:` 行も更新されます。`--run` には、`workspace/runs/` からの相対パスで run ディレクトリ名を指定します。`--kind` は、指定した種別が存在するか確認されます。変更はすべて履歴に残り、`BOARD.md` が再生成されます。
+
+`kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。
+
+### append
+
+```bash
+kb append 204 --section "PM 補足" --text "218 の `._*` は AppleDouble"
+kb append 204 --section "PM 補足" < memo.md      # --text がなければ標準入力から読む
+```
+
+チケット本文の**末尾**に追記します。`--section` を付けると `## <見出し>` を先に書きます。本文が空、またはチケットの本文ファイルがなければエラー（終了コード 1）です。
+
+挿入位置は末尾に固定しています。`## 完了条件` の手前に入れないのは、節を見分ける仕組みが `kb` になく、末尾なら変更が 1 か所で済むためです。後から書き足したものは見出しで見分けます。
+
+追記そのものは本文（ファイルが正本）に残ります。履歴には `body  - → append 24字 (PM 補足)` の形で、いつ・どれだけ足したかだけが残ります（`history` は `field` / `old` / `new` の 3 列で、差分は保持しません）。
 
 ### run
 
