@@ -19,7 +19,7 @@
 |---|---|---|
 | `id` | string（`^[a-z][a-z0-9_-]*$`） | 工程の名前。transition の行き先に使う。必須 |
 | `role` | planner / implementer / reviewer / researcher | エージェントが担当する工程。行動ルールは `roles/<role>.md`、モデルは役割の既定クラス |
-| `code` | string | スクリプトが担当する工程。`kit/steps/` からの相対パス。Mac で実行され、VM へは `sandbox ssh` で入る |
+| `code` | string | スクリプトが担当する工程。`kit/steps/` からの相対パス。制御系で実行され、VM へは `sandbox ssh` で入る。特別値 `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、`kit/steps/` にファイルは無い |
 | `brief` | string（Markdown） | この工程の追加指示。役割ごとの行動ルールの後ろに付く |
 | `model_class` | judgment / research / coding | 役割の既定クラスを上書き |
 | `inputs` | array of 成果物 | VM の `~/work/<id>/` から読んで依頼文に添える。reviewer には自動で差分も付く |
@@ -58,7 +58,7 @@
 
     ```yaml
     name: bug
-    description: 不具合修正。計画 → 再現テスト → 修正 → ゲート → レビュー → PR
+    description: 不具合修正。計画 → 再現テスト → 修正 → ゲート → レビュー → base 取り込み → PR
     inputs: [ticket.md]
     steps:
       - id: plan
@@ -83,8 +83,18 @@
         role: reviewer
         inputs: [plan.md, report.md, gates.txt]
         outputs: [review.md]
-        on_pass: pr
+        on_pass: sync
         on_fail: { goto: implement, max_loops: 1, else: human }
+      - id: sync
+        code: sync-base
+        on_pass: pr
+        on_fail: { goto: resolve, max_loops: 2, else: human }
+      - id: resolve
+        role: implementer
+        brief: |
+          **base の取り込みで戻された**。戻された理由の解消だけを行い、PR 本来の変更は直さない・広げない。
+        outputs: [git, report.md]
+        next: gates
       - id: pr
         code: pr-create.sh
         inputs: [plan.md, report.md, review.md, gates.txt]

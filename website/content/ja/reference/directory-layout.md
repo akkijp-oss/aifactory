@@ -40,7 +40,7 @@ aifactory/
 │   │   ├── schema/                  # workflow.schema.json / project.schema.json
 │   │   ├── roles/                   # _common.md + planner / implementer / researcher / reviewer
 │   │   ├── workflows/               # hotfix / bug / feature / chore / research / merge-pr
-│   │   ├── steps/                   # gates.sh / pr-create.sh / pr-merge.sh
+│   │   ├── steps/                   # gates.sh / pr-create.sh / pr-merge.sh（sync-base は runner 内蔵）
 │   │   └── routes.env               # クラス → モデル
 │   ├── bin/run                      # runner v1（Python）。記録は workspace/runs/
 │   └── tests/                       # runner の unittest

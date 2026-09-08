@@ -42,7 +42,7 @@ flowchart LR
 | `workflow/kit/roles/_common.md` | runner → エージェント（依頼文 1 層目） | 全役割共通の約束（push しない、範囲外を変えない、秘密を書かない） | 低 |
 | `workflow/kit/roles/<role>.md` | runner → エージェント（2 層目） | 役割ごとの行動ルール。担当範囲・禁止事項・出力形式 | 低 |
 | `workflow/kit/routes.env` | runner、intake | クラス → モデル（judgment = Fable / research = Sonnet / coding = Opus） | 低。メンテナの判断 |
-| `workflow/kit/steps/*.sh` | runner（スクリプトが担当する工程） | gates.sh（プロジェクトのゲートを VM で実行）、pr-create.sh、pr-merge.sh | 低 |
+| `workflow/kit/steps/*.sh` | runner（スクリプトが担当する工程） | gates.sh（プロジェクトのゲートを VM で実行）、pr-create.sh、pr-merge.sh。`sync-base`（PR 直前の base 取り込み）は runner 内蔵でファイルが無い | 低 |
 | `workflow/kit/schema/*.json` | runner | ワークフローの YAML と project.yml の正しさ | 低 |
 | `workspace/projects/<pj>/project.yml` | runner（4 層目）、dispatch（有無だけ）、intake（プロジェクト一覧）、コンソール | プロジェクトの基本情報と作業ルール。なければ `examples/projects/<pj>/` | 中 |
 | `workspace/projects/<pj>/gates.sh` | kit/steps/gates.sh（VM 内で） | プロジェクトの品質ゲート | 中 |

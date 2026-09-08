@@ -23,6 +23,7 @@ workflow/
 │   ├── roles/                    # _common.md（全役割共通の約束）+ planner / implementer / reviewer / researcher
 │   ├── workflows/                # hotfix / bug / feature / chore / research / merge-pr
 │   ├── steps/                    # code step: gates.sh（PJ のゲートを VM で実行）/ pr-create.sh（push + PR）/ pr-merge.sh
+│   │                             # `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、ここにファイルは無い
 │   └── routes.env                # クラス → モデル（judgment=Fable / research=Sonnet / coding=Opus）
 ├── bin/run                       # runner v1（Python）。定義を読んで VM の中で step を順に実行する
 ├── bin/spin-v0.sh                # v0 スパイク（hotfix 相当をベタ書き）。参考として残す
@@ -63,7 +64,9 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず定義と依頼文だけ確認
 ```
 
-runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は Mac 側で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**。
+runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**。
+
+`pr` の直前には `sync` step（`code: sync-base`。runner 内蔵）が入り、`git fetch origin <base>` と `git merge` で **base の最新を取り込む**。並列に走った別 run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにするため（ADR-0031）。衝突したら `git merge --abort` して衝突ファイル名を添え、implementer の `resolve` step に戻す（最大 2 回。3 回目で `human`）。取り込みの後に `docs/adr/` の番号重複も検査する（別ファイルなので git は衝突と見なさないため）。衝突が無ければ gates は回し直さず PR へ進む。
 
 step の出力は終了を待たず `runs/<run>/agent-<step>-<n>.log` / `code-<step>-<n>.log` に逐次書かれる（agent は `[+MM:SS] ▶ ツール: 引数` / `↳ 結果の先頭` / `result: … cost=$…` の形。生の JSON は同名 `.jsonl`）。`state.json` の `current` が今動いている step とログ名なので、`tail -f` か Web コンソール（`../console/`）で追える（ADR-0014）。
 
@@ -81,10 +84,10 @@ VM 無しで runner を 1 周させたいときは、`sandbox` と `scp` のシ�
 
 | 名前 | 流れ | 使いどころ |
 |---|---|---|
-| hotfix | plan(Fable) → implement(Opus) → gates → review(Fable) → pr | 本番障害の最小修正。宛先は `hotfix_base` |
-| bug | plan → implement（再現テスト先行）→ gates → review → pr | 不具合修正 |
-| feature | research(Sonnet) → design(Fable) → implement → gates → review → pr | 機能追加 |
-| chore | implement → gates → pr | docs 整理・依存更新など判断の要らない雑務 |
+| hotfix | plan(Fable) → implement(Opus) → gates → review(Fable) → sync → pr | 本番障害の最小修正。宛先は `hotfix_base` |
+| bug | plan → implement（再現テスト先行）→ gates → review → sync → pr | 不具合修正 |
+| feature | research(Sonnet) → design(Fable) → implement → gates → review → sync → pr | 機能追加 |
+| chore | implement → gates → sync → pr | docs 整理・依存更新など判断の要らない雑務 |
 | research | research(Sonnet) → judge(Fable) → end | 調査だけ。PR 無し。`summary.md` を回収 |
 | merge-pr | resolve → gates → review → merge | 既存 PR のコンフリクト解消とマージ。本文の `pr: N` 行で対象を指定 |
 

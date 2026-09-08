@@ -51,6 +51,7 @@ sequenceDiagram
   R->>V: claude -p (implement, Opus) → commit + report.md
   R->>V: gates.sh (typecheck / lint / test)
   R->>V: claude -p (review, Fable) → review.md
+  R->>V: sync-base (git merge origin/base)
   R->>G: pr-create.sh (push + PR)
   R->>S: release 204（work/ を回収 → clean へ）
   R-->>K: state.json → review
@@ -70,9 +71,10 @@ sequenceDiagram
 | 9 | implement（エージェント） | 再現テストを先に書いて失敗することを確認、修正して成功を確認、コミット。`report.md` | `prompt-implement-0.md`、`agent-implement-0.log` |
 | 10 | gates（code） | プロジェクトの `gates.sh` を VM で実行。失敗したら 9 へ戻す（最大 2 回） | `code-gates-1.log`、`work/gates.txt` |
 | 11 | review（エージェント） | 計画・報告・ゲート結果・差分を読み PASS / FAIL。FAIL なら 9 へ（最大 1 回） | `prompt-review-2.md`、`work/review.md` |
-| 12 | pr（code） | push して PR を作る。本文に plan / report / review / gates | `code-pr-3.log`、`work/pr_url` |
-| 13 | release | `~/work/204/` を Mac に回収し、VM を `clean` へ巻き戻す | `workspace/runs/…/work/` |
-| 14 | kb | `state.json` を読み、PR があれば `review` | `kanban.db`、`BOARD.md` |
+| 12 | sync（code） | `git fetch origin <base>` して base の最新を取り込む。衝突したら `resolve`（implementer）へ戻す（最大 2 回） | `code-sync-3.log` |
+| 13 | pr（code） | push して PR を作る。本文に plan / report / review / gates | `code-pr-4.log`、`work/pr_url` |
+| 14 | release | `~/work/204/` を制御系に回収し、VM を `clean` へ巻き戻す | `workspace/runs/…/work/` |
+| 15 | kb | `state.json` を読み、PR があれば `review` | `kanban.db`、`BOARD.md` |
 
 その後、人間が PR をレビューしてマージします。マージ作業を `merge-pr` チケットにすれば、コンフリクト解消 → gates → review → merge まで無人で回ります。
 
@@ -84,6 +86,7 @@ sequenceDiagram
 |---|---|---|
 | gates が失敗 | implement | 2 回 |
 | review が FAIL | implement | 1 回 |
+| sync（base 取り込み）が衝突 | resolve（implementer） | 2 回 |
 | 分岐のない工程が失敗 | human | 即 |
 
 戻すときは前回の結果（ゲートのログ、review の指摘）を依頼文の「前回の結果（直すこと）」に添えます。変更前のブランチでも失敗しているゲートは、`known_red_gates` に登録して参考情報（INFO）として扱います。エージェントには、依頼の範囲外として修正せずに報告するよう伝えます。

@@ -46,8 +46,18 @@ steps:
     role: reviewer
     inputs: [plan.md, report.md, gates.txt]
     outputs: [review.md]
-    on_pass: pr
+    on_pass: sync
     on_fail: { goto: implement, max_loops: 1, else: human }
+
+  - id: sync
+    code: sync-base                # code step。runner 内蔵。PR の直前に base の最新を取り込む
+    on_pass: pr
+    on_fail: { goto: resolve, max_loops: 2, else: human }
+
+  - id: resolve
+    role: implementer              # 衝突は人間でなく implementer に戻す
+    outputs: [git, report.md]
+    next: gates
 
   - id: pr
     code: pr-create.sh
@@ -127,10 +137,11 @@ flowchart TB
 
 上書きは 3 段。工程の `model_class` > 環境変数 `CLAUDE_MODEL`（1 回限り） > 既定。判断は Fable、Web 調査は Sonnet、実装は Opus という型はメンテナの判断（2026-09-06）です。`routes.env` を変えれば別のモデルにできます。
 
-## 3 つの実行スクリプト
+## 4 つのスクリプト工程
 
 | スクリプト | 何をする | 失敗の条件 |
 |---|---|---|
 | `gates.sh` | プロジェクトの `gates.sh` を VM に scp して実行。`known_red_gates` の FAIL を INFO（参考情報）として扱うように変更。結果を `~/work/<id>/gates.txt` に | FAIL が 1 つでもある |
 | `pr-create.sh` | コミットがあるか確認 → push → 成果物を本文にして `gh pr create` → URL を `~/work/<id>/pr_url` に | コミットがない、push 失敗 |
 | `pr-merge.sh` | コンフリクトマーカーの残りを検査 → base 取り込み済みか確認 → head へ push → ゲート・レビューの結果を PR コメントに → `gh pr merge` | マーカー残り、base 未取り込み、マージ失敗 |
+| `sync-base` | **runner 内蔵**（`kit/steps/` にファイルは無い）。`git fetch origin <base>` → 取り込み済みでなければ `git merge`。衝突したら衝突ファイル名を控えて `git merge --abort` → `docs/adr/` の番号重複を検査 | 衝突した、ADR 番号が重複した、fetch できない |

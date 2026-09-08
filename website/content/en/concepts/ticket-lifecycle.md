@@ -51,6 +51,7 @@ sequenceDiagram
   R->>V: claude -p (implement, Opus) → commit + report.md
   R->>V: gates.sh (typecheck / lint / test)
   R->>V: claude -p (review, Fable) → review.md
+  R->>V: sync-base (git merge origin/base)
   R->>G: pr-create.sh (push + PR)
   R->>S: release 204 (collect work/ → back to clean)
   R-->>K: state.json → review
@@ -70,9 +71,10 @@ sequenceDiagram
 | 9 | implement (agent) | Writes a reproduction test first, confirms red, fixes to green, commits. `report.md` | `prompt-implement-0.md`, `agent-implement-0.log` |
 | 10 | gates (code) | Runs the project's `gates.sh` in the VM. Red goes back to 9 (up to 2 times) | `code-gates-1.log`, `work/gates.txt` |
 | 11 | review (agent) | Reads plan, report, gate results and the diff; PASS / FAIL. FAIL goes back to 9 (up to 1 time) | `prompt-review-2.md`, `work/review.md` |
-| 12 | pr (code) | Pushes and opens the PR with plan / report / review / gates in the body | `code-pr-3.log`, `work/pr_url` |
-| 13 | release | Collects `~/work/204/` to the Mac and rolls the VM back to `clean` | `workspace/runs/…/work/` |
-| 14 | kb | Reads `state.json`; `review` if there is a PR | `kanban.db`, `BOARD.md` |
+| 12 | sync (code) | `git fetch origin <base>` and merges the latest base. A conflict goes back to `resolve` (implementer, up to 2 times) | `code-sync-3.log` |
+| 13 | pr (code) | Pushes and opens the PR with plan / report / review / gates in the body | `code-pr-4.log`, `work/pr_url` |
+| 14 | release | Collects `~/work/204/` to the control plane and rolls the VM back to `clean` | `workspace/runs/…/work/` |
+| 15 | kb | Reads `state.json`; `review` if there is a PR | `kanban.db`, `BOARD.md` |
 
 A human then reviews and merges the PR. Turning the merge into a `merge-pr` ticket runs conflict resolution → gates → review → merge unattended.
 
@@ -84,6 +86,7 @@ The result of a step decides the next one. Past the limit the run exits to `huma
 |---|---|---|
 | Gates red | implement | 2 |
 | Review FAIL | implement | 1 |
+| sync (base merge) conflicts | resolve (implementer) | 2 |
 | A step without branching fails | human | immediately |
 
 When sending back, the previous result (gate logs, review findings) is attached to the prompt as "Previous result (fix this)". If a red gate is already red on base, the runner downgrades it to INFO through `known_red_gates` and tells the agent "report, do not fix".
