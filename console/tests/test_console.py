@@ -934,6 +934,71 @@ class SandboxLsTest(unittest.TestCase):
         self.assertNotIn("ls.log.text", body)                            # 固定幅の生ログをそのまま出さない
 
 
+class SandboxIdleStopTest(unittest.TestCase):
+    """節電で止めた VM（sandbox idle-stop、チケット 252）を画面と MCP に渡す。
+
+    停止中の VM が「壊れている」のか「使われないので止めた」のかは、`sandbox ls` の STATUS だけでは分からない。
+    CLI が書く idle-stop.json を読んで、その vmid だけ「節電で停止中」と言えるようにする。コンソールからは止めも起こしもしない。
+    """
+
+    RESULT = {"hours": 3, "last_run": "2026-09-08T04:00:00+09:00",
+              "stopped": [{"vmid": 9204, "name": "sb-kumitate-01", "at": "2026-09-08T04:00:00+09:00",
+                           "last_used": "2026-09-08T00:30:00+09:00"}]}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-idle-stop-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.m = load_module(self.tmp / "jobs")
+        self.m.core.SANDBOX_STATE = self.tmp / "state.json"
+        self.idle = self.tmp / "idle-stop.json"
+
+    def write(self, data):
+        self.idle.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_no_file_means_no_idle_stop(self):
+        """timer が一度も動いていない環境では null。0 台と言い切らない"""
+        self.assertIsNone(self.m.core.sandbox_view()["idle_stop"])
+
+    def test_result_file_is_passed_through(self):
+        self.write(self.RESULT)
+        d = self.m.core.sandbox_view()["idle_stop"]
+        self.assertEqual(d["hours"], 3)
+        self.assertEqual(d["last_run"], "2026-09-08T04:00:00+09:00")
+        self.assertEqual(d["stopped"], [{"vmid": "9204", "name": "sb-kumitate-01",
+                                         "at": "2026-09-08T04:00:00+09:00", "last_used": "2026-09-08T00:30:00+09:00"}])
+
+    def test_vmid_is_a_string_so_the_screen_can_match_the_ls_table(self):
+        """台帳は数値、`sandbox ls` は文字列。突き合わせる側で取り違えないよう str に揃える（leases_by_vmid と同じ）"""
+        self.write(self.RESULT)
+        vmids = [v["vmid"] for v in self.m.core.sandbox_view()["idle_stop"]["stopped"]]
+        self.assertEqual(vmids, ["9204"])
+
+    def test_broken_file_is_ignored(self):
+        """読めないファイルで sandbox 画面ごと落とさない"""
+        self.idle.write_text("{ broken", encoding="utf-8")
+        self.assertIsNone(self.m.core.sandbox_view()["idle_stop"])
+        self.write([1, 2])
+        self.assertIsNone(self.m.core.sandbox_view()["idle_stop"])
+        self.write({"hours": 3, "last_run": "2026-09-08T04:00:00+09:00", "stopped": ["ごみ"]})
+        self.assertEqual(self.m.core.sandbox_view()["idle_stop"]["stopped"], [])
+
+    def test_screen_tells_idle_stop_apart_from_a_dead_vm(self):
+        """画面は idle_stop の vmid だけ「節電で停止中」にし、次の貸出で起きることを添える（JS は動かせないのでソースを検査する）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewSandbox"); body = app[i: app.index("\n/* ----------", i)]
+        for key in ("d.idle_stop", "T.power.idle", "T.help.idleStop", "T.help.idleStopAxes"):
+            self.assertIn(key, body, key)
+        self.assertIn("power(v.status, v.vmid)", body)                  # 停止中かどうかだけでなく vmid で見分ける
+
+    def test_ls_axes_no_longer_says_vms_are_never_stopped(self):
+        """「返却しても VM は止めない」は idle-stop 以後は事実と違う（UX.md の用語集も同じ）"""
+        strings = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        self.assertNotIn("返却しても VM は止めない", strings)
+        ux = (REPO / "console" / "UX.md").read_text(encoding="utf-8")
+        self.assertNotIn("返却しても止めない", ux)
+        self.assertIn("節電で停止中", ux)
+
+
 class SandboxSharedVmTest(unittest.TestCase):
     """同じ VM（同じ vmid）が複数チケットに貸出中のときの数え方と明示（チケット 237）。
 
