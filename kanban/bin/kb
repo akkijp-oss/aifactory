@@ -9,7 +9,7 @@
   kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume]   # workflow/bin/run を呼び、結果で状態を進める
-  kb sync <id> [--run DIR]                       # runs/<run>/state.json を読み直して状態を合わせる（手で回した run や中断後）
+  kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
   kb history <id>
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
 
@@ -253,20 +253,29 @@ def cmd_run(a):
     return rc
 
 
-def apply_result(c, tid, run_dir, rc=0):
-    """runs/<run>/state.json を読んで状態を進める（kb run の末尾と kb sync が共用）"""
+def apply_result(c, tid, run_dir, rc=0, dry=False):
+    """runs/<run>/state.json を読んで状態を進める（kb run の末尾と kb sync が共用）。
+    dry=True なら DB を書かず、前後（状態・メモ）を JSON で標準出力に出すだけ（console の下見が読む）"""
     st = paths.run_path(run_dir) / "state.json"
     s = json.loads(st.read_text(encoding="utf-8")) if st.exists() else {}
+    pr = None
     if "finished" not in s:
-        update(c, tid, status="in_progress", run=run_dir, note=f"runner 実行中（次の step: {s.get('next', '?')}）"); render(c); return rc
-    result, pr_url, wip = s.get("result"), s.get("pr_url") or "", s.get("wip_branch") or ""
-    m = re.search(r"/pull/(\d+)", pr_url); pr = int(m.group(1)) if m else None
-    # chore / bug / feature は pr step の後 `human`（= 人間がレビューしてマージ）で終わるので、PR があれば review
-    if "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
-    elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
-    elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
-    elif result == "human": status, note = "blocked", f"人間へ（wip: origin/{wip}）" if wip else "人間へ（PR 無し）"
-    else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
+        status, note = "in_progress", f"runner 実行中（次の step: {s.get('next', '?')}）"
+    else:
+        result, pr_url, wip = s.get("result"), s.get("pr_url") or "", s.get("wip_branch") or ""
+        m = re.search(r"/pull/(\d+)", pr_url); pr = int(m.group(1)) if m else None
+        # chore / bug / feature は pr step の後 `human`（= 人間がレビューしてマージ）で終わるので、PR があれば review
+        if "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
+        elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
+        elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
+        elif result == "human": status, note = "blocked", f"人間へ（wip: origin/{wip}）" if wip else "人間へ（PR 無し）"
+        else: status, note = "blocked", f"runner が異常終了 rc={rc}（state.json: {s.get('next')}）"
+    if dry:
+        r = get(c, tid)
+        print(json.dumps({"id": tid, "run": run_dir, "run_finished": s.get("finished"), "run_result": s.get("result"),
+                          "before": {"status": r["status"], "note": r["note"], "run": r["run"], "pr": r["pr"], "updated": r["updated"]},
+                          "after": {"status": status, "note": note, "pr": pr, "run": run_dir}}, ensure_ascii=False))
+        return rc
     update(c, tid, status=status, pr=pr, run=run_dir, note=note); render(c)
     return rc
 
@@ -274,7 +283,8 @@ def apply_result(c, tid, run_dir, rc=0):
 def cmd_sync(a):
     c = db(); r = get(c, a.id)
     run_dir = a.run or r["run"] or die(f"{a.id} に run が無い。--run で指定")
-    apply_result(c, a.id, run_dir); print(fmt(get(c, a.id)))
+    apply_result(c, a.id, run_dir, dry=a.dry_run)
+    if not a.dry_run: print(fmt(get(c, a.id)))
 
 
 def cmd_history(a):
@@ -295,7 +305,7 @@ def main():
     p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
-    p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run")
+    p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run"); p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
     p = sp.add_parser("history"); p.add_argument("id", type=int)
     sp.add_parser("render")
     a = ap.parse_args()

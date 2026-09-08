@@ -29,6 +29,12 @@ def now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def after(a, b):
+    """ISO 8601 の日時 a が b より後か。どちらかが無い・読めないときは False（比較を諦めて安全側）"""
+    try: return datetime.datetime.fromisoformat(a) > datetime.datetime.fromisoformat(b)
+    except (TypeError, ValueError): return False
+
+
 def load_yaml(p):
     try:
         import yaml
@@ -384,6 +390,26 @@ def ticket_action(tid, b):
     return {"rc": rc, "stdout": out, "stderr": err}
 
 
+def sync_preview(tid, run=None):
+    """「実行記録に状態を合わせる」を押す前の下見。kb sync --dry-run を呼び、前後（状態・メモ）と、
+    その run が終わった後にチケットが人手で更新されたかを返す。判定の正本は kb 側（ここには写さない）"""
+    t = rows("SELECT * FROM tickets WHERE id = ?", (tid,))
+    if not t: raise ApiError(f"チケット {tid} は見つかりません", 404)
+    t = t[0]
+    run = run or t["run"]
+    if not run: raise ApiError(f"チケット {tid} に run がありません。チケットの run を設定するか、--run で指定してください")
+    rc, out, err = kb("sync", tid, "--run", run, "--dry-run")
+    if rc != 0: raise ApiError((err or out).strip() or f"kb sync --dry-run が失敗 rc={rc}")
+    try: p = json.loads(out.strip().splitlines()[-1])
+    except Exception: raise ApiError("実行記録を読み直した結果を読めませんでした。もう一度お試しください")
+    b, a = p["before"], p["after"]
+    p["ticket"] = {k: t[k] for k in ("id", "title", "pj", "status", "note", "run", "updated")}
+    p["updated_after_run"] = after(t["updated"], p.get("run_finished"))
+    p["changes"] = b.get("status") != a.get("status") or (b.get("note") or "") != (a.get("note") or "")
+    p["labels"] = STATUS_LABEL
+    return p
+
+
 def ticket_run(tid, b):
     t = rows("SELECT * FROM tickets WHERE id = ?", (tid,))
     if not t: raise ApiError(f"チケット {tid} は見つかりません", 404)
@@ -447,7 +473,14 @@ def job_view(jid, offset=0):
     j = JobStore.get(jid)
     if not j: raise ApiError(f"ジョブ {jid} は見つかりません", 404)
     data, _ = read_file(str(JOBS / j["id"] / "log"), offset=offset)   # JOBS はリポジトリ外でもよい（絶対パス。根の検査は read_file）
-    return {"job": j, "log": data}
+    # 過去のジョブを開いたとき、画面が「今」のチケットで案内を決められるように現在値を添える（古い復旧案内を主表示しないため）
+    t = None
+    if j.get("ticket"):
+        r = rows("SELECT id, title, pj, status, note, run, updated FROM tickets WHERE id = ?", (j["ticket"],))
+        if r:
+            t = r[0]
+            t["updated_after_job"] = after(t["updated"], j.get("finished"))
+    return {"job": j, "log": data, "ticket": t}
 
 
 def job_wait(jid, timeout_s=120):
