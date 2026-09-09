@@ -622,6 +622,14 @@ class Run:
         if not fam: return ""
         return f'CLAUDE_CODE_OAUTH_TOKEN="${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-$CLAUDE_CODE_OAUTH_TOKEN}}" '
 
+    @staticmethod
+    def key_probe_command(fam):
+        """どの鍵で動くかを名前だけ調べるコマンド（VM の中で走る。値は出さない）。
+        take が鍵プール（ADR-0044）から選んでいれば /run/sandbox/env に CLAUDE_KEY_NAME_<系統> があるので `(pool: <名前>)` を添える"""
+        return (f'test -n "${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}" '
+                f'&& echo "CLAUDE_CODE_OAUTH_TOKEN_{fam}${{CLAUDE_KEY_NAME_{fam}:+ (pool: $CLAUDE_KEY_NAME_{fam})}}" '
+                f'|| echo CLAUDE_CODE_OAUTH_TOKEN')
+
     def agent_command(self, prompt_path, model, timeout_min):
         computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
         return (f"cd $SANDBOX_APP_DIR && {self.token_env_prefix(model)}timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
@@ -648,8 +656,7 @@ class Run:
         pf = self.run_dir / f"prompt-{step['id']}-{self.state['history'].__len__()}.md"
         pf.write_text(prompt, encoding="utf-8")
         fam = self.token_family(model)
-        # どの鍵で動いたかを名前だけ記録する（値は出さない）。系統別の鍵が VM に無ければ従来の鍵に落ちる
-        key = self.sb(f"test -n \"${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}\" && echo CLAUDE_CODE_OAUTH_TOKEN_{fam} || echo CLAUDE_CODE_OAUTH_TOKEN", check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
+        key = self.sb(self.key_probe_command(fam), check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
         self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"

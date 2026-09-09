@@ -8,7 +8,7 @@ const T = {
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
   "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）", "abandoned": "中断" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
-  "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "logs": "ログ", "config": "設定",
+  "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "keys": "鍵", "logs": "ログ", "config": "設定",
            "badgeScope": "この数字はすべての PJ の件数です。ボードで PJ を選んでも変わりません。", "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "power": { "running": "起動中", "stopped": "停止中", "idle": "節電で停止中", "candidate": "停止候補" },
@@ -19,6 +19,7 @@ const T = {
     "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
+    "keyAdd": "鍵を足す", "keyRemove": "削除する", "keyToken": "値を差し替える",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
@@ -28,6 +29,7 @@ const T = {
     "outcome": "結果", "artifacts": "成果物", "stepLogs": "工程のログ", "otherFiles": "その他のファイル（{n} 件）",
     "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "attachments": "添付", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
+    "keys": "鍵プール", "keyAdd": "鍵を足す",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
     "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道", "rawLog": "元のログを見る"
   },
@@ -37,7 +39,9 @@ const T = {
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
     "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
     "lentTo": "貸出先", "power": "稼働状態",
-    "poolDefined": "定義", "poolActual": "実体", "free": "空き"
+    "poolDefined": "定義", "poolActual": "実体", "free": "空き",
+    "keys": "鍵", "keyFable": "fable", "keyOther": "fable 以外", "keyEnabled": "使う", "keyTail": "末尾",
+    "issued": "発行", "lastUsed": "最終利用", "uses": "回数", "keyInUse": "使っているチケット"
   },
 
   "label": {
@@ -53,7 +57,9 @@ const T = {
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」を箇条書きで）",
     "bodyPlaceholder": "## 背景\n何に困っているか、どこで起きるかを書きます。\n\n## 完了条件\n- [ ] テストが緑になる\n- [ ] PR ができている",
     "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中", "vacant": "空き",
-    "tid": "チケット番号", "tidPlaceholder": "205 のように", "logSrc": "種類", "allLogSrc": "すべて"
+    "tid": "チケット番号", "tidPlaceholder": "205 のように", "logSrc": "種類", "allLogSrc": "すべて",
+    "keyName": "名前（英数字と . _ - の 1〜40 文字）", "keyNamePlaceholder": "fable-main のように",
+    "keyToken": "トークン（保存したあとは表示しません）", "keyAllowFable": "fable に使う", "keyAllowOther": "fable 以外に使う"
   },
 
   "sub": {
@@ -64,7 +70,8 @@ const T = {
     "intake": "依頼をチケットとして登録します。左は文章を LLM が題名と完了条件に整えます。右は自分で書いた題名と本文をそのまま登録します。登録するだけで、実行はまだ始まりません。",
     "jobs": "この画面から押した起票・実行・配車・返却の 1 回ごとの記録です。出力と終了コードをここから読めます。記録は console/jobs/ に残ります。",
     "logs": "起票と配車の記録です。チケット番号や PJ で絞り込めます。番号を押すとチケットへ移れます。原文は下の「元のログを見る」で読めます。",
-    "config": "読むだけの画面です。変えるときはファイルを編集してください。"
+    "config": "読むだけの画面です。変えるときはファイルを編集してください。",
+    "keys": "Claude の鍵をここに並べておくと、VM を貸し出すときに系統ごとに 1 本ずつ選んで渡します。合う鍵が無い系統は、これまでどおり設定ファイルの鍵を使います。"
   },
 
   "board": {
@@ -187,6 +194,7 @@ const T = {
     "jobs": "まだありません。起票・実行・配車・返却を押すと、ここに出ます。",
     "jobLog": "まだ出力がありません。数秒お待ちください。",
     "lent": "貸出中の VM はありません。",
+    "keys": "まだ鍵がありません。下の「鍵を足す」で登録すると、次の貸出から使われます。",
     "ls": "「一覧を取り直す」を押すと、Proxmox の VM 一覧をここに出します。",
     "lsVms": "プールの VM が 1 台もありませんでした。ジョブの記録で出力を確かめてください。",
     "log": "空です。",
@@ -221,6 +229,12 @@ const T = {
     "pjPoolMore": "空きは実体から貸出を引いた数です。snapshot clean の無い VM は一覧からは分からないので、空きに数えたまま貸出で飛ばされることがあります。",
     "pjPoolYml": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
+    "keys": "有効でフラグの合う鍵のうち、最後に使ってから最も時間が経ったものを系統ごとに選びます。同じチケットの再注入では同じ鍵を使い続けます。",
+    "keysFallback": "候補が 1 本も無い系統は、これまでどおり PJ と全体の設定ファイルの鍵を使います。",
+    "keysSecret": "トークンの値はどこにも表示しません。ここに出るのは末尾 4 文字だけです。",
+    "keysDisable": "使わないようにすると、その鍵を使っている貸出に再注入のジョブを起こします。動いている claude はそのままで、次の起動から別の鍵になります。",
+    "keysFile": "置き場:",
+    "keysError": "鍵の一覧を読めませんでした。制御系の keys.json を確かめてください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",
     "draftLost": "下書きの {v} は今は選べません。既定に戻しました。",
@@ -241,7 +255,11 @@ const T = {
     "stopSent": "止める合図（SIGTERM）を送りました。終わるまで数秒かかることがあります。",
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
     "draftRestored": "前回の下書きを復元しました。",
-    "draftCleared": "下書きを捨てました。"
+    "draftCleared": "下書きを捨てました。",
+    "keyAdded": "鍵 {name} を足しました。",
+    "keySaved": "鍵 {name} を保存しました。",
+    "keyRemoved": "鍵 {name} を削除しました。",
+    "keyReinject": "再注入のジョブを {n} 件起こしました。"
   },
 
   "err": {
@@ -253,6 +271,9 @@ const T = {
     "blockNeedsNote": "何を待っているかを書いてください。",
     "emptyRequest": "依頼文が空です。取り込む文章を入れてください。",
     "needTitle": "題名を入れてください。",
+    "needKeyName": "鍵の名前を入れてください。",
+    "needKeyToken": "トークンを入れてください。",
+    "needKeyFlag": "「fable に使う」と「fable 以外に使う」のどちらかを選んでください。",
     "attachFailedAfterNew": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。"
   },
 
@@ -287,6 +308,22 @@ const T = {
       "body": "実行記録 {run} の結果を読み直して、チケットの状態とメモを書き換えます。",
       "newer": "チケット {id} は、この run が終わった後の {at} に更新されています。実行すると、その更新は上書きされます。",
       "same": "前と後で変わるところはありません。"
+    },
+    "keyRemove": {
+      "title": "鍵 {name} を削除する",
+      "body": "この鍵をプールから消します。トークンの値は元に戻せません。",
+      "inUse": "この鍵はチケット {tasks} が使っています。削除すると、そのチケットに再注入のジョブを起こし、次の起動から別の鍵になります。",
+      "ok": "削除する"
+    },
+    "keyToken": {
+      "title": "鍵 {name} の値を差し替える",
+      "body": "新しいトークンに入れ替えます。前の値には戻せません。貸出中の VM には、再注入をするまで前の値が残ります。",
+      "ok": "差し替える"
+    },
+    "keyDisable": {
+      "title": "鍵 {name} を使わないようにする",
+      "body": "この鍵はチケット {tasks} が使っています。再注入のジョブを起こし、次の起動から別の鍵になります。",
+      "ok": "使わないようにする"
     },
     "detach": {
       "title": "添付 {name} を消す",

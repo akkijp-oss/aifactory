@@ -18,6 +18,8 @@ FAKES = '''
 load_pj() { CUR_PJ=$1; }
 state_field() { echo "x"; }
 touch_used() { :; }   # 最終利用の記録（252）。切り出しの外にあるので空にする
+pool_apply_keys() { :; }   # 鍵プール（379）。切り出しの外にあるので空にする（rotate は env の鍵だけを見る）
+state_set_keys() { :; }
 ghapp_ready() { return 1; }
 inject_env() { echo "$2" >> "$CALLS"; return 0; }
 systemctl() { echo "systemctl $*" >> "$CALLS"; [[ "$1" == list-unit-files ]] && echo "aifactory-console.service enabled"; return 0; }
