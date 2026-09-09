@@ -3,13 +3,16 @@
 `kanban/bin/kb`. The ticket ledger (SQLite) holding ids, state and history, and the entry point for calling the runner. Python 3 standard library only.
 
 ```
-kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
 kb list [--status S] [--pj P] [--all]
 kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
 kb append <id> [--section S] [--text T]
+kb attach <id> <file>...
+kb attachments <id> [--json]
+kb detach <id> <name>
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [minutes]]
 kb sync <id> [--run DIR]
@@ -24,6 +27,7 @@ kb render
 |---|---|
 | Database (source of truth) | `$AIFACTORY_WORKSPACE/kanban/kanban.db` (default `<repo>/workspace/kanban/`, not tracked by git) |
 | Bodies (source of truth) | `kanban/tickets/<id>-<pj>-<slug>.md` under the same root |
+| Attachments (source of truth) | `kanban/attachments/<id>/<name>` under the same root (ADR-0041) |
 | Board (generated) | `kanban/BOARD.md` under the same root |
 | Relocating | Environment variable `AIFACTORY_WORKSPACE=<dir>` moves the whole workspace; `KB_ROOT=<dir>` moves only the database, tickets and BOARD (for tests) |
 
@@ -96,6 +100,37 @@ Appends to the **end** of the ticket body. With `--section`, a `## <heading>` li
 The insertion point is fixed at the end. It does not go before `## 完了条件` because `kb` has no way to recognise sections, and appending at the end keeps the change in one place. The heading is what tells you a passage was added later.
 
 The text itself lives in the body (the file is the source of truth). The history only records when and how much was added, as `body  - → append 24字 (PM 補足)` — `history` has three columns (`field` / `old` / `new`) and does not keep diffs.
+
+### attach / attachments / detach
+
+```bash
+kb attach 204 ~/Desktop/screen.png spec.pdf    # copied (the original stays where it is)
+kb attachments 204                             # name, size, type, added
+kb attachments 204 --json                      # [{"name","size","type","added"}]
+kb detach 204 screen.png
+kb new kumitate bug "Bug: saving does nothing" --body - --attach screen.png   # attach while filing
+```
+
+Attach images (screenshots, design mockups) or files (spec PDFs, CSVs, config files) to a ticket. They are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the ticket body**. The files themselves are the source of truth; the listing is derived from them by `kb show`, the console ticket page and MCP `ticket_show` (ADR-0041).
+
+- Names are sanitized (path separators, `..` and control characters are removed). A name that already exists gets `-2`, `-3` … before the extension instead of overwriting
+- Limits are **20 MiB per file and 100 MiB per ticket**. Exceeding either is an error (exit code 1). With several files, it stops at the first failure and keeps what already went in
+- Adding and removing are recorded in the history as `attachment  - → add screen.png (12.3 KiB)` / `attachment  screen.png → removed`
+- For a ticket with no attachments, the output of `kb show` is unchanged
+
+On `kb run`, the runner places the attachments in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt:
+
+```
+- 添付: /home/dev/work/204/attachments/（screen.png, spec.pdf。画像・PDF は Read で開いて見ること。本文と食い違うときは添付を優先し、その旨を報告に書く）
+```
+
+The agent (Claude Code) can open images (PNG, JPG …) and PDFs with the Read tool, so "this part of this screen" and "exactly like this table" can be handed over as the real thing. With no attachments, nothing is added to the prompt.
+
+!!! warning "Do not attach secrets"
+    `attachments/` lives in the workspace, which is not tracked by git, so it is **not** scanned by `bin/oss-check.sh` for secrets (that check only verifies the location is untracked). Do not attach tokens, keys or real `.env` values.
+
+!!! note "Proxmox backend only for now"
+    Only the Proxmox backend copies attachments to the VM. Pull backends (macOS, Windows and Linux workers) use a different transfer path and are not covered yet; their prompts get no attachment line either.
 
 ### run
 

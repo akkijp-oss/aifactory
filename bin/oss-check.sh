@@ -15,7 +15,7 @@ if [[ "${1:-}" == "--staged" ]]; then
   # pre-commit 用: ステージされたファイルだけ（速い）。追跡禁止の置き場・秘密情報・固有名
   files="$(git diff --cached --name-only --diff-filter=ACMR)"
   [[ -n "$files" ]] || exit 0
-  bad="$(echo "$files" | grep -E '^(workspace/|kanban/(tickets/|kanban\.db|BOARD\.md)|workflow/runs/|glue/.*\.log|workflow/prompts/|docs/infra/|docs/source/.*transcript|console/jobs/|sandbox/templates/[^/]+/provision\.sh)' || true)"
+  bad="$(echo "$files" | grep -E '^(workspace/|kanban/(tickets/|attachments/|kanban\.db|BOARD\.md)|workflow/runs/|glue/.*\.log|workflow/prompts/|docs/infra/|docs/source/.*transcript|console/jobs/|sandbox/templates/[^/]+/provision\.sh)' || true)"
   [[ -z "$bad" ]] || { echo "NG  追跡してはいけない置き場: "; echo "$bad"; rc=1; }
   hits="$(echo "$files" | grep -v '^bin/oss-check.sh$' | tr '\n' '\0' | xargs -0 git diff --cached -U0 -- 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' | grep -nE "$PAT|$SECRET_PAT" | grep -vE "$ALLOW" || true)"
   [[ -z "$hits" ]] || { echo "$hits" | cut -c1-160; echo "NG  秘密情報か環境固有の名前がステージされた変更にある"; rc=1; }
@@ -23,7 +23,7 @@ if [[ "${1:-}" == "--staged" ]]; then
 fi
 
 echo "== 1. 追跡されてはいけない置き場"
-for p in workspace kanban/kanban.db kanban/tickets kanban/BOARD.md workflow/runs glue/intake.log glue/dispatch.log workflow/prompts docs/infra docs/source/media console/jobs; do
+for p in workspace kanban/kanban.db kanban/tickets kanban/attachments kanban/BOARD.md workflow/runs glue/intake.log glue/dispatch.log workflow/prompts docs/infra docs/source/media console/jobs; do
   if git ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then echo "NG  $p が追跡されている（bin/migrate-workspace.sh）"; rc=1; fi
 done
 if git ls-files 'sandbox/templates/*/provision.sh' | grep -q .; then echo "NG  sandbox/templates/<pj>/ に PJ 定義が残っている"; git ls-files 'sandbox/templates/*/provision.sh'; rc=1; fi

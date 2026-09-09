@@ -61,6 +61,8 @@ kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is f
 
 While `--wait` waits, the ticket stays `in_progress`, and the console board and run record show "waiting for a free VM" with the elapsed time.
 
+If the ticket has [attachments](tickets.md#attaching-images-and-files), the runner places them in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt (the list of names, and "open images and PDFs with Read"). A copy also comes back in `work/attachments/` of the run record. With no attachments the prompt is unchanged. This works on the Proxmox backend only for now (ADR-0041).
+
 ## What you can see while it runs
 
 The terminal prints `[run <pj>/<id> <elapsed s>] <step>: PASS/FAIL → <next>` per step. At the same time files accumulate in `$AIFACTORY_WORKSPACE/runs/<date>-<pj>-<id>/` (default `workspace/runs/`).
@@ -73,7 +75,7 @@ The terminal prints `[run <pj>/<id> <elapsed s>] <step>: PASS/FAIL → <next>` p
 | `agent-<step>-<n>.log` | During an agent step (streamed) | The `claude -p` event stream in readable form (timestamps, tool calls ▶, the head of each result ↳, and the final result with cost) |
 | `agent-<step>-<n>.jsonl` | During an agent step (streamed) | The same events as raw JSON (for debugging) |
 | `code-<step>-<n>.log` | During a code step (streamed) | Output of gates / pr |
-| `work/` | On release | Artifacts collected from the VM |
+| `work/` | On release | Artifacts collected from the VM (ticket attachments under `work/attachments/`) |
 
 `current` in `state.json` names the step that is running and its log file, so you can `tail -f` a log in the middle of a step. In a browser, the run screen of the [Web console](console.md) opens the same log automatically.
 

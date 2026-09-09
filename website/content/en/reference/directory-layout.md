@@ -77,6 +77,7 @@ workspace/                           # Default <repo>/workspace/. Not tracked by
 ├── kanban/
 │   ├── kanban.db                    # Source of truth for state (SQLite)
 │   ├── tickets/<id>-<pj>-<slug>.md  # Source of truth for bodies
+│   ├── attachments/<id>/<name>      # Source of truth for attachments (ADR-0041)
 │   └── BOARD.md                     # Generated
 ├── runs/<date>-<pj>-<id>/           # Run records
 │   ├── ticket.md  state.json

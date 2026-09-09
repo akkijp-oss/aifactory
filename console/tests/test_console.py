@@ -457,6 +457,22 @@ class ApiTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get("/api/tickets/999999")
         self.assertEqual(cm.exception.code, 404)
 
+    def test_ticket_detail_lists_attachments(self):
+        """kb attach で入れた添付が、そのままチケット画面（と MCP の ticket_show）に出る（チケット 353）"""
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws)}
+        shot = self.tmp / "画面.png"; shot.write_bytes(b"\x89PNG" + b"0" * 20)
+        r = subprocess.run([sys.executable, str(KB), "new", PJ, "bug", "不具合: 画面の見え方", "--body", "-", "--attach", str(shot)],
+                           input="x\n", text=True, capture_output=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tid = int(r.stdout.split()[0])
+        _, d = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual([a["name"] for a in d["attachments"]], ["画面.png"])
+        self.assertEqual(d["attachments"][0]["type"], "image/png")
+        self.assertEqual(d["attachments"][0]["size"], shot.stat().st_size)
+        self.assertNotIn("添付", d["body"])                                   # 本文には書かない（正本は attachments/）
+        _, seed = self.http.get(f"/api/tickets/{self.seed}")
+        self.assertEqual(seed["attachments"], [])                            # 添付の無いチケットは空
+
     def test_run_detail(self):
         _, r = self.http.get("/api/runs"); name = next(x["name"] for x in r["runs"] if x["kind"] == "v1" and x["status"] != "not_started")
         st, d = self.http.get(f"/api/runs/{name}")

@@ -61,6 +61,8 @@ kanban/bin/kb run 204 --wait             # プールに空きがなければ、�
 
 `--wait` で待っている間、チケットは `in_progress` のままで、コンソールのボードと実行記録には「VM の空き待ち」と経過時間が出ます。
 
+チケットに[添付](tickets.md)があれば、runner が VM の `~/work/<id>/attachments/` に置き、各工程の依頼文に添付の案内（名前の一覧と「画像・PDF は Read で開いて見ること」）を 1 行足します。添付は実行記録の `work/attachments/` にも控えが残ります。添付が無ければ依頼文は変わりません。今のところ Proxmox backend だけの機能です（ADR-0041）。
+
 ## 実行中に見えるもの
 
 ターミナルには `[run <pj>/<id> <経過秒>] <step>: PASS/FAIL → <次>` が工程ごとに出ます。同時に `$AIFACTORY_WORKSPACE/runs/<日付>-<pj>-<id>/`（既定 `workspace/runs/`）にファイルが増えていきます。
@@ -73,7 +75,7 @@ kanban/bin/kb run 204 --wait             # プールに空きがなければ、�
 | `agent-<step>-<n>.log` | エージェントの実行中（逐次） | `claude -p` のイベントを人が読める形にしたもの（時刻、ツール呼び出し ▶、結果の先頭 ↳、最後に result と費用） |
 | `agent-<step>-<n>.jsonl` | エージェントの実行中（逐次） | 同じイベントの生 JSON（デバッグ用） |
 | `code-<step>-<n>.log` | スクリプトの実行中（逐次） | gates / pr の出力 |
-| `work/` | release 時 | VM から回収した成果物 |
+| `work/` | release 時 | VM から回収した成果物（チケットの添付は `work/attachments/`） |
 
 `state.json` の `current` に今動いている工程とログ名が入るので、ログは工程の途中でも `tail -f` で追えます。ブラウザなら [Web コンソール](console.md) の run 画面が同じログを自動で開きます。
 
