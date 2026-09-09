@@ -408,9 +408,22 @@ class ApiTest(unittest.TestCase):
         self.assertIn("T.board.liveOpen", board, "実行記録リンクの読み上げ名（aria-label）が無い")
         for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, board, f"{key} をカードで使っていない")
         self.assertRegex(board, r"r\.step \?", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
+        # aria-label は中身を上書きする。見えている工程と経過時間を読み上げ名に含める（label in name。ticketLink と同じ約束）
+        i = board.index("const liveRow")
+        row = board[i:board.index("\n  };", i)]
+        self.assertIn("text: txt", row, "工程行の読み上げ名に見えている文字（工程・経過時間）が入っていない")
+        for key in ("T.board.liveStep", "T.board.liveNext", "T.board.liveSince"):
+            self.assertLess(row.index(key), row.index("aria-label"), f"{key} を組む前に aria-label を書いている（見えている文字を含められない）")
+        T = load_strings()
+        self.assertIn("{text}", T["board"]["liveOpen"], "読み上げ名の文言に見えている文字の差し込み口が無い")
+        self.assertLess(T["board"]["liveOpen"].index("{text}"), T["board"]["liveOpen"].index("{run}"), "読み上げ名が見えている文字で始まっていない")
         css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.card \.t::after", "題名リンクの当たり判定がカード全面に無い（クリックできる範囲が狭くなる）")
         self.assertRegex(css, r"\.card \.live \{", "カードの工程行の指定が無い")
+        # メモは title のツールチップでしか全文が読めない。題名リンクの ::after に覆わせない
+        note = re.search(r"\.card \.note \{[^}]*\}", css).group(0)
+        for prop in ("position: relative", "z-index: 1"):
+            self.assertIn(prop, note, f"メモに {prop} が無く、題名リンクの当たり判定がツールチップを覆う")
 
     def test_nav_badges_say_which_scope_they_count(self):
         """左ナビのバッジは全 PJ の数字（画面をまたぐので絞らない）。その対象範囲が画面で分かること。

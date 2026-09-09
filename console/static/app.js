@@ -209,8 +209,14 @@ async function viewBoard() {
   /* チケット 1 枚に紐づく「動いている run」。runs_live は上限なし・新しい順なので、先頭が最新の attempt（実行記録画面の runOf と同じ考え方）。
      記録から PJ が分からない run（pj が空）は帯と同じくチケット番号だけで拾う */
   const liveOf = x => (o.runs_live || []).find(r => String(r.task) === String(x.id) && (!r.pj || r.pj === x.pj));
-  /* 工程行。current が無い run（開始前・工程の切れ目）は前の工程ではなく「次は」を出す */
-  const liveRow = r => `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { run: r.name }))}"><span class="dot pulse"></span>${r.step ? tt(T.board.liveStep, { step: esc(stepName(r.step)), t: esc(since(r.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</a>`;
+  /* 工程行。current が無い run（開始前・工程の切れ目）は前の工程ではなく「次は」を出す。
+     読み上げ名は見えている文字（工程と経過時間）で始める。aria-label は中身を上書きするので、
+     行き先だけを入れると主役の工程が読み上げから消え、音声操作で見えている文字を言っても押せない（ticketLink と同じ約束） */
+  const liveRow = r => {
+    const txt = (r.step ? tt(T.board.liveStep, { step: stepName(r.step), t: since(r.since) }) : tt(T.board.liveNext, { step: r.next }))
+      + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
+    return `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { text: txt, run: r.name }))}"><span class="dot pulse"></span>${esc(txt)}</a>`;
+  };
   /* カードの外枠は div。チケット詳細（題名）と実行記録（工程行）を兄弟の <a> にする（<a> の入れ子は無効な HTML。376）。
      カード全面のクリックは題名リンクの ::after（style.css）で今までどおり保つ */
   const card = x => { const r = liveOf(x); return `<div class="card"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><a class="t" href="#/ticket/${x.id}">${esc(x.title)}</a>${r ? liveRow(r) : ''}
