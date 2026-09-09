@@ -1387,6 +1387,144 @@ def logs_view():
     return out
 
 
+# ---------- 工程ごとの消費統計（チケット 382）
+# 根拠は run の生イベント agent-<step>-<n>.jsonl だけ: system/init の model、result の usage（input / cache_creation / cache_read / output）と
+# total_cost_usd（claude CLI が API 料金で換算した値）、assistant の thinking ブロック。数字を推し量らず、無いものは 0 のまま。
+# jsonl は 1 本 100 KB〜数 MB あるので、1 度読んだ結果は（サイズ・更新時刻を鍵に）メモリとディスクに置き、次からは読み直さない
+STATS_CACHE = JOBS / "stats-cache.json"                        # ジョブ記録と同じ置き場（git 追跡外。checkout を汚さない）
+_stats_mem = {}                                                  # path → {"key": [size, mtime], "row": {...}}
+_stats_loaded = False
+AGENT_JSONL = re.compile(r"^agent-(.+)-(\d+)\.jsonl$")
+
+
+def _stats_load():
+    global _stats_loaded
+    if _stats_loaded: return
+    _stats_loaded = True
+    try:
+        d = json.loads(STATS_CACHE.read_text(encoding="utf-8"))
+        if isinstance(d, dict): _stats_mem.update({k: v for k, v in d.items() if isinstance(v, dict) and "key" in v and "row" in v})
+    except (OSError, ValueError): pass
+
+
+def _stats_save():
+    try:
+        STATS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATS_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_stats_mem, ensure_ascii=False), encoding="utf-8"); tmp.replace(STATS_CACHE)
+    except OSError: pass
+
+
+def step_stats(path):
+    """agent-<step>-<n>.jsonl 1 本を読んで、その工程の消費を 1 行にする。result が無い（途中で切れた・古い形式）なら usage は 0 のまま"""
+    row = {"model": None, "turns": 0, "duration_s": 0, "input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "cost": 0.0,
+           "thinking_blocks": 0, "thinking_visible": 0, "thinking_chars": 0, "text_chars": 0, "tool_chars": 0, "tool_calls": 0, "tools": {}, "result": None, "rate_limited": False, "has_result": False}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try: ev = json.loads(line)
+                except ValueError: continue
+                t = ev.get("type")
+                if t == "system" and ev.get("subtype") == "init": row["model"] = ev.get("model")
+                elif t == "assistant":
+                    for b in (ev.get("message") or {}).get("content") or []:
+                        bt = b.get("type")
+                        if bt == "thinking":
+                            # Opus は thinking の本文が記録に出ない（空文字列と署名だけ）。回数は数え、本文が見える回だけ文字数を足す
+                            row["thinking_blocks"] += 1
+                            if b.get("thinking"): row["thinking_visible"] += 1; row["thinking_chars"] += len(b["thinking"])
+                        elif bt == "text": row["text_chars"] += len(b.get("text") or "")
+                        elif bt == "tool_use":
+                            row["tool_calls"] += 1; n = str(b.get("name") or "?"); row["tools"][n] = row["tools"].get(n, 0) + 1
+                            row["tool_chars"] += len(json.dumps(b.get("input") or {}, ensure_ascii=False))   # 見える出力（ツールの引数。編集の本文が大半）
+                elif t == "rate_limit_event" and (ev.get("rate_limit_info") or {}).get("status") == "rejected": row["rate_limited"] = True
+                elif t == "result":
+                    u = ev.get("usage") or {}
+                    row.update({"has_result": True, "result": ev.get("subtype"), "turns": int(ev.get("num_turns") or 0),
+                                "duration_s": int(ev.get("duration_ms") or 0) // 1000,
+                                "input": int(u.get("input_tokens") or 0), "cache_write": int(u.get("cache_creation_input_tokens") or 0),
+                                "cache_read": int(u.get("cache_read_input_tokens") or 0), "output": int(u.get("output_tokens") or 0),
+                                "cost": float(ev.get("total_cost_usd") or 0)})
+    except OSError: pass
+    return row
+
+
+def agent_step_rows(force=False):
+    """runs/ の全 agent-*.jsonl を 1 工程 1 行に。読んだ結果はキャッシュし、サイズか更新時刻が変わったものだけ読み直す（実行中の工程は毎回伸びる）"""
+    _stats_load()
+    rows, seen, dirty = [], set(), False
+    if not RUNS.exists(): return rows
+    for d in sorted(RUNS.iterdir()):
+        if not d.is_dir() or d.name.startswith("."): continue
+        m = RUN_NAME.match(d.name)
+        if not m: continue
+        st = None
+        for f in d.iterdir():
+            fm = AGENT_JSONL.match(f.name)
+            if not fm: continue
+            key = str(f); seen.add(key)
+            try: stt = f.stat()
+            except OSError: continue
+            sig = [stt.st_size, int(stt.st_mtime)]
+            c = _stats_mem.get(key)
+            if force or not c or c["key"] != sig:
+                c = {"key": sig, "row": step_stats(f)}; _stats_mem[key] = c; dirty = True
+            if st is None:
+                try: st = json.loads((d / "state.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError): st = {}
+            row = dict(c["row"])
+            row.update({"run": d.name, "date": d.name[:10], "pj": st.get("pj") or m.group(1), "task": st.get("task") or m.group(2),
+                        "workflow": st.get("workflow"), "step": fm.group(1), "index": int(fm.group(2)),
+                        "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
+                        "at": ts_file(f)})
+            rows.append(row)
+    for k in [k for k in _stats_mem if k not in seen]: del _stats_mem[k]; dirty = True
+    if dirty: _stats_save()
+    return rows
+
+
+def _agg_into(a, r):
+    a["steps"] += 1; a["turns"] += r["turns"]; a["duration_s"] += r["duration_s"]
+    for k in ("input", "cache_write", "cache_read", "output", "cost", "thinking_blocks", "thinking_visible", "thinking_chars", "text_chars", "tool_chars", "tool_calls"): a[k] += r.get(k, 0)
+    if r["thinking_blocks"]: a["steps_with_thinking"] += 1
+    if r["rate_limited"]: a["rate_limited"] += 1
+    if not r["has_result"]: a["no_result"] += 1
+    if r["cost"] > a["max_cost"]: a["max_cost"] = r["cost"]; a["max_run"] = r["run"]; a["max_step_log"] = f"agent-{r['step']}-{r['index']}.log"
+
+
+def _agg_new(**keys):
+    return {**keys, "steps": 0, "turns": 0, "duration_s": 0, "input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "cost": 0.0,
+            "thinking_blocks": 0, "thinking_visible": 0, "thinking_chars": 0, "text_chars": 0, "tool_chars": 0, "tool_calls": 0, "steps_with_thinking": 0, "rate_limited": 0, "no_result": 0,
+            "max_cost": 0.0, "max_run": None, "max_step_log": None}
+
+
+def stats_view(days=None, pj=None, include_dry=False):
+    """工程ごとの消費統計。期間（今日からさかのぼる日数。None なら全部）と PJ で絞り、モデル別・工程別・日別・PJ 別・高い工程の上位にまとめる。
+    費用は claude CLI の total_cost_usd（API 料金の換算値）の合計。利用枠（5 時間 / 7 日）の重みとは違うので、画面は「換算」と言う"""
+    rows = agent_step_rows()
+    since = (datetime.date.today() - datetime.timedelta(days=int(days) - 1)).isoformat() if days else None
+    sel = [r for r in rows if (not since or r["date"] >= since) and (not pj or r["pj"] == pj) and (include_dry or not r["dry"])]
+    by_model, by_step, by_day, by_pj = {}, {}, {}, {}
+    total = _agg_new()
+    for r in sel:
+        model = r["model"] or "?"
+        _agg_into(total, r)
+        _agg_into(by_model.setdefault(model, _agg_new(model=model)), r)
+        _agg_into(by_step.setdefault((r["step"], model), _agg_new(step=r["step"], model=model)), r)
+        _agg_into(by_day.setdefault((r["date"], model), _agg_new(date=r["date"], model=model)), r)
+        _agg_into(by_pj.setdefault(r["pj"], _agg_new(pj=r["pj"])), r)
+    top = sorted(sel, key=lambda r: r["cost"], reverse=True)[:20]
+    for r in top:
+        r["log"] = f"agent-{r['step']}-{r['index']}.log"; r["log_path"] = rel(RUNS / r["run"] / r["log"]); r.pop("tools", None)
+    return {"since": since, "days": days, "pj": pj, "pjs": sorted({r["pj"] for r in rows if r["pj"]}),
+            "total": total,
+            "by_model": sorted(by_model.values(), key=lambda a: -a["cost"]),
+            "by_step": sorted(by_step.values(), key=lambda a: -a["cost"]),
+            "by_day": sorted(by_day.values(), key=lambda a: (a["date"], -a["cost"]), reverse=True),
+            "by_pj": sorted(by_pj.values(), key=lambda a: -a["cost"]),
+            "top": top, "files": len(rows), "selected": len(sel), "cache_file": str(STATS_CACHE)}
+
+
 def config_view():
     wfs = []
     for k in kinds():
