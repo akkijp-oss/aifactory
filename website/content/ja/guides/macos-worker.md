@@ -109,7 +109,7 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 | 記録 | 確認すること |
 |---|---|
-| `state.json` | 工程履歴、PR URL、backend・worker・lease、`artifacts_received` と `released` |
+| `state.json` | 工程履歴、PR URL、backend・worker・lease、`artifacts_received` と `released`、回収しなかった名前の `artifacts_skipped`、退避先の `wip_branch` |
 | `agent-*.log` / `code-*.log` | 実行内容、ゲート・レビューの判定、ゲストOSなどの検証根拠 |
 | `worker-operations.log` | ワーカー操作ID。管理CLIの `show` と対応づける |
 | `work/` | 計画・報告・レビュー・ゲート結果・PR URLなど |
@@ -117,7 +117,9 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 PR後の `result: human` は人間によるレビュー待ちを表す。これだけで失敗と判断せず、工程履歴とPRを確認する。通常終了ではゲストがTartの一覧から消え、制御系のleaseが空になる。`--keep` を付けた場合は成果物回収後もゲストとleaseを保持する。
 
-成果物はゲスト作業ディレクトリ直下の通常ファイル、合計4 MiBまで。入力転送は1ファイル350,000バイトまで。ディレクトリやsymlinkは回収しない。認証用 `runtime.env` は除外する。大きなビルド成果物や `.xcresult` の回収は、この経路では扱えない。
+PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切った、工程が失敗したなど）は、成果物回収の前に作業ブランチのHEADを `sandbox/<チケット番号>-<workflow名>-wip` へforce pushし、そのブランチ名を `state.json` の `wip_branch` に記録する。人はこのブランチを取り出して続きを引き取れる。pushできなかった場合は `wip_branch` を空にし、代わりに差分を `wip.patch`（`git am` で当てられる）としてrunディレクトリに残す。保全が成功しても失敗しても、成果物回収とゲスト削除は続行する。
+
+成果物はゲスト作業ディレクトリ直下の通常ファイル、合計4 MiBまで。入力転送は1ファイル350,000バイトまで。認証用 `runtime.env` は除外する。ディレクトリ・symlink・合計4 MiBを超える分は回収せず飛ばし、その名前と理由を `state.json` の `artifacts_skipped` に残す。回収対象外があってもrunは止めず、VMは返却する。大きなビルド成果物や `.xcresult` の回収は、この経路では扱えない。
 
 ## 失敗時の復旧
 
@@ -128,7 +130,8 @@ PR後の `result: human` は人間によるレビュー待ちを表す。これ�
 | CLI導入が長時間かかる | provisionログで進行・再取得を確認する。取得済みという理由だけで未検証のバイナリを配置しない |
 | GitHub token発行に失敗 | PJ設定とAppのインストール権限を確認する。runnerは同じリポジトリ内のsandbox CLIを呼ぶ。値をログへ出さない |
 | 日付をまたいで再開する | `kb run <id> --resume`。チケットに記録されたrunを使う |
-| 操作が `uncertain` | ゲスト停止と操作状態を管理者が確認する。ジャーナルを消して再実行しない |
+| 操作が `uncertain` | ゲスト停止と操作状態を管理者が確認する。ジャーナルを消して再実行しない。ログ上限の超過はこの原因にならない |
+| ログが途中で切れている | 1操作16 MiBに達した合図。切り捨て行が入り結果に `truncated` が付く。操作自体は完走しているので、exit codeと成果物で判断する |
 | 成果物回収・VM削除に失敗 | leaseを保持する。回収状況・ゲストの実状態を確定してから復旧する |
 
 `--resume` はそのrunのleaseを所有している場合に限る。認証情報・リポジトリ・工程履歴がまだないprovision失敗なら、同じ稼働中ゲストで再試行できる。途中まで作られたリポジトリや停止したゲストは自動で作り直さない。
@@ -146,6 +149,6 @@ PR後の `result: human` は人間によるレビュー待ちを表す。これ�
 
 ゲストはホストのディレクトリ・クリップボード・音声を共有しない。Softnetでprivate IPv4・リンクローカル・tailnet宛てを遮断し、ゲストの `Ethernet` に公開DNSを設定してIPv6を無効にする。このサービス名と、設定に使えるゲストのsudo環境が前提である。
 
-現在のcode step対応は `gates.sh`、`pr-create.sh`、`sync-base`（PR直前のbase取り込み。runner内蔵でPOSIXのgitだけを使う）。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
+現在のcode step対応は `gates.sh`、`pr-create.sh`、`sync-base`（PR直前のbase取り込み。runner内蔵でPOSIXのgitだけを使う）。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、超えた分は切り捨てる（操作は完走し、結果はexit codeで決まる）。画像のbase64は `[image N bytes]` に置き換えて記録する。記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
 
 画面操作の追加手順は[Mac・Windowsの画面操作](computer-use.md)を参照。

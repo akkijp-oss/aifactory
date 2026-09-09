@@ -6,7 +6,7 @@
 wip ブランチの続きから指定の step をやり直す口。
 
 - `resume_command`: 事実（result: human / wip_branch / resume_step）が揃った run だけコマンドを返す。
-  文言は console が組み、runner の記録には事実だけを置く（ADR-0025 / ADR-0034）
+  文言は console が組み、runner の記録には事実だけを置く（ADR-0025 / ADR-0036）
 - `run_summary` と `run_outcome` に `resume` が載る（run 画面と ticket_show の runs[] が同じ値を出す）
 - `ticket_run`: `from_step` / `from_branch` を `kb run` に渡し、記録は今日の run 名で始まる（前回の run を上書きしない）
 """

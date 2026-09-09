@@ -179,7 +179,7 @@ def ts_state(s):
 
 def resume_command(task, s):
     """human で止まった run を、新しい VM で続きから回すコマンド（チケット 333）。文言は console が組み、記録（state.json）には
-    事実だけを置く（ADR-0025 / ADR-0034）。続けるのに要る事実（wip ブランチ・やり直す step）が揃っていなければ None"""
+    事実だけを置く（ADR-0025 / ADR-0036）。続けるのに要る事実（wip ブランチ・やり直す step）が揃っていなければ None"""
     wip, step = s.get("wip_branch"), s.get("resume_step")
     if s.get("result") != "human" or not (task and wip and step): return None
     return f"kb run {task} --from {step} --branch {wip}"
@@ -516,9 +516,13 @@ def idle_stop_view():
     except Exception: return None
     if not isinstance(d, dict): return None
     stopped = [v for v in (d.get("stopped") or []) if isinstance(v, dict)]
-    return {"hours": d.get("hours"), "last_run": ts_aware(d.get("last_run")) if d.get("last_run") else None,
+    # candidates = 最終利用から hours 経ったが、足切り（keep 台）の内なので起動したまま残している VM（2026-09-09）
+    candidates = [v for v in (d.get("candidates") or []) if isinstance(v, dict)]
+    return {"hours": d.get("hours"), "keep": d.get("keep"),
+            "last_run": ts_aware(d.get("last_run")) if d.get("last_run") else None,
             "stopped": [{"vmid": str(v.get("vmid")), "name": v.get("name"),
-                         "at": ts_aware(v["at"]) if v.get("at") else None, "last_used": v.get("last_used")} for v in stopped]}
+                         "at": ts_aware(v["at"]) if v.get("at") else None, "last_used": v.get("last_used")} for v in stopped],
+            "candidates": [{"vmid": str(v.get("vmid")), "name": v.get("name"), "last_used": v.get("last_used")} for v in candidates]}
 
 
 def sandbox_view():

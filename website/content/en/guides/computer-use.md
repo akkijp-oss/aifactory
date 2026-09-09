@@ -16,7 +16,7 @@ computer_use: true
 
 Describe the application, exact input, expected display, and completion conditions in the ticket. For example: open Notepad, type a specified Japanese sentence, inspect the screenshot, and report whether the displayed text matches.
 
-Screenshots update `screenshot-latest.png` in the run's work directory. The latest image is collected with the other artifacts after SHA-256 verification. Copy images to separate names if more than one is needed; all artifacts together must fit within 4 MiB. Anyone who can read the artifacts can also see information visible on the captured desktop.
+Screenshots update `screenshot-latest.png` in the run's work directory. The latest image is collected with the other artifacts after SHA-256 verification. Copy images to separate names directly under the work directory if more than one is needed; images placed in a subdirectory are not collected. All artifacts together must fit within 4 MiB. Anyone who can read the artifacts can also see information visible on the captured desktop.
 
 ## Use through AIFactory MCP
 

@@ -93,7 +93,7 @@ MCP `ticket_new` → `ticket_run`、または `kb run <id>` で実行する。�
 
 PowerShellと子孫プロセスをWindows Job Objectに収容する。タスク終了・キャンセル・timeoutで子孫も終了させ、終了確認できない場合は `uncertain` として予約を保持する。サービス異常終了時もJob Objectのハンドル解放で停止する。ジャーナルに開始済みの操作は再起動後に自動再実行しない。
 
-成果物は作業フォルダー直下の通常ファイルだけを回収し、SHA-256を確認してから作業フォルダーを削除する。`runtime.env` は回収しない。入力350 KB、成果物合計4 MiB、ログ1操作16 MiBの制限はMacと共通。junction・symlinkなどreparse pointがある場合は削除を中断して予約を保持する。
+成果物は作業フォルダー直下の通常ファイルだけを回収し、SHA-256を確認してから作業フォルダーを削除する。`runtime.env` は回収しない。入力350 KB、成果物合計4 MiB、ログ1操作16 MiBの制限はMacと共通。ディレクトリ・reparse point・合計4 MiBを超える分は回収せず飛ばし、その名前と理由を `state.json` の `artifacts_skipped` に残す（回収側はここで止まらない）。ただしjunction・symlinkなどreparse pointが作業フォルダーに残っている場合は、ワーカー側の削除が中断して予約を保持する。
 
 `--keep` は回収後も作業フォルダーとleaseを保持する。`--resume` は同じleaseを所有し、cloneとticket準備が完了した場合のみ対応する。途中まで失敗した初期準備は自動再作成しない。管理者がVMのプロセスと状態を確認し、既存の `control show` / `resolve --confirmed-stopped` で復旧する。予約を解除するには成功した `guest-release` の操作IDが必要。VM自体は稼働を続ける。
 

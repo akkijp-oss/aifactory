@@ -15,7 +15,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--dry-run` | VM を触らず、定義の検証と依頼文の組み立てだけ。`workspace/runs/…-dry/` に出す |
 | `--keep` | 終了後に release しない（中を見たいとき） |
 | `--resume` | 既に貸出中の VM で、`state.json` の次の工程から続ける |
-| `--from[=step]` | 人間待ちで終わった run を、**新しい VM** で指定の工程からやり直す。工程を省くと前回の `resume_step`。前回の run は環境変数 `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡す（ADR-0034） |
+| `--from[=step]` | 人間待ちで終わった run を、**新しい VM** で指定の工程からやり直す。工程を省くと前回の `resume_step`。前回の run は環境変数 `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡す（ADR-0036） |
 | `--branch=名前` | `--from` のとき続きに使うブランチ。既定は前回の `wip_branch` |
 | `--wait[=秒]` | プールに空きがないとき、空くまで待って `sandbox take` をやり直す（単独なら 3600 秒。再試行の間隔は `AIFACTORY_WAIT_POLL_S` 秒、既定 30） |
 

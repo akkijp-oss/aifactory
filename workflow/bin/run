@@ -395,9 +395,11 @@ class Run:
         if self.dry: return ""
         wip = f"sandbox/{self.task}-{self.wf_name}-wip"
         self.refresh_token()
-        r = sh(["sandbox", "ssh", self.task, f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} && echo pushed"], check=False)
-        ok = "pushed" in (r.stdout or "")
-        self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (r.stderr or r.stdout)[-200:]}")
+        # ゲストの叩き方は backend ごとに違う（Proxmox は ssh、pull backend は worker queue）。self.sb に寄せて
+        # pull backend からも同じ保全が使えるようにする（チケット 282）。stdout しか返らないので stderr を混ぜる
+        out = self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} 2>&1 && echo pushed", check=False)
+        ok = "pushed" in (out or "")
+        self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (out or '')[-200:]}")
         if not ok:
             # push できなくても作業を失わない: base からの差分をパッチとして run ディレクトリに残す（2026-09-06 に App の workflows 権限不足で push が拒否され、実装が巻き戻しで消えた）
             patch = self.sb(f"cd $SANDBOX_APP_DIR && git format-patch --stdout origin/{self.base}..HEAD", check=False)
@@ -432,7 +434,7 @@ class Run:
             parts += ["## 差分（origin/%s...HEAD）" % self.base, "", "```", diff.strip(), "```", "",
                       f"差分の中身は `git diff origin/{self.base}...HEAD` で読むこと。", ""]
         if p.get('computer_use'):
-            parts += ["## VMの画面操作", "", "computer MCPツールで、この専用VMの画面取得・クリック・キー入力ができます。操作前にscreenshotで画面を確認し、その画像のピクセル座標を使ってください。typeは日本語対応、keyはWindowsのWINまたはMacのCMDとENTERなどを組み合わせます。操作後もscreenshotで結果を確認し、必要な画像を成果物として残してください。個人のデスクトップや他のVMは操作しません。", ""]
+            parts += ["## VMの画面操作", "", "computer MCPツールで、この専用VMの画面取得・クリック・キー入力ができます。操作前にscreenshotで画面を確認し、その画像のピクセル座標を使ってください。typeは日本語対応、keyはWindowsのWINまたはMacのCMDとENTERなどを組み合わせます。操作後もscreenshotで結果を確認し、必要な画像を成果物として残してください。画像は作業ディレクトリ直下に別名の通常ファイルとして保存してください。サブディレクトリに置いた画像は回収されません。全成果物の合計上限は4 MiBです。個人のデスクトップや他のVMは操作しません。", ""]
         if retry_note: parts += ["## 前回の結果（直すこと）", "", retry_note, ""]
         outs = [a for a in step.get("outputs", []) if a not in ("git", "pr_url")]
         parts += ["## 出力（必須）", ""]
@@ -585,7 +587,7 @@ class Run:
     def resume_step_for(self, step):
         """human で止まったとき、次にどの step からやり直せば続きになるか（`kb run --from <step>` に渡る事実）。
         戻し先が決まっている step（review→implement、gates→implement）はその戻し先、そうでなければその step 自身
-        （implement が時間上限で切られたなら implement からやり直す）。文言は組まない（ADR-0025 / ADR-0034）"""
+        （implement が時間上限で切られたなら implement からやり直す）。文言は組まない（ADR-0025 / ADR-0036）"""
         t = step.get("on_fail")
         return t["goto"] if isinstance(t, dict) and t.get("goto") in self.steps else step["id"]
 
@@ -641,7 +643,7 @@ class Run:
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
             if not ok and nxt == "human":
-                # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0034）
+                # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）
                 self.state["resume_step"] = self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
                 if fail.get("failure") == "timeout":

@@ -109,7 +109,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 
 With `--wait`, a run whose project pool is full does not fail: it waits for a free VM and then starts (minutes; 60 when the value is omitted). While waiting the ticket stays `in_progress`, and the console board and run page show "waiting for a free VM" with the elapsed time. Only when the limit is exceeded does the ticket go back to `todo`, with the reason in its note (ADR-0031).
 
-With `--from`, a run that ended at `human` is redone **on a new VM**, continuing from the recorded wip branch and starting at the given step. Omit the step and it starts at the step recorded as the one to redo. The name of the previous run is passed to the runner in an environment variable, so its artifacts and review findings come along to the new VM (ADR-0034). It cannot be combined with `--resume`.
+With `--from`, a run that ended at `human` is redone **on a new VM**, continuing from the recorded wip branch and starting at the given step. Omit the step and it starts at the step recorded as the one to redo. The name of the previous run is passed to the runner in an environment variable, so its artifacts and review findings come along to the new VM (ADR-0036). It cannot be combined with `--resume`.
 
 | state.json | State | Note |
 |---|---|---|

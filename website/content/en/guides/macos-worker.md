@@ -109,7 +109,7 @@ Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
 
 | Record | What to inspect |
 |---|---|
-| `state.json` | Step history, PR URL, backend, worker, lease, `artifacts_received`, and `released` |
+| `state.json` | Step history, PR URL, backend, worker, lease, `artifacts_received`, `released`, and `wip_branch` |
 | `agent-*.log` / `code-*.log` | Execution, gate and review verdicts, evidence such as guest OS |
 | `worker-operations.log` | Operation IDs to inspect with the administrator CLI's `show` command |
 | `work/` | Plan, report, review, gate results, PR URL, and other workflow files |
@@ -117,7 +117,9 @@ Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
 
 After PR creation, `result: human` means human review is pending. It alone does not indicate failure; inspect the history and PR. Normal cleanup removes the guest from Tart's list and clears the control plane lease. `--keep` retains both after artifact collection.
 
-Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes. Directories and symlinks are not collected; credential file `runtime.env` is excluded. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
+A run that reaches `human` before a PR exists (gate retries exhausted, a failed step) force-pushes the work branch HEAD to `sandbox/<ticket>-<workflow>-wip` before artifact collection and records that branch name in `wip_branch` in `state.json`, so a person can pick the work up from there. If the push fails, `wip_branch` stays empty and the diff is left in the run directory as `wip.patch`, which `git am` applies. Artifact collection and guest deletion continue whether or not the preservation succeeds.
+
+Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes; credential file `runtime.env` is excluded. Directories, symlinks, and anything beyond the 4 MiB total are skipped rather than collected, and their names and reasons are recorded in `artifacts_skipped` in `state.json`. Skipped entries do not stop the run, and the VM is still released. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
 
 ## Recovery
 
@@ -128,7 +130,8 @@ Collection accepts regular files directly under the guest working directory, up 
 | CLI installation takes a long time | Inspect provisioning logs for progress or repeated downloads. An existing download is not sufficient grounds to install an unverified binary |
 | GitHub token minting fails | Check project settings and App installation permissions. The runner uses the sandbox CLI in its own repository. Never log the token |
 | Resuming after the date changed | Use `kb run <id> --resume`; it uses the run recorded on the ticket |
-| An operation is `uncertain` | Have an administrator verify guest shutdown and operation state. Do not delete the journal and rerun |
+| An operation is `uncertain` | Have an administrator verify guest shutdown and operation state. Do not delete the journal and rerun. Exceeding the log limit is not a cause of this |
+| The log stops partway | The 16 MiB per-operation limit was reached. A truncation line is recorded and the result carries `truncated`. The operation itself ran to completion, so judge it by the exit code and the artifacts |
 | Artifact collection or guest deletion fails | Keep the lease and establish artifact and guest state before recovery |
 
 `--resume` requires ownership of the run's lease. A provisioning failure can be retried in the same running guest if credentials, repository, and step history have not been created. A partially created repository or stopped guest is not automatically recreated.
@@ -146,6 +149,6 @@ A documentation task was run on 2026-09-07 using an M1 Mac mini with 16 GB RAM, 
 
 The guest does not share host directories, clipboard, or audio. Softnet blocks private IPv4, link-local, and tailnet destinations. The worker configures public DNS on the guest's `Ethernet` service and disables IPv6. That service name and working guest sudo access are prerequisites.
 
-Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation; total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
+Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation and anything beyond that is truncated (the operation still runs to completion and its exit code decides the result); image base64 is recorded as `[image N bytes]`. Total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
 
 See [Mac and Windows computer use](computer-use.md) to add desktop interaction.

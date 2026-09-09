@@ -22,6 +22,29 @@ sys.path.insert(0, str(ROOT / "workers" / "lib"))
 from client import Client
 
 
+# 回収するのは作業ディレクトリ直下の通常ファイルだけ。ディレクトリ・symlink・上限超過は
+# 例外にせず飛ばして名前を返す。回収対象外があることは回収の失敗ではなく、ここで止めると
+# guest-release まで届かず lease が Mac を塞ぐ（チケット 277）。
+# アーカイブ展開・symlink 追従・任意のホスト宛先は行わない。
+SKIP_REASONS = ("directory", "symlink", "non-regular", "size")
+COLLECT_SCRIPT = '''import pathlib,sys,base64,hashlib,json,os,stat
+LIMIT=4*1024*1024
+p=pathlib.Path(sys.argv[1]); out={}; skipped=[]; total=0
+def skip(f,reason): skipped.append({'name':f.name,'reason':reason})
+for f in sorted(p.iterdir()):
+ if f.name == 'runtime.env': continue
+ if f.is_symlink(): skip(f,'symlink'); continue
+ if not f.is_file(): skip(f,'directory' if f.is_dir() else 'non-regular'); continue
+ fd=os.open(f,os.O_RDONLY|os.O_NOFOLLOW)
+ with os.fdopen(fd,'rb') as source:
+  if not stat.S_ISREG(os.fstat(source.fileno()).st_mode): skip(f,'non-regular'); continue
+  b=source.read(LIMIT-total+1)
+ if len(b)>LIMIT-total: skip(f,'size'); continue
+ total+=len(b)
+ out[f.name]={'data':base64.b64encode(b).decode(),'sha256':hashlib.sha256(b).hexdigest()}
+print(json.dumps({'files':out,'skipped':skipped}))'''
+
+
 def backend(Run):
     class MacRun(Run):
         backend_label = "Mac VM"
@@ -194,10 +217,14 @@ def backend(Run):
 
         def preserve(self):
             if self.dry: return ""
-            # Preserve on the control plane, without overwriting any remote branch.
-            patch = self.sb(f"cd $SANDBOX_APP_DIR && git diff --binary origin/{shlex.quote(self.base)}", check=False)
-            if patch: (self.run_dir / "wip.patch").write_text(patch)
-            return ""
+            # 保全そのものは Proxmox backend と同じ（作業ブランチの HEAD を wip ブランチへ、駄目なら wip.patch）。
+            # ただし失敗しても例外を外に出さない: MacRun.main の except に抜けると release（成果物回収・
+            # ゲスト削除）まで届かず、実装も lease も取り残される（チケット 282）
+            try:
+                return super().preserve()
+            except Exception as e:
+                self.log(f"{self.backend_label} preserve failed: {str(e)[-200:]}")
+                return ""
 
         def run_code(self, step):
             if self.dry: return True, "(dry-run)"
@@ -233,27 +260,32 @@ def backend(Run):
             self.sb(f"cat > {shlex.quote(self.work + '/pr_url')}", input_text=urls[-1] + "\n")
             return True, urls[-1]
 
+        def collect(self):
+            return self.sb(f"python3 -c {shlex.quote(COLLECT_SCRIPT)} {shlex.quote(self.work)}")
+
         def release(self):
             if self.dry: return
-            # Transfer only direct regular workflow artifacts, excluding credentials.
-            # No archive extraction, symlink following, or arbitrary host destination.
-            script = '''import pathlib,sys,base64,hashlib,json,os,stat
-p=pathlib.Path(sys.argv[1]); out={}; total=0
-for f in p.iterdir():
- if f.name == 'runtime.env': continue
- if f.is_symlink() or not f.is_file(): raise RuntimeError('non-regular artifact')
- fd=os.open(f,os.O_RDONLY|os.O_NOFOLLOW)
- with os.fdopen(fd,'rb') as source:
-  if not stat.S_ISREG(os.fstat(source.fileno()).st_mode): raise RuntimeError('non-regular artifact')
-  b=source.read(4*1024*1024-total+1)
- total+=len(b)
- if total>4*1024*1024: raise RuntimeError('artifact limit exceeded')
- out[f.name]={'data':base64.b64encode(b).decode(),'sha256':hashlib.sha256(b).hexdigest()}
-print(json.dumps(out))'''
-            raw = self.sb(f"python3 -c {shlex.quote(script)} {shlex.quote(self.work)}")
-            self.accept_artifacts(json.loads(raw))
+            manifest = json.loads(self.collect())
+            if not isinstance(manifest, dict) or "files" not in manifest:
+                raise RuntimeError("invalid artifact manifest; lease retained")
+            self.accept_artifacts(manifest["files"], manifest.get("skipped", []))
 
-        def accept_artifacts(self, files):
+        def record_skipped(self, skipped):
+            # ゲスト側の名前は agent が作れるので、件数・長さ・理由を丸めてから state に入れる。
+            # PowerShell の ConvertTo-Json は 1 件の配列を単体に潰すことがあるので dict も受ける。
+            if isinstance(skipped, dict): skipped = [skipped]
+            clean = []
+            for item in skipped if isinstance(skipped, (list, tuple)) else []:
+                if len(clean) >= 128: break
+                if not isinstance(item, dict): continue
+                reason = item.get("reason")
+                entry = {"name": str(item.get("name", ""))[:255],
+                         "reason": reason if reason in SKIP_REASONS else "other"}
+                clean.append(entry)
+                self.log(f"{self.backend_label} artifact skipped: {entry['name']} ({entry['reason']})")
+            if clean: self.state["artifacts_skipped"] = clean
+
+        def accept_artifacts(self, files, skipped=()):
             if not isinstance(files, dict) or len(files) > 128:
                 raise RuntimeError("invalid artifact manifest; lease retained")
             dest = self.run_dir / "work"
@@ -274,7 +306,9 @@ print(json.dumps(out))'''
                     tmp = f.name
                 os.replace(tmp, dest/name)
             (self.run_dir / "artifacts.json").write_text(json.dumps({k:v["sha256"] for k,v in files.items()}, indent=2))
-            self.state["artifacts_received"] = True; self.save()
+            self.state["artifacts_received"] = True
+            self.record_skipped(skipped)
+            self.save()
             if self.keep:
                 self.log(f"{self.backend_label} lease retained (--keep)"); return
             op, r = self.client.execute("guest-release")

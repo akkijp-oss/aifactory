@@ -74,7 +74,7 @@ Create and run a ticket through MCP or `kb run <id>`. Dispatch skips offline or 
 
 A Windows Job Object contains the command and descendants. Completion, cancellation, and timeout terminate descendants too. Closing the job handle after a worker crash also terminates them. Failure to confirm termination leaves the operation `uncertain`. A journaled operation is never automatically executed again after restart.
 
-Artifacts must be direct regular files, with a combined limit of 4 MiB. Inputs are limited to 350 KB and operation logs to 16 MiB. The runner verifies SHA-256 before releasing the workspace. It excludes `runtime.env`. Reparse points, including junctions, cause cleanup to stop and retain the lease.
+Artifacts must be direct regular files, with a combined limit of 4 MiB. Inputs are limited to 350 KB and operation logs to 16 MiB. The runner verifies SHA-256 before releasing the workspace. It excludes `runtime.env`. Directories, reparse points, and anything beyond the 4 MiB total are skipped, and their names and reasons are recorded in `artifacts_skipped` in `state.json`; collection itself does not stop. Reparse points left in the working folder, including junctions, still cause worker-side cleanup to stop and retain the lease.
 
 `--keep` retains the workspace and lease after collection. `--resume` requires the same owned lease and completed repository/ticket setup. Incomplete initial setup is not automatically recreated. Inspect processes and state before using `control show` and `resolve --confirmed-stopped`. Lease release requires a successful `guest-release` operation. The Windows VM continues running.
 

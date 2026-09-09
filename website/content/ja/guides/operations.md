@@ -52,7 +52,7 @@ App の権限を足したとき（Actions: Read など）は、各 installation 
 
 ### 使われていない VM は自動で止まる
 
-貸し出されていないプール VM は、最後に使われてから 3 時間（既定）で止まります。制御系の systemd timer `aifactory-idle-stop.timer` が 15 分ごとに `sandbox idle-stop` を呼びます（ADR-0033）。`sandbox ls` の STATUS が `stopped` でも、たいていは故障ではなく節電です。表の後に `[idle-stop] N 台が節電で停止中` と出ます。
+貸し出されていないプール VM は、最後に使われてから 24 時間（既定）で**停止候補**になり、候補が 10 台（既定。足切り）を超えたぶんだけ最終利用の古い順に止まります。候補が 10 台以下なら止まりません。制御系の systemd timer `aifactory-idle-stop.timer` が 15 分ごとに `sandbox idle-stop` を呼びます（ADR-0033 / ADR-0035）。`sandbox ls` の STATUS が `stopped` でも、たいていは故障ではなく節電です。表の後に `[idle-stop] N 台が節電で停止中` と出ます。
 
 **手で起こす必要はありません**。次の `take` が自動で起動し、`[start] vm <vmid>: 停止中だったので起動した（N 秒）` を出します（そのぶん 30〜60 秒ほど余分にかかります）。
 
@@ -61,7 +61,7 @@ sandbox idle-stop --dry-run              # 何が止まる判定になるか、�
 journalctl -u aifactory-idle-stop        # timer のログ
 ```
 
-止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0`（全体）か、`~/.config/sandbox/pj/<pj>.env` に同じ行（その PJ だけ）を書きます。時間を変えるときは `3` の代わりに時間数を書きます。
+止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0`（全体）か、`~/.config/sandbox/pj/<pj>.env` に同じ行（その PJ だけ）を書きます。時間を変えるときは `24` の代わりに時間数を、足切りの台数を変えるときは `SB_IDLE_STOP_KEEP=<台数>`（全体のみ。`0` で候補を全部止める）を書きます。
 
 ## テンプレートの更新
 
