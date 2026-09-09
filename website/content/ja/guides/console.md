@@ -128,7 +128,7 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | intake / dispatch のログ / ワークフロー・routes・プロジェクト・git |
 
-`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、返却と停止には `destructiveHint`）を返します。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされます（ADR-0037）。
+`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、返却と停止には `destructiveHint`）を返します。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされます（ADR-0038）。
 
 ### 運転の型
 

@@ -40,3 +40,10 @@ PR を作る直前に runner が `git merge origin/<base>` で base の最新を
 
 ## ゲートが赤で戻されたとき
 runner が赤のゲートのログ末尾を添えて戻す。**ログを読んで原因を特定してから**直す。テストを消したり skip にして緑にするのは禁止（本当に不要なテストなら理由を report.md に書いて人に判断を委ねる）。
+
+`FAIL` として戻ってきた分は **自分の変更が原因** だと思ってよい。runner が赤いゲートを base（`origin/<base>`）でも
+実際に回し直していて、base でも赤かったものは `INFO <名前> red (also red on base; not a gate)` に落としてあるからで、
+その根拠は `gates.txt` の `=== base check:` 以降にある。「これは元から赤いのでは」と推し測って手を止めない。
+
+ただし `=== base check:` に `BASE-CHECK-SKIP` と出ている回は base を見られていない（依頼文にもそう書いてある）。
+そのときだけは、base でも赤いと考える根拠を `report.md` に書いて手を止めてよい。

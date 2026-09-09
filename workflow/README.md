@@ -38,7 +38,8 @@ $AIFACTORY_WORKSPACE/                 # 運用データ（既定 <repo>/workspac
 ├── kanban/tickets/               # チケット本文（採番と状態は kanban）
 └── projects/<pj>/
     ├── project.yml               # ★PJ 固有。事実（repo / base / app_dir / gates / facts）と方針（review_points / forbidden）だけ
-    ├── gates.sh                  # PJ のゲート（VM 内で実行。全緑なら 0）
+    ├── gates.sh                  # PJ のゲート（VM 内で実行。全緑なら 0。引数があればその名前のゲートだけ）
+    ├── prepare.sh                # 任意。貸出直後の準備（project.yml の `prepare:` で名前を指定）
     └── provision.sh              # テンプレート焼き込み（sandbox 区画）
 
 examples/projects/<pj>/           # 同梱サンプルの PJ 定義（kumitate）。workspace に同名の PJ が無いときに使われる
@@ -84,6 +85,45 @@ python3 -m unittest discover -s workflow/tests -v    # 逐次ログ（EventRende
 
 VM 無しで runner を 1 周させたいときは、`sandbox` と `scp` のシムを PATH に置き、`HOME` を差し替えて偽の `~/.config/sandbox/state.json` を読ませる（手順は ADR-0014 の「実測」）。`AIFACTORY_WORKSPACE` を一時ディレクトリに向ければ本番の run 記録を汚さない。
 
+## 貸出直後の準備（`prepare`）と、base でも赤いゲート
+
+VM は run が終わるたびにテンプレート（`provision.sh` を焼いた時点）へ戻り、base だけが進む。このずれが gates の赤として
+出ると、実装役は「自分が壊した」と思って直せないものを直そうとする。対処は 2 つに分かれる（ADR-0038）。
+
+**環境のずれは `prepare` で埋める。** `project.yml` に `prepare: prepare.sh` と書くと、runner が VM を取って checkout した
+直後、最初の agent step の前に `app_dir` を cwd にして 1 回だけ実行する（`--from` の続きや PR 起点の run でも走らせる）。
+
+```yaml
+gates: gates.sh
+prepare: prepare.sh       # 例: pnpm install --frozen-lockfile && pnpm --filter @kumitate/db db:migrate
+```
+
+失敗したら **agent を起動せずに終わる**（`state.json` に `result: failed` / `failure: "prepare"`、`history` は空、出力は
+`code-prepare.log`）。整っていない VM で agent を起こしても直せない赤を直そうとするだけなので、人へ返す（kb はチケットを
+`blocked` にする）。pull backend（macOS / Windows / Linux）は既存の `provision.sh` を毎 take 実行していて、同じ役目を果たす。
+
+**準備では直らない赤（base 自身が赤い）は、runner が base で回して確かめる。** gates が赤いと、`kit/steps/gates.sh` が
+その**赤いゲートだけ**を `origin/<base>` でも実行する（同じ作業コピーで checkout を差し替える。未コミットの変更は
+`git stash` で退避して必ず戻す）。base でも赤かったものは実装役に戻さない。
+
+```
+INFO strings red (also red on base; not a gate)
+PASS feature
+
+=== base check: origin/develop
+BASE-CHECK origin/develop 675cdbc
+FAIL strings (~/gates/strings.log)
+```
+
+残りに `FAIL` が無ければ gates は PASS で review へ進み、implement への戻しを消費しない。確かめたゲート名は run の記録
+（`state.json` の `known_red_gates`）に載り、`sandbox_status` が `project.yml` に人が書いた値と合わせて見せる。
+`project.yml` は書き換えない。base で全ゲートを回し直さないために、PJ の `gates.sh` は
+**引数があればその名前のゲートだけ走らせる**契約にしてある（引数なしは従来どおり全部）。
+
+base を見に行けなかった回（未コミットの変更を退避できない、`origin/<base>` が無い）は `=== base check:` に
+`BASE-CHECK-SKIP` と理由が出て、判定はしない（実装役への依頼文もその回だけ言い切らない）。base を見た後に作業ブランチへ
+戻し切れなかったときは、赤が残っていなくても run をそこで止めて人へ回す（base に居る作業ツリーで agent を走らせない）。
+
 ## 6 つの workflow
 
 | 名前 | 流れ | 使いどころ |
@@ -126,7 +166,8 @@ stdout の末尾は `last_output`、`history` の末尾に `failure: "timeout"` 
 
 | 罠 | 症状 | 対処 |
 |---|---|---|
-| base で既に赤いゲートを agent に「直せ」と戻した | docs だけの PR（kumitate #294）に、無関係なテスト修正が混入した（#293 と重複） | `project.yml` の `known_red_gates` に書くと runner が FAIL → INFO に格下げし、戻さない。再試行の依頼文にも「base で既に赤なら直さず報告」を明記。直す PR がマージされたら消す |
+| base で既に赤いゲートを agent に「直せ」と戻した | docs だけの PR（kumitate #294）に、無関係なテスト修正が混入した（#293 と重複） | runner が赤いゲートを base でも回し、base でも赤ければ FAIL → INFO に格下げして戻さない（ADR-0038）。手で省きたいときは従来どおり `project.yml` の `known_red_gates` に書ける |
+| テンプレートから base が進んで VM の環境がずれた | kumitate の実 DB テストが列不在で全滅し、3 attempt を「gates 赤の修正」に浪費（#288 / #290 / #293） | `project.yml` の `prepare` で貸出直後に依存と migration を base へ揃える。揃わなければ agent を起こさず `failure: prepare` で止める |
 | `git add -A` の自動コミット | テストが生成した DB（turso の .db）を拾いかけた | 追跡済み変更だけ `git add -u`。未追跡は一覧を記録して push しない |
 | 変数の直後に全角括弧（`$loop）`） | bash が全角まで変数名と見て「未定義」 | 常に `${var}` と書く。runner を Python にした理由の一つ |
 | 実行中の bash スクリプトを編集した | 走っていた spin が途中で壊れた | 走っている run があるときはスクリプトを触らない。直すなら止めてから |

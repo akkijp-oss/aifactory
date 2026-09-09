@@ -364,6 +364,7 @@ function outcomeLead(o, s) {
   if (o.reason === 'runner_gone') return tt(T.outcome.runner_gone, { end: fmtT((o.job || {}).finished || s.mtime) });
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });
+  if (o.reason === 'prepare_failed') return tt(T.outcome.prepare_failed, { summary: o.error_summary || '' });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });

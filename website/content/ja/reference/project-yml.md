@@ -16,6 +16,7 @@
 | `app_dir` | string | ✅ | VM 内のアプリのディレクトリ（リポジトリ直下と違うことがある） | エージェントの作業ディレクトリ、`gates.sh` の作業ディレクトリ |
 | `url` | string | | VM 内から見たアプリの URL | 画面確認（将来） |
 | `gates` | string | ✅ | ゲートスクリプト。`projects/<pj>/` からの相対パス | スクリプトが担当する工程 `gates.sh` が VM に scp して実行 |
+| `prepare` | string | | 貸出直後の準備スクリプト。`projects/<pj>/` からの相対パス | VM を取って checkout した直後に `app_dir` を作業ディレクトリとして 1 回だけ実行。失敗したらエージェントを起動せず `failure: prepare` で終わる |
 | `stack` | string | | 1 行の技術スタック | 依頼文の冒頭 |
 | `facts` | array | | エージェントに毎回伝える事実。1 項目 1 行 | 依頼文の「プロジェクト」節 |
 | `review_points` | array | | reviewer が必ず見る観点（プロジェクト固有） | reviewer の依頼文だけに追加 |
@@ -65,6 +66,7 @@ forbidden:
 - `facts` は「テストの実行方法」「生成物の置き場」「既知の問題（日付つき）」が特に効く。長くなったら `README` や `CLAUDE.md` の該当箇所を指すだけにする
 - 「全プロジェクトで同じ注意」は書かない（`workflow/kit/roles/_common.md` へ）
 - `known_red_gates` は一時的。直す PR がマージされたら消す
+- `known_red_gates` は手で書かなくても、runner が赤いゲートを base で回して確かめた分が run の記録に載る（下記）
 - 変更は次の run から効く
 
 ## 検証スクリプト: gates.sh
@@ -82,6 +84,46 @@ INFO audit-gate red (known on base; not a gate)
 | `PASS <name>` | 成功 |
 | `FAIL <name> (<log>)` | 失敗。括弧内はログの保存先 |
 | `INFO <name> …` | 情報扱い（`known_red_gates` か、スクリプト側で情報にしたもの） |
+
+引数でゲート名を渡されたら、その名前のゲートだけを実行してください（引数なしなら全部）。runner が base で確かめるときに使います。
+
+## 貸出直後の準備: prepare
+
+VM は run が終わるたびにテンプレート（`provision.sh` を焼いた時点）に戻り、base ブランチだけが進みます。この差（依存の追加、DB のマイグレーション）はゲートの赤として現れますが、エージェントには直せません。
+
+`prepare` を指定すると、runner が VM を取って checkout した直後、最初のエージェント工程の前に 1 回だけ実行します。
+
+```yaml
+gates: gates.sh
+prepare: prepare.sh
+```
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${SANDBOX_APP_DIR:-$HOME/app}"
+pnpm install --frozen-lockfile
+pnpm --filter @kumitate/db db:migrate
+```
+
+失敗した場合、runner はエージェントを起動せずに終了します（`state.json` に `result: failed` と `failure: prepare`、工程の履歴は空、出力は `code-prepare.log`）。かんばんではチケットが `blocked` になります。macOS / Windows / Linux のワーカーでは、既存の `provision.sh` が毎回の貸出で同じ役目を果たします。
+
+## base でも赤いゲート
+
+ゲートが赤いとき、runner は**その赤いゲートだけ**を base（`origin/<base_branch>`）でも実行します。base でも赤ければ、そのゲートは実装工程に戻しません。
+
+```
+INFO strings red (also red on base; not a gate)
+PASS feature
+
+=== base check: origin/develop
+BASE-CHECK origin/develop 675cdbc
+FAIL strings (~/gates/strings.log)
+```
+
+残りに `FAIL` が無ければゲートは成功として次の工程へ進むので、実装への差し戻しを消費しません。確かめたゲート名は run の記録に残り、`sandbox_status` が `known_red_gates` に手で書いた値と合わせて返します。`project.yml` は書き換えません。
+
+base を確認できなかった回（未コミットの変更を退避できない、`origin/<base_branch>` が無いなど）は `=== base check:` に `BASE-CHECK-SKIP` と理由が出て、格下げは行いません。base を見たあと作業ブランチへ戻し切れなかった場合は、赤が残っていなくても run を止めて人に返します。
 
 具体的な書き方は [プロジェクトを追加する](../guides/add-project.md#gates-sh) を参照してください。
 

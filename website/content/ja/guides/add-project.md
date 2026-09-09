@@ -92,6 +92,7 @@ hotfix_base: main             # hotfix の宛先（省略時は base_branch）
 app_dir: /home/dev/app        # VM 内のアプリのディレクトリ（cwd になる）
 url: http://localhost:3000    # VM 内から見たアプリの URL
 gates: gates.sh               # 同じディレクトリのゲートスクリプト
+prepare: prepare.sh           # 任意。貸出直後に環境を base へ揃える（依存の再取得・マイグレーション）
 stack: "pnpm 10 monorepo / Node 22 / Next.js / PostgreSQL 16 / vitest"
 facts:                        # agent に毎回伝える事実。1 項目 1 行
   - "依存は `pnpm install --frozen-lockfile`。pnpm は packageManager の版に固定"
@@ -111,6 +112,7 @@ known_red_gates: []           # base で既に赤いゲート名。直す PR が
 | `stack` | 推奨 | 1 行。依頼文の冒頭に出る |
 | `facts` | 推奨 | テストの実行方法、生成物の置き場、既知の問題。**「全プロジェクトで同じ注意」は書かない**（それは `roles/_common.md`） |
 | `review_points` / `forbidden` | 推奨 | プロジェクト固有の観点と禁止 |
+| `prepare` | 必要なら | 貸出直後に走らせる準備スクリプト。VM のテンプレートと base の差（依存・マイグレーション）を埋める |
 | `known_red_gates` | 必要なら | 書くと runner が FAIL を INFO（参考情報）として扱うように変更し、エージェントに「直せ」と戻さない |
 | `workflow_overrides` | 稀 | ワークフロー名 → `base_branch` の上書き |
 
@@ -124,7 +126,11 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 cd "${SANDBOX_APP_DIR:-$HOME/app}"
 mkdir -p "$HOME/gates"; rc=0
-gate() { local name=$1; shift; if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi; }
+SELECT="$*"   # 引数があればその名前のゲートだけ走らせる（runner が base で確かめるときに使う）
+gate() { local name=$1; shift
+  if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
+  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+}
 gate typecheck pnpm --filter @myapp/web typecheck
 gate lint      pnpm --filter @myapp/web lint
 gate test      pnpm --filter @myapp/web test
@@ -132,6 +138,20 @@ exit $rc
 ```
 
 情報扱いにしたいもの（失敗しても止めない）は `gate` ではなく `INFO` を出す形にするか、`known_red_gates` に書きます。実行時間はここが大半なので、まず「CI と同じ」で始め、重ければ後で差分実行を考えます。Rails なら `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` のように並べます。
+
+ゲートが赤いとき、runner は**その赤いゲートだけ**を base でも実行し、base でも赤ければ実装工程に戻しません。上の `SELECT` はそのための契約です（引数なしなら今までどおり全部走ります）。
+
+**依存の再取得やマイグレーションはゲートに入れないでください。** それは「品質を測る」前の準備で、失敗したときの宛先も違います（ゲートの赤は実装エージェント、準備の失敗は人）。準備は `prepare.sh` に書き、`project.yml` の `prepare` で指定します。
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${SANDBOX_APP_DIR:-$HOME/app}"
+pnpm install --frozen-lockfile
+pnpm --filter @myapp/db db:migrate
+```
+
+VM は run が終わるたびにテンプレートへ戻り、base だけが進みます。`prepare` はその差を埋めます。失敗した場合、runner はエージェントを起動せずに終了します（`failure: prepare`）。
 
 ## 5. トークンを保存する 🧑
 
