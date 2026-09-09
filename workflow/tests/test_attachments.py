@@ -76,6 +76,27 @@ class AttachmentsLibTest(unittest.TestCase):
         long = att.sanitize("あ" * 200 + ".png")
         self.assertLessEqual(len(long.encode("utf-8")), att.MAX_NAME_BYTES)
 
+    def test_sanitize_drops_markdown_and_caps_the_name(self):
+        """名前は依頼文にそのまま埋まる。console / MCP から外部の名前を受けるので記法と長さを締める（チケット 378）"""
+        self.assertEqual(att.sanitize("a`b*[c].png"), "a_b__c_.png")
+        self.assertEqual(att.sanitize("<img>|表.csv"), "_img__表.csv")
+        self.assertEqual(att.sanitize("a  b\tc.png"), "a bc.png")        # 連続する空白は 1 つ。タブは制御文字として先に消える
+        self.assertEqual(att.MAX_NAME_BYTES, 120)
+        long = att.sanitize("あ" * 200 + ".png")
+        self.assertLessEqual(len(long.encode("utf-8")), 120)
+
+    def test_sanitize_is_idempotent(self):
+        """path_of() は「sanitize しても変わらない」で置き場の外を弾く。2 回目で変わると自分の添付を見失う"""
+        for name in ("a`b*[c].png", "../../x.png", ".ssh", "  a  b.png", "あ" * 200 + ".png", "|", "", "表 <1>.csv"):
+            once = att.sanitize(name)
+            self.assertEqual(att.sanitize(once), once, name)
+
+    def test_is_image_covers_the_four_types_and_not_svg(self):
+        for name in ("a.png", "a.JPG", "a.jpeg", "a.gif", "a.webp"):
+            self.assertTrue(att.is_image(name), name)
+        for name in ("a.svg", "a.txt", "a.pdf", "a"):      # SVG は中でスクリプトが動くので画像扱いしない
+            self.assertFalse(att.is_image(name), name)
+
     def test_add_sanitizes_and_never_escapes_the_ticket_directory(self):
         saved = att.add(101, self.src("shot.png"), name="../../../etc/passwd")
         self.assertEqual(saved, "passwd")

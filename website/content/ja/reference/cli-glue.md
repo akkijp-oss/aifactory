@@ -5,7 +5,7 @@
 ## intake
 
 ```
-intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
+intake <text-file|-> [--pj P] [--kind K] [--model M] [--attach FILE ...] [--dry-run]
 ```
 
 | 引数 | 意味 |
@@ -13,15 +13,16 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
 | `text-file` | 自由文のファイル。`-` で標準入力 |
 | `--pj` / `--kind` | プロジェクトと種別を明示的に指定。LLM の判定より優先 |
 | `--model` | 使うモデル。既定は `workflow/kit/routes.env` の `MODEL_judgment` |
-| `--dry-run` | チケットを作成せず、判定結果の JSON を出す |
+| `--attach` | 作成したチケットに添付するファイル（複数可。`--attach a.png b.csv` でも `--attach a.png --attach b.csv` でも）。画像は LLM にも見せる |
+| `--dry-run` | チケットを作成せず、判定結果の JSON を出す（添付はしない） |
 
 ### 動き
 
 1. 入力の先頭 5 行から `pj:` / `kind:` 行を読み取って指定値として使い、本文からは取り除く
 2. `--pj` / `--kind` があればそれを優先。指定値は存在の確認する
-3. Mac 上の一時ディレクトリを作業ディレクトリに、ツールなしで `claude -p` を 1 回呼ぶ。渡すのはプロジェクト一覧（`project.yml` の display_name / repo / stack、ないプロジェクトは「project.yml なし」と明記）、種別一覧（ワークフローの YAML の description）、判定の目安、チケットの形、依頼文
+3. Mac 上の一時ディレクトリを作業ディレクトリに、ツールなしで `claude -p` を 1 回呼ぶ。渡すのはプロジェクト一覧（`project.yml` の display_name / repo / stack、ないプロジェクトは「project.yml なし」と明記）、種別一覧（ワークフローの YAML の description）、判定の目安、チケットの形、依頼文。`--attach` に画像（png / jpg / gif / webp）があるときだけ、その一時ディレクトリの `attachments/` に画像を複製し、`--tools Read` で呼んで「読み取れた事実だけを本文の `## 現状` に書く」よう指示する（画像が無いときの呼び方は変わらない）
 4. 出力の JSON（`pj` / `kind` / `title` / `body` / `confidence` / `reason`）を取り出す。指定済みの pj / kind で上書き
-5. 本文末尾に `（intake <日時> / model <モデル> / confidence <値> / <理由>）` を付けて `kb new`。本文冒頭に `pr: N` があれば `--pr` に回す
+5. 本文末尾に `（intake <日時> / model <モデル> / confidence <値> / <理由>）` を付けて `kb new`。本文冒頭に `pr: N` があれば `--pr` に回す。`--attach` は `kb new --attach` に渡す。**チケットは作れたのに添付だけ失敗した**ときは、id を出してログも書いたうえで終了コード 2 で終わる（`kb attach <id> <ファイル>` でやり直す）
 6. `workspace/logs/intake.log` に 1 行（日時 / id / pj / kind / confidence / モデル / 理由）
 
 ### 出力

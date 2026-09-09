@@ -118,6 +118,20 @@ On `kb run`, the attachments are placed in `~/work/<id>/attachments/` on the VM 
 - **Do not attach tokens, keys or real `.env` values.** `attachments/` is not tracked by git, so it is not scanned for secrets by `bin/oss-check.sh`
 - Only the Proxmox backend copies attachments to the VM for now (macOS, Windows and Linux workers are not covered)
 
+### Attaching from the web console, MCP and intake
+
+Three more entry points write to the same place as `kb attach`, and go through the same checks for names and size limits.
+
+- **Web console**: both panels of the filing screen and the ticket screen have a drop area. Drop files on it or pick them; several at a time is fine. The ticket screen shows images as thumbnails and everything else as a download link, and `×` removes one (with a confirmation dialog). Picked files are not kept in the draft, so leaving the screen means picking them again
+- **MCP**: `ticket_attach(id, name, content_base64)` passes the bytes directly, which works over ssh. For a file that already sits on the control host, use `ticket_attach(id, path)`. It shows up in `ticket_show`, and `read_file` reads images back as images. `ticket_detach(id, name)` removes one
+- **intake**: `glue/bin/intake memo.txt --attach screen.png` attaches to the ticket it files. Images are also shown to the intake LLM, so facts read off the screenshot land in the `## 現状` (current state) section of the body
+
+!!! note "Names get normalised"
+    File names are normalised when they are saved: path separators, `..`, control characters and Markdown syntax (`` ` `` `*` `[` `]` `<` `>` `|`) are dropped, and the name is cut to 120 bytes. The name is embedded verbatim in each step's prompt, which is why it is kept short and plain. `kb attachments <id>` and the ticket screen show what was actually saved.
+
+!!! warning "Filing and attaching are two operations"
+    `kb new --attach` and the console's "file a ticket" button can **create the ticket and still fail to attach** (over the size limit, for instance). The ticket is there either way, so retry the attachment with `kb attach <id> <file>` or the ticket screen.
+
 ## Writing a good ticket
 
 | Good | Bad |
