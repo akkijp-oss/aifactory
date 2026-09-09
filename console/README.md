@@ -77,7 +77,8 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `ticket_attach` / `ticket_detach` | 添付を 1 件足す（`content_base64` か ctl 上の `path`）/ 消す。`read_file` は画像を image で返す（4 MiB まで） |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
-| `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
+| `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等）。`run_show` の `progress` に run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が付く |
+| `run_wait` | run の工程が変わる（`until: step`、既定）か終わる（`until: result`）まで待つ（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返す。ログ本文は含まない |
 | `run_action` | 人間の後始末（wip から PR 化・マージ／打ち切り）を実行記録に書く（`kb run-note`）。`close` は決着と PR 番号を記録し、`note` は説明を書き直す |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task / VM 名 / IP / since / 稼働状態）と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
@@ -88,8 +89,8 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 ### 運転の型
 
 1. `ticket_run(id)` でジョブが返る（`kb run` は 5〜80 分）
-2. 監視は `job_show(id, tail=2000)` か `run_show(name)` を数十秒おきに。`job_wait` は既定 60 秒・上限 300 秒待ち、終わらなければ `state` が `running` のまま返る（Claude Code は 120 秒でバックグラウンド化するので、それ以上待たせる意味が薄い）。サーバーは待ちを別スレッドに逃がすので他の呼び出しは即応する（ADR-0028）が、annotations を読まないクライアントでは呼び手の側で直列になる。止まって見えたら `timeout_s` を短くするか `job_show` で回す
-3. 終わったら `run_show(name)` の `outcome` と `ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読む
+2. 工程を追うのは `run_wait(name)`。次の工程遷移まで待ち、変わった瞬間に `step` / `ok` / `next` / `gate_fails` / `pr_url` / `result` を構造化して返す（ログ本文は返さないので、`^\[run ` を grep したりログ本文から終了を判定したりしなくてよい。agent 自身の出力に `result: success` が混ざる）。`timeout_s` に達したら `changed: false` のまま返るので繰り返し呼ぶ。ジョブの側を見るなら `job_show(id, tail=2000)` か `job_wait`。`job_wait` / `run_wait` はどちらも既定 60 秒・上限 300 秒で、Claude Code は 120 秒でバックグラウンド化するのでそれ以上待たせる意味が薄い（ADR-0028 / ADR-0051）。サーバーは待ちを別スレッドに逃がすので他の呼び出しは即応するが、annotations を読まないクライアントでは呼び手の側で直列になる
+3. 終わったら `run_show(name)` の `outcome` / `progress`（工程ごとの経過秒とゲートの PASS / FAIL / INFO 一覧）と `ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読む。経過秒は前の工程が終わった時刻からの差なので、`--from` で再開した run や VM の空き待ちを挟んだ run では工程の外の時間が混ざる（導けないときは `null`）
 4. VM の空きは `sandbox_status`。`ls` が 600 秒より古ければ裏で `sandbox ls` を起こし、今回は古い値に `ls_refreshing: true` と `ls_refresh_job` を付けて返す（次の呼び出しで `pool_actual` / `free` が最新になる。起こせなければ `ls_refresh_error`）。貸出中 VM の task / VM 名 / IP / since / 稼働状態は `leases[]` にそのまま出るので、`~/.config/sandbox/state.json` を ssh で読みに行かなくてよい。台帳の場所は環境変数 `SANDBOX_STATE`（`glue/bin/dispatch` と同じ規則）で、無いときは `state_exists: false`（「貸出なし」と読み違えないため）
 
 resources: `aifactory://board`（BOARD.md）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）。

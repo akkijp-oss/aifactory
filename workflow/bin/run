@@ -43,7 +43,7 @@ import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
 KIT = HERE / "kit"
-sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh
 
 def die(msg, code=1):
     print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
@@ -154,24 +154,13 @@ class PrepareFailed(RuntimeError):
     「環境起因の赤」を直そうとして時間を焼くだけなので、工程を 1 つも始めずに終わる（チケット 330）"""
 
 
-SECRET_LINE = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY)\s*=|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-", re.I)
-
-def scrub(text):
-    """秘密が混ざりうる行を落とす（子プロセスの stderr をそのまま state.json に保存するため）"""
-    return "\n".join(l for l in text.splitlines() if not SECRET_LINE.search(l))
+# 秘密の伏せ方とトークンの払い出しは lib/aifactory_gh.py に 1 か所（kb も同じものを使う。チケット 345）
+SECRET_LINE = gh.SECRET_LINE
+scrub = gh.scrub
 
 def ensure_gh_token(pj, repo=""):
-    """制御系で `gh` を使う前に GH_TOKEN を用意する。空なら GitHub App（ADR-0008）から PJ のリポジトリ限定の
-    1 時間トークンを払い出して自分の env に入れる（子プロセスの gh も継承する）。
-    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）"""
-    if os.environ.get("GH_TOKEN"): return None
-    r = sh(["sandbox", "gh-app", "token", pj], check=False)
-    token = ([l.strip() for l in (r.stdout or "").splitlines() if l.strip()] or [""])[-1]
-    if r.returncode != 0 or not token:
-        return (scrub(r.stderr or "").strip() or f"rc={r.returncode}")[-500:]
-    os.environ["GH_TOKEN"] = token
-    print(f"[run] GH_TOKEN: GitHub App から払い出し（{repo or pj}）", flush=True)
-    return None
+    """制御系で `gh` を使う前に GH_TOKEN を用意する（lib/aifactory_gh.py）。戻り: 払い出せなかった理由（要らない / できたときは None）"""
+    return gh.ensure_gh_token(pj, repo, log=lambda m: print(f"[run] {m}", flush=True))
 
 
 def stream(cmd, log_path, render=None, env=None):
@@ -712,6 +701,16 @@ class Run:
                 f'&& echo "CLAUDE_CODE_OAUTH_TOKEN_{fam}${{CLAUDE_KEY_NAME_{fam}:+ (pool: $CLAUDE_KEY_NAME_{fam})}}" '
                 f'|| echo CLAUDE_CODE_OAUTH_TOKEN')
 
+    POOL_KEY_RE = re.compile(r"\(pool: ([A-Za-z0-9._-]+)\)")
+
+    def report_key_launch(self, key_line):
+        """鍵プールの鍵で claude を起動したことを制御系の pool に報告する（`sandbox keys used <名前>`。ADR-0044）。
+        pool の uses は「割り当てた回数」で実使用と違ったので（2026-09-10）、起動の回数は runner が数える。失敗しても run は止めない"""
+        m = self.POOL_KEY_RE.search(key_line or "")
+        if not m or self.dry: return
+        r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        if r.returncode: self.log(f"keys used {m.group(1)}: 報告できなかった（rc={r.returncode}）")
+
     def agent_command(self, prompt_path, model, timeout_min):
         computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
         return (f"cd $SANDBOX_APP_DIR && {self.token_env_prefix(model)}timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
@@ -740,6 +739,7 @@ class Run:
         fam = self.token_family(model)
         key = self.sb(self.key_probe_command(fam), check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
         self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
+        self.report_key_launch(key)
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"
         self.scp_to(pf, prompt_path)

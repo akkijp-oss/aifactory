@@ -59,6 +59,7 @@ workers/bin/computer close desktop-...
 | Symbols | `=` `-` `+` `,` `.` `/` `;` `'` `[` `]` `\` `` ` `` |
 
 - `WIN` and `CMD` both mean the local meta key (Windows key on Windows, Command on Mac, Super on Linux). Sending `CMD` does not fail on Windows.
+- On Linux `CMD`/`WIN` is Super, which most applications do not treat as suppressing text input (`CMD`+`SHIFT`+`=` types a `+` instead of acting as a shortcut). Send Linux shortcuts with `CTRL` or `ALT`.
 - `+` has no physical key, so it is sent as the `=` key with `SHIFT`. Passing `SHIFT` and `=` explicitly does the same thing.
 - Symbol positions assume a **US layout**. On a guest with a JIS or other layout, symbol keys produce different characters.
 - An unknown name returns an error that lists every accepted name (`unsupported key: <name>; supported: ...`). Pick a name from that list instead of guessing again.

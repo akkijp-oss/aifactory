@@ -61,3 +61,5 @@
 - [0047: `--resume` の開始工程は `next` ではなく工程履歴から決め、続きが無い run は VM に触る前に止める](0047-resume-start-step-from-history.md)
 - [0048: チケットの `note` は先頭の `[run] ` 行だけが機械のもので、残りの行は人のもの](0048-run-note-line-keeps-human-note.md)
 - [0049: pull worker を他の run が使っているのは「待てば解ける失敗」（`PoolBusy`）として扱う](0049-pull-worker-lease-wait-is-pool-busy.md)
+- [0050: 「PR がどうなったか」は GitHub を正本に kb sync が見る（gh が使えなければ黙って飛ばす）](0050-pr-state-from-github-in-kb-sync.md)
+- [0051: run の工程遷移は run_wait で待つ／経過秒とゲート一覧は表示側で導く](0051-mcp-run-wait-and-derived-run-progress.md)
