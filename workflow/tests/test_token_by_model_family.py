@@ -142,3 +142,35 @@ class RunnerTokenFamilyTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RunnerReportsPoolLaunchTest(unittest.TestCase):
+    """鍵プールの鍵で起動したら `sandbox keys used <名前>` を呼ぶ（uses は割り当て回数で実使用と違った。2026-09-10）"""
+
+    def fake_run(self):
+        r = run.Run.__new__(run.Run); r.project = {}; r.work = '/home/dev/work/1'; r.dry = False
+        r.logs = []; r.log = lambda m: r.logs.append(m)
+        return r
+
+    def test_pool_name_in_the_probe_line_is_reported(self):
+        calls = []
+        real = run.sh
+        run.sh = lambda cmd, **kw: (calls.append(cmd), type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})())[1]
+        try:
+            r = self.fake_run()
+            r.report_key_launch('CLAUDE_CODE_OAUTH_TOKEN_FABLE (pool: novel_akkijp)')
+            r.report_key_launch('CLAUDE_CODE_OAUTH_TOKEN_OPUS')             # プール以外は報告しない
+            r.report_key_launch('CLAUDE_CODE_OAUTH_TOKEN')
+        finally:
+            run.sh = real
+        self.assertEqual(calls, [['sandbox', 'keys', 'used', 'novel_akkijp']])
+
+    def test_a_failed_report_is_logged_but_does_not_raise(self):
+        real = run.sh
+        run.sh = lambda cmd, **kw: type('R', (), {'returncode': 1, 'stdout': '', 'stderr': 'x'})()
+        try:
+            r = self.fake_run()
+            r.report_key_launch('CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: k1)')
+        finally:
+            run.sh = real
+        self.assertTrue(any('keys used k1' in m for m in r.logs))

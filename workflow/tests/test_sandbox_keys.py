@@ -101,6 +101,25 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertTrue(k['enabled']); self.assertEqual(k['uses'], 0); self.assertIsNone(k['last_used'])
         self.assertEqual(k['note'], 'Fable 用')
 
+    def test_used_counts_launches_apart_from_assignments(self):
+        """`keys used <名前>` は runner が claude を起動した回数（launches）を数える。take の割り当て（uses）とは別（2026-09-10）"""
+        self.add('fable-main', '--fable', token='fake-token-secret-1234')
+        for _ in range(3):
+            r = self.keys_cmd('used', 'fable-main')
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('launches 3', r.stdout)
+        j = json.loads(self.keys_cmd('list', '--json').stdout)['keys'][0]
+        self.assertEqual(j['launches'], 3); self.assertEqual(j['uses'], 0)
+        self.assertRegex(j['last_launched'], r'^\d{4}-\d\d-\d\dT')
+        r = self.keys_cmd('list')
+        self.assertIn('LAUNCHES', r.stdout); self.assertIn('ASSIGNED', r.stdout)
+
+    def test_used_with_an_unknown_name_does_not_fail(self):
+        """消した鍵を古い run が報告してきても runner を止めない"""
+        r = self.keys_cmd('used', 'gone')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('数えない', r.stdout)
+
     def test_list_shows_the_flags_and_only_the_last_four_characters(self):
         self.add('fable-main', '--fable', token='fake-token-secret-1234')
         self.add('both', '--fable', '--other', token='fake-token-secret-5678')

@@ -558,7 +558,7 @@ async function viewKeys() {
   const rows = d.keys.map(k => `<tr><td class="mono">${esc(k.name)}${k.note ? `<div class="help">${esc(k.note)}</div>` : ''}</td>
       <td>${flag(k, 'fable')}</td><td>${flag(k, 'other')}</td>
       <td><input type="checkbox" data-act="key-enabled" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}" ${k.enabled ? 'checked' : ''} aria-label="${esc(T.th.keyEnabled)}"></td>
-      <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_used ? `${fmtT(k.last_used)}（${esc(since(k.last_used))}）` : `<span class="help">${esc(T.keys.never)}</span>`}</td><td>${k.uses}</td>
+      <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_launched ? `${fmtT(k.last_launched)}（${esc(since(k.last_launched))}）` : `<span class="help">${esc(T.keys.never)}</span>`}</td><td title="${esc(tt(T.keys.assigned, { n: k.uses }))}">${k.launches == null ? 0 : k.launches}</td>
       <td>${k.in_use.map(x => `<a href="#/ticket/${esc(x)}" class="mono">${esc(x)}</a>`).join('、')}</td>
       <td class="nw"><button data-act="key-token" data-name="${esc(k.name)}">${esc(T.btn.keyToken)}</button>
         <button class="danger" data-act="key-rm" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}">${esc(T.btn.keyRemove)}</button></td></tr>`).join('');
@@ -566,7 +566,7 @@ async function viewKeys() {
     <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.keys.count, { n: d.keys.length }))}</small></h2>
       ${d.error ? `<div class="err">${esc(T.help.keysError)}</div>` : ''}
       <div class="help">${esc(T.help.keysHow)}</div>
-      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastUsed)}</th><th class="nw">${esc(T.th.uses)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
+      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastLaunched)}</th><th class="nw">${esc(T.th.launches)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
       <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysSameTask)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
       <div class="help">${esc(T.help.keysFile)} <span class="mono">${esc(d.keys_file)}</span></div></div>
     <div class="panel"><h2>${esc(T.h.keyAdd)}<small>sandbox keys add</small></h2>

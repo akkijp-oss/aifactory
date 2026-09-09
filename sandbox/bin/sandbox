@@ -331,7 +331,10 @@ resolve_gh_token() {
 # ---------- 鍵プール（keys.json。ADR-0044）
 # 制御系に名前付きの Claude の鍵を並べ、take / reset / reinject が系統ごとに 1 本ずつ選ぶ。
 # 鍵には「fable 許可（allow.fable）」「fable 以外許可（allow.other）」のフラグがあり、Fable 用と Opus / Sonnet / Haiku 用を分けられる。
-#   書式: {"keys":[{name, token, allow:{fable,other}, enabled, note, issued:"YYYY-MM-DD", last_used:"<ISO 8601 offset>|null", uses:n}]}
+#   書式: {"keys":[{name, token, allow:{fable,other}, enabled, note, issued:"YYYY-MM-DD", last_used:"<ISO 8601 offset>|null", uses:n,
+#                    launches:n, last_launched:"<ISO 8601 offset>|null"}]}
+#   uses / last_used = take / reinject でその鍵を割り当てた回数と時刻（選ぶ順番に使う）。launches / last_launched = runner が実際に
+#   その鍵で claude を起動した回数と時刻（`sandbox keys used <名前>`。使用量の目安はこちら）
 #   選び方: その task が前に使った鍵（まだ enabled でフラグが合えば）→ 無ければ候補のうち last_used が最古（同値は名前順）
 #   合う鍵が 1 本も無い系統は PJ / 全体の env の鍵をそのまま使う（プールが空なら挙動は今までと同じ。互換）
 # 鍵の値を触るのはこの区画と inject_env だけ。表示・ログ・console の応答には名前と末尾 4 文字しか出さない。
@@ -367,6 +370,10 @@ _pool_assign() { # group name token
     fable) _pool_fable="$2"; CLAUDE_CODE_OAUTH_TOKEN_FABLE="$3" ;;
     other) _pool_other="$2"; CLAUDE_CODE_OAUTH_TOKEN_OPUS="$3"; CLAUDE_CODE_OAUTH_TOKEN_SONNET="$3"; CLAUDE_CODE_OAUTH_TOKEN_HAIKU="$3" ;;   # 無印は _pool_apply_locked が埋める
   esac
+}
+_keys_mark_launched() { # name: runner が実際に claude を起動した回数（ロックの中で読み書きする）
+  keys_write "$(keys_load | jq --arg n "$1" --arg t "$(date -Iseconds)" \
+    '.keys |= map(if .name==$n then (.last_launched=$t | .launches=((.launches // 0)+1)) else . end)')"
 }
 _pool_mark_used() { # name
   keys_write "$(keys_load | jq --arg n "$1" --arg t "$(date -Iseconds)" \
@@ -452,13 +459,14 @@ keys_json_view() {
        name: $n,
        allow: {fable: (.allow.fable == true), other: (.allow.other == true)},
        enabled: (.enabled != false), tail4: ((.token // "")[-4:]),
-       issued: (.issued // null), last_used: (.last_used // null), uses: (.uses // 0), note: (.note // ""),
+       issued: (.issued // null), last_used: (.last_used // null), uses: (.uses // 0),
+       launches: (.launches // 0), last_launched: (.last_launched // null), note: (.note // ""),
        in_use: [ $st | to_entries[] | select(((.value.keys.fable // "")==$n) or ((.value.keys.other // "")==$n)) | .key ]
      } ]}'
 }
 
 _keys_usage() {
-  die "usage: sandbox keys list [--json] / keys add <名前> [--fable] [--other] [--note …] / keys set <名前> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <名前> [--force] / keys token <名前>
+  die "usage: sandbox keys list [--json] / keys add <名前> [--fable] [--other] [--note …] / keys set <名前> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <名前> [--force] / keys token <名前> / keys used <名前>（runner が起動を報告する）
   --fable = Fable に使う（計画・設計・レビューの工程）  --other = Opus・Sonnet・Haiku に使う（実装・調査の工程）。両方でも可。トークンは stdin か対話で入れる（コマンド行に書かない）"
 }
 # 鍵の値は $_keys_token_in に置き、jq へは環境変数で渡す（コマンド行に書くと ps で他人に見える）
@@ -502,17 +510,24 @@ cmd_keys() {
         echo "鍵はまだ登録されていません（${KEYS_FILE}）。sandbox keys add <名前> --fable --other か、console の「鍵」画面で登録します。無い間は env ファイルの鍵（sandbox token set。非推奨）を使います"
         return 0
       fi
-      local fmt='%-20s %-5s %-11s %-7s %-8s %-10s %-25s %-4s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る。FABLE / OPUS/SONNET = その用途に使うか
+      local fmt='%-20s %-5s %-11s %-7s %-8s %-10s %-8s %-25s %-8s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る。FABLE / OPUS/SONNET = その用途に使うか
       # shellcheck disable=SC2059
-      printf "$fmt" NAME FABLE OPUS/SONNET ENABLED TAIL ISSUED LAST_USED USES IN_USE
-      local n f o e t i l u iu
-      while IFS=$'\t' read -r n f o e t i l u iu; do
+      printf "$fmt" NAME FABLE OPUS/SONNET ENABLED TAIL ISSUED ASSIGNED LAST_LAUNCHED LAUNCHES IN_USE
+      local n f o e t i u ll la iu
+      while IFS=$'\t' read -r n f o e t i u ll la iu; do
         # shellcheck disable=SC2059
-        printf "$fmt" "$n" "$f" "$o" "$e" "$t" "$i" "$l" "$u" "$iu"
+        printf "$fmt" "$n" "$f" "$o" "$e" "$t" "$i" "$u" "$ll" "$la" "$iu"
       done < <(jq -r '.keys[] | [ .name, (if .allow.fable then "yes" else "no" end), (if .allow.other then "yes" else "no" end),
-                                  (if .enabled then "yes" else "no" end), ("…" + .tail4), (.issued // "-"), (.last_used // "-"),
-                                  (.uses|tostring), (if (.in_use|length) > 0 then (.in_use|join(",")) else "-" end) ] | @tsv' <<< "$v")
-      echo "file: ${KEYS_FILE}（FABLE = Fable に使う / OPUS/SONNET = Opus・Sonnet・Haiku に使う。console の「鍵」画面と同じ）" ;;
+                                  (if .enabled then "yes" else "no" end), ("…" + .tail4), (.issued // "-"), (.uses|tostring),
+                                  (.last_launched // "-"), (.launches|tostring), (if (.in_use|length) > 0 then (.in_use|join(",")) else "-" end) ] | @tsv' <<< "$v")
+      echo "file: ${KEYS_FILE}（FABLE = Fable に使う / OPUS/SONNET = Opus・Sonnet・Haiku に使う。ASSIGNED = take / reinject で割り当てた回数、LAUNCHES = runner が実際にその鍵で claude を起動した回数。console の「鍵」画面と同じ）" ;;
+    used)
+      # runner が「この鍵で claude を起動した」と報告する口（ADR-0044）。uses（割り当て回数）とは別に launches を数える。
+      # 無い名前は黙って 0 で返す（鍵を消した後に古い run が報告してきても runner を止めない）
+      local name=${1:-}; [[ -n "$name" ]] || _keys_usage
+      [[ -n "$(keys_get "$name")" ]] || { echo "[keys] ${name}: 無い（消された鍵か）。数えない"; return 0; }
+      with_state_lock _keys_mark_launched "$name"
+      echo "[keys] ${name}: launches $(keys_load | jq -r --arg n "$name" 'first(.keys[] | select(.name==$n) | .launches) // 0')" ;;
     add)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage

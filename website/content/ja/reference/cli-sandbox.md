@@ -106,9 +106,10 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | コマンド | 何をするか |
 |---|---|
 | `keys add <名前> [--fable] [--other] [--note …]` | 鍵を登録する。値は対話入力（エコー無し）か標準入力から受け取る。少なくとも一方の用途が要る。名前は `[A-Za-z0-9._-]` の 1〜40 文字で一意 |
-| `keys list [--json]` | 名前・用途・有効かどうか・トークンの末尾 4 文字・登録日・最後に使った日時・使用回数・使用中のチケット。値は出さない |
+| `keys list [--json]` | 名前・用途・有効かどうか・トークンの末尾 4 文字・登録日・割り当て回数（`ASSIGNED` = take / reinject で鍵を渡した回数）・最後に起動した日時・起動回数（`LAUNCHES` = runner が実際にその鍵で `claude` を起動した回数。使用量の目安はこちら）・使用中のチケット。値は出さない |
 | `keys set <名前> [--fable=on\|off] [--other=on\|off] [--enable\|--disable] [--note …]` | 用途・有効・メモを変える。有効を外したときは、その鍵を使っている VM への `reinject` を案内する |
-| `keys token <名前>` | トークンだけ入れ替える（名前・用途・使用回数はそのまま）。実行中の VM には `reinject` で反映する |
+| `keys token <名前>` | トークンだけ入れ替える（名前・用途・回数はそのまま）。実行中の VM には `reinject` で反映する |
+| `keys used <名前>` | runner が agent を起動するたびに呼ぶ報告口（起動回数と最後に起動した日時を進める）。人が打つことはない |
 | `keys rm <名前> [--force]` | 消す。実行中の VM が使っていれば `--force` が要る |
 
 選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途（runner が `--need=fable,other` で渡す）の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（下の `token set`。非推奨）を使います。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。

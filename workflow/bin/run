@@ -701,6 +701,16 @@ class Run:
                 f'&& echo "CLAUDE_CODE_OAUTH_TOKEN_{fam}${{CLAUDE_KEY_NAME_{fam}:+ (pool: $CLAUDE_KEY_NAME_{fam})}}" '
                 f'|| echo CLAUDE_CODE_OAUTH_TOKEN')
 
+    POOL_KEY_RE = re.compile(r"\(pool: ([A-Za-z0-9._-]+)\)")
+
+    def report_key_launch(self, key_line):
+        """鍵プールの鍵で claude を起動したことを制御系の pool に報告する（`sandbox keys used <名前>`。ADR-0044）。
+        pool の uses は「割り当てた回数」で実使用と違ったので（2026-09-10）、起動の回数は runner が数える。失敗しても run は止めない"""
+        m = self.POOL_KEY_RE.search(key_line or "")
+        if not m or self.dry: return
+        r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        if r.returncode: self.log(f"keys used {m.group(1)}: 報告できなかった（rc={r.returncode}）")
+
     def agent_command(self, prompt_path, model, timeout_min):
         computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
         return (f"cd $SANDBOX_APP_DIR && {self.token_env_prefix(model)}timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
@@ -729,6 +739,7 @@ class Run:
         fam = self.token_family(model)
         key = self.sb(self.key_probe_command(fam), check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
         self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
+        self.report_key_launch(key)
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"
         self.scp_to(pf, prompt_path)
