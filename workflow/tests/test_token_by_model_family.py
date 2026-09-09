@@ -114,6 +114,18 @@ class RunnerTokenFamilyTest(unittest.TestCase):
         self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN', cmd)
         self.assertIn('&& timeout 60m claude -p', cmd)
 
+    def test_the_key_in_the_log_names_the_pool_key_when_take_chose_one(self):
+        """ログの key= は名前だけ。take が鍵プール（#379）から選んでいれば `(pool: <名前>)` が付く"""
+        cmd = run.Run.key_probe_command('OPUS')
+        for env, want in (({'CLAUDE_CODE_OAUTH_TOKEN': 'base'}, 'CLAUDE_CODE_OAUTH_TOKEN'),
+                          ({'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'x'}, 'CLAUDE_CODE_OAUTH_TOKEN_OPUS'),
+                          ({'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'x', 'CLAUDE_KEY_NAME_OPUS': 'opus-a'},
+                           'CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)')):
+            r = subprocess.run(['bash', '-c', cmd], text=True, env={'PATH': os.environ['PATH'], **env},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(r.stdout.strip(), want, r.stderr)
+            self.assertNotIn('x', r.stdout.replace('CLAUDE_CODE_OAUTH_TOKEN', ''))   # 鍵の値は出さない
+
     def test_the_prefix_falls_back_in_a_real_shell(self):
         """VM と同じ bash で展開して、系統の鍵が無ければ従来の鍵、あれば系統の鍵が claude に渡ること"""
         prefix = self.fake_run().token_env_prefix('claude-opus-5')
