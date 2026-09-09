@@ -46,3 +46,4 @@
 - [0032: PR を作る直前に base を取り込む／`CHANGELOG` は `changelog.d` に分ける](0032-sync-base-before-pr-and-changelog-d.md)
 - [0033: 使われていないプール VM は止める。起こすのは `take` の役目](0033-stop-idle-pool-vms.md)
 - [0034: ワーカーのログ上限は切り捨てで扱う。画像の base64 は記録前に置き換える](0034-worker-log-limit-truncates-and-strips-images.md)
+- [0035: idle-stop は 24 時間で候補にし、候補が 10 台を超えた分だけ古い順に止める](0035-idle-stop-candidates-and-cutoff.md)

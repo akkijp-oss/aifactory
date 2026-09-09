@@ -52,7 +52,7 @@ When you add permissions to the App (such as Actions: Read), each installation m
 
 ### VMs nobody uses stop by themselves
 
-A pool VM that is not lent out is stopped 3 hours (default) after it was last used. The systemd timer `aifactory-idle-stop.timer` on the control plane calls `sandbox idle-stop` every 15 minutes (ADR-0033). A `stopped` STATUS in `sandbox ls` is therefore usually power saving, not a fault; the table is followed by `[idle-stop] N 台が節電で停止中`.
+A pool VM that is not lent out becomes a **stop candidate** 24 hours (default) after it was last used. Only when there are more than 10 candidates (default; the cutoff) are the oldest ones beyond that number stopped; with 10 or fewer candidates nothing is stopped. The systemd timer `aifactory-idle-stop.timer` on the control plane calls `sandbox idle-stop` every 15 minutes (ADR-0033 / ADR-0035). A `stopped` STATUS in `sandbox ls` is therefore usually power saving, not a fault; the table is followed by `[idle-stop] N 台が節電で停止中`.
 
 **You do not need to start them by hand.** The next `take` does it and logs `[start] vm <vmid>: 停止中だったので起動した（N 秒）` (30–60 seconds extra).
 
@@ -61,7 +61,7 @@ sandbox idle-stop --dry-run              # see what would be stopped, without st
 journalctl -u aifactory-idle-stop        # the timer's log
 ```
 
-To keep VMs running, put `SB_IDLE_STOP_HOURS=0` in `~/.config/sandbox/env` (everything) or in `~/.config/sandbox/pj/<pj>.env` (that project only). To change the window, write the number of hours instead of `3`.
+To keep VMs running, put `SB_IDLE_STOP_HOURS=0` in `~/.config/sandbox/env` (everything) or in `~/.config/sandbox/pj/<pj>.env` (that project only). To change the window, write the number of hours instead of `24`; to change the cutoff, set `SB_IDLE_STOP_KEEP=<count>` (global only; `0` stops every candidate).
 
 ## Updating templates
 
