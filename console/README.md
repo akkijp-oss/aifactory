@@ -80,7 +80,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
 
-`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、`sandbox_release` / `job_stop` / `computer_close` には `destructiveHint`）を返す。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされる（ADR-0036）。
+`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、`sandbox_release` / `job_stop` / `computer_close` には `destructiveHint`）を返す。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされる（ADR-0037）。
 
 ### 運転の型
 

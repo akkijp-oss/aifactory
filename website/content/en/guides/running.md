@@ -44,6 +44,7 @@ kanban/bin/kb run 204 --workflow chore   # run once with a different workflow (t
 kanban/bin/kb run 204 --dry-run          # validate definitions and assemble prompts only
 kanban/bin/kb run 204 --keep             # do not release the VM afterwards (to look inside)
 kanban/bin/kb run 204 --resume           # continue from the next step in state.json on the VM already lent
+kanban/bin/kb run 204 --from             # redo a run that ended at human, on a new VM, from where it stopped (below)
 kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is full (60 minutes; `--wait 30` for 30)
 ```
 
@@ -89,13 +90,31 @@ sandbox url 204                              # the app URL (opens in a browser)
 
 - **Stop**: Ctrl-C the runner process. The VM stays lent, so either return it with `sandbox release <id>` or continue with `--resume`
 - **Failed for VM reasons** (ssh dropped, token expired, and so on): `kb reopen <id>` → `kb run <id>`. A rerun on the same day moves the previous `runs/` directory to `-attemptN` first
-- **The agent's output was poor and the run went to `human`**: read `work/` and `agent-*.log`, fix the ticket, then `kb reopen` → `kb run`. The work is on `origin/sandbox/<id>-<wf>-wip` if you want to keep it
+- **The agent's output was poor and the run went to `human`**: read `work/` and `agent-*.log`, fix the ticket, then `kb reopen` → `kb run`. The work is on `origin/sandbox/<id>-<wf>-wip` if you want to keep it. When the findings are small, continue from where it stopped with `kb run <id> --from` instead of starting over (below)
 - **You changed a definition** (project.yml / workflow yml / roles): it does not affect a running run. It applies from the next run
+
+### Continuing a stopped run (`--from`)
+
+A run that ended at `human` can be redone **on a new VM, from where it stopped**. Research and design do not run again.
+
+```bash
+kb run 204 --from                                   # from the step in the record (default)
+kb run 204 --from implement                         # from a step you name
+kb run 204 --from implement --branch sandbox/204-feature-wip   # and from a branch you name
+```
+
+The exact line to type is shown in the ticket's note, in the "Outcome" panel of the run page in the console, and in the runs list of `ticket_show`.
+
+- The work continues from the recorded `wip_branch` (the branch the runner pushed when it stopped at `human`). `--branch` overrides it
+- The previous `work/plan.md` and friends are copied to the new VM, and the previous `review.md` goes into the first prompt as "what the last run produced (fix this)"
+- The previous run stays as it was, and the new run's `state.json` records `resumed_from`. The loop counters start over
+- It is a different thing from `--resume` (continue on the **same** VM while it is still lent), and the two cannot be combined
+- Do not resume the same ticket twice at once: the wip branch name is derived from the ticket and the workflow, so whichever finishes last overwrites the other
 
 ## Calling the runner directly
 
 ```bash
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=name]
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run
 ```
 

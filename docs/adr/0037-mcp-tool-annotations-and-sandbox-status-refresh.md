@@ -1,4 +1,4 @@
-# ADR 0036: MCP のツールに annotations を付ける／`sandbox_status` は古ければ裏で `sandbox ls` を起こす
+# ADR 0037: MCP のツールに annotations を付ける／`sandbox_status` は古ければ裏で `sandbox ls` を起こす
 
 - 状態: Accepted（ADR-0015 / ADR-0028 を補う。既存の決定は変えない）
 - 日付: 2026-09-09

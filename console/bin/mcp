@@ -70,7 +70,7 @@ def t_read_file(a):
     data, err = core.read_file(a.get("path") or "", tail=int(a["tail"]) if a.get("tail") else None, offset=int(a["offset"]) if a.get("offset") else None)
     if not data: raise core.ApiError(err, 403)
     return data
-def t_sandbox_status(a): return core.sandbox_ls_refresh_if_stale(core.sandbox_view())   # 古ければ裏で sandbox ls を起こす（ADR-0036）
+def t_sandbox_status(a): return core.sandbox_ls_refresh_if_stale(core.sandbox_view())   # 古ければ裏で sandbox ls を起こす（ADR-0037）
 def t_sandbox_ls(a): return core.op_sandbox_ls()
 def t_sandbox_release(a): return core.op_sandbox_release(a)
 def t_job_list(a): return {"jobs": core.JobStore.list()[: int(a.get("limit") or 30)]}
@@ -131,6 +131,8 @@ TOOLS = [
              "dry_run": {**BOOL, "description": "sync 専用。既定 true = 書かずに前後を返す。false を明示したときだけ状態とメモを上書きする"}}, ["id", "action"]), t_ticket_action),
     ("ticket_run", "チケットを runner で回す（kb run）。VM を貸し出し step を順に実行し PR まで進める。ジョブを返す。dry_run なら VM を触らず依頼文だけ組む",
      schema({"id": INT, "dry_run": BOOL, "workflow": {**STR, "description": "種別と違う workflow で回すとき"}, "keep": {**BOOL, "description": "終了後 VM を返却しない"}, "resume": {**BOOL, "description": "貸出中の VM で続きから"},
+             "from_step": {**STR, "description": "human で止まった run を新しい VM で、この step からやり直す（research / design は走らない）。記録の wip ブランチの続きから始まり、前回の work/*.md と review.md の指摘が依頼文に入る。空文字列なら記録の resume_step に任せる。打つべき値は ticket_show の runs[].resume に出る"},
+             "from_branch": {**STR, "description": "from_step のとき続きに使うブランチ。既定は記録の wip_branch"},
              "wait": {**INT, "description": "VM に空きが無いとき最大 n 分待つ（既定は待たずに失敗）"}}, ["id"]), t_ticket_run),
     ("intake", "自由文から起票する（glue/bin/intake。LLM 1 回で pj / kind / 題名 / 完了条件を決める）。ジョブを返す。pj / kind が分かっていれば渡す",
      schema({"text": STR, "pj": STR, "kind": STR, "dry_run": {**BOOL, "description": "起票せず判定 JSON だけ"}}, ["text"]), t_intake),
@@ -154,14 +156,14 @@ TOOL_MAP = {n: fn for n, _, _, fn in TOOLS}
 
 # ---------- annotations（tools/list に載せる手掛かり。MCP 2025-03-26 以降の任意項目で、古いクライアントは無視する）
 # readOnlyHint が無いツールを Claude Code は「並列に呼べない」とみなし、同じターンの呼び出しを直列に送る。
-# サーバーが job_wait を別スレッドに逃がしていても（ADR-0028）、これが無いと呼び手の側で塞がる（チケット 336・ADR-0036）
+# サーバーが job_wait を別スレッドに逃がしていても（ADR-0028）、これが無いと呼び手の側で塞がる（チケット 336・ADR-0037）
 RO = {"readOnlyHint": True}                                  # core を書かない読み取り
 RW = {"readOnlyHint": False}                                 # 状態を変える（ジョブを起こすものを含む）
 DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}   # 取り返しがつかない（VM を巻き戻す・走っているものを止める）
 ANNOTATIONS = {
     "overview": ("概況", RO), "ticket_list": ("チケット一覧", RO), "ticket_show": ("チケット 1 件", RO),
     "run_list": ("実行記録の一覧", RO), "run_show": ("実行記録 1 件", RO), "read_file": ("記録のファイルを読む", RO),
-    "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0036）
+    "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0037）
     "job_list": ("ジョブ一覧", RO), "job_show": ("ジョブ 1 件", RO), "job_wait": ("ジョブを待つ", RO),
     "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO),
     "ticket_new": ("チケットを起票", RW), "ticket_action": ("チケットを進める・直す", RW),

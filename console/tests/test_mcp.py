@@ -208,7 +208,17 @@ class McpTest(unittest.TestCase):
         self.assertIn("dry_run", props, "ticket_action のスキーマに dry_run が無い（呼び手が書く方法を見つけられない）")
         self.assertIn("sync", props["dry_run"].get("description", ""))
 
-    def test_12_job_wait_does_not_block_ticket_show(self):
+    def test_12_ticket_run_can_restart_from_a_step(self):
+        """human で止まった run を続きから回す口が MCP から見えること（チケット 333）。
+        説明に「打つべき値がどこに出るか」まで書く（呼び手は step 名を推し測れない）"""
+        props = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}["ticket_run"]["inputSchema"]["properties"]
+        for k in ("from_step", "from_branch"):
+            self.assertIn(k, props, f"ticket_run のスキーマに {k} が無い（呼び手が続きから回せない）")
+            self.assertTrue(props[k].get("description"))
+        self.assertIn("ticket_show", props["from_step"]["description"])
+        self.assertIn("wip", props["from_branch"]["description"])
+
+    def test_13_job_wait_does_not_block_ticket_show(self):
         """job_wait の待ちで ticket_show が塞がれない（チケット 336 の 1 番目。PM は 2026-09-08 に塞がれた）。
 
         ticket_show は sync_preview のために kb を 1 回起動するので、「別スレッドに逃がす」だけでなく
@@ -248,7 +258,7 @@ class McpTest(unittest.TestCase):
         self.assertEqual(second["id"], wait_id)
         self.assertEqual(json.loads(second["result"]["content"][0]["text"])["job"]["state"], "done")
 
-    def test_13_tools_carry_annotations(self):
+    def test_14_tools_carry_annotations(self):
         """tools/list に annotations を載せる（336）。
 
         Claude Code は readOnlyHint の無いツールを「並列に呼べない」とみなして同じターンの呼び出しを直列に送る。
@@ -290,9 +300,9 @@ class McpTest(unittest.TestCase):
         c = McpClient(env); self.addCleanup(c.close)
         return c
 
-    def test_14_sandbox_status_refreshes_a_stale_ls(self):
+    def test_15_sandbox_status_refreshes_a_stale_ls(self):
         """`sandbox ls` が古ければ、sandbox_status が裏で取り直しを起こす（336 の 2 番目）"""
-        c = self.client("14")
+        c = self.client("15")
         err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
         self.assertTrue(d["ls_refreshing"], "一度も ls を取っていないのに取り直しを起こしていない")
         jid = d["ls_refresh_job"]; self.assertTrue(jid)
@@ -311,19 +321,19 @@ class McpTest(unittest.TestCase):
         err, jl = c.tool("job_list"); self.assertFalse(err)
         self.assertEqual(len([j for j in jl["jobs"] if j["kind"] == "sandbox-ls"]), 1)
 
-    def test_14b_sandbox_status_says_why_it_could_not_refresh(self):
+    def test_15b_sandbox_status_says_why_it_could_not_refresh(self):
         """取り直しに失敗しても sandbox_status 自体は成功で返す（読めた分は返す）"""
-        c = self.client("14b", fake_sandbox=False)
+        c = self.client("15b", fake_sandbox=False)
         err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
         self.assertFalse(d["ls_refreshing"]); self.assertTrue(d.get("ls_refresh_error"))
 
-    def test_15_sandbox_status_lent_comes_from_the_state_file(self):
+    def test_16_sandbox_status_lent_comes_from_the_state_file(self):
         """貸出中 VM の IP を MCP から引ける（336 の 3 番目）。台帳は SANDBOX_STATE で差し替えられる"""
-        state = self.tmp / "state-15.json"
+        state = self.tmp / "state-16.json"
         lease = {"vmid": 9204, "name": "sb-kumitate-01", "ip": "10.77.1.4", "pj": PJ,
                  "since": "2026-09-08T10:00:00+09:00", "phase": "ready"}
         state.write_text(json.dumps({"336": lease}, ensure_ascii=False), encoding="utf-8")
-        c = self.client("15", fake_sandbox=False, state=state)
+        c = self.client("16", fake_sandbox=False, state=state)
 
         err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
         self.assertEqual(d["state_file"], str(state)); self.assertTrue(d["state_exists"]); self.assertIsNone(d["state_error"])

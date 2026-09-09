@@ -44,6 +44,7 @@ kanban/bin/kb run 204 --workflow chore   # 今回だけ別の workflow で回す
 kanban/bin/kb run 204 --dry-run          # 定義と依頼文の確認だけ
 kanban/bin/kb run 204 --keep             # 終わっても VM を返さない（中を見たいとき）
 kanban/bin/kb run 204 --resume           # 貸出中の VM で、state.json の次の step から続ける
+kanban/bin/kb run 204 --from             # 人間待ちで終わった run を、新しい VM で続きから（下）
 kanban/bin/kb run 204 --wait             # プールに空きがなければ、空くまで待つ（既定 60 分。`--wait 30` で 30 分）
 ```
 
@@ -89,13 +90,31 @@ sandbox url 204                              # アプリの URL（ブラウザ�
 
 - **止める**: runner のプロセスを Ctrl-C。VM は貸出中のまま残るので、`sandbox release <id>` で返すか、`--resume` で続けます
 - **VM 起因で落ちた**（ssh 切断、トークン失効など）: `kb reopen <id>` → `kb run <id>`。同じ日の再実行は前回の `runs/` を `-attemptN` に退避してから作ります
-- **エージェントの出力が悪くて `human` 行き**: `work/` と `agent-*.log` を読んでチケットを直し、`kb reopen` → `kb run`。成果を残したければ `origin/sandbox/<id>-<wf>-wip` にあります
+- **エージェントの出力が悪くて `human` 行き**: `work/` と `agent-*.log` を読んでチケットを直し、`kb reopen` → `kb run`。成果を残したければ `origin/sandbox/<id>-<wf>-wip` にあります。指摘が軽ければ、最初からやり直さず `kb run <id> --from` で続きから回せます（下）
 - **定義を変えた**（project.yml / ワークフローの YAML / roles）: 実行中の run には効きません。次の run から
+
+### 止まった run を続きから回す（`--from`）
+
+人間待ちで終わった run は、**新しい VM で、その run の続きから**やり直せます。調査と設計は走りません。
+
+```bash
+kb run 204 --from                                   # 記録に残った工程から（既定）
+kb run 204 --from implement                         # 工程を指定して
+kb run 204 --from implement --branch sandbox/204-feature-wip   # 続きに使うブランチも指定して
+```
+
+打つべき 1 行は、チケットのメモ・コンソールの run 画面の「結果」・`ticket_show` の実行記録にそのまま出ます。
+
+- 続きは記録の `wip_branch`（人間待ちのときに runner が退避したブランチ）から始まります。`--branch` はその上書きです
+- 前回の `work/plan.md` などは新しい VM に持ち込み、前回の `review.md` は最初の依頼文に「前回の結果（直すこと）」として入ります
+- 前回の run はそのまま残り、新しい run の `state.json` に `resumed_from` が入ります。戻せる回数（`loops`）は数え直しです
+- `--resume`（貸出中の**同じ** VM で続ける）とは別物で、併用はできません
+- 同じチケットを 2 つ同時に再開しないでください（退避ブランチの名前がチケットと workflow で決まるため、後から終わった方が上書きします）
 
 ## runner を直接呼ぶ
 
 ```bash
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前]
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run
 ```
 
