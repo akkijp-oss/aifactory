@@ -147,7 +147,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Disposition", ("inline" if inline else "attachment") + "; filename*=UTF-8''" + urllib.parse.quote(p.name))
-        self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+        # 添付だけは短く持たせる。チケット画面は 5 秒ごとに描き直すので、no-store だとサムネイルを毎回取り直すことになる。
+        # 同じ名前が別の中身に置き換わることはない（_unique が上書きしない）ので、消すまで中身は変わらない
+        self.send_header("Cache-Control", "private, max-age=60"); self.end_headers(); self.wfile.write(body)
 
     def api_get(self, ep, q):
         """戻り: (obj, code)"""
