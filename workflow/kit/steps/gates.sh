@@ -20,7 +20,9 @@ ip="$(jq -r --arg id "$TASK" '.[$id].ip' "$HOME/.config/sandbox/state.json")"
 scp -q -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$PROJECT_DIR/$GATES" "dev@$ip:/home/dev/gates.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-out="$(sandbox ssh "$TASK" "bash ~/gates.sh")"
+# PJ の gates.sh に base を渡す（`bin/changelog-release check --base origin/$BASE` のように base と比べるゲートがある。
+# 渡さないと既定の main と比べ、VM の origin/main はテンプレート時点で古いので、develop 向きの PJ では毎回赤になった。2026-09-10 run 347）
+out="$(sandbox ssh "$TASK" "BASE=$(printf '%q' "${BASE:-main}") bash ~/gates.sh")"
 # base で既に赤いゲート（project.yml の known_red_gates、env KNOWN_RED に空白区切り）は INFO に格下げする
 for k in ${KNOWN_RED:-}; do out="$(sed -E "s/^FAIL $k( |$)/INFO $k red (known on base; not a gate)\1/" <<< "$out")"; done
 fails="$(awk '/^FAIL/{print $2}' <<< "$out")"
@@ -93,7 +95,7 @@ restore() {                     # どこで抜けても作業ブランチへ戻�
 trap restore EXIT
 git checkout -q --detach "origin/$base" 2>/dev/null || { echo "BASE-CHECK-SKIP origin/$base を checkout できない"; exit 0; }
 echo "BASE-CHECK origin/$base $sha"
-bash "$HOME/gates.sh" "$@"
+BASE="$base" bash "$HOME/gates.sh" "$@"
 BASE_CHECK
   args=""; for g in $fails; do args="$args $(printf '%q' "$g")"; done
   base_out="$(sandbox ssh "$TASK" "bash ~/base-check.sh $(printf '%q' "$BASE") $(printf '%q' "$BRANCH")$args")"

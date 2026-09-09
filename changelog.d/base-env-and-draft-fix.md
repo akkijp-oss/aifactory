@@ -1,0 +1,2 @@
+### Fixed
+- **develop 向きの PJ で `changelog-d` ゲートが毎回赤になり、PR が draft になって自動マージが見送られるのを直す**。PJ の gates.sh は `origin/${BASE:-main}` と比べるが、kit の gates.sh が VM の中に `BASE` を渡しておらず、VM の `origin/main` はテンプレート時点で古いので CHANGELOG.md の差分が出ていた（run 347）。`BASE` を渡すようにした（base 確認の再実行でも同じ）。あわせて `pr-create.sh` の draft 判定を判定行（`=== base check:` より前）の FAIL だけにした（base 確認の記録に残る FAIL を数えると、base でも赤＝INFO に落とした回まで draft になり automerge が見送っていた）。系統別の鍵のテストは VM の env の鍵を引き継がないようにした。
