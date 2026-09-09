@@ -13,6 +13,7 @@ kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
 kb sync <id> [--run DIR]
+kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
 kb history <id>
 kb render
 ```
@@ -122,6 +123,28 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 | `finished` なし、runner が rc≠0 | blocked | runner が記録を残さず終了 rc=N |
 
 `--dry-run` ではチケットの状態を変更しません。終了コードは runner の値をそのまま返します。0 は正常終了または PR の作成完了、2 は PR がない状態での `human` 終了を表します。
+
+同じチケットを回し直すとき（今日の同じ名前の run がすでにある、または `--from` / `--branch` を付けたとき）は、メモを `再走中（attempt N・workflow W）` に置き換えます。置き換えないと、前回人間待ちで終わったときの「人間へ（wip: …）…」が実行中のメモとして残り、一覧が古い状態に見えます。前のメモは `kb history` に残ります。初回の run ではメモを触りません。
+
+### run-note
+
+```bash
+kb run-note 2026-09-06-kumitate-204 --result done --pr 300 --text "wip から PR を作ってマージした"
+```
+
+人間が run の後始末（wip ブランチから PR を作ってマージした、または打ち切った）をしたことを実行記録に残します。`runs/<run>/state.json` に `human: {at, by, result, pr_url, text}` を足すだけで、runner が確定した `result` は変えません（ADR-0039）。
+
+| 項目 | 内容 |
+|---|---|
+| `--result` | `done`（人間が仕上げた。既定）か `abandoned`（打ち切った） |
+| `--pr` | 人間が作ってマージした PR の番号。PJ 定義に `repo` があれば URL に、無ければ `#N` になります |
+| `--text` | 後始末の説明。コンソールの run 画面に出ます |
+| `--force` | すでに人間の記録がある run に書き足す（省いた項目は前の記録のまま） |
+| `by` | 環境変数 `AIFACTORY_ACTOR`、無ければ `USER` |
+
+`finished` のない（runner が動いている）run と、すでに `human` のある run（`--force` なし）は断ります。コンソールは `#/run/<name>` の「結果」に「人間が PR #n で仕上げました（完了）。」を出し、続きから回すコマンドを出さなくなります。
+
+`kb set <id> --pr N` と `kb done <id>` は、そのチケットの run が人間待ちのままで、まだ人間の記録が無ければ、同じ内容を自動で転記します（コンソールのチケット画面と MCP の `ticket_action` も同じ道を通ります）。runner 自身が作った PR は転記の対象にしません（`kb sync` からは呼びません）。転記できないときはチケットの更新だけを行い、理由を `[kb] warn:` として出します。
 
 ### sync
 

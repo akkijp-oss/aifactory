@@ -36,7 +36,10 @@ $kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]] # wor
                                                                         # --wait は VM の空きを待つ（分。既定 60）。上限超過は todo に戻す
 $kb run <id> --from [STEP] [--branch B]                                 # 人間待ちで終わった run を新しい VM で続きから（既定は記録の resume_step と wip ブランチ。--resume とは併用不可）
 $kb sync <id> [--run NAME] [--dry-run]                                  # runs/<NAME>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
+$kb run-note <run> [--result done|abandoned] [--pr N] [--text T]        # 人間の後始末（wip から PR 化・マージ／打ち切り）を runs/<run>/state.json に残す
+                                                                        # 既に記録があるときは --force を付けたときだけ書き直す
 $kb start|review|done|reopen <id> [--note TEXT]                         # 手で状態を進める
+                                                                        # done と set --pr は、紐づく run が人間待ちのままなら run 記録にも転記する
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
 $kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目（`--note ''` でメモを空に戻す）
 $kb append <id> [--section S] [--text T]                                # 本文の末尾に追記（--text が無ければ stdin）
