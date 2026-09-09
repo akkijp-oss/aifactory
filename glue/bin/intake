@@ -117,7 +117,7 @@ def ask_llm(text, pjs, kds, fixed, model, images=()):
 <<<
 {text}
 >>>
-{IMAGE_NOTE.format(names=chr(10).join("- attachments/" + n for n in images)) if images else ""}
+{IMAGE_NOTE.format(names=chr(10).join("- attachments/" + n for n in images.values())) if images else ""}
 
 ## 出力
 次の JSON だけを ```json フェンスで 1 つ出してください。他の文章は不要です。
@@ -173,7 +173,7 @@ def main():
     body = res["body"].strip() + f"\n\n---\n（intake {datetime.datetime.now().isoformat(timespec='minutes')} / model {model} / confidence {res['confidence']} / {res['reason']}）\n"
     pr = re.match(r"^pr:\s*#?(\d+)", body); cmd = [str(KB), "new", res["pj"], res["kind"], res["title"][:70], "--body", "-"]
     if pr: cmd += ["--pr", pr.group(1)]; body = re.sub(r"^pr:.*\n", "", body, count=1)
-    if a.attach: cmd += ["--attach", *a.attach]
+    for f in a.attach: cmd += ["--attach", f]      # kb new --attach は 1 回 1 ファイル（append）
     r = subprocess.run(cmd, input=body, text=True, capture_output=True, errors="replace")
     tid = r.stdout.split()[0] if r.stdout.split() and r.stdout.split()[0].isdigit() else None
     # kb new は「起票はできた・添付だけ失敗」でも id を出して rc≠0 で戻る。id が取れているならチケットは在るので、
