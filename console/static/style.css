@@ -258,3 +258,12 @@ kbd { font: 11.5px var(--mono); border: 1px solid var(--line); border-bottom-wid
 .thumb.none { display: flex; align-items: center; justify-content: center; color: var(--muted); text-transform: uppercase; text-decoration: none; }
 button.x { padding: 0 .35em; line-height: 1.4; margin-left: auto; }
 .filepic { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+
+/* 統計（チケット 382）: 数字の札と、右寄せの数表 */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.tile { background: var(--panel, #fff); border: 1px solid var(--line, #e3e6ea); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.tile b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+table.stats th.num, table.stats td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.stats td, table.stats th { vertical-align: top; }
+.btns button { margin-right: 4px; }

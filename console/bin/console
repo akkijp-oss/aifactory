@@ -178,6 +178,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         m = re.match(r"^jobs/([\w.-]+)$", ep)
         if m: return job_view(m.group(1), int(q.get("offset") or 0)), 200
         if ep == "logs": return logs_view(), 200
+        if ep == "stats": return stats_view(days=int(q["days"]) if q.get("days") else None, pj=q.get("pj") or None, include_dry=q.get("dry") == "1"), 200
         if ep == "config": return config_view(), 200
         raise ApiError("not found", 404)
 

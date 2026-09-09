@@ -74,7 +74,7 @@ WIP_TIMEOUT_MESSAGE = "wip: step timeout"
 WIP_QUOTA_MESSAGE = "wip: usage limit"
 WIP_KEY_MESSAGE = "wip: token unusable"
 PAUSE_KINDS = ("quota", "key")
-QUOTA_TEXT = re.compile(r"hit your (?:usage )?limit|usage limit reached|Claude AI usage limit|rate_limit_error|API Error: 429|"
+QUOTA_TEXT = re.compile(r"hit your (?:\w+ )?limit|usage limit reached|Claude AI usage limit|rate_limit_error|API Error: 429|"
                         r"\b429\b.{0,40}rate.?limit|overloaded_error|API Error: 529|spend limit reached|billing_error.{0,120}resets", re.I | re.S)
 KEY_TEXT = re.compile(r"credit balance (?:is )?too low|invalid api key|authentication_error|invalid_api_key|OAuth token (?:has )?(?:expired|revoked)|"
                       r"please run /login|not logged in|401 unauthorized|permission_error|billing_error|Invalid authentication", re.I)

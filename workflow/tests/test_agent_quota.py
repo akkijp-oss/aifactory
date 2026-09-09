@@ -96,6 +96,11 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(info["quota_type"], "unknown")
         self.assertIsNone(info["retry_after"])
 
+    def test_session_limit_wording_is_quota_too(self):
+        """実機 2026-09-09（kumitate 300 / 327）の文言。result は subtype success のまま is_error だけ true だった"""
+        kind, info = run.classify_agent_stop(None, {"subtype": "success", "is_error": True, "result": "You've hit your session limit · resets 2:50am (Asia/Tokyo)"}, "")
+        self.assertEqual(kind, "quota")
+
     def test_a_plain_failure_is_neither(self):
         kind, _ = run.classify_agent_stop(None, {"is_error": True, "subtype": "error_max_turns", "result": ""}, "")
         self.assertIsNone(kind)

@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
-const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
+const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', t: 'stats', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
@@ -779,6 +779,51 @@ async function viewLogs(q) {
   schedule(lgRefresh, 10000);
 }
 
+/* ---------- 統計（工程ごとの消費。チケット 382）。集計は API（core.stats_view）が済ませ、画面は並べて言い換えるだけ */
+const fmtTok = n => { n = Number(n) || 0; if (n >= 1e9) return (n / 1e9).toFixed(2) + 'G'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(0) + 'k'; return String(n); };
+const usd = x => '$' + (Number(x) || 0).toFixed(2);
+const avg = (a, b) => (b ? a / b : 0);
+async function viewStats(q) {
+  clearInterval(timer);
+  const p = new URLSearchParams(q || ''); const days = p.get('days') || '7'; const pj = p.get('pj') || ''; const dry = p.get('dry') === '1';
+  const d = await api(`stats?${days !== 'all' ? `days=${days}&` : ''}${pj ? `pj=${encodeURIComponent(pj)}&` : ''}${dry ? 'dry=1' : ''}`);
+  const t = d.total; const total = t.cost || 0;
+  const go = (k, v) => { const np = new URLSearchParams(p); if (v) np.set(k, v); else np.delete(k); location.hash = '#/stats?' + np.toString(); };
+  window._statsGo = go;
+  const periodBtn = k => `<button type="button" class="${k === days ? 'primary' : ''}" data-act="stats-period" data-v="${k}">${esc(T.stats.period[k])}</button>`;
+  const tile = (label, val, sub) => `<div class="tile"><span class="help">${esc(label)}</span><b>${val}</b>${sub ? `<span class="help">${esc(sub)}</span>` : ''}</div>`;
+  const stepCell = a => `${esc(a.step)}<div class="help">${esc(T.stepDesc[a.step] || '')}</div>`;
+  const think = a => `${esc(tt(T.stats.thinkingCell, { n: a.thinking_blocks }))}<div class="help">${esc(tt(T.stats.thinkingVisible, { v: a.thinking_visible, c: fmtTok(a.thinking_chars) }))}</div>`;
+  const thinkCell = a => `${a.steps_with_thinking} / ${a.steps}<div class="help">${esc(tt(T.stats.thinkingCell, { n: a.thinking_blocks }))} / ${esc(tt(T.stats.thinkingVisible, { v: a.thinking_visible, c: fmtTok(a.thinking_chars) }))}</div>`;
+  const numTd = v => `<td class="num">${v}</td>`;
+  const aggRow = (a, first) => `<tr>${first}${numTd(a.steps)}${numTd(avg(a.turns, a.steps).toFixed(0))}${numTd(avg(a.duration_s, a.steps * 60).toFixed(0))}${numTd(fmtTok(a.input))}${numTd(fmtTok(a.cache_write))}${numTd(fmtTok(a.cache_read))}${numTd(`${fmtTok(a.output)}<div class="help">${esc(tt(T.stats.visibleChars, { c: fmtTok(a.text_chars + a.tool_chars + a.thinking_chars) }))}</div>`)}<td>${thinkCell(a)}</td>${numTd(a.tool_calls)}${numTd(`<b>${usd(a.cost)}</b><div class="help">${esc(tt(T.stats.share, { p: (100 * avg(a.cost, total)).toFixed(0) + '%' }))}</div>`)}${numTd(`${usd(avg(a.cost, a.steps))}${a.max_run ? `<div class="help"><a href="#/run/${encodeURIComponent(a.max_run)}">${esc(tt(T.stats.maxOf, { cost: usd(a.max_cost) }))}</a></div>` : ''}`)}</tr>`;
+  const aggHead = first => `<tr><th>${esc(first)}</th><th class="num">${esc(T.th.steps)}</th><th class="num">${esc(T.th.avgTurns)}</th><th class="num">${esc(T.th.avgMin)}</th><th class="num">${esc(T.th.input)}</th><th class="num">${esc(T.th.cacheWrite)}</th><th class="num">${esc(T.th.cacheRead)}</th><th class="num">${esc(T.th.output)}</th><th>${esc(T.th.thinking)}</th><th class="num">${esc(T.th.tools)}</th><th class="num">${esc(T.th.cost)}</th><th class="num">${esc(T.th.avgCost)}</th></tr>`;
+  const table = (title, first, rows, cell) => `<div class="panel"><h2>${esc(title)}</h2>${rows.length ? `<div class="scroll"><table class="stats">${aggHead(first)}${rows.map(a => aggRow(a, `<td>${cell(a)}</td>`)).join('')}</table></div>` : `<div class="help">${esc(T.empty.stats)}</div>`}</div>`;
+  const notes = [t.no_result ? tt(T.stats.noResult, { n: t.no_result }) : '', t.rate_limited ? tt(T.stats.rateLimited, { n: t.rate_limited }) : ''].filter(Boolean).join(' / ');
+  render(head(esc(T.nav.stats), T.sub.stats) + `
+    <div class="row filters">
+      <span class="field">${esc(T.label.period)}<span class="btns">${['1', '7', '30', 'all'].map(periodBtn).join('')}</span></span>
+      <label class="field">${esc(T.label.pj)}<select data-act="stats-pj"><option value="">${esc(T.label.allPj)}</option>${d.pjs.map(x => `<option value="${esc(x)}" ${x === pj ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
+      <label class="help check"><input type="checkbox" data-act="stats-dry" ${dry ? 'checked' : ''}> ${esc(T.label.includeDry)}</label>
+      <span class="help">${esc(tt(T.stats.scope, { sel: d.selected, all: d.files }))}${notes ? ` / ${esc(notes)}` : ''}</span>
+    </div>
+    <div class="tiles">
+      ${tile(T.stats.tile.steps, t.steps, `${T.th.tools} ${t.tool_calls}`)}
+      ${tile(T.stats.tile.turns, t.turns, `${T.th.avgTurns} ${avg(t.turns, t.steps).toFixed(0)}`)}
+      ${tile(T.stats.tile.cacheRead, fmtTok(t.cache_read), `${T.th.input} ${fmtTok(t.input)} / ${T.th.cacheWrite} ${fmtTok(t.cache_write)}`)}
+      ${tile(T.stats.tile.output, fmtTok(t.output), `${T.th.thinking} ${tt(T.stats.thinkingCell, { n: t.thinking_blocks })}`)}
+      ${tile(T.stats.tile.cost, usd(total), `${T.th.avgCost} ${usd(avg(total, t.steps))}`)}
+      ${tile(T.stats.tile.thinking, `${t.steps_with_thinking} / ${t.steps}`, '')}
+    </div>
+    ${table(T.h.byModel, T.th.model, d.by_model, a => `<b class="mono">${esc(a.model)}</b>`)}
+    ${table(T.h.byStep, T.th.step, d.by_step, a => `${stepCell(a)}<span class="mono">${esc(a.model)}</span>`)}
+    ${table(T.h.byDay, T.th.date, d.by_day, a => `${esc(a.date)}<div class="mono help">${esc(a.model)}</div>`)}
+    ${d.by_pj.length > 1 ? table(T.h.byPj, T.label.pj, d.by_pj, a => `<b>${esc(a.pj)}</b>`) : ''}
+    <div class="panel"><h2>${esc(T.h.topSteps)}</h2>${d.top.length ? `<div class="scroll"><table class="stats"><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.step)}</th><th>${esc(T.th.model)}</th><th class="num">${esc(T.th.turns)}</th><th class="num">${esc(T.th.minutes)}</th><th class="num">${esc(T.th.cacheRead)}</th><th class="num">${esc(T.th.output)}</th><th>${esc(T.th.thinking)}</th><th class="num">${esc(T.th.cost)}</th><th>${esc(T.th.log)}</th></tr>
+      ${d.top.map(r => `<tr><td><a href="#/run/${encodeURIComponent(r.run)}">${esc(r.run)}</a></td><td>${esc(r.step)}</td><td class="mono">${esc(r.model || '?')}</td>${numTd(r.turns)}${numTd(Math.round(r.duration_s / 60))}${numTd(fmtTok(r.cache_read))}${numTd(fmtTok(r.output))}<td>${think(r)}</td>${numTd(`<b>${usd(r.cost)}</b>`)}<td>${fileBtn(r.run, r.log_path, r.log)}</td></tr>`).join('')}</table></div>` : `<div class="help">${esc(T.empty.stats)}</div>`}</div>
+    <div class="panel"><h2>${esc(T.h.howToRead)}</h2><ul class="help"><li>${esc(T.help.statsSource)}</li><li>${esc(T.help.statsCache)}</li><li>${esc(T.help.statsCost)}</li><li>${esc(T.help.statsThinking)}</li><li>${esc(T.help.statsScope)}</li></ul></div>`);
+}
+
 /* ---------- 設定 */
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
@@ -800,6 +845,9 @@ const actions = {
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
   'logs-pj': el => { lgFilter.pj = el.value; lgSync(); lgRender(); },
+  'stats-period': el => window._statsGo('days', el.dataset.v === '7' ? '' : el.dataset.v),
+  'stats-pj': el => window._statsGo('pj', el.value),
+  'stats-dry': el => window._statsGo('dry', el.checked ? '1' : ''),
   'logs-src': el => { lgFilter.src = el.value; lgSync(); lgRender(); },
   'runs-all': el => { localStorage.setItem('runs-all', el.checked ? '1' : '0'); viewRuns(); },
   'dispatch': () => dispatchDialog(),
@@ -1024,6 +1072,7 @@ async function route() {
     else if (seg[0] === 'intake') await viewIntake();
     else if (seg[0] === 'jobs') await viewJobs();
     else if (seg[0] === 'job') await viewJob(seg[1], true);
+    else if (seg[0] === 'stats') await viewStats(q);
     else if (seg[0] === 'logs') await viewLogs(q);
     else if (seg[0] === 'config') await viewConfig();
     else if (seg[0] === 'file') await viewFile(q);
