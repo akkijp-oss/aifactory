@@ -64,6 +64,16 @@ gate env-ready check "$HOME/prepared"
 exit $rc
 """
 
+# 出力が大きいゲート（work/gates/<name>.log の上限の効き方を見る）。契約は PJ_GATES と同じ
+NOISY_GATES = r"""#!/usr/bin/env bash
+set -uo pipefail
+cd "${SANDBOX_APP_DIR:-$HOME/app}"
+mkdir -p "$HOME/gates"
+noisy() { local line; line="$(head -c 2000 /dev/zero | tr '\0' x)"; for i in $(seq 1 400); do echo "$i $line"; done; test -f noisy-ok.txt; }
+if noisy > "$HOME/gates/noisy.log" 2>&1; then echo "PASS noisy"; exit 0; fi
+echo "FAIL noisy (~/gates/noisy.log)"; exit 1
+"""
+
 PROJECT = """name: basered
 repo: example/basered
 base_branch: develop
@@ -189,6 +199,11 @@ class GatesBaseRedTest(unittest.TestCase):
     def gates_txt(self, r):
         return (pathlib.Path(r.work) / "gates.txt").read_text(encoding="utf-8")
 
+    def gate_log(self, r, name):
+        """work/gates/<name>.log（チケット 331）。VM を返した後も残る回収対象。無ければ None"""
+        p = pathlib.Path(r.work) / "gates" / f"{name}.log"
+        return p.read_text(encoding="utf-8") if p.is_file() else None
+
     def verdict(self, r):
         """gates.txt の判定の行だけ（`=== ` から先は base の結果とログ末尾。console の gate_fails もそこで読むのをやめる）"""
         out = []
@@ -222,6 +237,11 @@ class GatesBaseRedTest(unittest.TestCase):
         self.assertIn("=== base check: origin/develop", txt)
         self.assertIn("--- strings.log on base (tail 30)", txt)
         self.assertIn("missing strings-ok.txt", txt)
+        # INFO に落ちた分もログは work/ に残す（「元から赤い」の根拠。ただし依頼文には載せない。チケット 331）
+        log = self.gate_log(r, "strings")
+        self.assertIsNotNone(log, "INFO に落ちたゲートの work/gates/strings.log が無い")
+        self.assertIn("strings.log on HEAD", log)
+        self.assertIn("missing strings-ok.txt", log)
         # base でも赤いゲートは run の記録に残る（console の sandbox 画面がここを読む）
         self.assertEqual(r.state["known_red_gates"], ["strings"])
         self.assertEqual((pathlib.Path(r.work) / "base-red.txt").read_text(encoding="utf-8").split(), ["strings"])
@@ -239,6 +259,8 @@ class GatesBaseRedTest(unittest.TestCase):
                 (self.app / "README.md").write_text("書きかけ\n", encoding="utf-8")
                 (self.app / "scratch.txt").write_text("メモ\n", encoding="utf-8")
             else:
+                # 1 回目の gates の直後。赤いゲートのログが work/ に落ちている（チケット 331）
+                self.red_log = self.gate_log(self.r, "feature")
                 (self.app / "feature-ok.txt").write_text("feature-ok.txt\n", encoding="utf-8"); self.commit("戻した")
         r = self.build(902, implement)
         r.main()
@@ -249,6 +271,16 @@ class GatesBaseRedTest(unittest.TestCase):
         # 戻すときの依頼文に「base で赤い分は INFO に落としてある」と書いてある（実装役に推測させない）
         self.assertIn("FAIL feature", self.notes["implement"][1])
         self.assertIn("also red on base", self.notes["implement"][1])
+        # 赤の中身（VM の ~/gates/feature.log）が work/ に残り、依頼文にも抜粋が入る（チケット 331）
+        self.assertIsNotNone(self.red_log, "1 回目の gates の後に work/gates/feature.log が無い")
+        self.assertIn("missing feature-ok.txt", self.red_log)
+        self.assertIn("=== tail 300", self.red_log)
+        note = self.notes["implement"][1]
+        self.assertIn("work/gates/feature.log", note)
+        self.assertIn("missing feature-ok.txt", note)
+        self.assertNotIn("### strings", note)           # 赤くないゲートの抜粋は入れない
+        # 緑になった回は古いログを持ち越さない（直したのに「まだ赤い」と読まれる）
+        self.assertIsNone(self.gate_log(r, "feature"), "全緑の回に前の回の work/gates/feature.log が残っている")
         # 未コミットの作業が stash → pop で戻っている
         self.assertEqual((self.app / "README.md").read_text(encoding="utf-8"), "書きかけ\n")
         self.assertEqual((self.app / "scratch.txt").read_text(encoding="utf-8"), "メモ\n")
@@ -351,6 +383,24 @@ class GatesBaseRedTest(unittest.TestCase):
         self.assertIn("作業ブランチへ戻せなかった", r.state["error"])
         self.assertEqual(r.state["resume_step"], "implement")
         self.assertEqual(r.state["known_red_gates"], ["strings"])
+
+    # ---------- 出力の大きいゲートは上限で切る。切っても末尾（普通はそこに失敗の理由がある）を残す
+    def test_a_noisy_gate_log_is_truncated_from_the_front_and_says_so(self):
+        """VM → runner の転送量と依頼文の肥大を抑えるため 1 ゲート 200KB 上限。上限は失敗にせず切り捨て、
+           切った事実を 1 行残す（ADR-0034 と同じ扱い）。切るのは先頭側で、末尾は必ず残す"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        def implement(n):
+            (self.app / "impl.txt").write_text("実装\n", encoding="utf-8"); self.commit("実装した")
+        r = self.build(909, implement)
+        (self.ws / "projects" / "basered" / "gates.sh").write_text(NOISY_GATES, encoding="utf-8")
+        r.main()
+        log = self.gate_log(r, "noisy")
+        self.assertIsNotNone(log, "work/gates/noisy.log が無い")
+        size = (pathlib.Path(r.work) / "gates" / "noisy.log").stat().st_size
+        self.assertLessEqual(size, 204800, f"上限を超えて残している: {size} バイト")
+        self.assertTrue(log.startswith("[truncated: kept last "), log[:80])
+        self.assertTrue(log.splitlines()[-1].startswith("400 x"), log.splitlines()[-1][:40])   # 末尾は切らない
 
     # ---------- 退避は HEAD ではなく作業ブランチを押す（base に detached のままでも実装が消えない）
     def test_preserve_pushes_the_working_branch_even_if_head_is_left_on_base(self):

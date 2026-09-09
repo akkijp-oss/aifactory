@@ -61,7 +61,7 @@ kanban/bin/kb run 204 --wait             # プールに空きがなければ、�
 
 `--wait` で待っている間、チケットは `in_progress` のままで、コンソールのボードと実行記録には「VM の空き待ち」と経過時間が出ます。
 
-チケットに[添付](tickets.md)があれば、runner が VM の `~/work/<id>/attachments/` に置き、各工程の依頼文に添付の案内（名前の一覧と「画像・PDF は Read で開いて見ること」）を 1 行足します。添付は実行記録の `work/attachments/` にも控えが残ります。添付が無ければ依頼文は変わりません。今のところ Proxmox backend だけの機能です（ADR-0040）。
+チケットに[添付](tickets.md)があれば、runner が VM の `~/work/<id>/attachments/` に置き、各工程の依頼文に添付の案内（名前の一覧と「画像・PDF は Read で開いて見ること」）を 1 行足します。添付は実行記録の `work/attachments/` にも控えが残ります。添付が無ければ依頼文は変わりません。今のところ Proxmox backend だけの機能です（ADR-0041）。
 
 ## 実行中に見えるもの
 

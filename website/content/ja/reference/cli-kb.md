@@ -27,7 +27,7 @@ kb render
 |---|---|
 | DB（正本） | `$AIFACTORY_WORKSPACE/kanban/kanban.db`（既定 `<repo>/workspace/kanban/`。git 追跡外） |
 | 本文（正本） | 同 `kanban/tickets/<id>-<pj>-<slug>.md` |
-| 添付（正本） | 同 `kanban/attachments/<id>/<名前>`（ADR-0040） |
+| 添付（正本） | 同 `kanban/attachments/<id>/<名前>`（ADR-0041） |
 | ボード（生成物） | 同 `kanban/BOARD.md` |
 | 置き場の差し替え | 環境変数 `AIFACTORY_WORKSPACE=<dir>` で workspace ごと、`KB_ROOT=<dir>` で DB・tickets・BOARD だけを別に置く（テスト用） |
 
@@ -111,7 +111,7 @@ kb detach 204 画面.png
 kb new kumitate bug "不具合: 保存が効かない" --body - --attach 画面.png   # 起票と同時に
 ```
 
-チケットに画像（スクリーンショット・デザイン案）やファイル（仕様書 PDF・CSV・設定ファイル）を添付します。`$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` にコピーされ、**本文には書きません**。正本は実体のファイルで、一覧は `kb show` の末尾・コンソールのチケット画面・MCP `ticket_show` が実体から導きます（ADR-0040）。
+チケットに画像（スクリーンショット・デザイン案）やファイル（仕様書 PDF・CSV・設定ファイル）を添付します。`$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` にコピーされ、**本文には書きません**。正本は実体のファイルで、一覧は `kb show` の末尾・コンソールのチケット画面・MCP `ticket_show` が実体から導きます（ADR-0041）。
 
 - 名前は sanitize されます（パス区切り・`..`・制御文字を落とす）。同じ名前の添付があれば拡張子の前に `-2`, `-3` … を付け、上書きしません
 - 上限は **1 ファイル 20 MiB・1 チケット合計 100 MiB**。超えるとエラー（終了コード 1）です。複数指定したときは失敗したファイルで止まり、そこまでに入った分は残ります

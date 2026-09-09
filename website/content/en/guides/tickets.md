@@ -109,7 +109,7 @@ kanban/bin/kb detach 204 screen.png
 kanban/bin/kb new kumitate bug "Bug: saving does nothing" --body ticket.md --attach screen.png
 ```
 
-Attachments are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the body** (the files themselves are the source of truth; ADR-0040). The listing shows up at the end of `kb show`, on the ticket page of the [web console](console.md) and in MCP `ticket_show`.
+Attachments are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the body** (the files themselves are the source of truth; ADR-0041). The listing shows up at the end of `kb show`, on the ticket page of the [web console](console.md) and in MCP `ticket_show`.
 
 On `kb run`, the attachments are placed in `~/work/<id>/attachments/` on the VM and every step prompt gains one line telling the agent to open them with Read and to prefer the attachment over the body when the two disagree. The agent (Claude Code) can open images and PDFs with the Read tool.
 

@@ -61,7 +61,7 @@ kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is f
 
 While `--wait` waits, the ticket stays `in_progress`, and the console board and run record show "waiting for a free VM" with the elapsed time.
 
-If the ticket has [attachments](tickets.md#attaching-images-and-files), the runner places them in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt (the list of names, and "open images and PDFs with Read"). A copy also comes back in `work/attachments/` of the run record. With no attachments the prompt is unchanged. This works on the Proxmox backend only for now (ADR-0040).
+If the ticket has [attachments](tickets.md#attaching-images-and-files), the runner places them in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt (the list of names, and "open images and PDFs with Read"). A copy also comes back in `work/attachments/` of the run record. With no attachments the prompt is unchanged. This works on the Proxmox backend only for now (ADR-0041).
 
 ## What you can see while it runs
 

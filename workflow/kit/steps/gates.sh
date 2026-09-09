@@ -4,9 +4,15 @@
 # 赤が出たら、その赤いゲートだけを base（origin/$BASE）でも走らせ直し、base でも赤いものは FAIL → INFO に落とす（チケット 330）。
 # 「自分の変更が壊したのか、元から赤いのか」を実装役の推測ではなく機械で切り分けるため。base でも赤かった名前は
 # $WORK/base-red.txt に置き、runner が run の記録（known_red_gates）に足す。
+#
+# 赤いゲートの VM 内ログ（~/gates/<name>.log）は $WORK/gates/<name>.log に抜粋を残す（チケット 331）。VM は run の終わりに
+# 返却・初期化されるので、そこに置かないと「どのテストがどう落ちたか」は run が終わった時点で誰にも読めなくなる。
 # runner から次の env で呼ばれる: PJ TASK RUN_DIR PROJECT_DIR GATES WORK BASE BRANCH KNOWN_RED
 set -uo pipefail
 : "${TASK:?}" "${PROJECT_DIR:?}" "${GATES:?}" "${WORK:?}"
+GATES_LOG_LINES="${GATES_LOG_LINES:-300}"           # work/gates/<name>.log に残す末尾の行数
+GATES_LOG_MAX_BYTES="${GATES_LOG_MAX_BYTES:-204800}"  # 1 ゲートあたりの上限。超える分は末尾を優先して切る
+GATES_LOG_RE='✗|×|FAIL|Error|error:|Traceback'      # 抜粋に拾うエラーらしい行
 KEY="$HOME/.ssh/conf.d/aifactory/sb_ed25519"
 ip="$(jq -r --arg id "$TASK" '.[$id].ip' "$HOME/.config/sandbox/state.json")"
 scp -q -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$PROJECT_DIR/$GATES" "dev@$ip:/home/dev/gates.sh"
@@ -20,8 +26,36 @@ fails="$(awk '/^FAIL/{print $2}' <<< "$out")"
 # ---------- base でも赤か（赤が出たときだけ、赤いゲートだけ）
 base_block=""
 # 前の回の結果を残さない。base を見なかった回は空にする（--resume で回し直したとき、古い !restore-failed を
-# runner が読み直して再び人間へ回してしまうため）
-sandbox ssh "$TASK" "mkdir -p $WORK && : > $WORK/base-red.txt"
+# runner が読み直して再び人間へ回してしまうため）。gates/ も毎回作り直す（前の回に赤かったゲートが緑になったのに
+# 古いログが残っていると、reviewer と人が「まだ赤い」と読む）
+sandbox ssh "$TASK" "mkdir -p $WORK && : > $WORK/base-red.txt && rm -rf $WORK/gates && mkdir -p $WORK/gates"
+
+# ---------- 赤いゲートのログを work/ に残す（チケット 331）
+# base 確認は同じゲートを base で回し直すので ~/gates/<name>.log を base の結果で上書きする。その前に HEAD 側を取る。
+# INFO に落とした分（known_red / この後 base でも赤と分かる分）もファイルは残す。「元から赤い」の根拠を reviewer と
+# 人が run の記録だけで確かめられるようにするため。実装役へ戻す依頼文に載せるかどうかは runner が FAIL だけで選ぶ
+red_head="$(awk '/^(FAIL|INFO) /{print $2}' <<< "$out")"
+for g in $red_head; do
+  q="$(printf '%q' "$g")"
+  sandbox ssh "$TASK" "tail -c $GATES_LOG_MAX_BYTES ~/gates/$q.log" > "$tmp/raw-$g.log" 2>/dev/null
+  [ -s "$tmp/raw-$g.log" ] || continue
+  { printf '# %s.log on HEAD (%s), fetched %s bytes / %s lines from ~/gates/%s.log, kept tail %s lines\n' \
+      "$g" "${BRANCH:-?}" "$(wc -c < "$tmp/raw-$g.log")" "$(wc -l < "$tmp/raw-$g.log")" "$g" "$GATES_LOG_LINES"
+    printf '\n=== excerpt (%s)\n' "$GATES_LOG_RE"
+    LC_ALL=C.UTF-8 grep -anE "$GATES_LOG_RE" "$tmp/raw-$g.log" | tail -100
+    printf '\n=== tail %s\n' "$GATES_LOG_LINES"
+    tail -n "$GATES_LOG_LINES" "$tmp/raw-$g.log"
+  } > "$tmp/excerpt-$g.log"
+  if [ "$(wc -c < "$tmp/excerpt-$g.log")" -gt "$GATES_LOG_MAX_BYTES" ]; then
+    # 上限は失敗にせず切り捨てる。切ったという事実だけ 1 行残す（ADR-0034 と同じ扱い）
+    keep=$(( GATES_LOG_MAX_BYTES - ${#g} - 60 )); [ "$keep" -lt 1024 ] && keep=1024
+    { printf '[truncated: kept last %s bytes of ~/gates/%s.log]\n' "$keep" "$g"
+      tail -c "$keep" "$tmp/excerpt-$g.log"; } > "$tmp/cut-$g.log"
+    mv "$tmp/cut-$g.log" "$tmp/excerpt-$g.log"
+  fi
+  sandbox ssh "$TASK" "cat > $WORK/gates/$q.log" < "$tmp/excerpt-$g.log"
+done
+
 if [ -n "$fails" ] && [ -n "${BASE:-}" ] && [ -n "${BRANCH:-}" ]; then
   # base で回し直すと ~/gates/<name>.log が base の結果で上書きされる。HEAD 側のログ末尾を先に取っておく
   for g in $fails; do sandbox ssh "$TASK" "tail -60 ~/gates/$g.log" > "$tmp/head-$g.log" 2>/dev/null; done

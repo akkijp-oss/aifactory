@@ -1,4 +1,4 @@
-# ADR 0040: チケットの添付は workspace の `kanban/attachments/<id>/` に置き、本文には書かない
+# ADR 0041: チケットの添付は workspace の `kanban/attachments/<id>/` に置き、本文には書かない
 
 - 状態: Accepted（ADR-0015 / ADR-0016 を補う。既存の決定は変えない）
 - 日付: 2026-09-09

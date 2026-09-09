@@ -141,7 +141,7 @@ flowchart TB
 
 | スクリプト | 何をする | 失敗の条件 |
 |---|---|---|
-| `gates.sh` | プロジェクトの `gates.sh` を VM に scp して実行。赤があればその赤いゲートだけを base でも実行し、base でも赤いものと `known_red_gates` の FAIL を INFO（参考情報）として扱うように変更。結果を `~/work/<id>/gates.txt` に | INFO に落ちなかった FAIL が 1 つでもある |
+| `gates.sh` | プロジェクトの `gates.sh` を VM に scp して実行。赤があればその赤いゲートだけを base でも実行し、base でも赤いものと `known_red_gates` の FAIL を INFO（参考情報）として扱うように変更。結果を `~/work/<id>/gates.txt` に、赤かったゲートのログの抜粋を `~/work/<id>/gates/<名前>.log` に | INFO に落ちなかった FAIL が 1 つでもある |
 | `pr-create.sh` | コミットがあるか確認 → push → 成果物を本文にして `gh pr create` → URL を `~/work/<id>/pr_url` に | コミットがない、push 失敗 |
 | `pr-merge.sh` | コンフリクトマーカーの残りを検査 → base 取り込み済みか確認 → head へ push → ゲート・レビューの結果を PR コメントに → `gh pr merge` | マーカー残り、base 未取り込み、マージ失敗 |
 | `sync-base` | **runner 内蔵**（`kit/steps/` にファイルは無い）。`git fetch origin <base>` → 取り込み済みでなければ `git merge`。衝突したら衝突ファイル名を控えて `git merge --abort` → `docs/adr/` の番号重複を検査 | 衝突した、ADR 番号が重複した、fetch できない |

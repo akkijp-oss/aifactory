@@ -27,7 +27,7 @@ kb render
 |---|---|
 | Database (source of truth) | `$AIFACTORY_WORKSPACE/kanban/kanban.db` (default `<repo>/workspace/kanban/`, not tracked by git) |
 | Bodies (source of truth) | `kanban/tickets/<id>-<pj>-<slug>.md` under the same root |
-| Attachments (source of truth) | `kanban/attachments/<id>/<name>` under the same root (ADR-0040) |
+| Attachments (source of truth) | `kanban/attachments/<id>/<name>` under the same root (ADR-0041) |
 | Board (generated) | `kanban/BOARD.md` under the same root |
 | Relocating | Environment variable `AIFACTORY_WORKSPACE=<dir>` moves the whole workspace; `KB_ROOT=<dir>` moves only the database, tickets and BOARD (for tests) |
 
@@ -111,7 +111,7 @@ kb detach 204 screen.png
 kb new kumitate bug "Bug: saving does nothing" --body - --attach screen.png   # attach while filing
 ```
 
-Attach images (screenshots, design mockups) or files (spec PDFs, CSVs, config files) to a ticket. They are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the ticket body**. The files themselves are the source of truth; the listing is derived from them by `kb show`, the console ticket page and MCP `ticket_show` (ADR-0040).
+Attach images (screenshots, design mockups) or files (spec PDFs, CSVs, config files) to a ticket. They are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the ticket body**. The files themselves are the source of truth; the listing is derived from them by `kb show`, the console ticket page and MCP `ticket_show` (ADR-0041).
 
 - Names are sanitized (path separators, `..` and control characters are removed). A name that already exists gets `-2`, `-3` … before the extension instead of overwriting
 - Limits are **20 MiB per file and 100 MiB per ticket**. Exceeding either is an error (exit code 1). With several files, it stops at the first failure and keeps what already went in

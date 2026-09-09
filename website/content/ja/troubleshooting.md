@@ -54,7 +54,7 @@ flowchart TD
 
 | 症状 | 見るところ | 対処 |
 |---|---|---|
-| gates が失敗 | `code-gates-<n>.log`、`work/gates.txt`、VM 内 `~/gates/<name>.log` | 変更前のブランチでも失敗しているなら `known_red_gates`。環境依存（GLB なし、macOS 用の基準画像）は情報扱いにする |
+| gates が失敗 | `code-gates-<n>.log`、`work/gates.txt`、`work/gates/<name>.log`（VM 内 `~/gates/<name>.log` の抜粋。VM を返した後も読める） | 変更前のブランチでも失敗しているなら `known_red_gates`。環境依存（GLB なし、macOS 用の基準画像）は情報扱いにする |
 | `pr-create.sh` が「コミットがない」 | `code-pr-<n>.log`、`work/report.md` | implementer がコミットしなかった理由が report にあるはず |
 | push が 403 | `code-pr-<n>.log` | GitHub App トークンの失効（1 時間）か未インストール。runner はスクリプトの実行前に払い出し直すので、それでも出るなら `sandbox gh-app status` |
 | merge が「コンフリクトマーカーが残っている」 | `code-merge-<n>.log` | resolve に戻る。上限を超えたら人間が解消 |

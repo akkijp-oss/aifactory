@@ -19,7 +19,7 @@ kanban/
 $AIFACTORY_WORKSPACE/kanban/
 ├── kanban.db       # 正本（SQLite）。ID・PJ・種別・状態・PR・run（run ディレクトリ名）・メモ・履歴
 ├── tickets/        # チケット本文 <id>-<pj>-<slug>.md（1 行目が題名、任意で `pr: N`）。runner にこのパスを渡す
-├── attachments/    # チケットの添付 <id>/<名前>（画像・PDF・CSV など）。本文には書かない。run のとき VM に運ばれる（ADR-0040）
+├── attachments/    # チケットの添付 <id>/<名前>（画像・PDF・CSV など）。本文には書かない。run のとき VM に運ばれる（ADR-0041）
 └── BOARD.md        # 生成物。状態を変える操作のたびに `kb` が再生成する。手で編集しない
 ```
 
@@ -61,7 +61,7 @@ $kb render                                                              # BOARD.
 - `kb append` は**本文の末尾**に足す。`--section` を付けると `## <見出し>` を先に書く（例 `## PM 補足`）。「`## 完了条件` の手前」には入れない: 節を見分ける仕組みが `kb` に無く、末尾なら diff が 1 か所で済むため。見出しで後から書き足したものだと分かる
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
-- 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0040）
+- 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
   - 名前は sanitize する（パス区切り・`..`・制御文字を落とす。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所
   - `kb run` すると runner が VM の `~/work/<id>/attachments/` に置き、各 step の依頼文に添付の案内が 1 行入る。agent は画像・PDF を Read で開いて見る。添付が無いチケットの依頼文は変わらない
   - **秘密情報（トークン・鍵・`.env` の実値）を添付しない。** `attachments/` は workspace（git 追跡外）なので `bin/oss-check.sh` の秘密情報の検査対象ではない。検査するのは「追跡されていないこと」だけ
