@@ -101,6 +101,9 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `POST /api/tickets/<id>/run` | `kb run` as a job. `{dry_run, workflow, keep, resume, from_step, from_branch, wait}` (`from_step` redoes a run that ended at `human` on a new VM, continuing from where it stopped; an empty string leaves the step to the record) |
 | `GET /api/runs` / `GET /api/runs/<name>` | Run records |
 | `POST /api/runs/<name>/action` | Record a human closeout on a run (`kb run-note`). `{action: close / note, result: done / abandoned, pr, text}`. `close` records the outcome for the first time; `note` rewrites the text of an existing record |
+| `POST /api/tickets/<id>/attach` | Add attachments. Send `files` as `multipart/form-data` (several at a time). JSON is not accepted |
+| `POST /api/tickets/<id>/detach` | Remove one attachment named `{name}`. The file is deleted, so this cannot be undone |
+| `GET /api/tickets/<id>/attachments/<name>` | Serve one attachment. Only images (png / jpg / gif / webp) are shown inline; everything else is always a download. Content sniffing is always off (`X-Content-Type-Options: nosniff`) |
 | `GET /api/file?path=&tail=` | A file under one of the allowed roots |
 | `GET /api/sandbox` / `POST /api/sandbox/ls` / `POST /api/sandbox/release` | Lending, refresh the list, release `{task}` |
 | `POST /api/intake` / `POST /api/dispatch` | `{text, pj, kind, dry_run}` / `{pj, once, max, dry_run}` |
@@ -122,9 +125,10 @@ claude mcp reset-project-choices   # approve again
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs, the `attachments` listing; plus `sync_preview` when the ticket has a run) |
 | `ticket_new` / `intake` | File a ticket (well-formed body / free text; intake is a job) |
+| `ticket_attach` / `ticket_detach` | Add one attachment (pass the bytes in `content_base64`, or point at a file on the control host with `path` — one or the other) / remove one. `path` may only point under your home directory or `/tmp`, and may not contain a name starting with `.` (so config and key directories stay out of reach) |
 | `ticket_action` | start / review / done / reopen / block (`done` and `set` with `pr` also transcribe the same thing as `run_action` onto the linked run when it is still waiting on a human) / set (an empty `note` clears it) / append (append to the end of the body; `text` required, `section` optional) / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |
-| `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log` and so on) |
+| `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log`, ticket attachments and so on). Images come back as an image block, so you can see them (up to 4 MiB; open anything larger from the console) |
 | `run_action` | Record that a human closed a run out — opened a PR from the wip branch and merged it, or gave up (`kb run-note`). `close` records the outcome (`done` / `abandoned`) and the PR number; `note` rewrites the text |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | Lending state (`leases[]` carries task, VM name, IP, since and power state) / live list (job) / release (job) |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | Job list, output, wait (60 s by default, 300 s at most), stop |

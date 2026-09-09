@@ -5,7 +5,7 @@
 ## intake
 
 ```
-intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
+intake <text-file|-> [--pj P] [--kind K] [--model M] [--attach FILE ...] [--dry-run]
 ```
 
 | Argument | Meaning |
@@ -13,15 +13,16 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
 | `text-file` | The free-text file. `-` for standard input |
 | `--pj` / `--kind` | Deterministic override. Beats the LLM's decision |
 | `--model` | Model to use. Default is `MODEL_judgment` from `workflow/kit/routes.env` |
-| `--dry-run` | Print the decision JSON without filing |
+| `--attach` | Files to attach to the ticket it files (several at a time: `--attach a.png b.csv` or `--attach a.png --attach b.csv`). Images are also shown to the LLM |
+| `--dry-run` | Print the decision JSON without filing (and without attaching) |
 
 ### Behaviour
 
 1. Picks up `pj:` / `kind:` lines from the first 5 lines of the input (deterministic) and removes them from the body
 2. `--pj` / `--kind` take precedence. Specified values are validated for existence
-3. Calls `claude -p` once on the Mac, with a temporary directory as cwd and no tools. It passes the project list (display_name / repo / stack from `project.yml`; projects without one are marked "no project.yml"), the kind list (descriptions from the workflow ymls), the decision guidance, the ticket shape, and the request
+3. Calls `claude -p` once on the Mac, with a temporary directory as cwd and no tools. It passes the project list (display_name / repo / stack from `project.yml`; projects without one are marked "no project.yml"), the kind list (descriptions from the workflow ymls), the decision guidance, the ticket shape, and the request. Only when `--attach` carries images (png / jpg / gif / webp) does it copy them into `attachments/` inside that temporary directory and call with `--tools Read`, telling the model to write only what it can actually read off them into the `## 現状` (current state) section. Without images the call is unchanged
 4. Extracts the JSON (`pj` / `kind` / `title` / `body` / `confidence` / `reason`) and overrides pj / kind with anything specified
-5. Appends `(intake <time> / model <model> / confidence <value> / <reason>)` to the body and calls `kb new`. A `pr: N` at the top of the body becomes `--pr`
+5. Appends `(intake <time> / model <model> / confidence <value> / <reason>)` to the body and calls `kb new`. A `pr: N` at the top of the body becomes `--pr`. `--attach` is passed on to `kb new --attach`. If **the ticket was created but the attachment failed**, it still prints the id and writes the log, then exits with code 2 (retry with `kb attach <id> <file>`)
 6. Writes one line to `workspace/logs/intake.log` (time / id / pj / kind / confidence / model / reason)
 
 ### Output

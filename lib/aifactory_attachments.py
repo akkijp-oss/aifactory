@@ -6,7 +6,7 @@ kb / workflow/bin/run / console/lib/core.py が全部ここを呼ぶ。置き場
 
 - 本文（tickets/<id>-<pj>-<slug>.md）には添付のことを書かない。正本は実体のファイルで、一覧は表示側が導く
 - 上限: 1 ファイル 20 MiB / チケット合計 100 MiB。超えたら ValueError（メッセージは日本語）
-- ファイル名は sanitize する（パス区切り・`..`・制御文字を落とす）。同じ名前が既にあれば拡張子の前に `-2`, `-3` … を付ける
+- ファイル名は sanitize する（パス区切り・`..`・制御文字・Markdown の記法を落とし 120 バイトに切る）。同じ名前が既にあれば拡張子の前に `-2`, `-3` … を付ける
 - workspace は git 追跡外＝ bin/oss-check.sh の検査対象外。秘密情報（トークン・鍵）は添付しない
 - 標準ライブラリだけで動く（VM の中でも ctl でも同じように使える）
 """
@@ -16,9 +16,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent)); import aifacto
 
 MAX_FILE = 20 * 1024 * 1024        # 1 ファイルの上限
 MAX_TOTAL = 100 * 1024 * 1024      # チケット 1 件の合計の上限
-MAX_NAME_BYTES = 255               # ext4 / APFS のファイル名の上限
+MAX_NAME_BYTES = 120               # 名前は依頼文にそのまま埋まる。console / MCP から外部の名前を受けるので、読める長さで締める（255 は ext4 の上限で、締めではない）
 DEFAULT_TYPE = "application/octet-stream"
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+MARKDOWN = re.compile(r"[`*\[\]<>|]")     # 依頼文（Markdown）に名前をそのまま書くので、記法になる文字は `_` に落とす
+SPACES = re.compile(r"\s+")               # 連続する空白（全角空白も）は 1 つに
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}   # 画面にそのまま出す・MCP が image で返す種類。SVG は入れない（中でスクリプトが動く）
 
 
 def dir_for(tid):
@@ -31,18 +34,27 @@ def dir_for(tid):
 
 
 def sanitize(name):
-    """人や LLM が渡した名前を、置き場の中だけで完結する 1 つのファイル名に落とす。
+    """人や LLM やブラウザーが渡した名前を、置き場の中だけで完結する 1 つのファイル名に落とす。
 
-    制御文字を除く → `/` `\\` で分けた最後の要素 → 前後の空白を除く → `` / `.` / `..` は `file` → 先頭の `.` は `_` → 255 バイトに切る
+    制御文字を除く → `/` `\\` で分けた最後の要素 → Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）は `_` →
+    連続する空白は 1 つにして前後を除く → `` / `.` / `..` は `file` → 先頭の `.` は `_` → MAX_NAME_BYTES に切る
+
+    冪等（`sanitize(sanitize(x)) == sanitize(x)`）であること。path_of() が「sanitize して変わらない」で
+    「置き場の外を指していない」を判定しているので、2 回目で変わると自分が保存した添付を見失う。
     """
-    s = CONTROL.sub("", str(name)).replace("\\", "/").split("/")[-1].strip()
+    s = CONTROL.sub("", str(name)).replace("\\", "/").split("/")[-1]
+    s = SPACES.sub(" ", MARKDOWN.sub("_", s)).strip()
     if s in ("", ".", ".."): s = "file"
     if s.startswith("."): s = "_" + s[1:]
     b = s.encode("utf-8")[:MAX_NAME_BYTES]
     while b:      # 切った所が UTF-8 の途中なら 1 バイトずつ戻す
-        try: return b.decode("utf-8")
+        try:
+            s = b.decode("utf-8"); break
         except UnicodeDecodeError: b = b[:-1]
-    return "file"
+    else:
+        return "file"
+    s = s.strip()     # 切った所が空白なら落とす（そうしないと 2 回目の sanitize で名前が変わる）
+    return s if s not in ("", ".", "..") else "file"
 
 
 def _unique(d, name):
@@ -66,6 +78,16 @@ def total_size(tid):
 
 def guess_type(name):
     return mimetypes.guess_type(name)[0] or DEFAULT_TYPE
+
+
+def is_image(name):
+    """画面にサムネイルで出す・MCP が image ブロックで返す種類か。画像かどうかの判定もここ 1 か所"""
+    return guess_type(name) in IMAGE_TYPES
+
+
+def free_name(d, name):
+    """置き場 d の中で他とぶつからない名前（sanitize 込み）。console がジョブの files/ に落とすときにも使う"""
+    return _unique(pathlib.Path(d), sanitize(name))
 
 
 def add(tid, src, name=None):
