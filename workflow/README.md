@@ -96,6 +96,21 @@ VM 無しで runner を 1 周させたいときは、`sandbox` と `scp` のシ�
 
 gates が赤なら implementer に戻す（最大 2 回）、review が FAIL なら戻す（最大 1 回）、超えたら `human`。
 
+### agent step の時間上限（`timeout_min`）
+
+| workflow | research | plan / design | implement | review | resolve |
+|---|---|---|---|---|---|
+| hotfix / bug / feature / chore / docs / merge-pr / research | 60 | 60 | 60 | 60 | 60 |
+| feature-long | 40 | 40 | **180** | 60 | 60 |
+
+既定は 60 分（`workflow/bin/run` の `DEFAULT_TIMEOUT_MIN`）。step ごとに yml の `timeout_min` で上書きする。
+
+上限を超えると `timeout` が rc=124 で切る。runner はそれを普通の失敗と分けて扱い、**追跡済みの未コミット変更だけを
+`wip: step timeout` としてコミット**してから（未追跡は足さない）人間に返すので、退避ブランチ `origin/sandbox/<id>-<wf>-wip`
+に途中までの実装が残る。`state.json` の `error` は `implement: 時間上限 60 分で中断（timeout）` の 1 行、agent の
+stdout の末尾は `last_output`、`history` の末尾に `failure: "timeout"` と `timeout_min` が入る（チケット 329）。
+14 ファイル超の作業を 60 分で回すと切られるので、大きい実装は `feature-long` を使うかチケットを割る。
+
 ## 音声・チケットの入口
 
 当面、音声メモからチケットは作らない（メンテナの判断 2026-09-06）。workflow は `ticket.md`（1 行目が題名、任意で 2 行目 `pr: N`）から始まる。チケットの置き場と採番は `../kanban/`（本文は `$AIFACTORY_WORKSPACE/kanban/tickets/<id>-<pj>-<slug>.md`。2026-09-06 に `workflow/tickets/` から移した）。種別の自動判定（ルーター）は glue。

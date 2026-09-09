@@ -111,6 +111,7 @@ const T = {
     "pr_created": "PR ができました。次はレビューです。",
     "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",
     "step_failed": "工程 {step} で止まりました。",
+    "step_timeout": "工程 {step} が時間上限 {n} 分で中断されました。コミット済みの分は wip ブランチに残っています。",
     "gateFails": "赤いゲート: {gates}。",
     "ended": "すべての工程が終わりました。",
     "waiting": "工程は終わり、人間の判断を待っています。",

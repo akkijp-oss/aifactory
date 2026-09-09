@@ -46,6 +46,8 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 - 実行: `cd $SANDBOX_APP_DIR && timeout <timeout_min>m claude -p "$(cat /home/dev/prompt.md)" --model <model> --output-format stream-json --verbose`。runner がイベントを 1 行ずつ受け、人が読める形を `agent-<step>-<n>.log` に逐次書く（時刻、ツール呼び出し ▶、結果の先頭 3 行 ↳、result と費用）。生の JSON は `agent-<step>-<n>.jsonl`
 - 実行中は `state.json` の `current` に `{step, kind, log, since}` が入る（工程が終わると `null`）
 - 合否: `outputs` のファイル（`git` / `pr_url` を除く）が全部 `~/work/<id>/` にあるか
+- 時間上限（工程の `timeout_min`、既定 60 分）を超えると `timeout` が終了コード 124 で切ります。runner はこれを普通の失敗と分けて扱い、追跡済みの未コミット変更だけを `wip: step timeout` としてコミットしてから工程を失敗にします（未追跡のファイルは足しません）。`human` に着けば退避ブランチ `origin/sandbox/<id>-<wf>-wip` に途中までの実装が乗るので、次の実行は続きから進められます
+- 依頼文の「出力（必須）」には、その工程の上限分数と「30 分ごとに `wip:` でコミットする」が入ります
 
 ### スクリプトが担当する工程
 
@@ -81,12 +83,16 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
   "current": null,
   "next": "end",
   "result": "end",
+  "error": "",
+  "last_output": "",
   "pr_url": "https://github.com/akkijp/kumitate/pull/300",
   "wip_branch": "",
   "finished": "2026-09-06T12:31:00",
   "elapsed_s": 1860
 }
 ```
+
+`human` で止まったときは、その理由が `error` に 1 行で入ります。工程が時間上限で切られた場合は `implement: 時間上限 60 分で中断（timeout）` の形になり、その工程の `history` の項目に `"failure": "timeout"` と `"timeout_min"` が付きます。エージェントの標準出力の末尾は `error` に混ぜず `last_output`（3000 字まで）に入ります。上限で切られたのに `error` の末尾が lint の集計行になっていて「lint で落ちた」と誤読された事故への対処です。Web コンソールと MCP の `run_show` は、この目印を見て「時間上限で中断されました」と出します。
 
 merge-pr の merge 工程が成功すると、`pr_url` の末尾に ` MERGED` が付きます。工程の実行中は、`current` に `{"step": "implement", "kind": "agent", "log": "agent-implement-1.log", "since": "…"}` のような情報が入ります。Web コンソールはこの情報を使って、実行中のログを表示します。
 
