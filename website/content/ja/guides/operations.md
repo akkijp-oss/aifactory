@@ -72,6 +72,20 @@ journalctl -u aifactory-idle-stop        # timer のログ
 
 作り直す前に `sandbox ls` で貸出中がないことを確かめます。
 
+## develop から main への昇格（人間）
+
+aifactory 自身の PR の宛先は `develop` です。ゲートが緑・レビューが PASS・CI がすべて pass の PR は runner が `develop` へ自動マージします（[`auto_merge`](../reference/project-yml.md)。ADR-0042）。**`main` への昇格は人間が行います。**
+
+```bash
+gh pr create --base main --head develop --title "develop → main（昇格）" --body "自動マージ済みの run: #.. #.."
+gh pr checks <番号> --watch
+gh pr merge <番号> --merge
+```
+
+- 昇格は「`develop` が緑で、実機で 1 周回せたら」。急ぐ理由が無ければ 1 日 1 回で足ります
+- `develop` が赤いまま昇格しません。直す PR を先に `develop` へ入れます
+- 制御系への配備（`bin/ctl-update`）は `origin/main` 追随のままです。`develop` の中身を試すときだけ `bin/ctl-update --ref origin/develop` を使い、確かめたら `bin/ctl-update` で戻します
+
 ## PJ 定義の変更手順
 
 runner が読む PJ 定義（`examples/projects/<pj>/` の `project.yml` / `gates.sh` / `provision.sh`）は、制御系の checkout の作業ツリーから直接読まれます。制御系で `gates.sh` を直すと次の gates からその場で効きますが、制御系の remote は https なので `git push` はできません。直したまま放っておくと、制御系が origin と食い違ったまま本番が動きます。

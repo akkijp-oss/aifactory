@@ -23,6 +23,7 @@ workflow/
 │   ├── roles/                    # _common.md（全役割共通の約束）+ planner / implementer / reviewer / researcher
 │   ├── workflows/                # hotfix / bug / feature / chore / research / merge-pr
 │   ├── steps/                    # code step: gates.sh（PJ のゲートを VM で実行）/ pr-create.sh（push + PR）/ pr-merge.sh
+│   │                             # pr-automerge.sh（条件を確かめて PR を base へマージ。ADR-0042）
 │   │                             # `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、ここにファイルは無い
 │   └── routes.env                # クラス → モデル（judgment=Fable / research=Sonnet / coding=Opus）
 ├── bin/run                       # runner v1（Python）。定義を読んで VM の中で step を順に実行する
@@ -69,7 +70,7 @@ workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず�
 - `--from[=step]` は human で止まった run を**新しい VM**で指定の step からやり直す（`--branch=<名前>` の続きから。既定は前回の `wip_branch`）。step を省くと前回の `resume_step` を使う。前回の run は `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡し、その `work/*.md` を持ち込み、`review.md` を最初の依頼文に「前回の結果（直すこと）」として入れる（ADR-0036）
 - `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す
 
-runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**。
+runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**（`project.yml` に `auto_merge` を書いた PJ だけ、次の `automerge` が条件を確かめて機械がマージする）。
 
 `pr` の直前には `sync` step（`code: sync-base`。runner 内蔵）が入り、`git fetch origin <base>` と `git merge` で **base の最新を取り込む**。並列に走った別 run の PR が先にマージされても、後発の PR が CONFLICTING で出てこないようにするため（ADR-0032）。衝突したら `git merge --abort` して衝突ファイル名を添え、implementer の `resolve` step に戻す（最大 2 回。3 回目で `human`）。取り込みの後に `docs/adr/` の番号重複も検査する（別ファイルなので git は衝突と見なさないため）。衝突が無ければ gates は回し直さず PR へ進む。
 
@@ -128,14 +129,38 @@ base を見に行けなかった回（未コミットの変更を退避できな
 
 | 名前 | 流れ | 使いどころ |
 |---|---|---|
-| hotfix | plan(Fable) → implement(Opus) → gates → review(Fable) → sync → pr | 本番障害の最小修正。宛先は `hotfix_base` |
-| bug | plan → implement（再現テスト先行）→ gates → review → sync → pr | 不具合修正 |
-| feature | research(Sonnet) → design(Fable) → implement → gates → review → sync → pr | 機能追加 |
-| chore | implement → gates → sync → pr | docs 整理・依存更新など判断の要らない雑務 |
+| hotfix | plan(Fable) → implement(Opus) → gates → review(Fable) → sync → pr → automerge | 本番障害の最小修正。宛先は `hotfix_base` |
+| bug | plan → implement（再現テスト先行）→ gates → review → sync → pr → automerge | 不具合修正 |
+| feature | research(Sonnet) → design(Fable) → implement → gates → review → sync → pr → automerge | 機能追加 |
+| chore | implement → gates → sync → pr → automerge | docs 整理・依存更新など判断の要らない雑務 |
 | research | research(Sonnet) → judge(Fable) → end | 調査だけ。PR 無し。`summary.md` を回収 |
 | merge-pr | resolve → gates → review → merge | 既存 PR のコンフリクト解消とマージ。本文の `pr: N` 行で対象を指定 |
 
 gates が赤なら implementer に戻す（最大 2 回）、review が FAIL なら戻す（最大 1 回）、超えたら `human`。
+
+### `automerge`（`auto_merge` のある PJ だけ。ADR-0042）
+
+`pr` の後ろに入る code step（`kit/steps/pr-automerge.sh`）。`project.yml` に `auto_merge` が無い PJ では runner が
+**step ごと飛ばして** `human` へ行くので、振る舞いは今までどおり（PR を作って人間がマージする）。
+
+```yaml
+auto_merge: true            # 既定値で有効にする
+auto_merge:                 # 値を選ぶなら dict で
+  method: merge             # merge | squash | rebase（既定 merge）
+  wait_min: 20              # CI checks を待つ上限（分）
+  delete_branch: true       # マージ後に origin の作業ブランチを消す
+  require_checks: true      # checks が 0 本ならマージしない（CI が無い PJ は false）
+```
+
+マージするのは次を**全部**満たすときだけ: `gates.txt` に `FAIL` が無い（`INFO`＝base でも赤は可）／workflow に reviewer が
+居るなら `review.md` の 1 行目が `# レビュー: PASS`／PR が OPEN で draft でない／宛先と head がこの run のもの／
+`gh pr checks` が全部 pass（30 秒ごとに `wait_min` まで。1 本でも fail なら止める）／`mergeable` が `MERGEABLE`。
+
+満たさなければ**マージせず PR を開いたまま** `human` へ渡し、理由を `state.json` の `error` に `automerge: <理由>` の
+1 行で残す（`resume_step` は付けない。PR はできていて、続きから回す対象ではない）。マージしたら `state.json` に
+`merged: {at, sha, method, pr_url, base}` を残し、PR に自動マージのコメントを 1 つ付ける。kb はチケットを `done` にする。
+
+`auto_merge` は**全 workflow に効く**。`hotfix_base: main` の PJ で真にすると hotfix が `main` へ自動で入る。
 
 ### agent step の時間上限（`timeout_min`）
 

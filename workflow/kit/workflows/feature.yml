@@ -58,4 +58,9 @@ steps:
     code: pr-create.sh
     inputs: [plan.md, report.md, review.md, gates.txt]
     outputs: [pr_url]
-    next: human
+    next: automerge
+
+  - id: automerge
+    code: pr-automerge.sh
+    on_pass: end
+    on_fail: human

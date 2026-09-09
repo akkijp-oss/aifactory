@@ -3,7 +3,8 @@
 name: aifactory
 display_name: aifactory（ソフトウェアファクトリー自身）
 repo: akkijp-oss/aifactory
-base_branch: main
+base_branch: develop            # PR の宛先。main は develop から人間が昇格させる安定版（ADR-0042）
+auto_merge: true                # ゲート緑・レビュー PASS・CI 緑なら runner が develop へマージする（ADR-0042）
 app_dir: /home/dev/app
 url: http://localhost:3000
 gates: gates.sh

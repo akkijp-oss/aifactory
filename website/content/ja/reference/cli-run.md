@@ -54,7 +54,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 ### スクリプトが担当する工程
 
 - `kit/steps/<script>` を Mac で実行。出力は `code-<step>-<n>.log` に逐次書く（`current` も同様に入る）
-- 渡す env: `PJ` `TASK` `RUN_DIR` `PROJECT_DIR` `GATES` `WORK` `APP_DIR` `BASE` `BRANCH` `WORKFLOW` `TITLE` `PR_NUMBER` `KNOWN_RED`
+- 渡す env: `PJ` `TASK` `RUN_DIR` `PROJECT_DIR` `GATES` `WORK` `APP_DIR` `BASE` `BRANCH` `WORKFLOW` `TITLE` `PR_NUMBER` `KNOWN_RED` `RUN_NAME` `HAS_REVIEW` `AUTO_MERGE` `AUTO_MERGE_METHOD` `AUTO_MERGE_WAIT_MIN` `AUTO_MERGE_DELETE_BRANCH` `AUTO_MERGE_REQUIRE_CHECKS`
 - 実行前に GitHub App トークンを払い出し直す（`sandbox reinject`）
 - 合否: 終了コード
 
@@ -96,7 +96,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 
 `human` で止まったときは、その理由が `error` に 1 行で入ります。工程が時間上限で切られた場合は `implement: 時間上限 60 分で中断（timeout）` の形になり、その工程の `history` の項目に `"failure": "timeout"` と `"timeout_min"` が付きます。エージェントの標準出力の末尾は `error` に混ぜず `last_output`（3000 字まで）に入ります。上限で切られたのに `error` の末尾が lint の集計行になっていて「lint で落ちた」と誤読された事故への対処です。Web コンソールと MCP の `run_show` は、この目印を見て「時間上限で中断されました」と出します。
 
-merge-pr の merge 工程が成功すると、`pr_url` の末尾に ` MERGED` が付きます。工程の実行中は、`current` に `{"step": "implement", "kind": "agent", "log": "agent-implement-1.log", "since": "…"}` のような情報が入ります。Web コンソールはこの情報を使って、実行中のログを表示します。
+`automerge` 工程がマージしたときは、`state.json` に `merged`（`{at, sha, method, pr_url, base}`）が入ります。マージしなかったときは入らず、`error` に `automerge: <理由>` が 1 行残ります（PR は開いたままなので、続きから回す `resume_step` は付きません）。merge-pr の merge 工程が成功すると、`pr_url` の末尾に ` MERGED` が付きます。工程の実行中は、`current` に `{"step": "implement", "kind": "agent", "log": "agent-implement-1.log", "since": "…"}` のような情報が入ります。Web コンソールはこの情報を使って、実行中のログを表示します。
 
 ## 環境変数
 
@@ -104,6 +104,8 @@ merge-pr の merge 工程が成功すると、`pr_url` の末尾に ` MERGED` �
 |---|---|
 | `CLAUDE_MODEL` | 全エージェントが担当する工程のモデルを 1 回だけ上書き |
 | `MERGE_METHOD` | merge-pr のマージ方法（merge / squash / rebase。既定 merge） |
+| `AUTOMERGE_POLL_S` | `automerge` が CI の check を見に行く間隔（秒。既定 30） |
+| `AUTOMERGE_ZERO_CHECKS_GRACE_S` | check が 0 本のときに待つ時間（秒。既定 180） |
 
 ## 過去に起きた問題と対処
 

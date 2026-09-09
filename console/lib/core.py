@@ -222,7 +222,7 @@ def run_summary(d):
             "branch": s.get("branch"), "base": s.get("base"), "started": ts_aware(s.get("started")), "finished": ts_aware(s.get("finished")),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
             "resume_step": s.get("resume_step"), "resumed_from": s.get("resumed_from"), "resume": resume_command(task, s),
-            "human": s.get("human"),
+            "human": s.get("human"), "merged": s.get("merged"),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
             "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
             "mtime": ts_file(st if st.exists() else d)}
@@ -313,7 +313,7 @@ def gate_fails(p):
 def run_outcome(d, s, state, wf, files):
     """「結果・止まった工程・理由の在り処」を、今ある記録（history / loops / gates.txt / ログの有無）だけから導く。
        runner は停止の理由を自由文で残さないので、導けないものは unknown（＝画面では「記録にありません」）にする"""
-    o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None, "human": None,
+    o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None, "human": None, "merged": None,
          "gate_fails": [], "fail_count": 0, "loops_hit": False, "job": None, "error_summary": None, "pr_url": s.get("pr_url"),
          "resume": s.get("resume")}   # 続きから回すコマンド（human で止まり wip が残っている run だけ。333）
     if s.get("kind") == "v0": o["reason"] = "v0"; return o
@@ -349,7 +349,20 @@ def run_outcome(d, s, state, wf, files):
         return o
     if state.get("_error") or (not hist and s.get("finished")): return o
     if not hist: return o
-    if s.get("pr_url"): o["reason"] = "pr_created"; return o
+    # runner が条件（ゲート緑・レビュー PASS・CI 緑）を確かめて自分でマージした run（ADR-0042）。
+    # 根拠は runner が書いた `merged` だけで、PR ができた話より先に言う（もう人間の出番は無い）
+    merged = state.get("merged")
+    if isinstance(merged, dict) and merged.get("at") and s.get("finished"):
+        o["reason"] = "merged"; o["merged"] = merged
+        o["pr_url"] = merged.get("pr_url") or o["pr_url"]
+        o["resume"] = None                     # 片が付いた run に「続きから回す」は出さない
+        return o
+    if s.get("pr_url"):
+        o["reason"] = "pr_created"
+        # 自動マージまで行って、条件を満たさず開いたまま人間に渡った run。理由は runner が error に 1 行で残している
+        if any(h.get("step") == "automerge" and h.get("ok") is False for h in hist):
+            o["automerge_error"] = last_line(state.get("error"))
+        return o
     last = hist[-1]
     if last.get("ok") is False:
         step = last.get("step"); o["stopped_step"] = step; o["stopped_index"] = len(hist) - 1

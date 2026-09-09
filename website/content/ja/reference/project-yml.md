@@ -23,7 +23,30 @@
 | `forbidden` | array | | エージェントがやってはいけないこと（プロジェクト固有） | 全役割の依頼文に「このプロジェクトで禁止」として追加 |
 | `workflow_overrides` | object | | ワークフロー名 → 上書き（v1 は `base_branch` のみ） | base の決定 |
 | `known_red_gates` | array | | base ブランチで既に失敗するゲート名（`gates.sh` の名前） | runner が FAIL を INFO（参考情報）として扱うように変更し、エージェントに「直せ」と戻さない |
+| `auto_merge` | boolean / object | | ゲート緑・レビュー PASS・CI 緑の PR を runner が `base_branch` へマージする（既定は無効） | `pr` の後の `automerge` 工程を回す。無い場合はその工程ごと飛ばして人間に渡す |
 
+
+### `auto_merge`（自動マージ）
+
+`true` と書くと既定値で有効になります。値を選ぶ場合は object で書きます。
+
+```yaml
+auto_merge:
+  method: merge          # merge / squash / rebase（既定 merge）
+  wait_min: 20           # CI の check が終わるのを待つ上限（分。既定 20）
+  delete_branch: true    # マージ後に origin の作業ブランチを消す（既定 true）
+  require_checks: true   # check が 0 本ならマージしない（既定 true。CI が無いプロジェクトは false）
+```
+
+マージするのは次を**すべて**満たすときだけです（ADR-0042）。
+
+- `gates.txt` に `FAIL` が無い（`INFO`＝base でも失敗するゲートは差し支えありません）
+- ワークフローに reviewer がいる場合、`review.md` の 1 行目が `# レビュー: PASS`
+- PR が開いていて下書きでなく、宛先と head がその run のもの
+- `gh pr checks` がすべて pass（30 秒ごとに `wait_min` まで待ち、1 本でも失敗したらそこで止まります）
+- GitHub の判定が `MERGEABLE`
+
+1 つでも欠けるときはマージせず、PR を開いたまま人間に渡します。理由は `state.json` の `error` に `automerge: CI 赤 (test)` のような 1 行で残り、板・コンソール・`run_show` から読めます。
 
 Windowsでは `backend: windows-pull`、登録済みの `worker`、`app_dir: <work_root>/app`、`.ps1` のゲートを指定します。[Windowsワーカーの導入手順](../guides/windows-worker.md)を参照してください。
 
@@ -65,6 +88,7 @@ forbidden:
 - YAML の平文にバッククォートや `: ` を含める項目は `"..."` で囲む（PyYAML が誤読する）
 - `facts` は「テストの実行方法」「生成物の置き場」「既知の問題（日付つき）」が特に効く。長くなったら `README` や `CLAUDE.md` の該当箇所を指すだけにする
 - 「全プロジェクトで同じ注意」は書かない（`workflow/kit/roles/_common.md` へ）
+- `auto_merge` は**すべてのワークフローに効く**。`hotfix_base: main` のプロジェクトで有効にすると、hotfix が `main` へ自動で入る
 - `known_red_gates` は一時的。直す PR がマージされたら消す
 - `known_red_gates` は手で書かなくても、runner が赤いゲートを base で回して確かめた分が run の記録に載る（下記）
 - 変更は次の run から効く
