@@ -56,6 +56,8 @@ jobs:
         with:
           go-version-file: workers/go.mod
           cache: false
+      # ランナー付属の Google Chrome の apt リポジトリは使わない。index のハッシュ不一致で apt-get update ごと落ちることがある（2026-09-09 PR #69）
+      - run: sudo rm -f /etc/apt/sources.list.d/google-chrome*.list /etc/apt/sources.list.d/google-chrome*.sources
       - run: sudo apt-get update && sudo apt-get install -y python3-pil python3-tk xvfb xauth xdotool xclip
       - run: go test -c -o /tmp/aifactory-worker.test ./cmd/aifactory-worker
         working-directory: workers
