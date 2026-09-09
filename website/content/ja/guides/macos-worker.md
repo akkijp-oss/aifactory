@@ -109,13 +109,15 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 | 記録 | 確認すること |
 |---|---|
-| `state.json` | 工程履歴、PR URL、backend・worker・lease、`artifacts_received` と `released`、回収しなかった名前の `artifacts_skipped` |
+| `state.json` | 工程履歴、PR URL、backend・worker・lease、`artifacts_received` と `released`、回収しなかった名前の `artifacts_skipped`、退避先の `wip_branch` |
 | `agent-*.log` / `code-*.log` | 実行内容、ゲート・レビューの判定、ゲストOSなどの検証根拠 |
 | `worker-operations.log` | ワーカー操作ID。管理CLIの `show` と対応づける |
 | `work/` | 計画・報告・レビュー・ゲート結果・PR URLなど |
 | `artifacts.json` | 回収ファイルのSHA-256 |
 
 PR後の `result: human` は人間によるレビュー待ちを表す。これだけで失敗と判断せず、工程履歴とPRを確認する。通常終了ではゲストがTartの一覧から消え、制御系のleaseが空になる。`--keep` を付けた場合は成果物回収後もゲストとleaseを保持する。
+
+PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切った、工程が失敗したなど）は、成果物回収の前に作業ブランチのHEADを `sandbox/<チケット番号>-<workflow名>-wip` へforce pushし、そのブランチ名を `state.json` の `wip_branch` に記録する。人はこのブランチを取り出して続きを引き取れる。pushできなかった場合は `wip_branch` を空にし、代わりに差分を `wip.patch`（`git am` で当てられる）としてrunディレクトリに残す。保全が成功しても失敗しても、成果物回収とゲスト削除は続行する。
 
 成果物はゲスト作業ディレクトリ直下の通常ファイル、合計4 MiBまで。入力転送は1ファイル350,000バイトまで。認証用 `runtime.env` は除外する。ディレクトリ・symlink・合計4 MiBを超える分は回収せず飛ばし、その名前と理由を `state.json` の `artifacts_skipped` に残す。回収対象外があってもrunは止めず、VMは返却する。大きなビルド成果物や `.xcresult` の回収は、この経路では扱えない。
 

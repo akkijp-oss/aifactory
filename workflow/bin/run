@@ -316,9 +316,11 @@ class Run:
         if self.dry: return ""
         wip = f"sandbox/{self.task}-{self.wf_name}-wip"
         self.refresh_token()
-        r = sh(["sandbox", "ssh", self.task, f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} && echo pushed"], check=False)
-        ok = "pushed" in (r.stdout or "")
-        self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (r.stderr or r.stdout)[-200:]}")
+        # ゲストの叩き方は backend ごとに違う（Proxmox は ssh、pull backend は worker queue）。self.sb に寄せて
+        # pull backend からも同じ保全が使えるようにする（チケット 282）。stdout しか返らないので stderr を混ぜる
+        out = self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} 2>&1 && echo pushed", check=False)
+        ok = "pushed" in (out or "")
+        self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (out or '')[-200:]}")
         if not ok:
             # push できなくても作業を失わない: base からの差分をパッチとして run ディレクトリに残す（2026-09-06 に App の workflows 権限不足で push が拒否され、実装が巻き戻しで消えた）
             patch = self.sb(f"cd $SANDBOX_APP_DIR && git format-patch --stdout origin/{self.base}..HEAD", check=False)
