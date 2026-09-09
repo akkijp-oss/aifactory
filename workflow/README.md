@@ -88,7 +88,7 @@ VM 無しで runner を 1 周させたいときは、`sandbox` と `scp` のシ�
 ## 貸出直後の準備（`prepare`）と、base でも赤いゲート
 
 VM は run が終わるたびにテンプレート（`provision.sh` を焼いた時点）へ戻り、base だけが進む。このずれが gates の赤として
-出ると、実装役は「自分が壊した」と思って直せないものを直そうとする。対処は 2 つに分かれる（ADR-0037）。
+出ると、実装役は「自分が壊した」と思って直せないものを直そうとする。対処は 2 つに分かれる（ADR-0038）。
 
 **環境のずれは `prepare` で埋める。** `project.yml` に `prepare: prepare.sh` と書くと、runner が VM を取って checkout した
 直後、最初の agent step の前に `app_dir` を cwd にして 1 回だけ実行する（`--from` の続きや PR 起点の run でも走らせる）。
@@ -166,7 +166,7 @@ stdout の末尾は `last_output`、`history` の末尾に `failure: "timeout"` 
 
 | 罠 | 症状 | 対処 |
 |---|---|---|
-| base で既に赤いゲートを agent に「直せ」と戻した | docs だけの PR（kumitate #294）に、無関係なテスト修正が混入した（#293 と重複） | runner が赤いゲートを base でも回し、base でも赤ければ FAIL → INFO に格下げして戻さない（ADR-0037）。手で省きたいときは従来どおり `project.yml` の `known_red_gates` に書ける |
+| base で既に赤いゲートを agent に「直せ」と戻した | docs だけの PR（kumitate #294）に、無関係なテスト修正が混入した（#293 と重複） | runner が赤いゲートを base でも回し、base でも赤ければ FAIL → INFO に格下げして戻さない（ADR-0038）。手で省きたいときは従来どおり `project.yml` の `known_red_gates` に書ける |
 | テンプレートから base が進んで VM の環境がずれた | kumitate の実 DB テストが列不在で全滅し、3 attempt を「gates 赤の修正」に浪費（#288 / #290 / #293） | `project.yml` の `prepare` で貸出直後に依存と migration を base へ揃える。揃わなければ agent を起こさず `failure: prepare` で止める |
 | `git add -A` の自動コミット | テストが生成した DB（turso の .db）を拾いかけた | 追跡済み変更だけ `git add -u`。未追跡は一覧を記録して push しない |
 | 変数の直後に全角括弧（`$loop）`） | bash が全角まで変数名と見て「未定義」 | 常に `${var}` と書く。runner を Python にした理由の一つ |

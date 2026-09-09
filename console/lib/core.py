@@ -4,7 +4,7 @@
 - 動かす: kb / intake / dispatch / sandbox を子プロセスで。長いものは JobStore（console/jobs/）。判定（二重起動・入力検査）はここに 1 つ
 - 置き場は lib/aifactory_paths.py（AIFACTORY_WORKSPACE。KB_ROOT / CONSOLE_JOBS で個別に差し替え可）
 """
-import contextlib, datetime, fcntl, json, os, pathlib, re, signal, sqlite3, subprocess, sys, threading, time
+import contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
@@ -19,7 +19,16 @@ KB_ROOT = paths.KB_ROOT
 DB = KB_ROOT / "kanban.db"
 RUNS = paths.RUNS
 LOGS = paths.LOGS
-SANDBOX_STATE = pathlib.Path.home() / ".config" / "sandbox" / "state.json"
+def sandbox_state_path():
+    """貸出台帳（state.json）の置き場。環境変数 SANDBOX_STATE が正（glue/bin/dispatch・workflow/bin/run と同じ規則）。
+
+    テナント運用では sandbox CLI が `<t>.state.json` を使うので、ここだけ固定パスを読むと
+    「CLI では貸出中なのに MCP の lent は {}」になる（チケット 336 の 3 番目）。
+    """
+    return pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config" / "sandbox" / "state.json"))
+
+
+SANDBOX_STATE = sandbox_state_path()
 SANDBOX_PJ_DIR = pathlib.Path.home() / ".config" / "sandbox" / "pj"
 POOL_PER_PJ = int(os.environ.get("SANDBOX_POOL_PER_PJ") or 3)   # 「定義台数」の正本は glue/bin/dispatch と同じ環境変数（241）
 LS_STALE_S = 600                                                # `sandbox ls` の結果がこれより古ければ「古い」と添える（229）
@@ -110,6 +119,8 @@ def load_ctl_env(path=None):
         if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2: v = v[1:-1]
         if not k or not v or os.environ.get(k): continue
         os.environ[k] = v; added.append(k)
+    global SANDBOX_STATE
+    SANDBOX_STATE = sandbox_state_path()   # ctl.env に SANDBOX_STATE があれば、それを読んでから台帳の場所を決め直す
     return added
 
 
@@ -546,10 +557,13 @@ def recent_red_gates(pj, limit=20):
 
 
 def sandbox_view():
-    lent = {}
-    if SANDBOX_STATE.exists():
+    lent, state_error = {}, None
+    state_exists = SANDBOX_STATE.exists()
+    if state_exists:
         try: lent = {k: ts_keys(v, "since") for k, v in json.loads(SANDBOX_STATE.read_text(encoding="utf-8")).items()}
-        except Exception as e: lent = {"_error": str(e)}
+        except Exception as e: lent = {"_error": str(e)}; state_error = str(e)
+    else:
+        state_error = f"{SANDBOX_STATE} がありません"   # 「貸出なし」と「台帳を読めていない」を呼び手が区別できるようにする（336）
     # 貸出は「1 チケット = 1 件」、VM は vmid の異なり。同じ VM を 2 台と数えないために分けて持つ（チケット 237）
     by_vmid = leases_by_vmid(lent)
     shared = {vmid: tasks for vmid, tasks in by_vmid.items() if len(tasks) > 1}
@@ -589,7 +603,14 @@ def sandbox_view():
         except ValueError: age = None
     e = sandbox_env()
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
-    return {"lent": lent, "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
+    # 貸出 1 件 = 1 行の一覧（台帳の写し）。MCP から IP を引くのに state.json を ssh で直読みしなくて済むようにする（336）
+    status_of = {str(v["vmid"]): v.get("status") for v in vms if v.get("vmid")}
+    leases = [{"task": str(t), "vmid": None if v.get("vmid") in (None, "") else str(v["vmid"]), "name": v.get("name"),
+               "ip": v.get("ip"), "pj": v.get("pj"), "since": v.get("since"), "phase": v.get("phase"),
+               "url": urls.get(t), "vm_status": status_of.get(str(v.get("vmid")))}
+              for t, v in sorted(lent.items(), key=lambda kv: _task_key(kv[0])) if isinstance(v, dict)]
+    return {"lent": lent, "leases": leases, "state_exists": state_exists, "state_error": state_error,
+            "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
             "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
             "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms,
             "ls_fetched": fetched, "ls_age_s": age, "ls_stale": bool(age is not None and age > LS_STALE_S),
@@ -717,6 +738,56 @@ class JobStore:
                 meta.update({"state": "ended", "finished": now(), "note": "終了を pid の消滅で検知（終了コード不明）。kb run なら run の state.json と kb の状態が正"}); cls.save(meta)
 
 
+# ---------- 枠組みの checkout（ctl の ~/aifactory）が origin と食い違っていないか
+REPO_STATUS_TTL = 30            # overview は 5 秒ごとに来る。git は 30 秒に 1 回だけ呼ぶ
+_repo_status_cache = {}
+
+
+def _git_out(path, *args):
+    """git を読むだけで呼ぶ。戻り: (rc, stdout)。git が無い・checkout でない・応答が無いときも例外にしない"""
+    try:
+        r = subprocess.run(["git", *args], cwd=str(path), text=True, capture_output=True, errors="replace", timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return r.returncode, r.stdout.strip()
+
+
+def repo_status(path=None, ttl=REPO_STATUS_TTL):
+    """この checkout（runner と console が動いている枠組みそのもの）が origin と食い違っていないか（チケット 337）。
+
+    runner は PJ 定義（examples/projects/<pj>/ の project.yml / gates.sh / provision.sh）を作業ツリーから
+    直接読むので、ctl で直して push していない変更はそのまま本番の挙動になる。origin と食い違ったまま
+    動いていることに気づけるように、ahead / behind / 汚れ を overview に添える。判定はここ 1 か所（ADR-0015）。
+
+    - 網は触らない（fetch しない）。behind は最後に fetch した時点との差
+    - git が無い・checkout でないときは known=False（分からない。警告も出さない）
+    - 上流が無いとき（detached や追跡なし）は ahead / behind は None。detached=True で分かる
+    """
+    p = pathlib.Path(path or REPO)
+    key = str(p)
+    hit = _repo_status_cache.get(key)
+    if hit and (time.monotonic() - hit[0]) < ttl: return hit[1]
+    d = {"path": key, "known": False, "branch": None, "upstream": None, "detached": False,
+         "ahead": None, "behind": None, "dirty": 0, "diverged": False}
+    rc, top = _git_out(p, "rev-parse", "--show-toplevel")
+    if rc == 0 and top:
+        d["known"] = True
+        _, branch = _git_out(p, "rev-parse", "--abbrev-ref", "HEAD")
+        d["detached"] = branch == "HEAD"
+        d["branch"] = None if d["detached"] else (branch or None)
+        rc, up = _git_out(p, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+        if rc == 0 and up:
+            d["upstream"] = up
+            rc, counts = _git_out(p, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+            n = counts.split()
+            if rc == 0 and len(n) == 2: d["ahead"], d["behind"] = int(n[0]), int(n[1])
+        rc, dirty = _git_out(p, "status", "--porcelain")
+        if rc == 0: d["dirty"] = len([l for l in dirty.splitlines() if l.strip()])
+        d["diverged"] = bool(d["ahead"] or d["behind"] or d["dirty"])
+    _repo_status_cache[key] = (time.monotonic(), d)
+    return d
+
+
 # ---------- overview
 def overview(pj=None, limit=6):
     """概況。pj を渡すと run の一覧だけその PJ に絞る（上限を掛ける前に絞る。7 本以上動いていても選んだ PJ の run が漏れない）。
@@ -739,7 +810,9 @@ def overview(pj=None, limit=6):
             "runs_abandoned": {"n": len(abandoned), "runs": abandoned[:limit]},
             "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
             "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
-            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now(), "tz": tz_info()}
+            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(),
+            "repo": repo_status(),                                                # PJ 定義を読む checkout が origin と食い違っていないか（337）
+            "now": now(), "tz": tz_info()}
 
 
 
@@ -907,8 +980,47 @@ def op_dispatch(b):
     return {"job": JobStore.start("dispatch", cmd, "dispatch " + " ".join(cmd[1:]), conflict=serial)}
 
 
-def op_sandbox_ls():
-    return {"job": JobStore.start("sandbox-ls", ["sandbox", "ls"], "sandbox ls")}
+def op_sandbox_ls(conflict=None):
+    return {"job": JobStore.start("sandbox-ls", ["sandbox", "ls"], "sandbox ls", conflict=conflict)}
+
+
+def sandbox_ls_refresh_if_stale(view):
+    """`sandbox ls` の値が古ければ、裏で取り直しのジョブを起こして view に印を付けて返す（チケット 336・ADR-0038）。
+
+    Proxmox への ssh に数秒かかるので、その場で待たずに「今回は古い値 + ls_refreshing: true」を返す。次の呼び出しで最新になる。
+    読み取りのツールが状態（jobs/）を増やす唯一の例外なので、起こす条件を 3 つに絞る:
+      - 値が古い（LS_STALE_S 超）か、まだ一度も取れていない
+      - sandbox-ls が実行中でない（実行中ならその id を返すだけ）
+      - 直近の sandbox-ls（成否問わず）の開始から LS_STALE_S 秒より経っている（失敗を叩き続けない）
+    起こせないときは view["ls_refresh_error"] に理由を入れる。sandbox_status 自体は失敗させない（読めた分は返す）。
+    view はその場で書き換えて返す。
+    """
+    view["ls_refreshing"] = False
+    if not (view.get("ls_stale") or view.get("ls_fetched") is None): return view
+    jobs = [j for j in JobStore.list() if j.get("kind") == "sandbox-ls"]     # 新しい順
+    running = next((j for j in jobs if j.get("rc") is None and j.get("state") == "running"), None)
+    if running:
+        view.update({"ls_refreshing": True, "ls_refresh_job": running["id"]}); return view
+    last = jobs[0] if jobs else None
+    if last and last.get("started") and not after(now(), _shift(last["started"], LS_STALE_S)):
+        view["ls_refresh_error"] = f"直近の sandbox ls（{last['id']}）から {LS_STALE_S} 秒経っていないので取り直しません"
+        return view
+    if not shutil.which("sandbox", path=child_env().get("PATH")):
+        view["ls_refresh_error"] = "sandbox コマンドが PATH にありません"; return view
+    try:
+        job = op_sandbox_ls(conflict=lambda j: "sandbox ls が実行中" if j.get("kind") == "sandbox-ls" else None)["job"]
+        view.update({"ls_refreshing": True, "ls_refresh_job": job["id"]})
+    except Conflict:
+        view["ls_refreshing"] = True                                         # 別の口が同時に起こした。それの結果を待てばよい
+    except Exception as e:
+        view["ls_refresh_error"] = f"{type(e).__name__}: {e}"
+    return view
+
+
+def _shift(ts, seconds):
+    """ISO 8601 の時刻を seconds 秒ずらした文字列。読めなければ元のまま返す"""
+    try: return (ts_dt(ts) + datetime.timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    except (TypeError, ValueError): return ts
 
 
 def op_sandbox_release(b):

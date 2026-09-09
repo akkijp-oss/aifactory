@@ -1,4 +1,4 @@
-# ADR 0037: 貸出直後の準備は project.yml の `prepare` で行い、「base でも赤いゲート」は runner が base で回して確かめる
+# ADR 0038: 貸出直後の準備は project.yml の `prepare` で行い、「base でも赤いゲート」は runner が base で回して確かめる
 
 - 状態: Accepted
 - 日付: 2026-09-09

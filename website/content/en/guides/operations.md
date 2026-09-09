@@ -72,6 +72,14 @@ To keep VMs running, put `SB_IDLE_STOP_HOURS=0` in `~/.config/sandbox/env` (ever
 
 Check `sandbox ls` for lent VMs before rebuilding.
 
+## Changing a project definition
+
+The project definitions the runner reads (`project.yml` / `gates.sh` / `provision.sh` under `examples/projects/<pj>/`) are read straight from the working tree of the control plane's checkout. Editing `gates.sh` there takes effect from the next gates run, but the control plane's remote is https, so `git push` fails. Leave it like that and production runs from a checkout that differs from origin.
+
+The rule is: **edit and push from your own (Mac) checkout, and only deploy on the control plane with `bin/ctl-update`.** If you did edit on the control plane in a hurry, carry the commits out with `git format-patch origin/main --stdout`, push them from your machine, then bring the control plane back in line with `git reset --hard origin/main`.
+
+Any difference (unpushed commits, commits not pulled in, uncommitted changes) is shown as a warning on the console board. The full procedure, including the deploy key swap that lets the control plane push directly, is in `sandbox/OPERATIONS.md` under 「PJ 定義の変更手順」.
+
 ## Egress limits (firewall)
 
 VMs can only reach the internet and the DNS on sb-gw (ADR-0010). The LAN, the Proxmox host, neighbouring VMs and the tailnet are unreachable. After rebuilding templates or pools, run `50-firewall.sh` again so the `clean` snapshots include the firewall settings.

@@ -170,9 +170,16 @@ async function viewBoard() {
   const tickets = extra => `#/tickets?pj=${encodeURIComponent(pj)}${extra || ''}`;                /* ボードで選んだ PJ を一覧に引き継ぐ */
   const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty"><a href="${tickets('&amp;status=' + s)}">${esc(tt(T.board.more, { n: list.length - cap }))}</a></div>` : ''}</section>`;
   const canDispatch = by.todo.length > 0;
+  /* PJ 定義（examples/projects/<pj>/）は runner がこの作業ツリーから直接読む。origin と食い違ったまま動いていたら言う（337） */
+  const repo = o.repo || {};
+  const repoBits = [repo.ahead ? tt(T.board.repoAhead, { n: repo.ahead }) : '', repo.behind ? tt(T.board.repoBehind, { n: repo.behind }) : '',
+                    repo.dirty ? tt(T.board.repoDirty, { n: repo.dirty }) : ''].filter(Boolean);
+  const repoWarn = repo.diverged && repoBits.length
+    ? `<div class="warn">${tt(T.board.repoDiverged, { path: esc(repo.path), what: esc(repoBits.join('・')) })}<br>${esc(T.board.repoHow)}</div>` : '';
   render(head(esc(T.nav.board), T.sub.board, `
       <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <a class="btn" href="${tickets()}">${esc(T.btn.openTickets)}</a><a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
+    + repoWarn
     + `<div class="help">${pj ? tt(T.board.scopePj, { pj: esc(pj) }) : esc(T.board.scopeAll)}</div>
     <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
     <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);

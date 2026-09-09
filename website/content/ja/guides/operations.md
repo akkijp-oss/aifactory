@@ -72,6 +72,14 @@ journalctl -u aifactory-idle-stop        # timer のログ
 
 作り直す前に `sandbox ls` で貸出中がないことを確かめます。
 
+## PJ 定義の変更手順
+
+runner が読む PJ 定義（`examples/projects/<pj>/` の `project.yml` / `gates.sh` / `provision.sh`）は、制御系の checkout の作業ツリーから直接読まれます。制御系で `gates.sh` を直すと次の gates からその場で効きますが、制御系の remote は https なので `git push` はできません。直したまま放っておくと、制御系が origin と食い違ったまま本番が動きます。
+
+基本は**手元（Mac）の checkout で直して push し、制御系では `bin/ctl-update` で配備するだけ**にします。急ぎで制御系の中で直したときは `git format-patch origin/main --stdout` で持ち出し、手元から push してから制御系を `git reset --hard origin/main` で揃え直します。
+
+食い違い（push していないコミット・取り込んでいないコミット・未コミットの変更）は、コンソールのボードに警告として出ます。手順の全文と、制御系から直接 push できるようにする deploy key の付け替えは `sandbox/OPERATIONS.md` の「PJ 定義の変更手順」にあります。
+
 ## 通信制限（ファイアウォール）
 
 VM はインターネットと sb-gw の DNS にだけ出られます（ADR-0010）。LAN・Proxmox ホスト・隣の VM・tailnet には届きません。テンプレートやプールを作り直したら `50-firewall.sh` を再実行して、`clean` スナップショットにファイアウォール設定が含まれるようにします。

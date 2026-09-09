@@ -39,6 +39,7 @@ class McpClient:
         return res["isError"], (json.loads(text) if not res["isError"] else text)
     def close(self):
         self.p.stdin.close(); self.p.wait(timeout=10)
+        self.p.stdout.close(); self.p.stderr.close()   # 1 テストで何本も立てるので、読み終わったパイプは閉じる
 
 
 class McpTest(unittest.TestCase):
@@ -216,6 +217,135 @@ class McpTest(unittest.TestCase):
             self.assertTrue(props[k].get("description"))
         self.assertIn("ticket_show", props["from_step"]["description"])
         self.assertIn("wip", props["from_branch"]["description"])
+
+    def test_13_job_wait_does_not_block_ticket_show(self):
+        """job_wait の待ちで ticket_show が塞がれない（チケット 336 の 1 番目。PM は 2026-09-08 に塞がれた）。
+
+        ticket_show は sync_preview のために kb を 1 回起動するので、「別スレッドに逃がす」だけでなく
+        「重い読み取りでも 2 秒以内に返る」ことまで固定する。
+        """
+        jid = "20260908-000001-fake"
+        d = self.tmp / "jobs" / jid; d.mkdir(parents=True, exist_ok=True)
+        meta = d / "meta.json"
+        running = {"id": jid, "kind": "fake", "label": "fake", "cmd": ["true"], "ticket": None, "run_hint": None,
+                   "pid": 1, "started": "2026-09-08T00:00:00+09:00", "finished": None, "rc": None, "state": "running"}
+        meta.write_text(json.dumps(running, ensure_ascii=False), encoding="utf-8")
+        (d / "log").write_text("$ fake\n", encoding="utf-8")
+
+        # sync_preview（kb を 1 回起動する重い読み取り）まで通るチケットを自前で用意する
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: job_wait 中の ticket_show", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r); tid = r["id"]
+        name = f"2020-01-01-{PJ}-{tid}"
+        rd = self.ws / "runs" / name; rd.mkdir(parents=True, exist_ok=True)
+        (rd / "state.json").write_text(json.dumps({"pj": PJ, "task": tid, "workflow": "research", "started": "2000-01-01T00:00:00+00:00",
+                                                   "finished": "2000-01-01T00:00:00+00:00", "result": "end", "pr_url": "", "history": []},
+                                                  ensure_ascii=False), encoding="utf-8")
+        err, r = self.c.tool("ticket_action", id=tid, action="set", run=name); self.assertFalse(err, r)
+
+        wait_id = self.c.send("tools/call", {"name": "job_wait", "arguments": {"id": jid, "timeout_s": 8}})
+        t0 = time.time()
+        show_id = self.c.send("tools/call", {"name": "ticket_show", "arguments": {"id": tid}})
+
+        first = self.c.recv()
+        self.assertEqual(first["id"], show_id, f"job_wait に塞がれた: {first}")
+        self.assertLess(time.time() - t0, 2, "ticket_show が 2 秒以内に返らない（336 の完了条件）")
+        self.assertFalse(first["result"]["isError"])
+        d2 = json.loads(first["result"]["content"][0]["text"])
+        self.assertIn("ticket", d2); self.assertIsNotNone(d2.get("sync_preview"))
+
+        meta.write_text(json.dumps({**running, "state": "done", "rc": 0, "finished": "2026-09-08T00:00:05+09:00"}, ensure_ascii=False), encoding="utf-8")
+        second = self.c.recv()
+        self.assertEqual(second["id"], wait_id)
+        self.assertEqual(json.loads(second["result"]["content"][0]["text"])["job"]["state"], "done")
+
+    def test_14_tools_carry_annotations(self):
+        """tools/list に annotations を載せる（336）。
+
+        Claude Code は readOnlyHint の無いツールを「並列に呼べない」とみなして同じターンの呼び出しを直列に送る。
+        サーバーが job_wait を別スレッドに逃がしていても（ADR-0028）、これが無いと呼び手の側で塞がる。
+        """
+        tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
+        for n, t in tools.items():
+            self.assertIn("annotations", t, f"{n} に annotations が無い")
+            self.assertIn("readOnlyHint", t["annotations"], n)
+            self.assertTrue(t["annotations"].get("title"), n)
+        for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file"):
+            self.assertTrue(tools[n]["annotations"]["readOnlyHint"], f"{n} は読み取りのはず")
+        for n in ("ticket_run", "ticket_new", "ticket_action", "intake", "dispatch", "sandbox_ls", "sandbox_release", "job_stop"):
+            self.assertFalse(tools[n]["annotations"]["readOnlyHint"], f"{n} は状態を変える")
+        for n in ("sandbox_release", "job_stop"):
+            self.assertTrue(tools[n]["annotations"].get("destructiveHint"), f"{n} は取り返しがつかない")
+
+    # ---- sandbox_status（336 の 2・3 番目）。実機も sandbox/bin/sandbox も使わず、PATH に偽の `sandbox` を置いた別クライアントで確かめる
+    LS_TABLE = ("TASK     VM             VMID   IP           STATUS    SINCE\n"
+                "229      sb-kumitate-01 9204   10.77.1.4    running   2026-09-06T12:00:07+09:00\n"
+                "-        sb-kumitate-long-name-99 9299 10.77.1.9 stopped\n")
+
+    def client(self, tag, fake_sandbox=True, state=None):
+        """別の jobs / HOME を持つ MCP クライアント。既存の cls.c の挙動は変えない。
+
+        HOME も差し替えるのは、core.child_env() が ~/.local/bin を PATH の末尾に足すため（本物の sandbox を呼ばない）。
+        """
+        home = self.tmp / f"home-{tag}"; home.mkdir(parents=True, exist_ok=True)
+        env = {**self.env, "CONSOLE_JOBS": str(self.tmp / f"jobs-{tag}"), "HOME": str(home),
+               "SANDBOX_STATE": str(state or (home / "state.json"))}
+        if fake_sandbox:
+            b = self.tmp / f"bin-{tag}"; b.mkdir(parents=True, exist_ok=True)
+            sb = b / "sandbox"
+            sb.write_text('#!/bin/sh\n[ "$1" = ls ] || exit 2\ncat <<\'EOF\'\n' + self.LS_TABLE + 'EOF\n', encoding="utf-8")
+            sb.chmod(0o755)
+            env["PATH"] = f"{b}:{env.get('PATH', '')}"
+        else:
+            env["PATH"] = "/usr/bin:/bin"
+        c = McpClient(env); self.addCleanup(c.close)
+        return c
+
+    def test_15_sandbox_status_refreshes_a_stale_ls(self):
+        """`sandbox ls` が古ければ、sandbox_status が裏で取り直しを起こす（336 の 2 番目）"""
+        c = self.client("15")
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
+        self.assertTrue(d["ls_refreshing"], "一度も ls を取っていないのに取り直しを起こしていない")
+        jid = d["ls_refresh_job"]; self.assertTrue(jid)
+        self.assertIsNone(d["ls_fetched"])                                   # 今回は古い値のまま返す（待たせない）
+
+        err, w = c.tool("job_wait", id=jid, timeout_s=30); self.assertFalse(err, w)
+        self.assertEqual(w["job"]["rc"], 0, w["log"]["text"][-400:])
+
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
+        self.assertFalse(d["ls_refreshing"]); self.assertFalse(d["ls_stale"])
+        self.assertLess(d["ls_age_s"], 600)
+        self.assertEqual([v["name"] for v in d["vms"]], ["sb-kumitate-01", "sb-kumitate-long-name-99"])
+        self.assertEqual(next(p for p in d["templates"] if p["pj"] == PJ)["pool_actual"], 1)
+
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)           # 新しいうちは何度呼んでもジョブを増やさない
+        err, jl = c.tool("job_list"); self.assertFalse(err)
+        self.assertEqual(len([j for j in jl["jobs"] if j["kind"] == "sandbox-ls"]), 1)
+
+    def test_15b_sandbox_status_says_why_it_could_not_refresh(self):
+        """取り直しに失敗しても sandbox_status 自体は成功で返す（読めた分は返す）"""
+        c = self.client("15b", fake_sandbox=False)
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
+        self.assertFalse(d["ls_refreshing"]); self.assertTrue(d.get("ls_refresh_error"))
+
+    def test_16_sandbox_status_lent_comes_from_the_state_file(self):
+        """貸出中 VM の IP を MCP から引ける（336 の 3 番目）。台帳は SANDBOX_STATE で差し替えられる"""
+        state = self.tmp / "state-16.json"
+        lease = {"vmid": 9204, "name": "sb-kumitate-01", "ip": "10.77.1.4", "pj": PJ,
+                 "since": "2026-09-08T10:00:00+09:00", "phase": "ready"}
+        state.write_text(json.dumps({"336": lease}, ensure_ascii=False), encoding="utf-8")
+        c = self.client("16", fake_sandbox=False, state=state)
+
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
+        self.assertEqual(d["state_file"], str(state)); self.assertTrue(d["state_exists"]); self.assertIsNone(d["state_error"])
+        self.assertEqual(d["lent"]["336"]["ip"], "10.77.1.4")
+        self.assertEqual(d["leases"], [{"task": "336", "vmid": "9204", "name": "sb-kumitate-01", "ip": "10.77.1.4",
+                                        "pj": PJ, "since": "2026-09-08T10:00:00+09:00", "phase": "ready",
+                                        "url": d["urls"]["336"], "vm_status": None}])
+
+        state.unlink()
+        err, d = c.tool("sandbox_status"); self.assertFalse(err, d)
+        self.assertEqual(d["lent"], {}); self.assertEqual(d["leases"], [])
+        self.assertFalse(d["state_exists"])
 
 
 if __name__ == "__main__":
