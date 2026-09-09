@@ -710,9 +710,10 @@ def sync_pr(c, r, dry=False):
         return "open", state or "?"       # OPEN と、こちらが知らない状態は触らない
     note = run_note(r["note"], note)
     if dry:
-        print(json.dumps({"id": r["id"], "pr": r["pr"], "pr_state": state,
-                          "before": {"status": r["status"], "note": r["note"]},
-                          "after": {"status": status, "note": note}}, ensure_ascii=False))
+        # 形は apply_result の dry と同じ（console の下見は最後の 1 行だけを読み、そこに最終の after が来る）
+        print(json.dumps({"id": r["id"], "run": r["run"], "pr_state": state,
+                          "before": {"status": r["status"], "note": r["note"], "run": r["run"], "pr": r["pr"], "updated": r["updated"]},
+                          "after": {"status": status, "note": note, "pr": r["pr"], "run": r["run"]}}, ensure_ascii=False))
         return status, note
     # PR 由来の更新でも run 記録への転記はしない（sync は転記しない。ADR-0039 / 342）
     update(c, r["id"], status=status, note=note, transcribe=False); render(c)

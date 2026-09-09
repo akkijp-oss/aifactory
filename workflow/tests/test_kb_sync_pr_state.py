@@ -108,6 +108,17 @@ class KbSyncPrStateTest(unittest.TestCase):
     def calls_text(self):
         return self.calls.read_text(encoding="utf-8") if self.calls.exists() else ""
 
+    def finished_run(self, tid, name, pr):
+        """PR まで出して human で終わった run の記録（runner が残す形）を置き、チケットの run 欄をそれに向ける"""
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps(
+            {"pj": "kumitate", "task": str(tid), "workflow": "feature", "branch": f"sandbox/{tid}-feature-x", "base": "develop",
+             "result": "human", "next": "human", "pr_url": f"https://github.com/akkijp/kumitate/pull/{pr}",
+             "started": "2026-09-08T09:00:00+09:00", "finished": "2026-09-08T10:00:00+09:00", "history": []},
+            ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.kb("set", str(tid), "--run", name).returncode, 0)
+        return name
+
     # ---------- 1 件ずつ
     def test_a_merged_pr_moves_the_ticket_to_done_with_the_merge_time_in_the_note(self):
         self.ticket(940, 300)
@@ -173,9 +184,13 @@ class KbSyncPrStateTest(unittest.TestCase):
         self.ticket(946, 300)
         r = self.kb("sync", "946", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        line = [json.loads(l) for l in r.stdout.splitlines() if l.startswith("{") and '"pr_state"' in l][0]
+        line = json.loads(r.stdout.strip().splitlines()[-1])
         self.assertEqual((line["id"], line["pr_state"]), (946, "MERGED"))
         self.assertEqual(line["after"]["status"], "done")
+        # 下見の形は apply_result の dry と同じ（console は最後の 1 行だけを読み、run と before/after を見る）
+        self.assertEqual(set(line["before"]), {"status", "note", "run", "pr", "updated"})
+        self.assertEqual(set(line["after"]), {"status", "note", "pr", "run"})
+        self.assertIn("run", line)
         self.assertEqual(self.show(946)["status"], "review", "--dry-run で DB を書いている")
 
     def test_a_ticket_without_a_run_is_synced_from_the_pr_alone(self):
@@ -186,6 +201,21 @@ class KbSyncPrStateTest(unittest.TestCase):
         self.ticket(948, None, status="todo")
         r = self.kb("sync", "948")
         self.assertEqual(r.returncode, 1); self.assertIn("run が無い", r.stderr)
+
+
+    def test_the_pr_state_overrides_the_note_the_runner_left(self):
+        """run 記録（PR 待ち）を先に、GitHub の事実を後に当てる。板は `PR 待ち` ではなく `マージ済み` になる"""
+        self.ticket(949, 300)
+        self.finished_run(949, "2026-09-08-kumitate-949", 300)
+        r = self.kb("sync", "949")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.show(949)
+        self.assertEqual(t["status"], "done")
+        self.assertEqual(t["note"], f"[run] PR #300 マージ済み {MERGED_AT}")
+        # 下見（console が読む形）は最後の 1 行が最終の状態
+        d = self.kb("sync", "949", "--dry-run")
+        self.assertEqual(d.returncode, 0, d.stdout + d.stderr)
+        self.assertEqual(json.loads(d.stdout.strip().splitlines()[-1])["run"], "2026-09-08-kumitate-949")
 
     # ---------- --all-review
     def test_all_review_walks_every_review_ticket_and_prints_one_summary(self):
