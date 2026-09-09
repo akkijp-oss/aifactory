@@ -62,7 +62,8 @@ $kb render                                                              # BOARD.
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
 - 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
-  - 名前は sanitize する（パス区切り・`..`・制御文字を落とす。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所
+  - 名前は sanitize する（パス区切り・`..`・制御文字・Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）を落とし 120 バイトに切る。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所（console / MCP / intake も同じ判定を通る）
+  - `kb new --attach` は「**起票は成功・添付だけ失敗**」になることがある（上限超えなど）。そのとき id は標準出力に出るが終了コードは 0 ではない。チケットは在るので、添付だけ `kb attach <id> <file>` でやり直す
   - `kb run` すると runner が VM の `~/work/<id>/attachments/` に置き、各 step の依頼文に添付の案内が 1 行入る。agent は画像・PDF を Read で開いて見る。添付が無いチケットの依頼文は変わらない
   - **秘密情報（トークン・鍵・`.env` の実値）を添付しない。** `attachments/` は workspace（git 追跡外）なので `bin/oss-check.sh` の秘密情報の検査対象ではない。検査するのは「追跡されていないこと」だけ
   - 今のところ添付を VM に運べるのは Proxmox backend だけ（pull backend＝ macOS / Windows / Linux は別途）。運べない backend では依頼文に案内も出ない

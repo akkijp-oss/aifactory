@@ -28,7 +28,8 @@ flowchart LR
 glue/bin/intake memo.txt                     # LLM が PJ / 種別 / 題名 / 完了条件を決めて kb new
 glue/bin/intake memo.txt --pj kumitate --kind bug   # 決まっている分は渡す（LLM は整形だけ）
 printf 'pj: kumitate\nkind: chore\n依頼文…' | glue/bin/intake -   # 先頭行でも指定できる
-glue/bin/intake memo.txt --dry-run           # 起票せず判定 JSON を見る
+glue/bin/intake memo.txt --dry-run           # 起票せず判定 JSON を見る（添付はしない）
+glue/bin/intake memo.txt --attach 画面.png 表.csv   # 起票したチケットに添付する。画像は LLM にも見せる
 
 # 配車（todo → 実行）
 glue/bin/dispatch --once                     # 最も古い todo を 1 件回す
@@ -40,6 +41,8 @@ PJ の一覧（intake が LLM に渡す候補、dispatch が見る `project.yml`
 
 ## 設計の約束
 - **intake の出力は提案**。`kb new` が pj / kind の実在を検証し、confidence とモデル名を本文末尾に残す。低ければ人間が `kb set` で直す
+- `--attach` の画像（png / jpg / gif / webp）は一時ディレクトリの `attachments/` に複製して `--tools Read` で LLM に見せ、読み取れた事実を本文の `## 現状` に書かせる。画像が無いときの呼び方（`--tools ""`）は変わらない
+- 起票はできて添付だけ失敗したときは、id を出したうえで終了コード 2（チケットは在るので `kb attach` でやり直す）
 - **dispatch は判断しない**。種別は kanban が持つ。dispatch が見るのは「project.yml があるか」「プール（PJ あたり 3 台）に空きがあるか」だけ
 - **直列**。並列にするなら PJ 単位（プールが別）から。ゲートが 15〜60 分かかる観察があるので、並列より先にゲートの差分実行が効く
 - LLM は Mac 側の `claude -p`（cwd を一時ディレクトリにし、ツール無しで呼ぶ）。VM は使わない

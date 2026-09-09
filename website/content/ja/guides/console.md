@@ -101,7 +101,10 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `POST /api/tickets/<id>/run` | `kb run` をジョブで。`{dry_run, workflow, keep, resume, from_step, from_branch, wait}`（`from_step` は人間待ちで終わった run を新しい VM で続きから回す。空文字列なら記録の工程に任せる） |
 | `GET /api/runs` / `GET /api/runs/<name>` | 実行記録 |
 | `POST /api/runs/<name>/action` | 人間の後始末を実行記録に書く（`kb run-note`）。`{action: close / note, result: done / abandoned, pr, text}`。`close` は決着を初めて記録し、`note` は記録済みの説明を書き直します |
-| `GET /api/file?path=&tail=` | 許可されたディレクトリ内のファイル |
+| `POST /api/tickets/<id>/attach` | 添付を足します。`multipart/form-data` で `files` を送ります（複数可）。JSON では受けません |
+| `POST /api/tickets/<id>/detach` | `{name}` の添付を 1 件消します。ファイルが消えるので元に戻せません |
+| `GET /api/tickets/<id>/attachments/<name>` | 添付を返します。画像（png / jpg / gif / webp）だけそのまま表示し、その他は必ずダウンロードになります。種類の推測は常に止めます（`X-Content-Type-Options: nosniff`） |
+| `GET /api/file?path=&tail=` | 許可されたディレクトリ内のファイル。画像は文字列ではなく `base64` と `type` で返ります（4 MiB まで） |
 | `GET /api/sandbox` / `POST /api/sandbox/ls` / `POST /api/sandbox/release` | 貸出、一覧の取り直し、返却 `{task}` |
 | `POST /api/intake` / `POST /api/dispatch` | `{text, pj, kind, dry_run}` / `{pj, once, max, dry_run}` |
 | `GET /api/jobs` / `GET /api/jobs/<id>?offset=` / `POST /api/jobs/<id>/stop` | ジョブ一覧、出力の継続的な読み取り、停止 |
@@ -122,9 +125,10 @@ claude mcp reset-project-choices   # 承認をやり直す
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れます）・一覧・1 件（本文・履歴・run・ジョブ・添付の一覧 `attachments`。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | チケット作成（整った本文 / 自由文。intake はジョブ） |
+| `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです） |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
-| `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log` など） |
+| `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log`・チケットの添付など）。画像は image として返るので、そのまま見えます（4 MiB まで。それより大きいものはコンソールから開いてください） |
 | `run_action` | 人間が run の後始末（wip ブランチから PR を作ってマージ・打ち切り）をしたことを実行記録に書く（`kb run-note`）。`close` は決着（`done` / `abandoned`）と PR 番号を記録し、`note` は説明を書き直します |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task・VM 名・IP・貸出開始・稼働状態）/ 実機の状態確認（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
