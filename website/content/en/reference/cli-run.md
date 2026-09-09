@@ -3,7 +3,7 @@
 `workflow/bin/run`. The runner (v1, Python 3, `pyyaml` + `jsonschema`) that reads a workflow definition and executes its steps in order inside a sandbox VM. Normally invoked through `kb run`.
 
 ```
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=seconds]]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=name] [--wait[=seconds]]
 ```
 
 | Argument | Meaning |
@@ -15,6 +15,8 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--dry-run` | No VM: validate definitions and assemble prompts only, into `workspace/runs/…-dry/` |
 | `--keep` | Do not release the VM afterwards (to look inside) |
 | `--resume` | Continue from the next step in `state.json` on the VM already lent |
+| `--from[=step]` | Redo a run that ended at `human` from the given step **on a new VM**. Without a step, uses the previous `resume_step`. The previous run is passed in the `AIFACTORY_FROM_RUN` environment variable (run names only; ADR-0034) |
+| `--branch=name` | The branch to continue from with `--from`. Defaults to the previous `wip_branch` |
 | `--wait[=seconds]` | When the pool has no free VM, wait for one and retry `sandbox take` (3600 seconds on its own; the retry interval is `AIFACTORY_WAIT_POLL_S` seconds, 30 by default) |
 
 ## Exit codes
@@ -31,11 +33,11 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 2. Decides the base branch (`base_branch: hotfix_base` in the workflow → `hotfix_base` in the project; `workflow_overrides` overrides)
 3. For merge-pr (`pr: N` in the body) gets head / base with `gh pr view` and uses the head as the work branch. Otherwise `sandbox/<id>-<wf>-<slug>`
 4. Creates `workspace/runs/<date>-<pj>-<id>/`. If it exists and `--resume` is not given, moves the previous one to `-attemptN`. Writes `ticket.md` and `state.json`
-5. `sandbox take <pj> <id>`. Fetches base in the VM and creates the work branch. Places the ticket at `~/work/<id>/ticket.md`. With `--wait`, a failure that says the pool is full sets `current` to `wait-vm` and retries the take until one comes free (ADR-0031)
+5. `sandbox take <pj> <id>`. Fetches base in the VM and creates the work branch (with `--from`, branches from `origin/<wip branch>` instead of base and copies the previous run's `work/*.md` onto the VM). Places the ticket at `~/work/<id>/ticket.md`. With `--wait`, a failure that says the pool is full sets `current` to `wait-vm` and retries the take until one comes free (ADR-0031)
 6. Executes steps in order (below) until `end` or `human`
 7. On `human`, pushes to `origin/sandbox/<id>-<wf>-wip` to preserve the work
 8. Collects `~/work/<id>/` into `workspace/runs/…/work/`. `sandbox release` unless `--keep`
-9. Writes `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s` to `state.json`
+9. Writes `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s` to `state.json`. A run that stopped at `human` also gets `resume_step` (the step to redo), and a run started with `--from` gets `resumed_from` / `from_step` / `from_branch`
 
 When `--wait` runs out, the record carries `failure: "wait_timeout"` and `waited_s` (the seconds waited) beside `result: failed`, and the exit code is 2. `kb` reads that marker and puts the ticket back to `todo` instead of `blocked`.
 

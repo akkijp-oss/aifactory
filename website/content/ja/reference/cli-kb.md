@@ -11,7 +11,7 @@ kb block <id> --note TEXT
 kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
 kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
-kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]
+kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
 kb sync <id> [--run DIR]
 kb history <id>
 kb render
@@ -99,7 +99,7 @@ kb append 204 --section "PM 補足" < memo.md      # --text がなければ標�
 ### run
 
 ```bash
-kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]
+kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
 ```
 
 1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
@@ -108,6 +108,8 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]]
 4. 終わったら `state.json` を読んで状態を進める（下表）
 
 `--wait` を付けると、VM のプールに空きがないときに失敗せず、空くまで待ってから実行します（分。値を省くと 60 分）。待っている間、チケットは `in_progress` のままで、コンソールとボードには「VM の空き待ち」と経過時間が出ます。上限を超えたときだけチケットは `todo` に戻り、理由がメモに残ります（ADR-0031）。
+
+`--from` を付けると、人間待ちで終わった run を**新しい VM**で、その続き（記録の退避ブランチ）から指定の工程だけやり直します。工程を省くと、記録に残った「やり直す工程」から始まります。前回の run の名前は環境変数で runner に渡り、前回の成果物とレビュー指摘が新しい VM に持ち込まれます（ADR-0034）。`--resume` とは併用できません。
 
 | state.json | 状態 | メモ |
 |---|---|---|
