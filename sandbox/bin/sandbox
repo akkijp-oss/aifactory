@@ -13,6 +13,7 @@
 #   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
 #   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 #   sandbox token clear <pj|global> [claude|gh|claude:<系統>] トークンを消す
+#   sandbox keys list|add|set|rm|token          Claude の鍵プール（名前 + fable 許可 / fable 以外許可）。take が系統ごとに 1 本選ぶ（ADR-0043）
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 #   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
@@ -172,6 +173,7 @@ STATE_LOCK="$STATE.lock"
 # 台帳の隣に置く 2 つ。state.json（貸出の正本）には混ぜない
 LAST_USED="${STATE%state.json}last-used.json"       # vmid → 最後に take / reset / release / reinject した時刻（ADR-0026 の書式）
 IDLE_STOP_FILE="${STATE%state.json}idle-stop.json"  # 直近の idle-stop の結果（ls / console / MCP が「節電で停止中」を出すのに読む）
+KEYS_FILE="${SANDBOX_KEYS:-${STATE%state.json}keys.json}"  # Claude の鍵プール（600。名前とフラグ付き。ADR-0043）
 _state_locked=0; _lock_style=""; _reserved_task=""; _reserved_dns=""
 state_lock_acquire() {
   local use_mkdir=0
@@ -322,10 +324,239 @@ resolve_gh_token() {
   return 0
 }
 
+# ---------- 鍵プール（keys.json。ADR-0043）
+# 制御系に名前付きの Claude の鍵を並べ、take / reset / reinject が系統ごとに 1 本ずつ選ぶ。
+# 鍵には「fable 許可（allow.fable）」「fable 以外許可（allow.other）」のフラグがあり、Fable 用と Opus / Sonnet / Haiku 用を分けられる。
+#   書式: {"keys":[{name, token, allow:{fable,other}, enabled, note, issued:"YYYY-MM-DD", last_used:"<ISO 8601 offset>|null", uses:n}]}
+#   選び方: その task が前に使った鍵（まだ enabled でフラグが合えば）→ 無ければ候補のうち last_used が最古（同値は名前順）
+#   合う鍵が 1 本も無い系統は PJ / 全体の env の鍵をそのまま使う（プールが空なら挙動は今までと同じ。互換）
+# 鍵の値を触るのはこの区画と inject_env だけ。表示・ログ・console の応答には名前と末尾 4 文字しか出さない。
+KEYS_NAME_RE='^[A-Za-z0-9._-]{1,40}$'
+
+keys_load() { [[ -f "$KEYS_FILE" ]] && cat "$KEYS_FILE" || echo '{"keys":[]}'; }
+
+keys_write() { # <json>: 600 で原子的に置き換える（同じディレクトリの一時ファイル → mv）
+  local tmp
+  mkdir -p "$(dirname "$KEYS_FILE")"
+  tmp="$(mktemp "$KEYS_FILE.XXXXXX")"; chmod 600 "$tmp"
+  jq . <<< "$1" > "$tmp" || { rm -f "$tmp"; die "keys.json を書けない（JSON が壊れている）"; }
+  mv "$tmp" "$KEYS_FILE"
+}
+
+keys_get() { keys_load | jq -c --arg n "$1" 'first(.keys[] | select(.name==$n)) // empty'; }
+keys_token_of() { keys_load | jq -r --arg n "$1" 'first(.keys[] | select(.name==$n) | .token) // empty'; }
+keys_in_use() { # <name> → その鍵を使っている貸出中の task（空白区切り。無ければ空）
+  jq -r --arg n "$1" 'to_entries[] | select(((.value.keys.fable // "")==$n) or ((.value.keys.other // "")==$n)) | .key' "$STATE" | tr '\n' ' ' | sed 's/ *$//'
+}
+# keys_pick <group> [今使っている名前] → 選んだ鍵の名前（候補が無ければ空）。group は fable / other
+keys_pick() {
+  keys_load | jq -r --arg g "$1" --arg cur "${2:-}" '
+    [ .keys[] | select(.enabled != false) | select(.allow[$g] == true) ] as $c
+    | first($c[] | select(.name == $cur) | .name)
+      // first(($c | sort_by((.last_used // ""), .name))[].name)
+      // ""'
+}
+
+_pool_fable=""; _pool_other=""   # 今回の take / reset / reinject が選んだ鍵の名前（inject_env と state が使う）
+_pool_assign() { # group name token
+  case "$1" in
+    fable) _pool_fable="$2"; CLAUDE_CODE_OAUTH_TOKEN_FABLE="$3" ;;
+    other) _pool_other="$2"; CLAUDE_CODE_OAUTH_TOKEN_OPUS="$3"; CLAUDE_CODE_OAUTH_TOKEN_SONNET="$3"; CLAUDE_CODE_OAUTH_TOKEN_HAIKU="$3"
+           # 無印の鍵が env に無くてもプールだけで運用できるように other の鍵で埋める（env にあればそちらが勝つ）
+           [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || { CLAUDE_CODE_OAUTH_TOKEN="$3"; _src_claude="pool/$2"; } ;;
+  esac
+}
+_pool_mark_used() { # name
+  keys_write "$(keys_load | jq --arg n "$1" --arg t "$(date -Iseconds)" \
+    '.keys |= map(if .name==$n then (.last_used=$t | .uses=((.uses // 0)+1)) else . end)')"
+}
+_pool_apply_locked() { # task
+  local task=$1 group cur name tok
+  _pool_fable=""; _pool_other=""
+  [[ -f "$KEYS_FILE" ]] || return 0
+  for group in fable other; do
+    cur="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
+    name="$(keys_pick "$group" "$cur")"
+    [[ -n "$name" ]] || continue
+    tok="$(keys_token_of "$name")"
+    [[ -n "$tok" ]] || continue
+    _pool_assign "$group" "$name" "$tok"
+    _pool_mark_used "$name"
+  done
+  return 0
+}
+# pool_apply_keys <task>: 系統ごとに鍵を選び、CLAUDE_CODE_OAUTH_TOKEN_* を上書きする。
+#   グローバルに返すので $( ) の中で呼ばない。keys.json の更新（last_used / uses）は state.json のロックの中でやる（234 と同じ）
+pool_apply_keys() { with_state_lock _pool_apply_locked "$@"; }
+# pool_load_from_state <task>: 選び直さずに、state に残っている名前から値だけ引き直す（gh-app refresh 用。使用回数は増やさない）
+pool_load_from_state() {
+  local task=$1 group name tok
+  _pool_fable=""; _pool_other=""
+  [[ -f "$KEYS_FILE" ]] || return 0
+  for group in fable other; do
+    name="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
+    [[ -n "$name" ]] || continue
+    tok="$(keys_token_of "$name")"; [[ -n "$tok" ]] || continue
+    _pool_assign "$group" "$name" "$tok"
+  done
+  return 0
+}
+# pool_keys_json: 貸出項目に残す {"fable":…,"other":…}（取れた群だけ。何も取れなければ {}）
+pool_keys_json() { jq -nc --arg f "${_pool_fable:-}" --arg o "${_pool_other:-}" '{fable:$f,other:$o} | with_entries(select(.value != ""))'; }
+_state_keys_raw() { # task keys-json
+  local tmp; tmp=$(mktemp)
+  jq --arg id "$1" --argjson k "$2" \
+    'if (.[$id]|type)=="object" then (if ($k|length)>0 then .[$id].keys=$k else .[$id] |= del(.keys) end) else . end' "$STATE" > "$tmp" && mv "$tmp" "$STATE"
+}
+# state_set_keys <task>: 貸出項目の keys だけ差し替える（他の項目は残す）
+state_set_keys() { with_state_lock _state_keys_raw "$1" "$(pool_keys_json)"; }
+
+# keys_json_view: マスク済みの一覧（token は出さず末尾 4 文字だけ。貸出中の task を in_use に足す）。CLI の --json と console が読む形
+keys_json_view() {
+  keys_load | jq -c --argjson st "$(cat "$STATE")" '
+    {keys: [ .keys[] | (.name) as $n | {
+       name: $n,
+       allow: {fable: (.allow.fable == true), other: (.allow.other == true)},
+       enabled: (.enabled != false), tail4: ((.token // "")[-4:]),
+       issued: (.issued // null), last_used: (.last_used // null), uses: (.uses // 0), note: (.note // ""),
+       in_use: [ $st | to_entries[] | select(((.value.keys.fable // "")==$n) or ((.value.keys.other // "")==$n)) | .key ]
+     } ]}'
+}
+
+_keys_usage() {
+  die "usage: sandbox keys list [--json] / keys add <name> [--fable] [--other] [--note …] / keys set <name> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <name> [--force] / keys token <name>"
+}
+# 鍵の値は $_keys_token_in に置き、jq へは環境変数で渡す（コマンド行に書くと ps で他人に見える）
+_keys_token_in=""
+_keys_ask_token() { # <名前>: tty ならエコー無しの対話入力、そうでなければ stdin
+  local v
+  if [[ -t 0 ]]; then read -rs -p "token for $1: " v; echo >&2; else v="$(cat)"; fi
+  v="${v//[$'\r\n']/}"
+  [[ -n "$v" ]] || die "空のトークン"
+  _keys_token_in="$v"
+}
+_keys_add_locked() { # name fable other note
+  [[ -z "$(keys_get "$1")" ]] || die "鍵 $1 は既にあります（値の差し替えは sandbox keys token $1）"
+  keys_write "$(keys_load | KEYS_TOKEN_IN="$_keys_token_in" jq --arg n "$1" --argjson f "$2" --argjson o "$3" --arg note "$4" --arg d "$(date +%F)" \
+    '.keys += [{name:$n, token:env.KEYS_TOKEN_IN, allow:{fable:$f, other:$o}, enabled:true, note:$note, issued:$d, last_used:null, uses:0}]')"
+}
+_keys_token_locked() { # name
+  keys_write "$(KEYS_TOKEN_IN="$_keys_token_in" jq --arg n "$1" --arg d "$(date +%F)" \
+    '.keys |= map(if .name==$n then (.token=env.KEYS_TOKEN_IN | .issued=$d) else . end)' "$KEYS_FILE")"
+}
+_keys_set_locked() { # name fable other enabled note（変えない項目は空文字列）
+  keys_write "$(keys_load | jq --arg n "$1" --arg f "$2" --arg o "$3" --arg e "$4" --arg note "$5" '
+    .keys |= map(if .name==$n then
+        (if $f != "" then .allow.fable = ($f == "true") else . end)
+      | (if $o != "" then .allow.other = ($o == "true") else . end)
+      | (if $e != "" then .enabled = ($e == "true") else . end)
+      | (if $note != "" then .note = (if $note == "-" then "" else $note end) else . end)
+      else . end)')"
+}
+_keys_rm_locked() { keys_write "$(keys_load | jq --arg n "$1" '.keys |= map(select(.name != $n))')"; }
+
+cmd_keys() {
+  local sub=${1:-list}; shift || true
+  case "$sub" in
+    list)
+      local as_json=0 a
+      for a in "$@"; do case "$a" in --json) as_json=1 ;; *) _keys_usage ;; esac; done
+      local v; v="$(keys_json_view)"
+      if (( as_json )); then printf '%s\n' "$v"; return 0; fi
+      if [[ "$(jq -r '.keys | length' <<< "$v")" == 0 ]]; then
+        echo "鍵プールは空です（$KEYS_FILE）。sandbox keys add <名前> --fable / --other で足す。空の間は PJ / 全体の env の鍵を使います"
+        return 0
+      fi
+      local fmt='%-20s %-5s %-5s %-4s %-8s %-10s %-25s %-4s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る
+      # shellcheck disable=SC2059
+      printf "$fmt" NAME FABLE OTHER ON TAIL ISSUED LAST_USED USES IN_USE
+      local n f o e t i l u iu
+      while IFS=$'\t' read -r n f o e t i l u iu; do
+        # shellcheck disable=SC2059
+        printf "$fmt" "$n" "$f" "$o" "$e" "$t" "$i" "$l" "$u" "$iu"
+      done < <(jq -r '.keys[] | [ .name, (if .allow.fable then "yes" else "no" end), (if .allow.other then "yes" else "no" end),
+                                  (if .enabled then "yes" else "no" end), ("…" + .tail4), (.issued // "-"), (.last_used // "-"),
+                                  (.uses|tostring), (if (.in_use|length) > 0 then (.in_use|join(",")) else "-" end) ] | @tsv' <<< "$v")
+      echo "file: $KEYS_FILE" ;;
+    add)
+      local name=${1:-}; shift || true
+      [[ -n "$name" ]] || _keys_usage
+      [[ "$name" =~ $KEYS_NAME_RE ]] || die "名前は英数字と . _ - の 1〜40 文字にしてください（$name）"
+      local fable=false other=false note=""
+      while (( $# )); do
+        case "$1" in
+          --fable) fable=true ;;
+          --other) other=true ;;
+          --note) note=${2:-}; shift ;;
+          *) _keys_usage ;;
+        esac; shift
+      done
+      [[ "$fable" == true || "$other" == true ]] || die "--fable か --other のどちらか（両方でも可）を指定してください"
+      [[ -z "$(keys_get "$name")" ]] || die "鍵 $name は既にあります（値の差し替えは sandbox keys token $name）"
+      _keys_ask_token "$name"
+      with_state_lock _keys_add_locked "$name" "$fable" "$other" "$note"
+      echo "[ok] 鍵 $name を足しました（fable: $fable / other: $other）。次の take から候補に入ります" ;;
+    set)
+      local name=${1:-}; shift || true
+      [[ -n "$name" ]] || _keys_usage
+      [[ -n "$(keys_get "$name")" ]] || die "鍵 $name はありません（sandbox keys list）"
+      local f="" o="" e="" note=""
+      while (( $# )); do
+        case "$1" in
+          --fable=on) f=true ;; --fable=off) f=false ;;
+          --other=on) o=true ;; --other=off) o=false ;;
+          --enable) e=true ;; --disable) e=false ;;
+          --note) note=${2:-}; [[ -n "$note" ]] || note='-'; shift ;;
+          *) _keys_usage ;;
+        esac; shift
+      done
+      [[ -n "$f$o$e$note" ]] || _keys_usage
+      with_state_lock _keys_set_locked "$name" "$f" "$o" "$e" "$note"
+      echo "[ok] 鍵 $name を更新しました"
+      if [[ "$e" == false ]]; then
+        local used t; used="$(keys_in_use "$name")"
+        if [[ -n "$used" ]]; then
+          echo "[hint] この鍵を使っている貸出中の task があります。別の鍵に切り替えるには次を実行してください（動いている claude はそのまま。次の起動から変わります）:"
+          for t in $used; do echo "         sandbox reinject $t"; done
+        fi
+      fi ;;
+    rm)
+      local name=${1:-} force=0 a; shift || true
+      [[ -n "$name" ]] || _keys_usage
+      for a in "$@"; do case "$a" in --force) force=1 ;; *) _keys_usage ;; esac; done
+      [[ -n "$(keys_get "$name")" ]] || die "鍵 $name はありません（sandbox keys list）"
+      local used t; used="$(keys_in_use "$name")"
+      if [[ -n "$used" ]] && (( ! force )); then
+        die "鍵 $name は貸出中の task ($used) が使っています。消すなら --force（消したあと sandbox reinject <task> で別の鍵に切り替わります）"
+      fi
+      with_state_lock _keys_rm_locked "$name"
+      echo "[ok] 鍵 $name を消しました"
+      if [[ -n "$used" ]]; then
+        echo "[hint] 使っていた task を別の鍵に切り替えるには:"
+        for t in $used; do echo "         sandbox reinject $t"; done
+      fi ;;
+    token)
+      local name=${1:-}
+      [[ -n "$name" ]] || _keys_usage
+      [[ -n "$(keys_get "$name")" ]] || die "鍵 $name はありません（sandbox keys list）"
+      _keys_ask_token "$name"
+      with_state_lock _keys_token_locked "$name"
+      echo "[ok] 鍵 $name の値を差し替えました。貸出中の VM に反映するには sandbox reinject <task>" ;;
+    *) _keys_usage ;;
+  esac
+}
+
 # claude_family_lines: 設定されているモデル系統別の鍵だけを KEY=VAL 行で出す（/run/sandbox/env 用。未設定の系統は行を出さない）
 claude_family_lines() {
   local f n v
   for f in ${CLAUDE_TOKEN_FAMILIES:-FABLE OPUS SONNET HAIKU}; do n="CLAUDE_CODE_OAUTH_TOKEN_$f"; v="${!n:-}"; [[ -n "$v" ]] && echo "$n=$v"; done
+  return 0
+}
+# claude_key_name_lines: プールから選んだ鍵の名前を系統別に出す（値は出さない）。runner がログの key=… の後ろに出す
+claude_key_name_lines() {
+  local f
+  [[ -n "${_pool_fable:-}" ]] && echo "CLAUDE_KEY_NAME_FABLE=${_pool_fable}"
+  [[ -n "${_pool_other:-}" ]] && for f in OPUS SONNET HAIKU; do echo "CLAUDE_KEY_NAME_$f=${_pool_other}"; done
   return 0
 }
 inject_env() { # ip task pj
@@ -337,7 +568,7 @@ TASK_ID=$task
 SANDBOX_PJ=$pj
 SANDBOX_HOST=task-$task.$SB_DOMAIN
 CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-$(claude_family_lines)
+$(claude_family_lines; claude_key_name_lines)
 GH_TOKEN=${GH_TOKEN:-}
 GH_REPO=${GH_REPO:-}
 GH_TOKEN_EXPIRES_AT=$exp
@@ -420,7 +651,8 @@ reserve_vm() { with_state_lock _reserve_vm_locked "$@"; }
 cmd_take() {
   local pj=${1:?pj} task=${2:?task-id}
   load_pj "$pj"
-  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj}）" >&2
+  pool_apply_keys "$task"   # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj} か sandbox keys add）" >&2
   local pick; pick="$(reserve_vm "$pj" "$task")"   # die はサブシェルを抜けるだけなので、空なら止める
   [[ -n "$pick" ]] || exit 1
   _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
@@ -431,11 +663,12 @@ cmd_take() {
   fi
   inject_env "$ip" "$task" "$pj"
   dns_set "$task" "$ip"; _reserved_dns=1
-  local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" \
-    '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s}')"
+  local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" --argjson k "$(pool_keys_json)" \
+    '{vmid:($v|tonumber),name:$n,ip:$i,pj:$p,since:$s} + (if ($k|length) > 0 then {keys:$k} else {} end)')"
   _reserved_task=""; _reserved_dns=""   # 確定。以降の EXIT で消さない
   state_set "$task" "$rec"
   touch_used "$vmid"
+  [[ -n "$_pool_fable$_pool_other" ]] && echo "[key] プールの鍵: fable=${_pool_fable:--} other=${_pool_other:--}"
   echo "[ok] task-$task.$SB_DOMAIN  ssh: sandbox ssh $task  url: http://task-$task.$SB_DOMAIN:$APP_PORT"
 }
 
@@ -456,8 +689,10 @@ cmd_reset() {
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   load_pj "$pj"
   echo "[reset] $(state_field "$task" name) → clean"
+  pool_apply_keys "$task"
   rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
+  state_set_keys "$task"
   touch_used "$vmid"
   echo "[ok] reset 完了（env 再注入済み）"
 }
@@ -491,6 +726,16 @@ cmd_release() {
 }
 
 mask() { local t=$1; [[ -z "$t" ]] && { echo "(未設定)"; return; }; echo "${t:0:8}…${t: -4} (${#t}文字)"; }
+
+# keys_pool_note: token show の末尾に出す鍵プールの 1 行（本数と系統ごとの候補数。値も名前も出さない）
+keys_pool_note() {
+  local f="${KEYS_FILE:-}"
+  [[ -n "$f" && -f "$f" ]] || return 0
+  jq -r '[.keys[] | select(.enabled != false)] as $on
+         | "pool: \(.keys | length) 本（有効 \($on | length) / fable 用 \([$on[] | select(.allow.fable == true)] | length) / fable 以外用 \([$on[] | select(.allow.other == true)] | length)）"' "$f" 2>/dev/null || true
+  echo "  ↑ take が系統ごとに 1 本選び、合う鍵が無い系統は上の env の鍵に落ちる（一覧は sandbox keys list）"
+  return 0
+}
 
 # _write_key <file> <key> <val>: env ファイルの該当行だけを書き換える（val が空なら削除）。
 #   ctl.env には CONSOLE_TOKEN や説明コメントが同居するので、丸ごと上書きせず該当行と発行日コメントだけ差し替える
@@ -619,7 +864,8 @@ cmd_token() {
         echo "GH_TOKEN:                $(mask "${GH_TOKEN:-}")  ← ${_src_gh:-未設定}$([[ -n "$pj" && -z "${GH_REPO:-}" ]] && echo "（GH_REPO 未設定のため App は使えない）")  $(_issued_note GH_TOKEN "${_src_gh:-}")"
       fi
       echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
-      [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
+      [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')"
+      keys_pool_note ;;
     *) die "usage: sandbox token set|clear <pj|global> [claude|gh|claude:<fable|opus|sonnet|haiku>] / sandbox token rotate [claude|gh|claude:<系統>] / sandbox token show [pj]" ;;
   esac
 }
@@ -634,7 +880,9 @@ cmd_reinject() {
     local ip pj; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"
     [[ -n "$ip" ]] || die "task $task は未貸出"
     load_pj "$pj"
+    pool_apply_keys "$task"   # 同じ task は同じ鍵を使い続ける（その鍵が無効・削除されたときだけ選び直す）
     inject_env "$ip" "$task" "$pj"
+    state_set_keys "$task"
     touch_used "$(state_field "$task" vmid)"
     echo "[ok] task-$task ($(state_field "$task" name)): env 再注入。claude を使っている場合は VM 内で再起動"
   done
@@ -672,6 +920,7 @@ cmd_gh_app() {
       local ids; ids="$(jq -r 'keys[]' "$STATE")"; [[ -n "$ids" ]] || { echo "貸出中の task なし"; return 0; }
       local task; for task in $ids; do
         local ip pj; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"; load_pj "$pj"
+        pool_load_from_state "$task"   # GH_TOKEN の払い出し直しなので、Claude の鍵は選び直さない
         inject_env "$ip" "$task" "$pj" && echo "[ok] task-$task ($(state_field "$task" name)): GH_TOKEN 更新"
       done ;;
     *) die "usage: sandbox gh-app status|token <pj>|refresh" ;;
@@ -875,8 +1124,9 @@ case "${1:-}" in
   ls) cmd_ls ;;
   status) shift; cmd_status "$@" ;;
   token) shift; cmd_token "$@" ;;
+  keys) shift; cmd_keys "$@" ;;
   reinject) shift; cmd_reinject "$@" ;;
   gh-app) shift; cmd_gh_app "$@" ;;
   idle-stop) shift; cmd_idle_stop "$@" ;;
-  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
