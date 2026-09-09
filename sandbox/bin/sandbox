@@ -8,10 +8,11 @@
 #   sandbox ls                       貸出状況
 #   sandbox status [pj]              プールの台数を PJ ごとに（定義 / 実体 / 貸出 / 空き）
 # 運用補助（契約外）:
-#   sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く
-#   sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
+#   sandbox token set <pj|global> [claude|gh|claude:fable|claude:opus|claude:sonnet|claude:haiku]
+#                                               トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く。claude:<系統> はそのモデル系統だけに使う鍵
+#   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
 #   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
-#   sandbox token clear <pj|global> [claude|gh] トークンを消す
+#   sandbox token clear <pj|global> [claude|gh|claude:<系統>] トークンを消す
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 #   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
@@ -19,6 +20,7 @@
 #   その PJ のリポジトリ（pj/<pj>.env の GH_REPO）だけに効く 1 時間有効の installation token を払い出して注入する（ADR-0008）。
 #   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
 # 設定: ~/.config/sandbox/env（全体既定）→ ~/.config/sandbox/pj/<pj>.env（PJ 別上書き）→ SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN（一回限りの上書き）
+#   モデル系統別の鍵: CLAUDE_CODE_OAUTH_TOKEN_FABLE / _OPUS / _SONNET / _HAIKU（任意）。runner が step のモデルに合わせて選び、無ければ CLAUDE_CODE_OAUTH_TOKEN に落ちる
 #   シェルに export された CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は無視する
 #   テナント（ADR-0017）: SB_TENANT=<t>（既定 main）。名前の既定は規則から導く（SB_PREFIX=sb-<t>、SB_DOMAIN=<t>.sb.internal、SB_POOL=sb-<t>）。
 #   別テナントの設定で動かす（ホスト管理者が複数テナントを手元から見るとき）: SB_TENANT=<t> で ~/.config/sandbox/tenants/<t>.env を読む
@@ -46,7 +48,9 @@ CTL_ENV="${SANDBOX_CTL_ENV:-$HOME/.config/aifactory/ctl.env}"
 # 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
 # シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
 _ovr_claude="${SANDBOX_CLAUDE_TOKEN:-}"; _ovr_gh="${SANDBOX_GH_TOKEN:-}"
-unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN
+# モデル系統別の鍵（任意。runner が step のモデル名から系統を選ぶ。無ければ CLAUDE_CODE_OAUTH_TOKEN）
+CLAUDE_TOKEN_FAMILIES="FABLE OPUS SONNET HAIKU"
+unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU
 set -a; # shellcheck disable=SC1090
 source "$ENV_FILE"; set +a
 _src_claude="${CLAUDE_CODE_OAUTH_TOKEN:+global(env)}"; _src_gh="${GH_TOKEN:+global(env)}"
@@ -318,6 +322,12 @@ resolve_gh_token() {
   return 0
 }
 
+# claude_family_lines: 設定されているモデル系統別の鍵だけを KEY=VAL 行で出す（/run/sandbox/env 用。未設定の系統は行を出さない）
+claude_family_lines() {
+  local f n v
+  for f in ${CLAUDE_TOKEN_FAMILIES:-FABLE OPUS SONNET HAIKU}; do n="CLAUDE_CODE_OAUTH_TOKEN_$f"; v="${!n:-}"; [[ -n "$v" ]] && echo "$n=$v"; done
+  return 0
+}
 inject_env() { # ip task pj
   local ip=$1 task=$2 pj=$3
   resolve_gh_token "$pj" || return 1
@@ -327,6 +337,7 @@ TASK_ID=$task
 SANDBOX_PJ=$pj
 SANDBOX_HOST=task-$task.$SB_DOMAIN
 CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+$(claude_family_lines)
 GH_TOKEN=${GH_TOKEN:-}
 GH_REPO=${GH_REPO:-}
 GH_TOKEN_EXPIRES_AT=$exp
@@ -514,13 +525,22 @@ _issued_note() {
   [[ -n "$n" ]] && echo "発行から $n 日（issued $d）" || echo "issued $d"
 }
 
-# token set <pj|global> [claude|gh] : 対話入力（エコー無し）で保存。ファイルは 600
+# token_key <kind> → env のキー名。claude / gh / claude:<系統>（fable|opus|sonnet|haiku）
+token_key() {
+  case "$1" in
+    claude) echo CLAUDE_CODE_OAUTH_TOKEN ;;
+    gh) echo GH_TOKEN ;;
+    claude:fable|claude:opus|claude:sonnet|claude:haiku) echo "CLAUDE_CODE_OAUTH_TOKEN_$(tr '[:lower:]' '[:upper:]' <<< "${1#claude:}")" ;;
+    *) die "kind は claude か gh か claude:<fable|opus|sonnet|haiku>" ;;
+  esac
+}
+# token set <pj|global> [claude|gh|claude:<系統>] : 対話入力（エコー無し）で保存。ファイルは 600
 cmd_token() {
   local sub=${1:-}; shift || true
   case "$sub" in
     set|clear)
       local scope=${1:?pj または global} kind=${2:-claude} file key
-      case "$kind" in claude) key=CLAUDE_CODE_OAUTH_TOKEN;; gh) key=GH_TOKEN;; *) die "kind は claude か gh";; esac
+      key="$(token_key "$kind")" || exit 1
       if [[ "$scope" == global ]]; then file="$ENV_FILE"; else mkdir -p "$PJ_DIR"; file="$PJ_DIR/$scope.env"; [[ -f "$file" ]] || { echo "# sandbox PJ 別設定: ${scope}（~/.config/sandbox/env を上書き）" > "$file"; chmod 600 "$file"; }; fi
       local val=""
       if [[ "$sub" == set ]]; then
@@ -539,7 +559,7 @@ cmd_token() {
       # 1 回の入力で global・鍵を持つ全 PJ・ctl.env を差し替える（ADR-0029）。
       # 順序は「ファイル更新 → 一覧 → console restart → reinject」。後段が失敗しても、更新できた場所は一覧に残す
       local kind=${1:-claude} key
-      case "$kind" in claude) key=CLAUDE_CODE_OAUTH_TOKEN;; gh) key=GH_TOKEN;; *) die "kind は claude か gh";; esac
+      key="$(token_key "$kind")" || exit 1
       local is_ctl=0; [[ -f "$CTL_ENV" ]] && is_ctl=1
       (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
       local val=""
@@ -588,6 +608,11 @@ cmd_token() {
       else echo "host: 手元（ctl.env なし）。Mac 運用は停止中 → 差し替えは制御系 LXC で実行してください"; fi
       echo "scope: ${pj:-global}   files: $ENV_FILE${pjfile:+ + $pjfile}"
       echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}  $(_issued_note CLAUDE_CODE_OAUTH_TOKEN "${_src_claude:-}")"
+      local _f _n _v _l
+      for _f in ${CLAUDE_TOKEN_FAMILIES:-FABLE OPUS SONNET HAIKU}; do
+        _n="CLAUDE_CODE_OAUTH_TOKEN_$_f"; _v="${!_n:-}"; _l="$(tr '[:upper:]' '[:lower:]' <<< "$_f")"
+        [[ -n "$_v" ]] && echo "  $_n: $(mask "$_v")  ← claude-${_l}-* の step だけに使う（無い系統は CLAUDE_CODE_OAUTH_TOKEN）"
+      done
       if ghapp_ready && [[ -n "${GH_REPO:-}" ]]; then
         echo "GH_TOKEN:                GitHub App が take 時に払い出す（${GH_REPO} 限定・1 時間）$([[ -n "${GH_TOKEN:-}" ]] && echo "  ※静的 GH_TOKEN も ${_src_gh} にあるが App が優先")"
       else
@@ -595,7 +620,7 @@ cmd_token() {
       fi
       echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
       [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')" ;;
-    *) die "usage: sandbox token set|clear <pj|global> [claude|gh] / sandbox token rotate [claude|gh] / sandbox token show [pj]" ;;
+    *) die "usage: sandbox token set|clear <pj|global> [claude|gh|claude:<fable|opus|sonnet|haiku>] / sandbox token rotate [claude|gh|claude:<系統>] / sandbox token show [pj]" ;;
   esac
 }
 
