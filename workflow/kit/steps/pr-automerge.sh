@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kit/steps/pr-automerge.sh: pr-create.sh が作った PR の条件を確かめ、全部満たすときだけ base へマージする（ADR-0041）
+# kit/steps/pr-automerge.sh: pr-create.sh が作った PR の条件を確かめ、全部満たすときだけ base へマージする（ADR-0042）
 # runner から次の env で呼ばれる: PJ TASK RUN_DIR WORK BASE BRANCH RUN_NAME HAS_REVIEW(0/1)
 #   AUTO_MERGE_METHOD(merge|squash|rebase) AUTO_MERGE_WAIT_MIN AUTO_MERGE_DELETE_BRANCH(0/1) AUTO_MERGE_REQUIRE_CHECKS(0/1)
 # 待ちの長さはテストのために env で上書きできる: AUTOMERGE_POLL_S(30) AUTOMERGE_ZERO_CHECKS_GRACE_S(180) AUTOMERGE_MERGEABLE_POLL_S(5)

@@ -102,6 +102,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print a
 | Command | Writes to |
 |---|---|
 | `token set <pj>` | `CLAUDE_CODE_OAUTH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` |
+| `token set <pj> claude:<fable\|opus\|sonnet\|haiku>` | `CLAUDE_CODE_OAUTH_TOKEN_<FAMILY>` in the same file. The runner picks the family from the step's model name and starts `claude -p` with that key when it is set (otherwise `CLAUDE_CODE_OAUTH_TOKEN`). Use it to run Fable and Opus on different keys. `rotate` / `clear` accept the same spec |
 | `token set <pj> gh` | `GH_TOKEN` in the same file (fallback when the App is not configured) |
 | `token set global` | `~/.config/sandbox/env` (default for every project) |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env` |
@@ -125,7 +126,7 @@ The permissions requested are "those we want that the App actually holds". Add a
 |---|---|
 | `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`) / `SB_IDLE_STOP_HOURS` (hours of disuse before a VM becomes a stop candidate; default 24, `0` disables) / `SB_IDLE_STOP_KEEP` (candidates kept running; default 10). Skeleton `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | Another tenant's settings on the maintainer's machine. `SB_TENANT=<t>` makes `sandbox` and `proxmox/run.sh` read it; state goes to `<t>.state.json`, per-project files to `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, (fallback `GH_TOKEN`), `SB_IDLE_STOP_HOURS` (override for this project only) |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, optionally `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU` (per model family), (fallback `GH_TOKEN`), `SB_IDLE_STOP_HOURS` (override for this project only) |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App. Created by `sandbox/bin/gh-app-setup` |
 | `~/.config/sandbox/state.json` | Lending table. `{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | ssh settings for `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*`. Skeleton `ssh_config.example` |

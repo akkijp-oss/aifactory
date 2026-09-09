@@ -52,7 +52,7 @@ kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is f
 
 | Runner result | kb state | Note |
 |---|---|---|
-| `merged` in `state.json` | `done` | The runner checked the conditions and merged it automatically (ADR-0041) |
+| `merged` in `state.json` | `done` | The runner checked the conditions and merged it automatically (ADR-0042) |
 | `pr_url` contains MERGED | `done` | Merged |
 | `pr_url` present | `review` | A human reviews and merges |
 | `end` without a PR (research etc.) | `done` | Finished without a PR |
@@ -63,6 +63,8 @@ kanban/bin/kb run 204 --wait             # wait for a free VM when the pool is f
 While `--wait` waits, the ticket stays `in_progress`, and the console board and run record show "waiting for a free VM" with the elapsed time.
 
 Setting [`auto_merge`](../reference/project-yml.md) in the project's `project.yml` adds an `automerge` step after `pr`. The runner merges the PR into `base_branch` only when the gates are green, the review is PASS, every CI check passed and GitHub reports `MERGEABLE`; the ticket then becomes `done`. If anything is missing it does not merge — the PR stays open and goes to a human, with the reason on one line in the note and the console. Projects without the setting behave exactly as before: a PR is created and waits for a human.
+
+If the ticket has [attachments](tickets.md#attaching-images-and-files), the runner places them in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt (the list of names, and "open images and PDFs with Read"). A copy also comes back in `work/attachments/` of the run record. With no attachments the prompt is unchanged. This works on the Proxmox backend only for now (ADR-0041).
 
 ## What you can see while it runs
 
@@ -76,7 +78,7 @@ The terminal prints `[run <pj>/<id> <elapsed s>] <step>: PASS/FAIL → <next>` p
 | `agent-<step>-<n>.log` | During an agent step (streamed) | The `claude -p` event stream in readable form (timestamps, tool calls ▶, the head of each result ↳, and the final result with cost) |
 | `agent-<step>-<n>.jsonl` | During an agent step (streamed) | The same events as raw JSON (for debugging) |
 | `code-<step>-<n>.log` | During a code step (streamed) | Output of gates / pr |
-| `work/` | On release | Artifacts collected from the VM |
+| `work/` | On release | Artifacts collected from the VM (ticket attachments under `work/attachments/`) |
 
 `current` in `state.json` names the step that is running and its log file, so you can `tail -f` a log in the middle of a step. In a browser, the run screen of the [Web console](console.md) opens the same log automatically.
 

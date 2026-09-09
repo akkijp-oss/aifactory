@@ -10,7 +10,7 @@ sandbox（どこで動くか）の上で、**誰（agent / code）が・何を�
 |---|---|---|
 | **workflow** | チケット種別ごとの手順。step の並びと分岐 | `kit/workflows/<name>.yml` |
 | **step** | 1 回の呼び出し。担い手は **role**（agent）か **code**（スクリプト）のどちらか | workflow の中 |
-| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`） |
+| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`。モデル系統ごとに別の鍵を使うなら `sandbox token set <pj> claude:<fable\|opus\|sonnet>`。runner が step のモデル名から `CLAUDE_CODE_OAUTH_TOKEN_<系統>` を選び、無ければ `CLAUDE_CODE_OAUTH_TOKEN`） |
 | **artifact** | step の入出力。**必ずファイル**。VM の `~/work/<task>/` に置き、終了時に `$AIFACTORY_WORKSPACE/runs/<run>/work/` へ回収 | 名前は workflow の `inputs` / `outputs` |
 | **transition** | 結果に応じた次の行き先。ループ回数の上限つき。`human` = 人間に渡して終了 | step の `next` / `on_pass` / `on_fail` |
 
@@ -23,7 +23,7 @@ workflow/
 │   ├── roles/                    # _common.md（全役割共通の約束）+ planner / implementer / reviewer / researcher
 │   ├── workflows/                # hotfix / bug / feature / chore / research / merge-pr
 │   ├── steps/                    # code step: gates.sh（PJ のゲートを VM で実行）/ pr-create.sh（push + PR）/ pr-merge.sh
-│   │                             # pr-automerge.sh（条件を確かめて PR を base へマージ。ADR-0041）
+│   │                             # pr-automerge.sh（条件を確かめて PR を base へマージ。ADR-0042）
 │   │                             # `sync-base`（PR 直前の base 取り込み）は runner 内蔵で、ここにファイルは無い
 │   └── routes.env                # クラス → モデル（judgment=Fable / research=Sonnet / coding=Opus）
 ├── bin/run                       # runner v1（Python）。定義を読んで VM の中で step を順に実行する
@@ -138,7 +138,7 @@ base を見に行けなかった回（未コミットの変更を退避できな
 
 gates が赤なら implementer に戻す（最大 2 回）、review が FAIL なら戻す（最大 1 回）、超えたら `human`。
 
-### `automerge`（`auto_merge` のある PJ だけ。ADR-0041）
+### `automerge`（`auto_merge` のある PJ だけ。ADR-0042）
 
 `pr` の後ろに入る code step（`kit/steps/pr-automerge.sh`）。`project.yml` に `auto_merge` が無い PJ では runner が
 **step ごと飛ばして** `human` へ行くので、振る舞いは今までどおり（PR を作って人間がマージする）。

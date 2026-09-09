@@ -102,6 +102,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | コマンド | 書き先 |
 |---|---|
 | `token set <pj>` | `~/.config/sandbox/pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN` |
+| `token set <pj> claude:<fable\|opus\|sonnet\|haiku>` | 同じファイルの `CLAUDE_CODE_OAUTH_TOKEN_<系統>`。runner が step のモデル名から系統を選び、その鍵があればそれで `claude -p` を起動する（無ければ `CLAUDE_CODE_OAUTH_TOKEN`）。Fable と Opus を別の鍵で動かすときに使う。`rotate` / `clear` も同じ指定を受ける |
 | `token set <pj> gh` | 同 `GH_TOKEN`（App 未設定時のフォールバック） |
 | `token set global` | `~/.config/sandbox/env`（全プロジェクトの既定） |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env` と、その鍵を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env` |
@@ -125,7 +126,7 @@ CLI は、必要な権限のうち GitHub App に許可されているものを�
 |---|---|
 | `~/.config/sandbox/env` | `SB_TENANT`（既定 `main`。`SB_PREFIX` = `sb-<t>`、`SB_DOMAIN` = `<t>.sb.internal`、`SB_POOL` = `sb-<t>` を導く）/ `PVE_HOST`（Proxmox ホストの ssh エイリアス。ssh モードで必須、既定なし）または `PVE_API_URL` + `PVE_API_TOKEN`（API モード。テナントのプール限定のトークン。`PVE_API_CA` か `PVE_API_INSECURE=1`。ADR-0017）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定なし）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）/ `SB_IDLE_STOP_HOURS`（使われていない VM を停止候補にするまでの時間。既定 24、`0` で無効）/ `SB_IDLE_STOP_KEEP`（候補のうち起動したまま残す台数。既定 10）。ひな形 `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | 別テナントの設定（メンテナの手元）。`SB_TENANT=<t>` で `sandbox` と `proxmox/run.sh` が読む。状態は `<t>.state.json`、PJ 別設定は `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、（フォールバック用 `GH_TOKEN`）、`SB_IDLE_STOP_HOURS`（この PJ だけ上書き） |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、任意で `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`（モデル系統別の鍵）、（フォールバック用 `GH_TOKEN`）、`SB_IDLE_STOP_HOURS`（この PJ だけ上書き） |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App。`sandbox/bin/gh-app-setup` が作る |
 | `~/.config/sandbox/state.json` | 貸出台帳。`{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*` の ssh 設定。ひな形 `ssh_config.example` |

@@ -38,7 +38,7 @@ auto_merge:
   require_checks: true   # check が 0 本ならマージしない（既定 true。CI が無いプロジェクトは false）
 ```
 
-マージするのは次を**すべて**満たすときだけです（ADR-0041）。
+マージするのは次を**すべて**満たすときだけです（ADR-0042）。
 
 - `gates.txt` に `FAIL` が無い（`INFO`＝base でも失敗するゲートは差し支えありません）
 - ワークフローに reviewer がいる場合、`review.md` の 1 行目が `# レビュー: PASS`

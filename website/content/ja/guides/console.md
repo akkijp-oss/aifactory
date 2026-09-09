@@ -120,7 +120,7 @@ claude mcp reset-project-choices   # 承認をやり直す
 
 | ツール | 内容 |
 |---|---|
-| `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れます）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
+| `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れます）・一覧・1 件（本文・履歴・run・ジョブ・添付の一覧 `attachments`。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | チケット作成（整った本文 / 自由文。intake はジョブ） |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |

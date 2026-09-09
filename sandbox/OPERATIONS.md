@@ -54,7 +54,7 @@ cd ~/aifactory && bin/ctl-update
 ## develop → main の昇格（人間）
 
 aifactory 自身の PR の宛先は `develop`（`examples/projects/aifactory/project.yml` の `base_branch`）。
-ゲート緑・レビュー PASS・CI 緑の PR は runner が `develop` へ自動マージする（`auto_merge: true`。ADR-0041）。
+ゲート緑・レビュー PASS・CI 緑の PR は runner が `develop` へ自動マージする（`auto_merge: true`。ADR-0042）。
 **`main` への昇格は機械がしない。** 溜まった `develop` を人が見て、次の 3 コマンドで上げる。
 
 ```bash

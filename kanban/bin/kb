@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
 
-  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
   kb list [--status S] [--pj P] [--all]
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
   kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
+  kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
+  kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
+  kb detach <id> <name>                          # 添付を 1 件消す
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
@@ -21,6 +24,7 @@
 - kind  : workflow/kit/workflows/*.yml のうち `.` / `_` 始まりでないもの（chore / bug / feature / hotfix / research / merge-pr / docs）
 - status: todo → in_progress → review → done。人間待ちは blocked
 - チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
+- 添付は attachments/<id>/（本文には書かない。1 ファイル 20 MiB・1 チケット 100 MiB まで）。run のとき VM の ~/work/<id>/attachments/ に置かれる
 - DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
 - 「ただのコード。エージェントは居ない」。LLM を使う判断（種別の分類など）は glue 側
 - 置き場は環境変数 AIFACTORY_WORKSPACE（全体）か KB_ROOT（kanban だけ）で差し替えられる
@@ -30,7 +34,7 @@ import argparse, datetime, json, os, pathlib, re, sqlite3, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # kanban/
 REPO = HERE.parent                                              # repo root
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
 ROOT = paths.KB_ROOT
 DB = ROOT / "kanban.db"
 TICKETS = ROOT / "tickets"
@@ -200,6 +204,7 @@ def cmd_new(a):
     record(c, tid, "status", None, a.status)
     c.commit(); render(c)
     print(fmt(get(c, tid))); print(f"     {file}")
+    if getattr(a, "attach", None): attach_files(c, tid, a.attach)
     return tid
 
 
@@ -218,6 +223,12 @@ def cmd_show(a):
     for k in r.keys(): print(f"{k:<8} {r[k] if r[k] is not None else ''}")
     f = ROOT / r["file"]
     print("-" * 60); print(f.read_text(encoding="utf-8") if f.exists() else f"(本文ファイル無し: {f})")
+    # 添付は本文に書かないので、ここで導く（0 件なら今までどおり何も足さない）
+    items = attachments.listing(a.id)
+    if items:
+        print("-" * 20 + f" 添付 ({len(items)}) " + "-" * 20)
+        for it in items: print(f"{it['name']:<40} {attachments.human(it['size']):>10}  {it['type']}  {it['added']}")
+        print(f"     {attachments.dir_for(a.id)}")
 
 
 def cmd_status(a, status):
@@ -241,6 +252,45 @@ def cmd_append(a):
     record(c, a.id, "body", None, f"append {len(text)}字" + (f" ({a.section})" if a.section else ""))
     c.execute("UPDATE tickets SET updated = ? WHERE id = ?", (now(), a.id)); c.commit()
     print(fmt(get(c, a.id))); print(f"     {f}")
+
+
+def attach_files(c, tid, files):
+    """ファイルを添付し、history に残す。1 件でも失敗したらそこで止める（入った分は残る）"""
+    added = []
+    try:
+        for f in files:
+            name = attachments.add(tid, f)
+            record(c, tid, "attachment", None, f"add {name} ({attachments.human((attachments.dir_for(tid) / name).stat().st_size)})")
+            added.append(name)
+    except (ValueError, OSError) as e:
+        c.execute("UPDATE tickets SET updated = ? WHERE id = ?", (now(), tid)); c.commit()
+        if added: print(f"[kb] {len(added)} 件は添付済み: {', '.join(added)}", file=sys.stderr)
+        die(f"添付できない: {e}")
+    c.execute("UPDATE tickets SET updated = ? WHERE id = ?", (now(), tid)); c.commit()
+    for name in added: print(f"添付 {name}  {attachments.dir_for(tid) / name}")
+    return added
+
+
+def cmd_attach(a):
+    c = db(); get(c, a.id)
+    attach_files(c, a.id, a.file)
+
+
+def cmd_attachments(a):
+    c = db(); get(c, a.id)
+    items = attachments.listing(a.id)
+    if a.json: print(json.dumps(items, ensure_ascii=False)); return
+    if not items: print("(添付なし)"); return
+    for it in items: print(f"{it['name']:<40} {attachments.human(it['size']):>10}  {it['type']}  {it['added']}")
+    print(f"     {attachments.dir_for(a.id)}")
+
+
+def cmd_detach(a):
+    c = db(); get(c, a.id)
+    if not attachments.remove(a.id, a.name): die(f"添付 {a.name} が無い（kb attachments {a.id} で確認）")
+    record(c, a.id, "attachment", a.name, "removed")
+    c.execute("UPDATE tickets SET updated = ? WHERE id = ?", (now(), a.id)); c.commit()
+    print(f"detach {a.name}")
 
 
 def cmd_next(a):
@@ -463,12 +513,16 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("new"); p.add_argument("pj"); p.add_argument("kind"); p.add_argument("title")
     p.add_argument("--body"); p.add_argument("--pr", type=int); p.add_argument("--id", type=int); p.add_argument("--status", default="todo"); p.add_argument("--note")
+    p.add_argument("--attach", action="append", metavar="FILE", help="起票と同時に添付する（複数可）")
     p = sp.add_parser("list"); p.add_argument("--status"); p.add_argument("--pj"); p.add_argument("--all", action="store_true")
     p = sp.add_parser("show"); p.add_argument("id", type=int)
     for name in ("start", "review", "done", "reopen", "block"):
         p = sp.add_parser(name); p.add_argument("id", type=int); p.add_argument("--note", required=(name == "block"))
     p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
     p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
+    p = sp.add_parser("attach"); p.add_argument("id", type=int); p.add_argument("file", nargs="+", help="添付するファイル（コピーされる）")
+    p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("detach"); p.add_argument("id", type=int); p.add_argument("name", help="kb attachments で出る名前")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
     p.add_argument("--wait", nargs="?", type=float, const=60, help="VM のプールに空きが無いとき、空くまで待つ上限（分。既定 60）")
@@ -491,6 +545,9 @@ def main():
         cmd_status(a, {"start": "in_progress", "review": "review", "done": "done", "reopen": "todo", "block": "blocked"}[a.cmd])
     elif a.cmd == "set": cmd_set(a)
     elif a.cmd == "append": cmd_append(a)
+    elif a.cmd == "attach": cmd_attach(a)
+    elif a.cmd == "attachments": cmd_attachments(a)
+    elif a.cmd == "detach": cmd_detach(a)
     elif a.cmd == "next": cmd_next(a)
     elif a.cmd == "run": sys.exit(cmd_run(a))
     elif a.cmd == "sync": cmd_sync(a)

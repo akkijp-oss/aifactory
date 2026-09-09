@@ -1,4 +1,4 @@
-"""条件を満たすときだけ PR を base へマージする automerge step（チケット 358 / ADR-0041）。
+"""条件を満たすときだけ PR を base へマージする automerge step（チケット 358 / ADR-0042）。
 
   python3 -m unittest discover -s workflow/tests -p 'test_pr_automerge.py' -v
 

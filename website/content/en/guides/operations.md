@@ -74,7 +74,7 @@ Check `sandbox ls` for lent VMs before rebuilding.
 
 ## Promoting develop to main (by a human)
 
-aifactory's own PRs target `develop`. A PR with green gates, a PASS review and all CI checks passing is merged into `develop` by the runner ([`auto_merge`](../reference/project-yml.md), ADR-0041). **Promotion to `main` is done by a human.**
+aifactory's own PRs target `develop`. A PR with green gates, a PASS review and all CI checks passing is merged into `develop` by the runner ([`auto_merge`](../reference/project-yml.md), ADR-0042). **Promotion to `main` is done by a human.**
 
 ```bash
 gh pr create --base main --head develop --title "develop -> main" --body "Automatically merged runs: #.. #.."

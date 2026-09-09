@@ -1,0 +1,2 @@
+### Added
+- **モデル系統ごとに別の Claude の鍵を使い分けられる**。`sandbox token set <pj|global> claude:<fable|opus|sonnet|haiku>` で `CLAUDE_CODE_OAUTH_TOKEN_<系統>` を保存すると、`take` がそれを VM の `/run/sandbox/env` に書き、runner が step のモデル名（`routes.env`: judgment=fable / coding=opus / research=sonnet）から系統を選んで、その鍵で `claude -p` を起動する。無い系統は従来の `CLAUDE_CODE_OAUTH_TOKEN` にそのまま落ちる。runner は鍵の値を持たず、run のログには `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS` のように名前だけ残る。`ctl.env` に置けば制御系の intake（fable）にも効く。`token rotate` / `clear` / `show` も同じ指定を受ける。

@@ -20,6 +20,7 @@
               待っている間は state.json の `current` が `wait-vm`（console のジョブ一覧・run 画面・MCP に「VM の空き待ち」と出る）。
               再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す
 
+チケットの添付（kb attach）は take のときに VM の ~/work/<task>/attachments/ へ置き、各 step の依頼文で場所を案内する（チケット 353）。
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
 step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
 """
@@ -28,7 +29,7 @@ import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
 KIT = HERE / "kit"
-sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
 
 def die(msg, code=1):
     print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
@@ -300,6 +301,23 @@ class Run:
         self.log(f"前回の run {self.from_run.name} から持ち込み: {', '.join(names) or '(無し)'}")
         return names
 
+    def push_attachments(self):
+        """チケットの添付（kb attach で入れた画像・PDF など）を VM の ~/work/<task>/attachments/ に置く（チケット 353）。
+
+        本文（ticket.md）には添付のことが書かれていないので、置いた実績を state.json の `attachments` に残し、
+        依頼文の案内はその記録だけを根拠に出す（運べていない backend で嘘の案内をしない）。
+        `carry_work`（前回の run の work/*.md を持ち込む）とは別の経路。添付が無ければ何もしない"""
+        items = attachments.listing(self.task)
+        if not items: return []
+        if not self.dry:
+            self.sb(f"mkdir -p {self.work}/attachments")
+            d = attachments.dir_for(self.task)
+            self.scp_files_to([d / it["name"] for it in items], f"{self.work}/attachments/")
+        self.state["attachments"] = [{"name": it["name"], "size": it["size"], "type": it["type"]} for it in items]
+        self.save()
+        self.log(f"チケットの添付 {len(items)} 件: " + ", ".join(it["name"] for it in items))
+        return items
+
     def first_retry_note(self):
         """`--from` で始めるとき、最初の step の依頼文に付ける「前回の結果（直すこと）」。
         前回のレビュー指摘をそのまま渡す（これが無いと、人が読んだ指摘が次の run に伝わらない）。
@@ -332,13 +350,25 @@ class Run:
     def scp_to(self, local, remote):
         if self.dry: return
         sh(["scp", *self.scp_opts(), str(local), f"dev@{self.vm_ip()}:{remote}"])
+    def scp_files_to(self, locals, remote_dir):
+        """ファイルを 1 回の scp でディレクトリへ置く。**宛先にファイル名を書かない**（名前は scp の protocol で運ばれる）。
+
+        利用者が付けた名前（日本語・空白入り）を宛先パスに書くと、どちらのモードでも安全にできない:
+        OpenSSH 9 以降の既定（SFTP）は宛先をリモートシェルに通さないので quote した記号がそのまま名前になり、
+        レガシー（`-O` / OpenSSH 8 以前）は逆にシェルを通すので quote しないと空白で切れる。
+        宛先をディレクトリに固定すれば、宛先に利用者由来の文字列が入らずどちらでも名前が保たれる"""
+        if self.dry or not locals: return
+        sh(["scp", *self.scp_opts(), *[str(p) for p in locals], f"dev@{self.vm_ip()}:{remote_dir}"])
 
     def run_remote(self, cmd, log_path, render=None, timeout=3600):
         return stream(["sandbox", "ssh", self.task, cmd], log_path, render=render)
 
     # ---------- lifecycle
     def take(self):
-        if self.dry or self.resume: return
+        if self.dry:
+            self.push_attachments()      # 転送はしないが、依頼文の案内は dry-run でも組み立てて見せる
+            return
+        if self.resume: return
         self.log("take")
         r = sh(["sandbox", "take", self.pj, self.task], check=False)
         if r.returncode != 0:
@@ -359,6 +389,7 @@ class Run:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
         self.prepare()
         if self.from_step: self.carry_work()
+        self.push_attachments()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
 
     def prepare(self):
@@ -470,6 +501,11 @@ class Run:
         if p.get("forbidden"): parts += ["", "### この PJ で禁止", ""] + [f"- {x}" for x in p["forbidden"]]
         if step["role"] == "reviewer" and p.get("review_points"): parts += ["", "### この PJ で必ず見る観点", ""] + [f"- {x}" for x in p["review_points"]]
         parts += ["", "## チケット", "", self.ticket.strip(), ""]
+        # 添付は本文に入らない（正本は workspace の attachments/）。場所と名前だけ案内する（チケット 353）
+        att = self.state.get("attachments") or []
+        if att:
+            parts += [f"- 添付: {self.work}/attachments/（{', '.join(a['name'] for a in att)}。"
+                      "画像・PDF は Read で開いて見ること。本文と食い違うときは添付を優先し、その旨を報告に書く）", ""]
         for a in step.get("inputs", []):
             if a in ("git", "pr_url"): continue
             body = self.vm_read(a) if not self.dry else f"（dry-run: {a} の内容）"
@@ -495,9 +531,23 @@ class Run:
     def diff_summary(self):
         return self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False)
 
+    @staticmethod
+    def token_family(model):
+        """モデル名 → 鍵の系統（FABLE / OPUS / SONNET / HAIKU）。分からなければ空。
+        系統ごとに別の鍵（CLAUDE_CODE_OAUTH_TOKEN_<系統>。sandbox token set <pj> claude:<系統>）を使い分けるため"""
+        m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
+        return m.group(1).upper() if m else ""
+
+    def token_env_prefix(self, model):
+        """agent の前に置く env の割り当て。VM の /run/sandbox/env（take が書く）に系統別の鍵があればそれを、無ければ従来の
+        CLAUDE_CODE_OAUTH_TOKEN をそのまま使う。値は VM の中で展開されるので、runner は鍵を持たないし、ログにも出ない"""
+        fam = self.token_family(model)
+        if not fam: return ""
+        return f'CLAUDE_CODE_OAUTH_TOKEN="${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-$CLAUDE_CODE_OAUTH_TOKEN}}" '
+
     def agent_command(self, prompt_path, model, timeout_min):
         computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
-        return (f"cd $SANDBOX_APP_DIR && timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
+        return (f"cd $SANDBOX_APP_DIR && {self.token_env_prefix(model)}timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
                 "--dangerously-skip-permissions --output-format stream-json --verbose" + computer + " 2>&1 < /dev/null")
 
     def commit_tracked(self, message):
@@ -520,7 +570,10 @@ class Run:
         prompt = self.build_prompt(step, retry_note)
         pf = self.run_dir / f"prompt-{step['id']}-{self.state['history'].__len__()}.md"
         pf.write_text(prompt, encoding="utf-8")
-        self.log(f"agent {step['id']} ({step['role']} / {cls} → {model})")
+        fam = self.token_family(model)
+        # どの鍵で動いたかを名前だけ記録する（値は出さない）。系統別の鍵が VM に無ければ従来の鍵に落ちる
+        key = self.sb(f"test -n \"${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}\" && echo CLAUDE_CODE_OAUTH_TOKEN_{fam} || echo CLAUDE_CODE_OAUTH_TOKEN", check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
+        self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"
         self.scp_to(pf, prompt_path)

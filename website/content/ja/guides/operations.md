@@ -74,7 +74,7 @@ journalctl -u aifactory-idle-stop        # timer のログ
 
 ## develop から main への昇格（人間）
 
-aifactory 自身の PR の宛先は `develop` です。ゲートが緑・レビューが PASS・CI がすべて pass の PR は runner が `develop` へ自動マージします（[`auto_merge`](../reference/project-yml.md)。ADR-0041）。**`main` への昇格は人間が行います。**
+aifactory 自身の PR の宛先は `develop` です。ゲートが緑・レビューが PASS・CI がすべて pass の PR は runner が `develop` へ自動マージします（[`auto_merge`](../reference/project-yml.md)。ADR-0042）。**`main` への昇格は人間が行います。**
 
 ```bash
 gh pr create --base main --head develop --title "develop → main（昇格）" --body "自動マージ済みの run: #.. #.."

@@ -25,7 +25,7 @@ jobs:
             echo "ok $f"
           done
       - name: python -m py_compile
-        run: python3 -m py_compile lib/aifactory_paths.py workflow/bin/run kanban/bin/kb glue/bin/intake glue/bin/dispatch console/bin/console console/bin/mcp console/lib/core.py
+        run: python3 -m py_compile lib/aifactory_paths.py lib/aifactory_attachments.py workflow/bin/run kanban/bin/kb glue/bin/intake glue/bin/dispatch console/bin/console console/bin/mcp console/lib/core.py
       - name: unittest (workflow)
         run: python3 -m unittest discover -s workflow/tests -v
       - name: unittest (console + mcp)

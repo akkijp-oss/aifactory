@@ -77,6 +77,7 @@ workspace/                           # 既定 <repo>/workspace/。git 追跡外
 ├── kanban/
 │   ├── kanban.db                    # 状態の正本（SQLite）
 │   ├── tickets/<id>-<pj>-<slug>.md  # 本文の正本
+│   ├── attachments/<id>/<名前>       # 添付の正本（画像・PDF など。ADR-0041）
 │   └── BOARD.md                     # 生成物
 ├── runs/<日付>-<pj>-<id>/            # 実行記録
 │   ├── ticket.md  state.json

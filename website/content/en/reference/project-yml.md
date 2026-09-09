@@ -36,7 +36,7 @@ auto_merge:
   require_checks: true   # Do not merge when there are zero checks (default true; set false for a project without CI)
 ```
 
-It merges only when **all** of these hold (ADR-0041):
+It merges only when **all** of these hold (ADR-0042):
 
 - No `FAIL` in `gates.txt` (`INFO`, i.e. a gate that is red on base too, is fine)
 - If the workflow has a reviewer, the first line of `review.md` is `# レビュー: PASS`

@@ -67,6 +67,17 @@ def parse_header(text):
     return found, "\n".join(keep).strip()
 
 
+def env_for_model(model, environ=None):
+    """モデル系統別の鍵（CLAUDE_CODE_OAUTH_TOKEN_FABLE / _OPUS / _SONNET / _HAIKU。ctl.env に置く）があればそれを
+    CLAUDE_CODE_OAUTH_TOKEN として claude に渡す。無ければ環境をそのまま（runner の VM 内の切り替えと同じ規則）"""
+    env = dict(os.environ if environ is None else environ)
+    m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
+    if m:
+        v = env.get("CLAUDE_CODE_OAUTH_TOKEN_" + m.group(1).upper())
+        if v: env["CLAUDE_CODE_OAUTH_TOKEN"] = v
+    return env
+
+
 def ask_llm(text, pjs, kds, fixed, model):
     pj_list = "\n".join(f"- {n}: {d}" for n, d in pjs)
     kind_list = "\n".join(f"- {n}: {d}" for n, d in kds)
@@ -99,7 +110,8 @@ def ask_llm(text, pjs, kds, fixed, model):
 {{"pj": "...", "kind": "...", "title": "50 字以内。先頭に docs:/fix:/feat:/test: などの接頭辞", "body": "...", "confidence": 0.0〜1.0, "reason": "1 行"}}
 """
     with tempfile.TemporaryDirectory() as td:  # cwd をリポジトリから外し、ツールを使わせない
-        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--tools", ""], cwd=td, text=True, capture_output=True, errors="replace")
+        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--tools", ""], cwd=td, text=True, capture_output=True, errors="replace",
+                           env=env_for_model(model))
     if r.returncode != 0: die(f"claude -p が失敗 ({r.returncode}): {r.stderr[-800:]}")
     m = re.search(r"```json\s*(\{.*?\})\s*```", r.stdout, re.S) or re.search(r"(\{.*\})", r.stdout, re.S)
     if not m: die(f"JSON が取れない。出力:\n{r.stdout[-1500:]}")

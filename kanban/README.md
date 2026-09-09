@@ -19,6 +19,7 @@ kanban/
 $AIFACTORY_WORKSPACE/kanban/
 ├── kanban.db       # 正本（SQLite）。ID・PJ・種別・状態・PR・run（run ディレクトリ名）・メモ・履歴
 ├── tickets/        # チケット本文 <id>-<pj>-<slug>.md（1 行目が題名、任意で `pr: N`）。runner にこのパスを渡す
+├── attachments/    # チケットの添付 <id>/<名前>（画像・PDF・CSV など）。本文には書かない。run のとき VM に運ばれる（ADR-0041）
 └── BOARD.md        # 生成物。状態を変える操作のたびに `kb` が再生成する。手で編集しない
 ```
 
@@ -43,6 +44,9 @@ $kb start|review|done|reopen <id> [--note TEXT]                         # 手で
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
 $kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目（`--note ''` でメモを空に戻す）
 $kb append <id> [--section S] [--text T]                                # 本文の末尾に追記（--text が無ければ stdin）
+$kb attach <id> <file>...                                               # 画像・PDF・CSV などを添付（コピー。本文には書かない）
+$kb attachments <id> [--json]                                           # 添付の一覧（名前・サイズ・種別・追加日時）
+$kb detach <id> <name>                                                  # 添付を 1 件消す
 $kb history <id>                                                        # 変更履歴
 $kb render                                                              # BOARD.md を再生成
 ```
@@ -51,12 +55,17 @@ $kb render                                                              # BOARD.
 - `kind` は「何の仕事か」、run の `workflow` は「今回どう回したか」。`kb run --workflow X` は `kind` を書き換えず、履歴に `workflow → X` を残す（種別を変えるのは `kb set --kind`。ADR-0030）
 - id は 3 桁以上の連番（`MAX(id)+1`、最小 100）。DNS 名 `task-{id}.sb.internal` に使える
 - `run` 列には run ディレクトリ名（例 `2026-09-06-kumitate-206`）が入る。実体は `$AIFACTORY_WORKSPACE/runs/<NAME>/`。`kb sync --run` / `kb set --run` もこの名前で指定する
-- `kb run` の結果判定: `state.json` に `merged` あり → `done`（runner が条件を確かめて自動マージした。ADR-0041）/ `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`
+- `kb run` の結果判定: `state.json` に `merged` あり → `done`（runner が条件を確かめて自動マージした。ADR-0042）/ `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`
 - take 失敗を `todo` に戻さず `blocked` にするのは、`glue/bin/dispatch` が古い順に `todo` を拾うため。プールが埋まっている間は同じチケットを取り直して失敗し続ける。理由を `note` に残して人間に返し、直したら `kb reopen` → `kb run` で戻す
 - `--pr` を変えると本文の `pr:` 行も書き換える（runner は本文の `pr:` を読むため）
 - `kb append` は**本文の末尾**に足す。`--section` を付けると `## <見出し>` を先に書く（例 `## PM 補足`）。「`## 完了条件` の手前」には入れない: 節を見分ける仕組みが `kb` に無く、末尾なら diff が 1 か所で済むため。見出しで後から書き足したものだと分かる
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
+- 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
+  - 名前は sanitize する（パス区切り・`..`・制御文字を落とす。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所
+  - `kb run` すると runner が VM の `~/work/<id>/attachments/` に置き、各 step の依頼文に添付の案内が 1 行入る。agent は画像・PDF を Read で開いて見る。添付が無いチケットの依頼文は変わらない
+  - **秘密情報（トークン・鍵・`.env` の実値）を添付しない。** `attachments/` は workspace（git 追跡外）なので `bin/oss-check.sh` の秘密情報の検査対象ではない。検査するのは「追跡されていないこと」だけ
+  - 今のところ添付を VM に運べるのは Proxmox backend だけ（pull backend＝ macOS / Windows / Linux は別途）。運べない backend では依頼文に案内も出ない
 - テストは `KB_ROOT=<別ディレクトリ>`（または `AIFACTORY_WORKSPACE` ごと）で DB・tickets・BOARD の置き場を差し替えて行う
 
 ## sandbox / workflow に約束すること

@@ -7,6 +7,7 @@ kb / run / intake / dispatch / console は全部ここを読む。置き場の�
     workspace/
     ├── projects/<pj>/{project.yml,provision.sh,gates.sh}   PJ 定義（無ければ examples/projects/<pj>/ を探す）
     ├── kanban/{kanban.db,tickets/,BOARD.md}                チケット台帳
+    │   └── attachments/<id>/                              チケットの添付（画像・PDF など。lib/aifactory_attachments.py が扱う）
     ├── runs/<run>/                                         実行記録
     ├── logs/{intake.log,dispatch.log}                      取り込み・配車の記録
     └── docs/                                               私有のメモ（インフラ台帳など。枠組みは読まない）
@@ -46,6 +47,7 @@ else:
     PROJECT_DIRS = [WORKSPACE / "projects", EXAMPLES]
     _kb, RUNS, LOGS = WORKSPACE / "kanban", WORKSPACE / "runs", WORKSPACE / "logs"
 KB_ROOT = pathlib.Path(os.environ.get("KB_ROOT") or _kb).expanduser()
+ATTACHMENTS = KB_ROOT / "attachments"      # チケットの添付（<id>/<名前>）。KB_ROOT を差し替えたら一緒に動く
 JOBS = pathlib.Path(os.environ.get("CONSOLE_JOBS") or (REPO / "console" / "jobs")).expanduser()
 
 
@@ -78,7 +80,7 @@ def run_path(run):
 
 def describe():
     return {"workspace": str(WORKSPACE), "workspace_source": WORKSPACE_SOURCE, "legacy": LEGACY, "project_dirs": [str(p) for p in PROJECT_DIRS],
-            "kb_root": str(KB_ROOT), "runs": str(RUNS), "logs": str(LOGS), "jobs": str(JOBS)}
+            "kb_root": str(KB_ROOT), "attachments": str(ATTACHMENTS), "runs": str(RUNS), "logs": str(LOGS), "jobs": str(JOBS)}
 
 
 if __name__ == "__main__":

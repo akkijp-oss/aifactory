@@ -1,4 +1,4 @@
-# ADR 0041: PR は `base_branch`（aifactory は `develop`）宛てに作り、条件を満たせば runner がマージする。main への昇格は人間
+# ADR 0042: PR は `base_branch`（aifactory は `develop`）宛てに作り、条件を満たせば runner がマージする。main への昇格は人間
 
 - 状態: Accepted
 - 日付: 2026-09-09
