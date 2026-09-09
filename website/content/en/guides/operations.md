@@ -29,7 +29,9 @@ sandbox reinject <id>                                # push the current key into
 
 Long-lived tokens from `claude setup-token` expire. When one does, the step stops with `failure: key` and the ticket becomes `blocked`. The issue date in `sandbox keys list` tells you when that is coming.
 
-**`sandbox token set <pj>` is deprecated.** It is the old way of putting a key in a per-project file; it still works for compatibility but is not used while the pool has a matching key (the command prints a notice). `sandbox token rotate` replaces the key intake uses (`ctl.env`) and the last-resort key in `~/.config/sandbox/env`; it does not touch the pool.
+**`sandbox token set <pj>` is deprecated.** It is the old way of putting a key in a per-project file; it still works for compatibility but is not used at all while the pool holds any key (the command prints a notice). `sandbox token rotate` replaces the key intake uses (`ctl.env`); it does not touch the pool.
+
+**When the pool has no key for a purpose the run needs, the run pauses** (ADR-0046). No VM is taken, the ticket goes back to todo and its note says it is paused for lack of a key. Register a key on the *Keys* screen and the 5-minute timer starts the run over. Disabling every key stops the factory; enabling one resumes it.
 ### Running out of usage (the usage limit) resumes by itself
 
 When the token's **usage limit** (the 5-hour or 7-day window) is used up, `claude -p` is rejected and the agent step stops. The runner treats this apart from an ordinary failure: it commits whatever was changed so far as `wip: usage limit`, pushes it to the wip branch, and puts the ticket **back to todo** (the note says it is paused and when the limit is expected to reset). The control plane's systemd timer `aifactory-resume.timer` calls `dispatch --resume-paused` every 5 minutes, and once the reset time has passed it **continues** the run with `kb run <id> --from` (the same step, on top of the wip branch). Nobody has to do anything (ADR-0043).

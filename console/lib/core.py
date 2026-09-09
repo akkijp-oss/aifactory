@@ -349,6 +349,9 @@ def run_outcome(d, s, state, wf, files):
         # prepare.sh か VM の側にある。「VM を取得できなかった」と混ぜない
         if state.get("failure") == "prepare":
             o["reason"] = "prepare_failed"; o["stopped_step"] = "prepare"
+        # 要る用途の Claude の鍵が鍵プールに無く、VM を取らずに一時停止した run（ADR-0046）。チケットは todo に戻っていて、鍵が登録されると timer が回し直す
+        if state.get("failure") == "nokey":
+            o["reason"] = "nokey"; o["stopped_step"] = "take"; o["needed_keys"] = [k for k in (state.get("needed_keys") or []) if k in ("fable", "other")]
         return o
     # 人間が後始末（wip から PR を作ってマージ・打ち切り）をした run（チケット 335）。runner が確定した result より後の事実なので、
     # 止まった工程の話より先に言う。kb が state.json に足した `human` だけが根拠で、ここでは何も推し量らない（ADR-0039）

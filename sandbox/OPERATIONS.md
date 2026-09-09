@@ -165,7 +165,7 @@ sandbox reinject <task>                             # 無効化・削除・差�
 ```
 
 - 選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。使用量が鍵の間で均されます。
-- 用途に合う鍵が 1 本も無いときだけ、`pj/<pj>.env` と `env` の鍵（`sandbox token set`。非推奨）に落ちます。main テナントでは global の `env` に保険を 1 本残してあります。
+- プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（チケットは todo に戻り、鍵を登録すると timer が回し直す。ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（`sandbox token set`。非推奨）を使います。
 - 鍵の値はどこにも表示しません。`keys list` も console も MCP も、名前と末尾 4 文字だけを出します。run のログには `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` のように名前だけ残ります。
 - console の「鍵」画面（左のナビ。近道は `g k`）から同じことができます。使わない設定にする / 消すと、その鍵を使っている貸出に `sandbox reinject` のジョブが自動で起きます。
 - `sandbox token rotate` はプールを触りません（`env` と `ctl.env` の鍵だけを差し替えます）。プールの鍵を替えるのは `sandbox keys token <名前>` です。

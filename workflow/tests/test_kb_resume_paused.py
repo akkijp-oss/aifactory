@@ -179,6 +179,29 @@ class KbResumePausedTest(unittest.TestCase):
         log = (self.ws / "logs" / "dispatch.log").read_text(encoding="utf-8")
         self.assertIn("start 931", log); self.assertIn("end   931", log)
 
+    def test_dispatch_resume_paused_restarts_a_run_that_had_no_key_once_the_pool_has_one(self):
+        """鍵が無くて止まった run（failure nokey。VM を取っていない）は、鍵プールに要る用途の鍵が入ると初めから回し直す（--from は付けない。ADR-0046）"""
+        d = self.ws / "runs" / self.prev; d.mkdir(parents=True, exist_ok=True)
+        now = datetime.datetime.now().astimezone()
+        (d / "state.json").write_text(json.dumps({"pj": "kumitate", "task": "931", "workflow": "bug", "branch": "sandbox/931-bug-x", "base": "develop",
+            "result": "failed", "next": "human", "pr_url": "", "wip_branch": "", "failure": "nokey", "needed_keys": ["fable", "other"],
+            "error": "鍵なし: Fable に使う鍵が鍵プールに無い", "started": iso(now), "finished": iso(now), "elapsed_s": 1, "loops": {}, "history": []}), encoding="utf-8")
+        self.assertEqual(self.kb("set", "931", "--run", self.prev).returncode, 0)
+        self.assertEqual(self.kb("sync", "931").returncode, 0)
+        self.assertEqual(self.show()["status"], "todo")
+        keys = self.ws / "keys.json"; env = dict(self.env, SANDBOX_KEYS=str(keys))
+        r = self.dispatch("--resume-paused", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr); self.assertIn("鍵の登録", r.stdout)
+        self.assertFalse(self.calls.exists(), "鍵が無い間は runner を呼ばない")
+        keys.write_text(json.dumps({"keys": [{"name": "a", "token": "x", "allow": {"fable": True, "other": True}, "enabled": True}]}))
+        r = self.dispatch("--resume-paused", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("鍵が登録されたので初めから回し直す", r.stdout)
+        calls = self.calls.read_text(encoding="utf-8")
+        self.assertIn("take kumitate 931 --need=fable,other", calls)
+        self.assertIn("FROM_RUN: 未設定", calls)                                 # 続きではなく初めから
+        self.assertFalse((self.ws / "runs" / self.today / "state.json").exists() and json.loads((self.ws / "runs" / self.today / "state.json").read_text()).get("from_step"))
+
     def test_dispatch_resume_paused_waits_until_the_limit_resets(self):
         self.paused_run(retry_after="future")
         self.kb("sync", "931")
