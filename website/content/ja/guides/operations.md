@@ -28,6 +28,19 @@ sandbox reinject --all
 
 `sandbox token rotate` は制御系（`~/.config/aifactory/ctl.env` のあるホスト）で実行します。保存した日は各ファイルにコメントで残るので、`sandbox token show` の「発行から N 日」で期限が近いことに気づけます。
 
+### Claude の鍵プール（制御系にまとめて置く）
+
+鍵が何本もあるときは、プロジェクトごとに配る代わりに、制御系の `~/.config/sandbox/keys.json` に名前を付けて並べておけます。VM を貸し出すとき（`take`）に、系統ごとに 1 本ずつ選んで渡します。
+
+```bash
+sandbox keys add fable-main --fable      # Fable 用の契約の鍵（値は対話入力）
+sandbox keys add opus-a --other          # Opus / Sonnet / Haiku 用
+sandbox keys list                        # 名前・フラグ・末尾 4 文字・最終利用・使っている貸出
+sandbox keys set opus-a --disable        # しばらく使わない（使っている貸出には reinject で切り替える）
+```
+
+選ばれるのは、フラグの合う鍵のうち最後に使ってから最も時間が経ったものです。同じチケットの `reinject` では同じ鍵を使い続け、その鍵が使えなくなったときだけ選び直します。候補が 1 本も無い系統は、上のプロジェクトごとの鍵に落ちます（プールが空なら今までどおりです）。コンソールの「鍵」画面からも同じことができます。詳しくは [sandbox CLI の keys](../reference/cli-sandbox.md) と ADR-0043 を見てください。
+
 ### GitHub のトークン（自動）
 
 GitHub App の installation token は 1 時間で切れます。制御系の systemd timer `aifactory-gh-refresh.timer` が 45 分ごとに貸出中の VM へ払い出し直し、runner もスクリプトが担当する工程の前に払い出し直します。手動なら:

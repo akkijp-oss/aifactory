@@ -93,6 +93,7 @@ sandbox token set <pj|global> [claude|gh]   トークンを対話入力して保
 sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
 sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 sandbox token clear <pj|global> [claude|gh] トークンを消す
+sandbox keys list|add|set|rm|token          Claude の鍵プール（制御系の keys.json）。名前とフラグを付けた鍵を並べ、take が系統ごとに 1 本選ぶ
 sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 ```
@@ -106,9 +107,25 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | `token set <pj> gh` | 同 `GH_TOKEN`（App 未設定時のフォールバック） |
 | `token set global` | `~/.config/sandbox/env`（全プロジェクトの既定） |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env` と、その鍵を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env` |
-| `token show [pj]` | 効いているトークンの出どころとマスク表示、保存からの日数、実行ホストが制御系かどうか |
+| `token show [pj]` | 効いているトークンの出どころとマスク表示、保存からの日数、実行ホストが制御系かどうか。鍵プールがあれば本数と系統ごとの候補数も 1 行 |
 
 期限切れの差し替えは制御系（`ctl.env` のあるホスト）で `sandbox token rotate` を 1 回。更新した場所を一覧で出したあと、`ctl.env` を更新したときは `aifactory-console` を再起動し（`sudo -n` が通らなければコマンドを表示）、貸出中の VM があれば `reinject --all` まで行います（ADR-0029）。VM の中で動いている `claude` は、従来どおり VM 内で再起動が要ります。
+
+### keys
+
+制御系の `~/.config/sandbox/keys.json`（600）に名前を付けた Claude の鍵を並べておくと、`take` / `reset` / `reinject` が系統ごとに 1 本ずつ選んで VM に渡します（ADR-0043）。鍵ごとに「fable に使う」「fable 以外（Opus / Sonnet / Haiku）に使う」の 2 つのフラグがあり、Fable 用の契約と Opus 用の契約を分けられます。
+
+| コマンド | 何をするか |
+|---|---|
+| `keys add <名前> [--fable] [--other] [--note …]` | 鍵を足す。値は対話入力（エコー無し）か標準入力から受け取る。フラグは少なくとも一方が要る。名前は `[A-Za-z0-9._-]` の 1〜40 文字で一意 |
+| `keys list [--json]` | 名前・フラグ・使うかどうか・トークンの末尾 4 文字・発行日・最終利用・使用回数・その鍵を使っている貸出。値は出さない |
+| `keys set <名前> [--fable=on\|off] [--other=on\|off] [--enable\|--disable] [--note …]` | フラグ・使うかどうか・メモを変える。使わない設定にしたときは、その鍵を使っている貸出への `reinject` を案内する |
+| `keys token <名前>` | 値だけ差し替える（名前・フラグ・使用回数はそのまま）。貸出中の VM には `reinject` で反映する |
+| `keys rm <名前> [--force]` | 消す。貸出中の task が使っていれば `--force` が要る |
+
+選び方は「その task が前に使った鍵（まだ使える設定なら）→ 無ければ、フラグの合う鍵のうち最後に使ってから最も時間が経ったもの」です。候補が 1 本も無い系統は、これまでどおり `pj/<pj>.env` と `env` の鍵に落ちます（プールが空なら挙動は今までと同じ）。VM には既存の系統別変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
+
+`sandbox token rotate` はプールを触りません（`env` と `ctl.env` の鍵だけを差し替えます）。
 
 ### gh-app
 

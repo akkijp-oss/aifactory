@@ -28,6 +28,19 @@ sandbox reinject --all
 
 Run `sandbox token rotate` on the control plane (the host that has `~/.config/aifactory/ctl.env`). The day each token was saved is recorded as a comment in the file, so `sandbox token show` can tell you how many days ago that was.
 
+### Claude key pool (kept on the control plane)
+
+When you hold several keys, name them and keep them in `~/.config/sandbox/keys.json` on the control plane instead of handing them out per project. Lending a VM (`take`) then picks one key per model family.
+
+```bash
+sandbox keys add fable-main --fable      # a key from a Fable contract (the value is typed in)
+sandbox keys add opus-a --other          # for Opus / Sonnet / Haiku
+sandbox keys list                        # names, flags, last 4 characters, last use, and the leases holding each key
+sandbox keys set opus-a --disable        # stop using it (switch the leases over with reinject)
+```
+
+The key picked is the eligible one that has gone longest without being used. The same ticket keeps its key across `reinject`, and only picks again once that key can no longer be used. A family with no candidate falls back to the per-project keys above, so an empty pool behaves exactly like today. The console's *Keys* screen does the same things. See [the keys section of the sandbox CLI](../reference/cli-sandbox.md) and ADR-0043.
+
 ### GitHub token (automatic)
 
 GitHub App installation tokens expire after one hour. The systemd timer `aifactory-gh-refresh.timer` on the control plane reissues them to every lent VM every 45 minutes, and the runner reissues before each code step. By hand:
