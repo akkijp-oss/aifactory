@@ -28,7 +28,17 @@ def sandbox_state_path():
     return pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config" / "sandbox" / "state.json"))
 
 
+def sandbox_keys_path():
+    """Claude の鍵プール（keys.json）の置き場。sandbox CLI と同じ規則で、環境変数 SANDBOX_KEYS が正。
+    無ければ台帳（state.json）の隣（テナント運用では <t>.keys.json）。値はここでは読まない（読むのは sandbox CLI だけ。ADR-0044）"""
+    v = os.environ.get("SANDBOX_KEYS")
+    if v: return pathlib.Path(v)
+    s = sandbox_state_path()
+    return s.parent / (s.name[:-len("state.json")] + "keys.json" if s.name.endswith("state.json") else "keys.json")
+
+
 SANDBOX_STATE = sandbox_state_path()
+SANDBOX_KEYS = sandbox_keys_path()
 SANDBOX_PJ_DIR = pathlib.Path.home() / ".config" / "sandbox" / "pj"
 POOL_PER_PJ = int(os.environ.get("SANDBOX_POOL_PER_PJ") or 3)   # 「定義台数」の正本は glue/bin/dispatch と同じ環境変数（241）
 LS_STALE_S = 600                                                # `sandbox ls` の結果がこれより古ければ「古い」と添える（229）
@@ -123,8 +133,9 @@ def load_ctl_env(path=None):
         if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2: v = v[1:-1]
         if not k or not v or os.environ.get(k): continue
         os.environ[k] = v; added.append(k)
-    global SANDBOX_STATE
+    global SANDBOX_STATE, SANDBOX_KEYS
     SANDBOX_STATE = sandbox_state_path()   # ctl.env に SANDBOX_STATE があれば、それを読んでから台帳の場所を決め直す
+    SANDBOX_KEYS = sandbox_keys_path()
     return added
 
 
@@ -646,9 +657,11 @@ def sandbox_view():
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
     # 貸出 1 件 = 1 行の一覧（台帳の写し）。MCP から IP を引くのに state.json を ssh で直読みしなくて済むようにする（336）
     status_of = {str(v["vmid"]): v.get("status") for v in vms if v.get("vmid")}
+    # keys は take / reinject が書いた鍵プールの名前（{"fable": …, "other": …}）。値は台帳にも入らない（ADR-0044）
     leases = [{"task": str(t), "vmid": None if v.get("vmid") in (None, "") else str(v["vmid"]), "name": v.get("name"),
                "ip": v.get("ip"), "pj": v.get("pj"), "since": v.get("since"), "phase": v.get("phase"),
-               "url": urls.get(t), "vm_status": status_of.get(str(v.get("vmid")))}
+               "url": urls.get(t), "vm_status": status_of.get(str(v.get("vmid"))),
+               "keys": v.get("keys") if isinstance(v.get("keys"), dict) else None}
               for t, v in sorted(lent.items(), key=lambda kv: _task_key(kv[0])) if isinstance(v, dict)]
     return {"lent": lent, "leases": leases, "state_exists": state_exists, "state_error": state_error,
             "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
@@ -1153,6 +1166,99 @@ def op_sandbox_release(b):
     if not re.match(r"^\d{3,}$", task): raise ApiError("チケット番号（task）は 3 桁以上の数字で指定してください")
     busy = lambda j: f"チケット {task} のジョブ {j['id']} が実行中です。先にジョブを止めてから返却してください" if j.get("ticket") == int(task) else None
     return {"job": JobStore.start("sandbox-release", ["sandbox", "release", task], f"sandbox release {task}", ticket=int(task), conflict=busy)}
+
+
+# ---------- Claude の鍵プール（keys.json。ADR-0044）
+# 読むのは名前・フラグ・末尾 4 文字だけ。token の値は keys_view にも応答にも例外文にも入れない。
+# 書くのは必ず sandbox CLI 経由（core が keys.json を直接書くことはない。state.json と同じ約束）
+KEY_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+
+
+def sandbox_cli(args, stdin=None):
+    """sandbox CLI を同期で呼ぶ（数秒で終わる操作だけ）。戻り: (rc, stdout, stderr)。
+
+    鍵の追加・差し替えは JobStore に載せない: JobStore は stdin を jobs/<id>/stdin.txt に、コマンド行を log に書くので、
+    トークンが記録に残ってしまう。ここでは stdin をパイプで渡すだけにする（記録に残らない）"""
+    if not shutil.which("sandbox", path=child_env().get("PATH")): raise ApiError("sandbox コマンドが PATH にありません")
+    r = subprocess.run(["sandbox", *map(str, args)], text=True, capture_output=True, errors="replace",
+                       input=stdin, env=child_env(), cwd=str(REPO))
+    return r.returncode, r.stdout, r.stderr
+
+
+def keys_view():
+    """鍵プールの一覧（マスク済み）。keys.json を直接読む（state.json と同じ流儀）。token の値は返さない"""
+    path = SANDBOX_KEYS
+    raw, error = [], None
+    exists = path.exists()
+    if exists:
+        try: raw = json.loads(path.read_text(encoding="utf-8")).get("keys") or []
+        except Exception as e: error = str(e)
+    lent = {}
+    if SANDBOX_STATE.exists():
+        try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
+        except Exception: lent = {}
+
+    def in_use(name):
+        """その鍵を使っている貸出中のチケット（take / reinject が state.json の keys に残した名前）"""
+        ts = [str(t) for t, v in lent.items() if isinstance(v, dict) and isinstance(v.get("keys"), dict)
+              and name and name in (v["keys"].get("fable"), v["keys"].get("other"))]
+        return sorted(ts, key=_task_key)
+
+    keys = []
+    for k in raw:
+        if not isinstance(k, dict): continue
+        name = str(k.get("name") or "")
+        allow = k.get("allow") if isinstance(k.get("allow"), dict) else {}
+        tok = str(k.get("token") or "")
+        keys.append({"name": name, "allow": {"fable": allow.get("fable") is True, "other": allow.get("other") is True},
+                     "enabled": k.get("enabled") is not False, "tail4": tok[-4:], "note": k.get("note") or "",
+                     "issued": k.get("issued"), "last_used": ts_aware(k.get("last_used")) if k.get("last_used") else None,
+                     "uses": k.get("uses") or 0, "in_use": in_use(name)})
+    return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
+            # 系統ごとの候補数。0 の系統は PJ / 全体の env の鍵に落ちる（互換）
+            "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")}}
+
+
+def keys_apply(b):
+    """鍵プールを変える（sandbox keys …）。action: add / set / rm / token。
+
+    無効化（set --disable）と削除でその鍵を使えなくしたときは、使っている貸出中のチケットに reinject のジョブを起こす
+    （動いている claude はそのまま。次の起動から別の鍵になる。#46 の規則）"""
+    action, name = str(b.get("action") or ""), str(b.get("name") or "")
+    if action not in ("add", "set", "rm", "token"): raise ApiError("action は add / set / rm / token のどれかにしてください")
+    if not KEY_NAME_RE.match(name): raise ApiError("鍵の名前は英数字と . _ - の 1〜40 文字にしてください")
+    token = b.get("token")
+    stdin = None
+    before = {k["name"]: k for k in keys_view()["keys"]}
+    if action in ("add", "token"):
+        if not token or not str(token).strip(): raise ApiError("トークンを入れてください")
+        stdin = str(token).strip() + "\n"
+    if action == "add":
+        if not (b.get("fable") or b.get("other")): raise ApiError("「fable 許可」「fable 以外許可」のどちらか（両方でも可）を選んでください")
+        args = ["keys", "add", name]
+        if b.get("fable"): args.append("--fable")
+        if b.get("other"): args.append("--other")
+        if b.get("note"): args += ["--note", str(b["note"])]
+    elif action == "token":
+        args = ["keys", "token", name]
+    elif action == "set":
+        args = ["keys", "set", name]
+        for g in ("fable", "other"):
+            if b.get(g) is not None: args.append("--%s=%s" % (g, "on" if b[g] else "off"))
+        if b.get("enabled") is not None: args.append("--enable" if b["enabled"] else "--disable")
+        if b.get("note") is not None: args += ["--note", str(b["note"]) or "-"]
+        if len(args) == 3: raise ApiError("変える項目がありません")
+    else:
+        args = ["keys", "rm", name] + (["--force"] if b.get("force") else [])
+    rc, out, err = sandbox_cli(args, stdin=stdin)
+    if rc != 0: raise ApiError((err or out).strip() or "sandbox keys %s が失敗しました（rc=%s）" % (action, rc))
+    jobs = []
+    if action == "rm" or (action == "set" and b.get("enabled") is False):
+        for task in (before.get(name) or {}).get("in_use", []):
+            try: jobs.append(JobStore.start("sandbox-reinject", ["sandbox", "reinject", task], "sandbox reinject %s" % task,
+                                            ticket=int(task) if task.isdigit() else None))
+            except Exception as e: jobs.append({"task": task, "error": "%s: %s" % (type(e).__name__, e)})
+    return {"ok": True, "message": out.strip(), "reinject_jobs": jobs, "view": keys_view()}
 
 
 def job_view(jid, offset=0):

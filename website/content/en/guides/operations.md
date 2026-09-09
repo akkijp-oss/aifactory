@@ -28,6 +28,18 @@ sandbox reinject --all
 
 Run `sandbox token rotate` on the control plane (the host that has `~/.config/aifactory/ctl.env`). The day each token was saved is recorded as a comment in the file, so `sandbox token show` can tell you how many days ago that was.
 
+### Claude key pool (kept on the control plane)
+
+When you hold several keys, name them and keep them in `~/.config/sandbox/keys.json` on the control plane instead of handing them out per project. Lending a VM (`take`) then picks one key per model family.
+
+```bash
+sandbox keys add fable-main --fable      # a key from a Fable contract (the value is typed in)
+sandbox keys add opus-a --other          # for Opus / Sonnet / Haiku
+sandbox keys list                        # names, flags, last 4 characters, last use, and the leases holding each key
+sandbox keys set opus-a --disable        # stop using it (switch the leases over with reinject)
+```
+
+The key picked is the eligible one that has gone longest without being used. The same ticket keeps its key across `reinject`, and only picks again once that key can no longer be used. A family with no candidate falls back to the per-project keys above, so an empty pool behaves exactly like today. The console's *Keys* screen does the same things. See [the keys section of the sandbox CLI](../reference/cli-sandbox.md) and ADR-0044.
 ### Running out of usage (the usage limit) resumes by itself
 
 When the token's **usage limit** (the 5-hour or 7-day window) is used up, `claude -p` is rejected and the agent step stops. The runner treats this apart from an ordinary failure: it commits whatever was changed so far as `wip: usage limit`, pushes it to the wip branch, and puts the ticket **back to todo** (the note says it is paused and when the limit is expected to reset). The control plane's systemd timer `aifactory-resume.timer` calls `dispatch --resume-paused` every 5 minutes, and once the reset time has passed it **continues** the run with `kb run <id> --from` (the same step, on top of the wip branch). Nobody has to do anything (ADR-0043).

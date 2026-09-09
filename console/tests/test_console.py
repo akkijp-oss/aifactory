@@ -6,7 +6,7 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import datetime, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import datetime, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, stat, subprocess, sys, tempfile, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
@@ -51,6 +51,149 @@ class Http:
         try:
             with urllib.request.urlopen(req, timeout=10) as r: return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
+
+
+# 鍵プール（#379）の口を確かめるための偽 sandbox。keys.json を書くのは本物と同じ「CLI だけ」で、
+# console は読み取りとジョブの起動しかしないことを確かめる（本物の VM も Proxmox も使わない）
+FAKE_SANDBOX_KEYS = r"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+a = sys.argv[1:]
+p = pathlib.Path(os.environ["SANDBOX_KEYS"])
+if a[:1] == ["reinject"]:
+    print("reinject", a[1]); sys.exit(0)
+if a[:1] != ["keys"]: sys.exit(2)
+sub, name = a[1], a[2]
+d = json.loads(p.read_text()) if p.exists() else {"keys": []}
+by = {k["name"]: k for k in d["keys"]}
+if sub == "add":
+    if name in by: print("[error] 既にあります", file=sys.stderr); sys.exit(1)
+    d["keys"].append({"name": name, "token": sys.stdin.read().strip(), "enabled": True, "uses": 0, "last_used": None,
+                      "issued": "2026-09-09", "note": "", "allow": {"fable": "--fable" in a, "other": "--other" in a}})
+elif sub == "set":
+    k = by[name]
+    for f in ("fable", "other"):
+        if "--%s=on" % f in a: k["allow"][f] = True
+        if "--%s=off" % f in a: k["allow"][f] = False
+    if "--disable" in a: k["enabled"] = False
+    if "--enable" in a: k["enabled"] = True
+elif sub == "rm":
+    d["keys"] = [k for k in d["keys"] if k["name"] != name]
+elif sub == "token":
+    by[name]["token"] = sys.stdin.read().strip()
+else: sys.exit(2)
+p.write_text(json.dumps(d, ensure_ascii=False))
+p.chmod(0o600)
+print("[ok]", sub, name)
+"""
+
+
+class KeysApiTest(unittest.TestCase):
+    """/api/keys（#379）: 一覧はマスク済み、書き込みは sandbox CLI 経由、無効化・削除は使っている貸出に reinject を起こす"""
+
+    TOKEN = "fake-token-console-test-9999"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-keys-test-"))
+        cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
+        cls.home = cls.tmp / "home"; cls.home.mkdir()
+        cls.keys = cls.tmp / "keys.json"
+        cls.state = cls.tmp / "state.json"
+        cls.state.write_text("{}", encoding="utf-8")
+        b = cls.tmp / "bin"; b.mkdir()
+        sb = b / "sandbox"; sb.write_text(FAKE_SANDBOX_KEYS, encoding="utf-8"); sb.chmod(0o755)
+        cls.port = free_port()
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs"),
+               "HOME": str(cls.home), "SANDBOX_STATE": str(cls.state), "SANDBOX_KEYS": str(cls.keys),
+               "PATH": f"{b}:{os.environ.get('PATH', '')}"}
+        cls.proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(cls.port)], env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.http = Http(f"http://127.0.0.1:{cls.port}")
+        for _ in range(50):
+            try: cls.http.get("/api/keys"); break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate(); cls.proc.wait(timeout=10)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.keys.write_text(json.dumps({"keys": []}), encoding="utf-8")
+        self.state.write_text("{}", encoding="utf-8")
+
+    def lend(self, task, fable=None, other=None):
+        """台帳に貸出を 1 件置く（take が書く形。鍵の名前だけが入り、値は入らない）"""
+        k = {g: v for g, v in (("fable", fable), ("other", other)) if v}
+        self.state.write_text(json.dumps({task: {"vmid": 9201, "name": "sb-t-01", "ip": "10.77.1.1", "pj": PJ,
+                                                 "since": "2026-09-09T10:00:00+09:00", "keys": k}}, ensure_ascii=False), encoding="utf-8")
+
+    def add(self, name, fable=False, other=True, token=None):
+        return self.http.post("/api/keys", {"action": "add", "name": name, "token": token or self.TOKEN,
+                                            "fable": fable, "other": other})
+
+    def test_list_is_masked_and_never_carries_the_token(self):
+        st, d = self.add("opus-a")
+        self.assertEqual(st, 200, d)
+        self.assertNotIn(self.TOKEN, json.dumps(d, ensure_ascii=False))
+        st, v = self.http.get("/api/keys")
+        self.assertEqual(st, 200)
+        self.assertNotIn(self.TOKEN, json.dumps(v, ensure_ascii=False))
+        self.assertEqual([k["name"] for k in v["keys"]], ["opus-a"])
+        k = v["keys"][0]
+        self.assertEqual(k["tail4"], self.TOKEN[-4:]); self.assertNotIn("token", k)
+        self.assertEqual(k["allow"], {"fable": False, "other": True}); self.assertTrue(k["enabled"])
+        self.assertEqual(v["candidates"], {"fable": 0, "other": 1})
+        self.assertEqual(v["keys_file"], str(self.keys))
+
+    def test_the_written_file_is_600_and_console_did_not_write_it(self):
+        self.assertEqual(self.add("opus-a")[0], 200)
+        self.assertEqual(stat.S_IMODE(os.stat(self.keys).st_mode), 0o600)
+
+    def test_bad_input_is_refused_before_the_cli_runs(self):
+        for b, why in (({"action": "add", "name": "bad name", "token": "x", "other": True}, "名前"),
+                       ({"action": "nope", "name": "opus-a"}, "action"),
+                       ({"action": "add", "name": "opus-a", "token": "", "other": True}, "トークン"),
+                       ({"action": "add", "name": "opus-a", "token": "x"}, "fable")):
+            st, d = self.http.post("/api/keys", b)
+            self.assertEqual(st, 400, (b, d)); self.assertIn(why, d["error"])
+        self.assertEqual(json.loads(self.keys.read_text())["keys"], [])
+
+    def test_the_flags_can_be_toggled(self):
+        self.assertEqual(self.add("k1", fable=True, other=False)[0], 200)
+        st, d = self.http.post("/api/keys", {"action": "set", "name": "k1", "other": True})
+        self.assertEqual(st, 200, d)
+        self.assertEqual(d["view"]["keys"][0]["allow"], {"fable": True, "other": True})
+        self.assertEqual(d["reinject_jobs"], [])
+
+    def test_disabling_a_key_in_use_starts_a_reinject_job(self):
+        self.assertEqual(self.add("opus-a")[0], 200)
+        self.lend("379", other="opus-a")
+        st, d = self.http.post("/api/keys", {"action": "set", "name": "opus-a", "enabled": False})
+        self.assertEqual(st, 200, d)
+        self.assertFalse(d["view"]["keys"][0]["enabled"])
+        self.assertEqual([j["cmd"] for j in d["reinject_jobs"]], [["sandbox", "reinject", "379"]])
+        self.assertEqual(d["reinject_jobs"][0]["ticket"], 379)
+        _, jobs = self.http.get("/api/jobs")
+        self.assertIn("sandbox-reinject", [j["kind"] for j in jobs["jobs"]])
+
+    def test_removing_a_key_that_is_not_in_use_starts_no_job(self):
+        self.assertEqual(self.add("opus-a")[0], 200)
+        st, d = self.http.post("/api/keys", {"action": "rm", "name": "opus-a"})
+        self.assertEqual(st, 200, d)
+        self.assertEqual(d["reinject_jobs"], [])
+        self.assertEqual(self.http.get("/api/keys")[1]["keys"], [])
+
+    def test_the_lease_carries_the_key_names(self):
+        self.lend("379", fable="fable-a", other="opus-a")
+        st, v = self.http.get("/api/sandbox")
+        self.assertEqual(st, 200)
+        self.assertEqual(v["leases"][0]["keys"], {"fable": "fable-a", "other": "opus-a"})
+
+    def test_post_needs_the_console_header(self):
+        st, d = self.http.post("/api/keys", {"action": "add", "name": "x", "token": "y", "other": True}, header=False)
+        self.assertEqual(st, 403, d)
 
 
 class ApiTest(unittest.TestCase):
@@ -1826,6 +1969,24 @@ class BrowserTimeTest(unittest.TestCase):
         self.assertEqual(tokyo["spanBoth"], ten); self.assertEqual(utc["spanBoth"], ten)
         # オフセットが無い記録は読む側の時間帯で答えが変わる（この不具合の本体。API はもう naive を返さない）
         self.assertNotEqual(tokyo["naive"], utc["naive"])
+
+    def test_the_lease_row_shows_the_pool_key_names(self):
+        """貸出行に出る鍵の名前（#379）。プールを使っていない貸出（keys が無い）は空にする"""
+        app = (pathlib.Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        src = self.tmp / "keynames.js"
+        src.write_text("\n".join([js_line(app, "esc"), js_line(app, "keyNames"), """console.log(JSON.stringify({
+          both: keyNames({fable: "fable-a", other: "opus-a"}),
+          one: keyNames({other: "opus-a"}),
+          none: keyNames(null),
+          empty: keyNames({}),
+          escaped: keyNames({fable: "<script>"})}));"""]), encoding="utf-8")
+        p = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["both"], "fable: fable-a<br>other: opus-a")
+        self.assertEqual(r["one"], "other: opus-a")
+        self.assertEqual(r["none"], ""); self.assertEqual(r["empty"], "")
+        self.assertEqual(r["escaped"], "fable: &lt;script&gt;")
 
     def test_missing_and_odd_times_say_what_is_going_on(self):
         for r in (self.run_js("Asia/Tokyo"), self.run_js("UTC")):
