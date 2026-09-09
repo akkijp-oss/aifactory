@@ -2,7 +2,8 @@
 # kit/steps/pr-automerge.sh: pr-create.sh が作った PR の条件を確かめ、全部満たすときだけ base へマージする（ADR-0041）
 # runner から次の env で呼ばれる: PJ TASK RUN_DIR WORK BASE BRANCH RUN_NAME HAS_REVIEW(0/1)
 #   AUTO_MERGE_METHOD(merge|squash|rebase) AUTO_MERGE_WAIT_MIN AUTO_MERGE_DELETE_BRANCH(0/1) AUTO_MERGE_REQUIRE_CHECKS(0/1)
-# 待ちの間隔はテストのために env で上書きできる: AUTOMERGE_POLL_S(30) AUTOMERGE_ZERO_CHECKS_GRACE_S(180) AUTOMERGE_MERGEABLE_POLL_S(5)
+# 待ちの長さはテストのために env で上書きできる: AUTOMERGE_POLL_S(30) AUTOMERGE_ZERO_CHECKS_GRACE_S(180) AUTOMERGE_MERGEABLE_POLL_S(5)
+#   AUTOMERGE_WAIT_S（既定は AUTO_MERGE_WAIT_MIN 分。テストが 20 分待たずに「終わらない」側を確かめるため）
 # マージしたら $WORK/merged.json を書き、最終行に `MERGED: <sha> <url>` を出して 0 で終わる（runner が state.json に転記する）。
 # マージしないのは失敗ではなく正常な終わり方の 1 つ。理由を **最終行** に `NOMERGE: <理由>` として出し、1 で終わる（runner が error に使う）
 set -euo pipefail
@@ -46,7 +47,7 @@ read -r state draft bref href <<<"$(printf '%s\n' "$v" | tail -1)"
 [[ "$href" == "$BRANCH" ]] || nomerge "PR #$num の head が $BRANCH でない ($href)"
 
 # ---------- CI（checks が全部 pass になるまで待つ。fail が 1 本でも出たら待たずに止める）
-deadline=$(( $(date +%s) + WAIT_MIN * 60 ))
+deadline=$(( $(date +%s) + ${AUTOMERGE_WAIT_S:-$((WAIT_MIN * 60))} ))
 started=$(date +%s)
 checks_n=0
 while :; do
