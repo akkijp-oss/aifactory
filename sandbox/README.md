@@ -141,6 +141,7 @@ task-id は kanban 区画が採番する。手で使うときは `001` のよう
 | 情報 | 置き場 | VM への渡し方 |
 |---|---|---|
 | Claude Code 長期トークン（`claude setup-token` の出力） | **PJ ごと** `~/.config/sandbox/pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN`（全体既定は `~/.config/sandbox/env`。`sandbox token set <pj>` で保存。ADR-0006） | `take` 時に `/run/sandbox/env`（tmpfs）へ書く。巻き戻しで消える。差し替えは制御系で `sandbox token rotate`（global・全 PJ・`ctl.env` + `reinject` + console restart。ADR-0029） |
+| モデル系統別の鍵（任意） | 同じファイルの `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`（`sandbox token set <pj\|global> claude:<系統>`） | `take` が設定済みの系統だけ `/run/sandbox/env` に書き、runner が step のモデル名（`routes.env`）から系統を選んで `CLAUDE_CODE_OAUTH_TOKEN` に差し替えて `claude -p` を起動する。無い系統は従来の鍵。run のログに `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS` のように名前だけ残る。`ctl.env` に置けば intake（judgment=fable）にも効く |
 | GitHub の push / PR 権限 | **GitHub App**（例: `aifactory-sandbox`）の App ID と秘密鍵を Mac `~/.config/sandbox/gh-app/`（`sandbox/bin/gh-app-setup` が作る。ADR-0008） | `take` / `reinject` のたびに、その PJ のリポジトリ（`pj/<pj>.env` の `GH_REPO`）だけに効く 1 時間有効の installation token を払い出して `/run/sandbox/env` の `GH_TOKEN` に注入。launchd が 45 分ごとに更新。App 未設定なら静的 `GH_TOKEN`（`sandbox token set <pj> gh`）にフォールバック |
 | GitHub トークン（テンプレート焼き込み時の clone） | Mac の `gh auth token`（既存の OAuth トークン） | 焼き込み時だけ環境変数で渡し、テンプレートには残さない |
 | VM 用 SSH 鍵 | Mac `~/.ssh/conf.d/aifactory/sb_ed25519` | 公開鍵を cloud-init でテンプレートに入れる |

@@ -485,9 +485,23 @@ class Run:
     def diff_summary(self):
         return self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False)
 
+    @staticmethod
+    def token_family(model):
+        """モデル名 → 鍵の系統（FABLE / OPUS / SONNET / HAIKU）。分からなければ空。
+        系統ごとに別の鍵（CLAUDE_CODE_OAUTH_TOKEN_<系統>。sandbox token set <pj> claude:<系統>）を使い分けるため"""
+        m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
+        return m.group(1).upper() if m else ""
+
+    def token_env_prefix(self, model):
+        """agent の前に置く env の割り当て。VM の /run/sandbox/env（take が書く）に系統別の鍵があればそれを、無ければ従来の
+        CLAUDE_CODE_OAUTH_TOKEN をそのまま使う。値は VM の中で展開されるので、runner は鍵を持たないし、ログにも出ない"""
+        fam = self.token_family(model)
+        if not fam: return ""
+        return f'CLAUDE_CODE_OAUTH_TOKEN="${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-$CLAUDE_CODE_OAUTH_TOKEN}}" '
+
     def agent_command(self, prompt_path, model, timeout_min):
         computer = (" --strict-mcp-config --mcp-config " + shlex.quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
-        return (f"cd $SANDBOX_APP_DIR && timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
+        return (f"cd $SANDBOX_APP_DIR && {self.token_env_prefix(model)}timeout {timeout_min}m claude -p \"$(cat {shlex.quote(prompt_path)})\" --model {shlex.quote(model)} "
                 "--dangerously-skip-permissions --output-format stream-json --verbose" + computer + " 2>&1 < /dev/null")
 
     def commit_tracked(self, message):
@@ -510,7 +524,10 @@ class Run:
         prompt = self.build_prompt(step, retry_note)
         pf = self.run_dir / f"prompt-{step['id']}-{self.state['history'].__len__()}.md"
         pf.write_text(prompt, encoding="utf-8")
-        self.log(f"agent {step['id']} ({step['role']} / {cls} → {model})")
+        fam = self.token_family(model)
+        # どの鍵で動いたかを名前だけ記録する（値は出さない）。系統別の鍵が VM に無ければ従来の鍵に落ちる
+        key = self.sb(f"test -n \"${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}\" && echo CLAUDE_CODE_OAUTH_TOKEN_{fam} || echo CLAUDE_CODE_OAUTH_TOKEN", check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
+        self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"
         self.scp_to(pf, prompt_path)
