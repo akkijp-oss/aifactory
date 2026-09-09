@@ -52,6 +52,10 @@
 
 `max_loops` の既定値は 1、`else` の既定値は `human` です。やり直した回数は、`state.json` の `loops` に `"<from>-><to>": n` の形式で記録します。
 
+!!! note "軽微なレビュー指摘は 1 周だけ延びる"
+
+    `role: reviewer` の工程の FAIL に限り、`review.md` に `severity: minor` の 1 行があると、`max_loops` を使い切っていても **もう 1 周だけ** `goto` に戻ります。加点は 1 遷移につき 1 回きりで（使ったことは `state.json` の `severity_bonus` に `"<from>-><to>": 1` で残ります）、`severity: major` と無指定は従来どおり `else`（既定は `human`）です。`max_loops` の値そのものは変わりません（ADR-0053）。
+
 ## 例
 
 === "bug.yml"

@@ -96,7 +96,7 @@ sandbox url 204                              # the app URL (opens in a browser)
 - **Stop**: Ctrl-C the runner process. The VM stays lent, so either return it with `sandbox release <id>` or continue with `--resume`
 - **The run stopped at `gates` because base was red**: once someone has fixed base (`develop` / `main`), continue **from gates** with `kb run <id> --resume` while the VM is still lent, or with `kb run <id> --from gates` once it has been returned. The implementation is not redone. Where `--resume` restarts is decided from the step history in `state.json`, so a run whose history is empty (provisioning failed before any step ran) starts from the first step of the workflow (ADR-0047)
 - **Failed for VM reasons** (ssh dropped, token expired, and so on): `kb reopen <id>` → `kb run <id>`. A rerun on the same day moves the previous `runs/` directory to `-attemptN` first
-- **The agent's output was poor and the run went to `human`**: read `work/` and `agent-*.log`, fix the ticket, then `kb reopen` → `kb run`. The work is on `origin/sandbox/<id>-<wf>-wip` if you want to keep it. When the findings are small, continue from where it stopped with `kb run <id> --from` instead of starting over (below)
+- **The agent's output was poor and the run went to `human`**: read `work/` and `agent-*.log`, fix the ticket, then `kb reopen` → `kb run`. The work is on `origin/sandbox/<id>-<wf>-wip` if you want to keep it. When the findings are small, continue from where it stopped with `kb run <id> --from` instead of starting over (below). Note that when the reviewer marked the FAIL `severity: minor`, the run itself goes back to implement **one more time** even after the loop limit is used up (ADR-0053)
 - **You changed a definition** (project.yml / workflow yml / roles): it does not affect a running run. It applies from the next run
 
 ### Continuing a stopped run (`--from`)
@@ -112,10 +112,10 @@ kb run 204 --from implement --branch sandbox/204-feature-wip   # and from a bran
 The exact line to type is shown in the ticket's note, in the "Outcome" panel of the run page in the console, and in the runs list of `ticket_show`.
 
 - The work continues from the recorded `wip_branch` (the branch the runner pushed when it stopped at `human`). `--branch` overrides it
-- The previous `work/plan.md` and friends are copied to the new VM, and the previous `review.md` goes into the first prompt as "what the last run produced (fix this)"
+- The previous `work/plan.md` and friends are copied to the new VM. The previous `review.md` goes into the first prompt as "what the last run produced (fix this)" **only when it was a FAIL** (for a run that stopped after the review passed, the one-line reason it stopped goes in instead)
 - The previous run stays as it was, and the new run's `state.json` records `resumed_from`. The loop counters start over
 - It is a different thing from `--resume` (continue on the **same** VM while it is still lent), and the two cannot be combined
-- Do not resume the same ticket twice at once: the wip branch name is derived from the ticket and the workflow, so whichever finishes last overwrites the other
+- Do not resume the same ticket twice at once: the wip branch name is derived from the ticket and the workflow, so whichever finishes last overwrites the other. While a run is still going, `kb run --from` stops with an error; if that run is not running any more, `kb reopen <id>` puts the ticket back on the board and lets the resume through (`kb sync` does not), and add `--force` when you mean to go ahead anyway
 
 ## Calling the runner directly
 
