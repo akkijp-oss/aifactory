@@ -353,7 +353,7 @@ class Run:
             parts += ["## 差分（origin/%s...HEAD）" % self.base, "", "```", diff.strip(), "```", "",
                       f"差分の中身は `git diff origin/{self.base}...HEAD` で読むこと。", ""]
         if p.get('computer_use'):
-            parts += ["## VMの画面操作", "", "computer MCPツールで、この専用VMの画面取得・クリック・キー入力ができます。操作前にscreenshotで画面を確認し、その画像のピクセル座標を使ってください。typeは日本語対応、keyはWindowsのWINまたはMacのCMDとENTERなどを組み合わせます。操作後もscreenshotで結果を確認し、必要な画像を成果物として残してください。個人のデスクトップや他のVMは操作しません。", ""]
+            parts += ["## VMの画面操作", "", "computer MCPツールで、この専用VMの画面取得・クリック・キー入力ができます。操作前にscreenshotで画面を確認し、その画像のピクセル座標を使ってください。typeは日本語対応、keyはWindowsのWINまたはMacのCMDとENTERなどを組み合わせます。操作後もscreenshotで結果を確認し、必要な画像を成果物として残してください。画像は作業ディレクトリ直下に別名の通常ファイルとして保存してください。サブディレクトリに置いた画像は回収されません。全成果物の合計上限は4 MiBです。個人のデスクトップや他のVMは操作しません。", ""]
         if retry_note: parts += ["## 前回の結果（直すこと）", "", retry_note, ""]
         outs = [a for a in step.get("outputs", []) if a not in ("git", "pr_url")]
         parts += ["## 出力（必須）", ""]
