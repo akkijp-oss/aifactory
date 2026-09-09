@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """workflow/bin/run: workflow 定義（kit/workflows/<name>.yml）を読んで、sandbox VM の中で step を順に実行する runner（v1）。
 
-  workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=秒]]
+  workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前] [--wait[=秒]]
 
 - pj        : $AIFACTORY_WORKSPACE/projects/<pj>/project.yml（無ければ examples/projects/<pj>/）がある PJ
 - task-id   : sandbox take に渡す ID（3 桁など）
@@ -11,6 +11,11 @@
 - 置き場（PJ 定義 / runs/）は lib/aifactory_paths.py が決める（AIFACTORY_WORKSPACE。既定は <repo>/workspace/）
 - --keep    : 終了後に release しない（中を見たいとき）
 - --resume  : 既に貸出中の VM で、state.json の次の step から続ける
+- --from    : human で止まった run を、**新しい VM** で指定の step からやり直す（チケット 333）。`--from` だけなら前回の
+              state.json の `resume_step`（無ければ history の最後の step）。前回の run は環境変数 AIFACTORY_FROM_RUN で渡す
+              （run 名の形しか受け付けない）。前回の work/*.md は新しい VM に持ち込み、review.md は最初の step の
+              「前回の結果（直すこと）」として依頼文に入る。--resume とは別物（あちらは貸出中の同じ VM で続ける）
+- --branch  : --from のとき、続きに使うブランチ（既定は前回の state.json の `wip_branch`）。origin/<名前> から作業ブランチを作る
 - --wait    : プールに空きが無い（sandbox take が「空きなし」）とき、失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限を指定。チケット 242）
               待っている間は state.json の `current` が `wait-vm`（console のジョブ一覧・run 画面・MCP に「VM の空き待ち」と出る）。
               再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す
@@ -162,10 +167,21 @@ def run_name(pj, task, dry=False, resume=False):
     return f"{datetime.date.today().isoformat()}-{pj}-{task}" + ("-dry" if dry else "")
 
 
+# --from / --branch で受け取るブランチ名の形（人が打つ値が初めてシェルに乗る経路。使う所では shlex.quote もする）
+BRANCH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+
+def valid_branch(b):
+    """git のブランチ名として素直に使える形か（`..` や末尾の `/` `.lock` は git が拒む。先頭の `-` は引数に化ける）"""
+    return bool(b) and bool(BRANCH_NAME.fullmatch(b)) and ".." not in b and not b.endswith(("/", ".lock"))
+
+
 class Run:
-    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0):
+    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
         self.wait_s = wait_s        # プールに空きが無いときに待つ上限（秒。0 なら待たずに失敗する）
+        # --from の再開（チケット 333）。--resume（貸出中の同じ VM で続ける）とは別経路で、新しい VM を取り直す
+        self.from_step = self.from_branch = self.from_run = None
+        self.from_state = {}
         self.project_dir = paths.project_dir(pj) or die(f"PJ {pj} の定義が無い（{' / '.join(str(d / pj) for d in paths.PROJECT_DIRS)}）")
         (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
         self.project = load_yaml(self.project_dir / "project.yml")
@@ -202,23 +218,81 @@ class Run:
                 self.branch = f"(pr #{self.pr_number} head)"
         self.work = f"/home/dev/work/{task}"
         self.run_dir = paths.RUNS / run_name(pj, task, dry, resume)
+        # --from の解決は退避より前に行う（指定が悪くて die するとき、前回の run を -attemptN に動かしたままにしない）
+        if from_step is not None or from_branch is not None: self.resolve_from(from_step, from_branch)
+        self.retired = None
         if self.run_dir.exists() and not resume and not dry:
             # 同じ日の再実行で前回の記録を上書きしない。前回分は -attemptN に退避（2026-09-06 に kumitate 203 の 1 回目を消してしまった）
             n = 1
             while (self.run_dir.parent / f"{self.run_dir.name}-attempt{n}").exists(): n += 1
-            self.run_dir.rename(self.run_dir.parent / f"{self.run_dir.name}-attempt{n}")
+            self.retired = self.run_dir.parent / f"{self.run_dir.name}-attempt{n}"
+            self.run_dir.rename(self.retired)
+            # 前回の run が「今日の同じ名前の run」だったなら、それは今退避したディレクトリ
+            if self.from_run is not None and self.from_run.name == self.run_dir.name: self.from_run = self.retired
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.run_dir / "state.json"
         self.state = json.loads(self.state_file.read_text()) if (resume and self.state_file.exists()) else {
             "pj": pj, "task": task, "workflow": wf_name, "branch": self.branch, "base": self.base,
             "started": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
         if resume: self.branch = self.state["branch"]; self.base = self.state["base"]
+        if self.from_step:
+            # 途中の step から始める。loops は空のまま（review→implement の戻しは、この run で新しく数え直す）
+            self.state.update({"next": self.from_step, "from_step": self.from_step, "from_branch": self.from_branch,
+                               "resumed_from": self.from_run.name if self.from_run else None})
         (self.run_dir / "ticket.md").write_text(self.ticket, encoding="utf-8")
         if not resume:
             # ticket.md だけの run を残さない。take の途中で落ちても console と kb が読める記録にする（2026-09-08 チケット 238）
             self.state["current"] = {"step": "take", "kind": "take", "log": None,
                                      "since": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             self.save()
+
+    def resolve_from(self, from_step, from_branch):
+        """`--from` の再開: 「どの step から」「どのブランチの続きから」を、指定と前回の run の記録から決める（チケット 333）。
+
+        前回の run は AIFACTORY_FROM_RUN で受け取り、run 名の形（<日付>-<pj>-<task>）しか受け付けない
+        （`--resume` の AIFACTORY_RESUME_RUN と同じガード。他チケットの記録や任意のパスを読ませない）。
+        step もブランチも決まらなければ die する（推し測って research から回し直さない）。"""
+        prev = os.environ.get("AIFACTORY_FROM_RUN") or ""
+        if prev:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}-" + re.escape(self.pj) + "-" + re.escape(self.task), prev):
+                raise ValueError("invalid recorded from run")
+            d = paths.RUNS / prev            # 今日の同じ名前なら、この後の退避で -attemptN に付け替える（呼び元）
+            if d.is_dir(): self.from_run = d
+        if self.from_run and (self.from_run / "state.json").exists():
+            try: self.from_state = json.loads((self.from_run / "state.json").read_text(encoding="utf-8"))
+            except ValueError: self.from_state = {}
+        hist = self.from_state.get("history") or []
+        step = from_step or self.from_state.get("resume_step") or (hist[-1].get("step") if hist else None)
+        step or die("再開する step が決まらない（前回の記録に resume_step が無い）。--from <step> で指定すること")
+        step in self.steps or die(f"step {step} は workflow {self.wf_name} に無い（{' / '.join(self.steps)}）")
+        branch = from_branch or self.from_state.get("wip_branch")
+        branch or die("続きに使うブランチが記録に無い（前回の wip_branch が空）。--branch=<名前> で指定すること")
+        valid_branch(branch) or die(f"ブランチ名として使えない: {branch}")
+        self.from_step, self.from_branch = step, branch
+
+    def carry_work(self):
+        """前回の run で回収した work/*.md（plan.md / research.md / review.md など）を新しい VM に持ち込む。
+        ticket.md と prompt.md は今回のものを使うので運ばない（pr_url は拡張子が無いので対象外）"""
+        src = (self.from_run / "work") if self.from_run else None
+        if not src or not src.is_dir(): return []
+        names = []
+        for f in sorted(src.iterdir()):
+            if not f.is_file() or f.suffix not in (".md", ".txt") or f.name in ("ticket.md", "prompt.md"): continue
+            self.scp_to(f, f"{self.work}/{f.name}"); names.append(f.name)
+        self.log(f"前回の run {self.from_run.name} から持ち込み: {', '.join(names) or '(無し)'}")
+        return names
+
+    def first_retry_note(self):
+        """`--from` で始めるとき、最初の step の依頼文に付ける「前回の結果（直すこと）」。
+        前回のレビュー指摘をそのまま渡す（これが無いと、人が読んだ指摘が次の run に伝わらない）。
+        review そのものからやり直すときは付けない（reviewer に前回の自分の指摘を書き写させない）"""
+        if not self.from_step or not self.from_run: return ""
+        if (self.steps.get(self.from_step) or {}).get("role") == "reviewer": return ""
+        rv = self.from_run / "work" / "review.md"
+        body = rv.read_text(encoding="utf-8", errors="replace").strip() if rv.is_file() else ""
+        if body: return f"前回の run {self.from_run.name} のレビュー指摘（直すこと）:\n\n{body}"
+        err = ([l.strip() for l in str(self.from_state.get("error") or "").splitlines() if l.strip()] or [""])[-1]
+        return f"前回の run {self.from_run.name} は次の理由で止まった: {err}" if err else ""
 
     # ---------- VM helpers
     def sb(self, cmd, input_text=None, check=True):
@@ -257,10 +331,15 @@ class Run:
         print(((r.stdout or "").strip().splitlines() or [""])[-1])
         self.taken = True   # ここから先で落ちたら VM を返す（238）
         self.sb(f"mkdir -p {self.work}")
-        if self.pr_number:
+        if self.from_branch:
+            # --from: base ではなく前回の wip ブランチの続きから始める（実装済みのコミットを持ったまま次の step に入る。333）
+            wip = shlex.quote(self.from_branch)
+            self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {wip} && git checkout -q -B {self.branch} origin/{wip} && git log -1 --format='wip: %h %s'")
+        elif self.pr_number:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
         else:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
+        if self.from_step: self.carry_work()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
     def take_waiting(self):
         """--wait のとき、プールに空きが出るまで take を呼び直す。待っている間は state.json の current を wait-vm にして
@@ -503,6 +582,13 @@ class Run:
             self.state["loops"][key] = n + 1; return t["goto"]
         return t.get("else", "human")
 
+    def resume_step_for(self, step):
+        """human で止まったとき、次にどの step からやり直せば続きになるか（`kb run --from <step>` に渡る事実）。
+        戻し先が決まっている step（review→implement、gates→implement）はその戻し先、そうでなければその step 自身
+        （implement が時間上限で切られたなら implement からやり直す）。文言は組まない（ADR-0025 / ADR-0034）"""
+        t = step.get("on_fail")
+        return t["goto"] if isinstance(t, dict) and t.get("goto") in self.steps else step["id"]
+
     def fail_before_start(self, e, failure=None, waited_s=None):
         """take（VM の取得と準備）で落ちたときの終わり方。工程は 1 つも走っていないので、記録に理由を残して人間へ返す（チケット 238）。
         記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう。
@@ -526,13 +612,16 @@ class Run:
     def main(self):
         self.t0 = time.time()
         self.log(f"workflow {self.wf_name}: " + " → ".join(s["id"] for s in self.wf["steps"]) + f"  (branch {self.branch} → {self.base})")
+        if self.from_step:
+            self.log(f"--from: {self.from_step} から origin/{self.from_branch} の続きを回す"
+                     + (f"（前回の run: {self.from_run.name}）" if self.from_run else "（前回の run の記録は無し）"))
         try:
             self.take_waiting()
         except PoolTimeout as e:
             return self.fail_before_start(e, failure="wait_timeout", waited_s=e.waited_s)
         except Exception as e:
             return self.fail_before_start(e)
-        cur = self.state["next"]; retry_note = ""; result = "end"
+        cur = self.state["next"]; retry_note = self.first_retry_note(); result = "end"
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")
             self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
@@ -552,6 +641,8 @@ class Run:
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
             if not ok and nxt == "human":
+                # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0034）
+                self.state["resume_step"] = self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
                 if fail.get("failure") == "timeout":
                     self.state["error"] = f"{cur}: 時間上限 {fail.get('timeout_min')} 分で中断（timeout）"
@@ -591,7 +682,17 @@ if __name__ == "__main__":
             from linux import backend
         runner = backend(Run)
     wait_s = 0
+    from_step = from_branch = None
     for f in flags:
         if f == "--wait": wait_s = 3600
         elif f.startswith("--wait="): wait_s = int(f.split("=", 1)[1])
-    sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags, wait_s=wait_s).main())
+        elif f == "--from": from_step = ""                       # step の指定なし＝前回の記録（resume_step）に任せる
+        elif f.startswith("--from="): from_step = f.split("=", 1)[1]
+        elif f.startswith("--branch="): from_branch = f.split("=", 1)[1]
+        elif f == "--branch": die("--branch=<名前> の形で指定すること")
+    if from_step is not None or from_branch is not None:
+        if "--resume" in flags: die("--from と --resume は一緒に使えない（--resume は貸出中の VM で続き、--from は新しい VM を取り直す）")
+        # pull backend（macOS / Windows / Linux）は take を独自に持ち、wip ブランチからの checkout をしない（チケット 333 の範囲外）
+        if project.get("backend") in ("macos-pull", "windows-pull", "linux-pull"): die("--from は sandbox backend の PJ だけで使える")
+    sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags, wait_s=wait_s,
+                    from_step=from_step, from_branch=from_branch).main())
