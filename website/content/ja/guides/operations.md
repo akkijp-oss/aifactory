@@ -28,6 +28,18 @@ sandbox reinject --all
 
 `sandbox token rotate` は制御系（`~/.config/aifactory/ctl.env` のあるホスト）で実行します。保存した日は各ファイルにコメントで残るので、`sandbox token show` の「発行から N 日」で期限が近いことに気づけます。
 
+### Claude の鍵プール（制御系にまとめて置く）
+
+鍵が何本もあるときは、プロジェクトごとに配る代わりに、制御系の `~/.config/sandbox/keys.json` に名前を付けて並べておけます。VM を貸し出すとき（`take`）に、系統ごとに 1 本ずつ選んで渡します。
+
+```bash
+sandbox keys add fable-main --fable      # Fable 用の契約の鍵（値は対話入力）
+sandbox keys add opus-a --other          # Opus / Sonnet / Haiku 用
+sandbox keys list                        # 名前・フラグ・末尾 4 文字・最終利用・使っている貸出
+sandbox keys set opus-a --disable        # しばらく使わない（使っている貸出には reinject で切り替える）
+```
+
+選ばれるのは、フラグの合う鍵のうち最後に使ってから最も時間が経ったものです。同じチケットの `reinject` では同じ鍵を使い続け、その鍵が使えなくなったときだけ選び直します。候補が 1 本も無い系統は、上のプロジェクトごとの鍵に落ちます（プールが空なら今までどおりです）。コンソールの「鍵」画面からも同じことができます。詳しくは [sandbox CLI の keys](../reference/cli-sandbox.md) と ADR-0044 を見てください。
 ### 利用枠切れ（トークン切れ）は自動で続きから再開する
 
 鍵の**利用枠**（5 時間 / 7 日の窓）を使い切ると、エージェントの工程は `claude -p` が拒否されて止まります。runner はこれを普通の失敗と分けて扱い、途中までの変更を `wip: usage limit` としてコミットして退避ブランチに保全し、チケットを **未着手（todo）に戻します**（メモに「一時停止」と解除見込み時刻）。制御系の systemd timer `aifactory-resume.timer` が 5 分ごとに `dispatch --resume-paused` を呼び、解除時刻を過ぎたものから `kb run <id> --from` で**続き**（同じ工程を退避ブランチの上で）を回します。人が何かする必要はありません（ADR-0043）。

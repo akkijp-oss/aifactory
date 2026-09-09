@@ -272,7 +272,7 @@ class McpTest(unittest.TestCase):
             self.assertIn("annotations", t, f"{n} に annotations が無い")
             self.assertIn("readOnlyHint", t["annotations"], n)
             self.assertTrue(t["annotations"].get("title"), n)
-        for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file"):
+        for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file", "keys_list"):
             self.assertTrue(tools[n]["annotations"]["readOnlyHint"], f"{n} は読み取りのはず")
         for n in ("ticket_run", "ticket_new", "ticket_action", "run_action", "intake", "dispatch", "sandbox_ls", "sandbox_release", "job_stop"):
             self.assertFalse(tools[n]["annotations"]["readOnlyHint"], f"{n} は状態を変える")
@@ -302,6 +302,39 @@ class McpTest(unittest.TestCase):
             env["PATH"] = "/usr/bin:/bin"
         c = McpClient(env); self.addCleanup(c.close)
         return c
+
+    def test_14b_keys_list_is_masked_and_read_only(self):
+        """keys_list（#379）はマスク済みの一覧を返し、値は返さない。追加・削除は MCP に出さない"""
+        home = self.tmp / "home-keys"; home.mkdir(parents=True, exist_ok=True)
+        keys = home / "keys.json"; state = home / "state.json"
+        token = "fake-token-mcp-test-4321"
+        keys.write_text(json.dumps({"keys": [
+            {"name": "fable-main", "token": token, "allow": {"fable": True, "other": False},
+             "enabled": True, "note": "", "issued": "2026-09-09", "last_used": None, "uses": 0},
+            {"name": "opus-off", "token": token, "allow": {"fable": False, "other": True},
+             "enabled": False, "note": "", "issued": "2026-09-09", "last_used": "2026-09-09T10:00:00+09:00", "uses": 3}]},
+            ensure_ascii=False), encoding="utf-8")
+        state.write_text(json.dumps({"379": {"vmid": 9201, "name": "sb-t-01", "ip": "10.77.1.1", "pj": PJ,
+                                             "since": "2026-09-09T10:00:00+09:00", "keys": {"fable": "fable-main"}}},
+                                    ensure_ascii=False), encoding="utf-8")
+        env = {**self.env, "CONSOLE_JOBS": str(self.tmp / "jobs-keys"), "HOME": str(home), "PATH": "/usr/bin:/bin",
+               "SANDBOX_STATE": str(state), "SANDBOX_KEYS": str(keys)}
+        c = McpClient(env); self.addCleanup(c.close)
+
+        tools = {t["name"] for t in c.call("tools/list")["result"]["tools"]}
+        self.assertIn("keys_list", tools)
+        self.assertEqual(tools & {"keys_add", "keys_rm", "keys_set", "keys_token"}, set())   # 秘密を渡す口は出さない
+
+        err, d = c.tool("keys_list"); self.assertFalse(err, d)
+        self.assertNotIn(token, json.dumps(d, ensure_ascii=False))
+        self.assertEqual([k["name"] for k in d["keys"]], ["fable-main", "opus-off"])
+        self.assertEqual(d["keys"][0]["tail4"], "4321"); self.assertNotIn("token", d["keys"][0])
+        self.assertEqual(d["keys"][0]["in_use"], ["379"]); self.assertEqual(d["keys"][1]["in_use"], [])
+        self.assertEqual(d["candidates"], {"fable": 1, "other": 0})                          # 使わない設定の鍵は候補に数えない
+        self.assertEqual(d["keys_file"], str(keys)); self.assertTrue(d["exists"])
+
+        err, s = c.tool("sandbox_status"); self.assertFalse(err, s)
+        self.assertEqual(s["leases"][0]["keys"], {"fable": "fable-main"})                    # 貸出行にも鍵の名前が出る
 
     def test_15_sandbox_status_refreshes_a_stale_ls(self):
         """`sandbox ls` が古ければ、sandbox_status が裏で取り直しを起こす（336 の 2 番目）"""
@@ -343,7 +376,7 @@ class McpTest(unittest.TestCase):
         self.assertEqual(d["lent"]["336"]["ip"], "10.77.1.4")
         self.assertEqual(d["leases"], [{"task": "336", "vmid": "9204", "name": "sb-kumitate-01", "ip": "10.77.1.4",
                                         "pj": PJ, "since": "2026-09-08T10:00:00+09:00", "phase": "ready",
-                                        "url": d["urls"]["336"], "vm_status": None}])
+                                        "url": d["urls"]["336"], "vm_status": None, "keys": None}])   # keys は鍵プールを使っていなければ null（379）
 
         state.unlink()
         err, d = c.tool("sandbox_status"); self.assertFalse(err, d)

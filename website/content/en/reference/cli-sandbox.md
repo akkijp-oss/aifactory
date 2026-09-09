@@ -93,6 +93,7 @@ sandbox token set <pj|global> [claude|gh]   enter a token interactively and save
 sandbox token rotate [claude|gh]            replace the token in the global file, every project file and ctl.env from one prompt
 sandbox token show [pj]                     which token is in effect (masked), how old it is, and whether this host is the control plane
 sandbox token clear <pj|global> [claude|gh] remove a token
+sandbox keys list|add|set|rm|token          the Claude key pool (keys.json on the control plane): named keys with flags, one picked per family on take
 sandbox reinject <task-id>|--all            re-inject the current settings into lent VMs (no rollback; for key rotation)
 sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print an installation token for <pj> / reissue GH_TOKEN to every lent VM
 ```
@@ -106,9 +107,25 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print a
 | `token set <pj> gh` | `GH_TOKEN` in the same file (fallback when the App is not configured) |
 | `token set global` | `~/.config/sandbox/env` (default for every project) |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env` |
-| `token show [pj]` | Source and masked value of the effective token, days since it was saved, and whether this host is the control plane |
+| `token show [pj]` | Source and masked value of the effective token, days since it was saved, and whether this host is the control plane. When a key pool exists, one more line gives the number of keys and the candidates per family |
 
 Rotate an expired token with a single `sandbox token rotate` on the control plane (the host that has `ctl.env`). It lists every file it updated, restarts `aifactory-console` when `ctl.env` changed (printing the command instead if `sudo -n` does not work), and finishes with `reinject --all` when VMs are lent out (ADR-0029). A `claude` process already running inside a VM still has to be restarted there.
+
+### keys
+
+Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the control plane, one picked per family by `take` / `reset` / `reinject` (ADR-0044). Each key carries two flags — *use for fable* and *use for everything else* (Opus / Sonnet / Haiku) — so a Fable contract and an Opus contract can be separate keys.
+
+| Command | What it does |
+|---|---|
+| `keys add <name> [--fable] [--other] [--note …]` | Add a key. The value is read from the terminal without echo, or from stdin. At least one flag is required. The name must be unique and match `[A-Za-z0-9._-]{1,40}` |
+| `keys list [--json]` | Name, flags, whether it is in use, the last 4 characters of the token, issue date, last use, use count, and the leases holding it. The value is never printed |
+| `keys set <name> [--fable=on\|off] [--other=on\|off] [--enable\|--disable] [--note …]` | Change the flags, whether the key is used, or the note. Turning a key off prints the `reinject` commands for the leases that hold it |
+| `keys token <name>` | Replace only the value (name, flags and counters stay). Apply it to lent VMs with `reinject` |
+| `keys rm <name> [--force]` | Remove a key. `--force` is required while a lease still holds it |
+
+The pick is "the key this task used before (while it is still eligible), otherwise the eligible key that has gone longest without being used". A family with no candidate falls back to `pj/<pj>.env` and `env` as before, so an empty pool behaves exactly like today. Keys reach the VM through the existing per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`.
+
+`sandbox token rotate` does not touch the pool; it replaces the keys in `env` and `ctl.env` only.
 
 ### gh-app
 

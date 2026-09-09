@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
-const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', l: 'logs', c: 'config' };   // g + 頭文字で移動
+const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
@@ -495,6 +495,8 @@ async function viewRun(name) {
 }
 
 /* ---------- sandbox */
+/* 貸出行に出す鍵の名前（take が選んだプールの鍵）。プールを使っていない貸出（keys が無い）は空にする */
+const keyNames = k => (k && typeof k === 'object') ? ['fable', 'other'].filter(g => k[g]).map(g => `${esc(g)}: ${esc(k[g])}`).join('<br>') : '';
 async function viewSandbox() {
   const [d, o] = await Promise.all([api('sandbox'), refreshNav()]);
   const lent = Object.entries(d.lent).filter(([k, v]) => v && typeof v === 'object');
@@ -530,7 +532,7 @@ async function viewSandbox() {
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
     <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(sharedEntries.length ? tt(T.sandbox.countShared, { n: d.lease_count, m: d.vm_count }) : tt(T.sandbox.count, { n: lent.length }))}</small></h2>
       ${sharedEntries.map(([vmid, tasks]) => `<div class="warn">${esc(tt(T.sandbox.sharedWarn, { vm: vmOf(vmid), vmid, tasks: tasks.join('、') }))}</div>`).join('')}
-      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task), others = othersOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）${others.length ? `<div><span class="st blocked">${esc(T.sandbox.sharedBadge)}</span> <span class="help">${esc(tt(T.sandbox.sharedWith, { tasks: others.join('、') }))}</span></div>` : ''}</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${esc(since(v.since))}）</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
+      ${lent.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.lentSince)}</th><th>${esc(T.th.keys)}</th><th>URL</th><th></th></tr>${lent.map(([task, v]) => { const run = runOf(task), others = othersOf(task); return `<tr><td><a href="#/ticket/${esc(task)}" class="mono">${esc(task)}</a>${run ? `<div class="help"><span class="dot pulse"></span>${esc(tt(T.sandbox.runOn, { step: run.current ? run.current.step : (run.next || '') }))}</div>` : ''}</td><td class="mono">${esc(v.name)}（${esc(v.vmid)}）${others.length ? `<div><span class="st blocked">${esc(T.sandbox.sharedBadge)}</span> <span class="help">${esc(tt(T.sandbox.sharedWith, { tasks: others.join('、') }))}</span></div>` : ''}</td><td class="mono">${esc(v.ip)}</td><td>${esc(v.pj)}</td><td>${fmtT(v.since)}（${esc(since(v.since))}）</td><td class="mono nw">${keyNames(v.keys)}</td><td>${d.urls && d.urls[task] ? `<a href="${esc(d.urls[task])}" target="_blank" rel="noopener" class="mono">${esc(d.urls[task])}</a>` : ''}</td>
         <td><button class="danger" data-act="sandbox-release" data-task="${esc(task)}" data-vm="${esc(v.name)}" data-run="${run ? esc(run.name) : ''}" data-step="${run && run.current ? esc(run.current.step) : ''}" data-shared="${esc(others.join('、'))}">${esc(T.btn.release)}</button></td></tr>`; }).join('')}</table>
         <div class="help top">${esc(T.help.release)}</div>` : `<div class="help">${esc(T.empty.lent)}</div>`}</div>
     <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(poolAt)}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.poolDefined)}</th><th>${esc(T.th.poolActual)}</th><th>${esc(T.th.lent)}</th><th>${esc(T.th.free)}</th></tr>
@@ -545,6 +547,33 @@ async function viewSandbox() {
         <div class="help top">${esc(T.help.lsAxes)}</div>
         ${idle && idle.hours ? `<div class="help">${esc(tt(T.help.idleStopAxes, { h: idle.hours, k: idle.keep == null ? 0 : idle.keep }))}</div>` : ''}` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
+}
+
+/* ---------- 鍵（Claude の鍵プール。値は送るだけで、画面には末尾 4 文字しか出ない） */
+async function viewKeys() {
+  clearInterval(timer);
+  const d = await api('keys');
+  const flag = (k, f) => `<input type="checkbox" data-act="key-flag" data-name="${esc(k.name)}" data-field="${esc(f)}" ${k.allow[f] ? 'checked' : ''} aria-label="${esc(f === 'fable' ? T.label.keyAllowFable : T.label.keyAllowOther)}">`;
+  const rows = d.keys.map(k => `<tr><td class="mono">${esc(k.name)}${k.note ? `<div class="help">${esc(k.note)}</div>` : ''}</td>
+      <td>${flag(k, 'fable')}</td><td>${flag(k, 'other')}</td>
+      <td><input type="checkbox" data-act="key-enabled" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}" ${k.enabled ? 'checked' : ''} aria-label="${esc(T.th.keyEnabled)}"></td>
+      <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_used ? `${fmtT(k.last_used)}（${esc(since(k.last_used))}）` : ''}</td><td>${k.uses}</td>
+      <td>${k.in_use.map(x => `<a href="#/ticket/${esc(x)}" class="mono">${esc(x)}</a>`).join('、')}</td>
+      <td><button data-act="key-token" data-name="${esc(k.name)}">${esc(T.btn.keyToken)}</button>
+        <button class="danger" data-act="key-rm" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}">${esc(T.btn.keyRemove)}</button></td></tr>`).join('');
+  render(head(esc(T.nav.keys), T.sub.keys) + `
+    <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.sandbox.count, { n: d.keys.length }))}</small></h2>
+      ${d.error ? `<div class="err">${esc(T.help.keysError)}</div>` : ''}
+      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.keyFable)}</th><th>${esc(T.th.keyOther)}</th><th>${esc(T.th.keyEnabled)}</th><th>${esc(T.th.keyTail)}</th><th>${esc(T.th.issued)}</th><th>${esc(T.th.lastUsed)}</th><th>${esc(T.th.uses)}</th><th>${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
+      <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
+      <div class="help">${esc(T.help.keysFile)} <span class="mono">${esc(d.keys_file)}</span></div></div>
+    <div class="panel"><h2>${esc(T.h.keyAdd)}<small>sandbox keys add</small></h2>
+      <div class="row"><label class="field">${esc(T.label.keyName)}<input type="text" id="key-name" autocomplete="off" placeholder="${esc(T.label.keyNamePlaceholder)}"></label>
+        <label class="field">${esc(T.label.note)}<input type="text" id="key-note" autocomplete="off" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+      <div class="field"><label for="key-token">${esc(T.label.keyToken)}</label><input type="password" id="key-token" autocomplete="new-password"></div>
+      <div class="row"><label class="help check"><input type="checkbox" id="key-fable"> ${esc(T.label.keyAllowFable)}</label>
+        <label class="help check"><input type="checkbox" id="key-other"> ${esc(T.label.keyAllowOther)}</label></div>
+      <div class="actions"><button class="primary" data-act="key-add">${esc(T.btn.keyAdd)}</button><span class="help">${esc(T.help.keysSecret)}</span></div></div>`);
 }
 
 /* ---------- 起票の下書き
@@ -878,6 +907,50 @@ const actions = {
     if (!ok) return;
     const r = await api('sandbox/release', { task }); go(`#/job/${r.job.id}`);
   },
+  'key-add': async () => {
+    const name = $('key-name').value.trim(), token = $('key-token').value;
+    if (!name) { toast(esc(T.err.needKeyName), { err: true }); $('key-name').focus(); return; }
+    if (!token) { toast(esc(T.err.needKeyToken), { err: true }); $('key-token').focus(); return; }
+    if (!$('key-fable').checked && !$('key-other').checked) { toast(esc(T.err.needKeyFlag), { err: true }); return; }
+    await api('keys', { action: 'add', name, token, fable: $('key-fable').checked, other: $('key-other').checked, note: $('key-note').value.trim() || undefined });
+    $('key-token').value = '';                                    /* 送ったトークンは画面に残さない */
+    toast(esc(tt(T.msg.keyAdded, { name }))); viewKeys();
+  },
+  'key-flag': async el => {
+    const { name, field } = el.dataset;
+    await api('keys', { action: 'set', name, [field]: el.checked });
+    toast(esc(tt(T.msg.keySaved, { name }))); viewKeys();
+  },
+  /* 使わないようにすると、その鍵を使っている貸出に再注入のジョブが起きる。使っているチケットがあるときだけ確認する */
+  'key-enabled': async el => {
+    const { name, inuse } = el.dataset, on = el.checked;
+    if (!on && inuse) {
+      const ok = await ask({ title: tt(T.dialog.keyDisable.title, { name }), ok: T.dialog.keyDisable.ok, body: `<p>${esc(tt(T.dialog.keyDisable.body, { name, tasks: inuse }))}</p>` });
+      if (!ok) { viewKeys(); return; }
+    }
+    const r = await api('keys', { action: 'set', name, enabled: on });
+    toast(esc(tt(T.msg.keySaved, { name })) + (r.reinject_jobs.length ? ' ' + esc(tt(T.msg.keyReinject, { n: r.reinject_jobs.length })) : ''));
+    viewKeys();
+  },
+  'key-token': async el => {
+    const { name } = el.dataset;
+    let token = '';
+    const ok = await ask({ title: tt(T.dialog.keyToken.title, { name }), ok: T.dialog.keyToken.ok, focus: 'first',
+      body: `<p>${esc(T.dialog.keyToken.body)}</p><label class="field">${esc(T.label.keyToken)}<input type="password" id="dlg-key-token" autocomplete="new-password"></label>`,
+      validate: dlg => { token = dlg.querySelector('#dlg-key-token').value.trim(); return token ? '' : T.err.needKeyToken; } });
+    if (!ok) return;
+    await api('keys', { action: 'token', name, token });
+    toast(esc(tt(T.msg.keySaved, { name }))); viewKeys();
+  },
+  'key-rm': async el => {
+    const { name, inuse } = el.dataset;
+    const ok = await ask({ title: tt(T.dialog.keyRemove.title, { name }), ok: T.dialog.keyRemove.ok, danger: true, typed: inuse ? name : null,
+      body: `<p>${esc(tt(T.dialog.keyRemove.body, { name }))}</p>${inuse ? `<div class="warn">${esc(tt(T.dialog.keyRemove.inUse, { tasks: inuse }))}</div>` : ''}` });
+    if (!ok) return;
+    const r = await api('keys', { action: 'rm', name, force: !!inuse });
+    toast(esc(tt(T.msg.keyRemoved, { name })) + (r.reinject_jobs.length ? ' ' + esc(tt(T.msg.keyReinject, { n: r.reinject_jobs.length })) : ''));
+    viewKeys();
+  },
   'job-stop': async el => {
     const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });
     if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
@@ -947,6 +1020,7 @@ async function route() {
     else if (seg[0] === 'runs') await viewRuns();
     else if (seg[0] === 'run') await viewRun(decodeURIComponent(seg.slice(1).join('/')));
     else if (seg[0] === 'sandbox') await viewSandbox();
+    else if (seg[0] === 'keys') await viewKeys();
     else if (seg[0] === 'intake') await viewIntake();
     else if (seg[0] === 'jobs') await viewJobs();
     else if (seg[0] === 'job') await viewJob(seg[1], true);
