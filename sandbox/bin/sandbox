@@ -188,7 +188,7 @@ state_lock_acquire() {
     [[ "$_lock_style" == mkdir ]] || die "state.json のロックが取れない（$STATE_LOCK.d が $SB_LOCK_WAIT 秒消えない。別の sandbox が動いている？ 動いていなければ rmdir で消す）"
   else
     exec 9>"$STATE_LOCK"
-    flock -w "$SB_LOCK_WAIT" 9 || die "state.json のロックが取れない（$STATE_LOCK。別の sandbox が動いている？）"
+    flock -w "$SB_LOCK_WAIT" 9 || die "state.json のロックが取れない（${STATE_LOCK}。別の sandbox が動いている？）"
     _lock_style=flock
   fi
   _state_locked=1
@@ -316,7 +316,7 @@ resolve_gh_token() {
   [[ -n "$_ovr_gh" ]] && { GH_TOKEN="$_ovr_gh"; return 0; }
   if ghapp_ready && [[ -n "$repo" ]]; then
     local t; t="$(ghapp_token "$repo")" || return 1
-    [[ -n "$t" ]] || { echo "[error] installation token を取得できない（$repo）" >&2; return 1; }
+    [[ -n "$t" ]] || { echo "[error] installation token を取得できない（${repo}）" >&2; return 1; }
     GH_TOKEN="$t"; GH_TOKEN_SOURCE="app:$repo"
   else
     GH_TOKEN_SOURCE="${GH_TOKEN:+static}"
@@ -464,7 +464,7 @@ cmd_keys() {
       local v; v="$(keys_json_view)"
       if (( as_json )); then printf '%s\n' "$v"; return 0; fi
       if [[ "$(jq -r '.keys | length' <<< "$v")" == 0 ]]; then
-        echo "鍵プールは空です（$KEYS_FILE）。sandbox keys add <名前> --fable / --other で足す。空の間は PJ / 全体の env の鍵を使います"
+        echo "鍵プールは空です（${KEYS_FILE}）。sandbox keys add <名前> --fable / --other で足す。空の間は PJ / 全体の env の鍵を使います"
         return 0
       fi
       local fmt='%-20s %-5s %-5s %-4s %-8s %-10s %-25s %-4s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る
@@ -481,7 +481,7 @@ cmd_keys() {
     add)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage
-      [[ "$name" =~ $KEYS_NAME_RE ]] || die "名前は英数字と . _ - の 1〜40 文字にしてください（$name）"
+      [[ "$name" =~ $KEYS_NAME_RE ]] || die "名前は英数字と . _ - の 1〜40 文字にしてください（${name}）"
       local fable=false other=false note=""
       while (( $# )); do
         case "$1" in
@@ -492,10 +492,10 @@ cmd_keys() {
         esac; shift
       done
       [[ "$fable" == true || "$other" == true ]] || die "--fable か --other のどちらか（両方でも可）を指定してください"
-      [[ -z "$(keys_get "$name")" ]] || die "鍵 $name は既にあります（値の差し替えは sandbox keys token $name）"
+      [[ -z "$(keys_get "$name")" ]] || die "鍵 $name は既にあります（値の差し替えは sandbox keys token ${name}）"
       _keys_ask_token "$name"
       with_state_lock _keys_add_locked "$name" "$fable" "$other" "$note"
-      echo "[ok] 鍵 $name を足しました（fable: $fable / other: $other）。次の take から候補に入ります" ;;
+      echo "[ok] 鍵 $name を足しました（fable: $fable / other: ${other}）。次の take から候補に入ります" ;;
     set)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage
@@ -584,7 +584,7 @@ dns_del() { gw "sed -i '/ task-$1\$/d' /etc/sandbox/hosts; systemctl reload dnsm
 : "${SB_ROLLBACK_TRIES:=3}"
 : "${SB_ROLLBACK_WAIT:=10}"
 _rollback_err=""
-rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
+rollback() { # vmid ip → 0 / 1（失敗理由は ${_rollback_err}）
   # die しないで rc を返す。「巻き戻せていないのに released」と言わないため、state を消すかどうかは呼び手が決める（245）
   # 直前の rollback（RAM 復元）のロックが残っていることがあるので、解放を待ってからリトライする。
   # 無言で再試行すると失敗ログの直後に [ok] が出て「無視した」ように見えるので、失敗のたびに理由を出す
@@ -600,7 +600,7 @@ rollback() { # vmid ip → 0 / 1（失敗理由は $_rollback_err）
       _rollback_err="$(printf '%s' "$out" | tail -1)"; [[ -n "$_rollback_err" ]] || _rollback_err="rollback API が失敗"
     fi
     if (( i < n )); then
-      echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err。${w}秒後に再試行" >&2
+      echo "[warn] vm $1: rollback 失敗 ($i/$n): ${_rollback_err}。${w}秒後に再試行" >&2
       sleep "$w"
     else
       echo "[warn] vm $1: rollback 失敗 ($i/$n): $_rollback_err" >&2
@@ -661,7 +661,7 @@ cmd_take() {
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
   if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
-    rollback "$vmid" "$ip" || die "vm $vmid: rollback が通らない（$_rollback_err）"
+    rollback "$vmid" "$ip" || die "vm $vmid: rollback が通らない（${_rollback_err}）"
   fi
   inject_env "$ip" "$task" "$pj"
   dns_set "$task" "$ip"; _reserved_dns=1
@@ -692,7 +692,7 @@ cmd_reset() {
   load_pj "$pj"
   echo "[reset] $(state_field "$task" name) → clean"
   pool_apply_keys "$task"
-  rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
+  rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（${_rollback_err}）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
   state_set_keys "$task"
   touch_used "$vmid"
@@ -713,7 +713,7 @@ cmd_release() {
   echo "[release] $(state_field "$task" name) ← task-$task"
   if ! rollback "$vmid" "$ip"; then
     # 巻き戻せていない VM を state から消すと、次の take が clean だと思って貸し出す（245）
-    (( force )) || die "vm $vmid: 巻き戻しに失敗（$_rollback_err）。state は保持。\`sandbox release $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください（VM を手で直したなら \`sandbox release $task --force\`）"
+    (( force )) || die "vm $vmid: 巻き戻しに失敗（${_rollback_err}）。state は保持。\`sandbox release $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください（VM を手で直したなら \`sandbox release $task --force\`）"
     echo "[warn] 巻き戻し失敗を無視して返却（--force）: $_rollback_err" >&2
     dns_del "$task" || true
     state_del "$task"
@@ -769,7 +769,7 @@ _issued_note() {
   d="$(_issued "$file" "$key")"
   [[ -n "$d" ]] || { echo "発行日不明（token set / rotate で保存し直すと記録される）"; return 0; }
   n="$(_issued_days "$d")"
-  [[ -n "$n" ]] && echo "発行から $n 日（issued $d）" || echo "issued $d"
+  [[ -n "$n" ]] && echo "発行から $n 日（issued ${d}）" || echo "issued $d"
 }
 
 # token_key <kind> → env のキー名。claude / gh / claude:<系統>（fable|opus|sonnet|haiku）
@@ -810,7 +810,7 @@ cmd_token() {
       local is_ctl=0; [[ -f "$CTL_ENV" ]] && is_ctl=1
       (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
       local val=""
-      if [[ -t 0 ]]; then read -rs -p "$key（global・全 PJ・ctl.env をまとめて更新）: " val; echo; else val="$(cat)"; fi
+      if [[ -t 0 ]]; then read -rs -p "${key}（global・全 PJ・ctl.env をまとめて更新）: " val; echo; else val="$(cat)"; fi
       val="${val//[$'\r\n']/}"
       [[ -n "$val" ]] || die "空のトークン"
       local n=0 skip=0 f
@@ -818,14 +818,14 @@ cmd_token() {
       for f in "$PJ_DIR"/*.env; do
         [[ -f "$f" ]] || continue
         if grep -q "^$key=" "$f"; then _write_key "$f" "$key" "$val"; echo "[updated] $f"; n=$((n+1))
-        else echo "[skip]    $f（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
+        else echo "[skip]    ${f}（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
       done
       local ctl_done=0
       if (( is_ctl )); then
         if grep -q "^$key=" "$CTL_ENV"; then _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV"; n=$((n+1)); ctl_done=1
-        else echo "[skip]    $CTL_ENV（$key の行が無い）"; skip=$((skip+1)); fi
+        else echo "[skip]    ${CTL_ENV}（$key の行が無い）"; skip=$((skip+1)); fi
       else
-        echo "[skip]    $CTL_ENV（無し）"
+        echo "[skip]    ${CTL_ENV}（無し）"
       fi
       echo "$n 箇所更新 / $skip 箇所 skip   $key = $(mask "$val")"
       if (( ctl_done )); then
@@ -948,7 +948,7 @@ idle_hours_for() { # pj 既定 → その PJ の SB_IDLE_STOP_HOURS
   ( load_pj "$1" >/dev/null 2>&1 || true; echo "${SB_IDLE_STOP_HOURS:-$2}" )
 }
 # _idle_classify vmid name hours now → 判定を $_idle_verdict に入れる（candidate / lent / fresh / unknown / off）。
-# candidate と fresh のとき $_idle_since（最終利用の epoch）/ $_idle_age（秒）/ $_idle_src（最終利用 | 起動から）/ $_idle_last（記録。無ければ空）
+# candidate と fresh のとき ${_idle_since}（最終利用の epoch）/ ${_idle_age}（秒）/ ${_idle_src}（最終利用 | 起動から）/ ${_idle_last}（記録。無ければ空）
 _idle_verdict=""; _idle_since=""; _idle_age=0; _idle_src=""; _idle_last=""; _idle_entry=""
 _idle_classify() {
   local vmid=$1 name=$2 h=$3 now=$4
