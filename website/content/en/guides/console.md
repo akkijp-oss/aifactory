@@ -124,11 +124,18 @@ claude mcp reset-project-choices   # approve again
 | `ticket_action` | start / review / done / reopen / block / set (an empty `note` clears it) / append (append to the end of the body; `text` required, `section` optional) / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |
 | `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log` and so on) |
-| `sandbox_status` / `sandbox_ls` / `sandbox_release` | Lending state / live list (job) / release (job) |
+| `sandbox_status` / `sandbox_ls` / `sandbox_release` | Lending state (`leases[]` carries task, VM name, IP, since and power state) / live list (job) / release (job) |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | Job list, output, wait (60 s by default, 300 s at most), stop |
 | `logs` / `config` | intake / dispatch logs / workflows, routes, projects, git |
 
-If the job has not finished, `job_wait` returns it still running, so call it again when you want to wait longer. Other tools stay responsive while it waits (ADR-0028).
+`tools/list` returns `annotations` for every tool (`title` and `readOnlyHint`; `destructiveHint` for release and stop). Without them Claude Code treats a tool as "not safe to call in parallel" and serialises the calls in one turn, so you wait even though the server is asynchronous (ADR-0037).
+
+### How to drive a run
+
+1. `ticket_run(id)` returns a job (`kb run` takes 5 to 80 minutes).
+2. Watch it with `job_show(id, tail=2000)` or `run_show(name)` every few tens of seconds. `job_wait` waits 60 s by default and 300 s at most, and returns the job still running if it has not finished, so call it again. Other tools stay responsive while it waits (ADR-0028), but a client that ignores annotations serialises the calls on its side. If it looks stuck, use a shorter `timeout_s` or poll with `job_show`.
+3. When it is over, read `outcome` from `run_show(name)` and `sync_preview` from `ticket_show(id)`, then go deeper with `read_file(path)` into `agent-*.log` / `code-*.log` / `work/*.md`.
+4. For free VMs, call `sandbox_status`. When the `sandbox ls` values are older than 600 s it starts a refresh job in the background and returns the old values with `ls_refreshing: true` and `ls_refresh_job` (the next call carries a fresh `pool_actual` / `free`; if it cannot start one, `ls_refresh_error` says why). The task, VM name, IP, lease start and power state of every lent VM are in `leases[]`, so you no longer have to read `state.json` over ssh.
 
 Resources: `aifactory://board` (the board), `aifactory://ledger` (the ledger) and `aifactory://ticket/<id>` (a ticket body).
 

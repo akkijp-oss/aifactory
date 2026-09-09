@@ -70,7 +70,7 @@ def t_read_file(a):
     data, err = core.read_file(a.get("path") or "", tail=int(a["tail"]) if a.get("tail") else None, offset=int(a["offset"]) if a.get("offset") else None)
     if not data: raise core.ApiError(err, 403)
     return data
-def t_sandbox_status(a): return core.sandbox_view()
+def t_sandbox_status(a): return core.sandbox_ls_refresh_if_stale(core.sandbox_view())   # 古ければ裏で sandbox ls を起こす（ADR-0037）
 def t_sandbox_ls(a): return core.op_sandbox_ls()
 def t_sandbox_release(a): return core.op_sandbox_release(a)
 def t_job_list(a): return {"jobs": core.JobStore.list()[: int(a.get("limit") or 30)]}
@@ -142,17 +142,43 @@ TOOLS = [
     ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
     ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数",
      schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
-    ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧、直近の sandbox ls（成否問わず）と、最後に成功した回の VM 一覧（貸出先 / VM 名 / IP / 稼働状態 / pj）。templates[] のプールは 4 つに分かれる: pool_defined（設定の定義台数）/ pool_actual（最後に成功した ls に出た実体台数。ls が無ければ null）/ lent（貸出中の台数）/ free（空き = 実体 - 貸出、0 で下げ止まり）。実体が定義より少ないと unbuilt 台が未構築で、hint に足し方が入る（定義の数だけ同時に走らせると take が空きなしで落ちる）。実体は ls_fetched 時点の値で、ls_age_s 秒前・600 秒超なら ls_stale が true。古ければ sandbox_ls で取り直す。同じ VM に複数の貸出があると貸出先は 221,222 のカンマ区切りで、shared に組が入る（台数は vm_count、件数は lease_count）。idle_stop は節電で止めた VM の記録（{hours: 何時間使われなければ停止候補にするか, keep: 候補のうち起動したまま残す台数（足切り。候補がこれを超えた分だけ古い順に止める）, last_run: 最後に判定した時刻, stopped: [{vmid, name, at, last_used}], candidates: [{vmid, name, last_used}]（候補だが足切りの内で起動したまま）}。一度も動いていなければ null）。ここに載っている stopped の VM は壊れているのではなく節電で、次の貸出（take）が自動で起動する", schema({}), t_sandbox_status),
+    ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧、直近の sandbox ls（成否問わず）と、最後に成功した回の VM 一覧（貸出先 / VM 名 / IP / 稼働状態 / pj）。templates[] のプールは 4 つに分かれる: pool_defined（設定の定義台数）/ pool_actual（最後に成功した ls に出た実体台数。ls が無ければ null）/ lent（貸出中の台数）/ free（空き = 実体 - 貸出、0 で下げ止まり）。実体が定義より少ないと unbuilt 台が未構築で、hint に足し方が入る（定義の数だけ同時に走らせると take が空きなしで落ちる）。実体は ls_fetched 時点の値で、ls_age_s 秒前・600 秒超なら ls_stale が true。古ければ裏で sandbox ls のジョブを起こし、今回は古い値のまま ls_refreshing: true と ls_refresh_job（ジョブ id）を付けて返す（次の呼び出しで最新になる。起こせなければ ls_refresh_error）。leases[] は貸出台帳（state.json）の写しで、貸出 1 件 = 1 行（task / vmid / name / ip / pj / since / phase / url / vm_status）。台帳そのものが無いときは state_exists が false（「貸出なし」と読み違えないため）。同じ VM に複数の貸出があると貸出先は 221,222 のカンマ区切りで、shared に組が入る（台数は vm_count、件数は lease_count）。idle_stop は節電で止めた VM の記録（{hours: 何時間使われなければ停止候補にするか, keep: 候補のうち起動したまま残す台数（足切り。候補がこれを超えた分だけ古い順に止める）, last_run: 最後に判定した時刻, stopped: [{vmid, name, at, last_used}], candidates: [{vmid, name, last_used}]（候補だが足切りの内で起動したまま）}。一度も動いていなければ null）。ここに載っている stopped の VM は壊れているのではなく節電で、次の貸出（take）が自動で起動する", schema({}), t_sandbox_status),
     ("sandbox_ls", "Proxmox に ssh して VM の実勢を取る（sandbox ls）。VM 1 台 = 1 行で、貸出が複数あれば貸出先は 221,222 のカンマ区切り。ジョブを返す（数秒）", schema({}), t_sandbox_ls),
     ("sandbox_release", "貸出中の VM を snapshot clean に巻き戻して返却する。動いている run は止まる。ジョブを返す", schema({"task": {**STR, "description": "task-id（3 桁以上）"}}, ["task"]), t_sandbox_release),
     ("job_list", "コンソール / MCP が起動した CLI ジョブの一覧", schema({"limit": INT}), t_job_list),
     ("job_show", "ジョブ 1 件と出力。offset（バイト）で追い読み、tail で末尾だけ", schema({"id": STR, "offset": INT, "tail": INT}, ["id"]), t_job_show),
-    ("job_wait", "ジョブが終わるまで待つ（最大 timeout_s 秒、既定 60、上限 300）。終わらなければ running のまま返すので、長く待つなら繰り返し呼ぶ。待っている間も他のツールは即応する。出力は末尾 4000 文字", schema({"id": STR, "timeout_s": INT}, ["id"]), t_job_wait),
+    ("job_wait", "ジョブが終わるまで待つ（最大 timeout_s 秒、既定 60、上限 300）。終わらなければ running のまま返すので、長く待つなら繰り返し呼ぶ。サーバーは待ちを別スレッドに逃がすので他の呼び出しは即応するが、クライアントが同じターンの呼び出しを直列に送ることがある（annotations の readOnlyHint を見ない実装）。止まって見えるなら timeout_s を短くするか、job_show(tail) / run_show を繰り返して監視する。出力は末尾 4000 文字", schema({"id": STR, "timeout_s": INT}, ["id"]), t_job_wait),
     ("job_stop", "ジョブを止める（プロセスグループに SIGTERM）。kb run の途中なら VM が貸出中のまま残ることがある", schema({"id": STR}, ["id"]), t_job_stop),
     ("logs", "起票（intake.log）と配車（dispatch.log）のログ（$AIFACTORY_WORKSPACE/logs/）", schema({}), t_logs),
     ("config", "workflow の流れ、モデルの経路（routes.env）、役割、PJ 一覧、git status", schema({}), t_config),
 ]
 TOOL_MAP = {n: fn for n, _, _, fn in TOOLS}
+
+# ---------- annotations（tools/list に載せる手掛かり。MCP 2025-03-26 以降の任意項目で、古いクライアントは無視する）
+# readOnlyHint が無いツールを Claude Code は「並列に呼べない」とみなし、同じターンの呼び出しを直列に送る。
+# サーバーが job_wait を別スレッドに逃がしていても（ADR-0028）、これが無いと呼び手の側で塞がる（チケット 336・ADR-0037）
+RO = {"readOnlyHint": True}                                  # core を書かない読み取り
+RW = {"readOnlyHint": False}                                 # 状態を変える（ジョブを起こすものを含む）
+DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}   # 取り返しがつかない（VM を巻き戻す・走っているものを止める）
+ANNOTATIONS = {
+    "overview": ("概況", RO), "ticket_list": ("チケット一覧", RO), "ticket_show": ("チケット 1 件", RO),
+    "run_list": ("実行記録の一覧", RO), "run_show": ("実行記録 1 件", RO), "read_file": ("記録のファイルを読む", RO),
+    "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0037）
+    "job_list": ("ジョブ一覧", RO), "job_show": ("ジョブ 1 件", RO), "job_wait": ("ジョブを待つ", RO),
+    "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO),
+    "ticket_new": ("チケットを起票", RW), "ticket_action": ("チケットを進める・直す", RW),
+    "ticket_run": ("チケットを runner で回す", RW), "intake": ("自由文から起票", RW), "dispatch": ("todo を順に回す", RW),
+    "sandbox_ls": ("VM の実勢を取り直す", RW),
+    "computer_open": ("画面操作用の環境を予約", RW), "computer_action": ("画面を取る・操作する", RW),
+    "sandbox_release": ("VM を巻き戻して返却", DESTRUCTIVE), "job_stop": ("ジョブを止める", DESTRUCTIVE),
+    "computer_close": ("画面操作用の予約を返却", DESTRUCTIVE),
+}
+
+
+def annotations(name):
+    """ツールの annotations。表に無いものは安全側（読み取りとは言わない）に倒す"""
+    title, hints = ANNOTATIONS.get(name, (name, RW))
+    return {"title": title, **hints}
 
 
 # ---------- resources（読み物）
@@ -185,7 +211,7 @@ def handle(msg):
                 "serverInfo": {"name": "aifactory", "version": "0.1"}, "instructions": INSTRUCTIONS}
     if method == "ping": return {}
     if method == "tools/list":
-        return {"tools": [{"name": n, "description": d, "inputSchema": sc} for n, d, sc, _ in TOOLS]}
+        return {"tools": [{"name": n, "description": d, "inputSchema": sc, "annotations": annotations(n)} for n, d, sc, _ in TOOLS]}
     if method == "tools/call":
         name = params.get("name"); args = params.get("arguments") or {}
         fn = TOOL_MAP.get(name)

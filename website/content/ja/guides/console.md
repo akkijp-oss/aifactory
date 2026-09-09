@@ -124,11 +124,18 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `ticket_action` | start / review / done / reopen / block / set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log` など） |
-| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況 / 実機の状態確認（ジョブ）/ 返却（ジョブ） |
+| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task・VM 名・IP・貸出開始・稼働状態）/ 実機の状態確認（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | intake / dispatch のログ / ワークフロー・routes・プロジェクト・git |
 
-`job_wait` は終わらなければ実行中のまま返るので、長く待ちたいときは繰り返し呼びます。待っている間も他のツールはすぐ応答します（ADR-0028）。
+`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、返却と停止には `destructiveHint`）を返します。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされます（ADR-0037）。
+
+### 運転の型
+
+1. `ticket_run(id)` を呼ぶとジョブが返ります（`kb run` は 5〜80 分かかります）
+2. 監視は `job_show(id, tail=2000)` か `run_show(name)` を数十秒おきに呼びます。`job_wait` は既定 60 秒・上限 300 秒待ち、終わらなければ実行中のまま返るので繰り返し呼びます。待っている間も他のツールはすぐ応答します（ADR-0028）が、annotations を読まないクライアントでは呼び手の側で直列になります。止まって見えたら `timeout_s` を短くするか `job_show` で回してください
+3. 終わったら `run_show(name)` の `outcome` と `ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読みます
+4. VM の空きは `sandbox_status` です。`sandbox ls` の値が 600 秒より古ければ裏で取り直しのジョブを起こし、今回は古い値のまま `ls_refreshing: true` と `ls_refresh_job` を付けて返します（次の呼び出しで `pool_actual` / `free` が最新になります。起こせないときは `ls_refresh_error`）。貸出中 VM の task・VM 名・IP・貸出開始・稼働状態は `leases[]` にそのまま出るので、`state.json` を ssh で読みに行く必要はありません
 
 resources として `aifactory://board`（ボード）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）も読めます。
 

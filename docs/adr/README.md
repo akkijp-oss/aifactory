@@ -48,3 +48,4 @@
 - [0034: ワーカーのログ上限は切り捨てで扱う。画像の base64 は記録前に置き換える](0034-worker-log-limit-truncates-and-strips-images.md)
 - [0035: idle-stop は 24 時間で候補にし、候補が 10 台を超えた分だけ古い順に止める](0035-idle-stop-candidates-and-cutoff.md)
 - [0036: 止まった run の再開は「新しい VM で、wip ブランチの続きから、指定の step」で行う](0036-resume-from-step-on-a-new-vm.md)
+- [0037: MCP のツールに annotations を付ける／`sandbox_status` は古ければ裏で `sandbox ls` を起こす](0037-mcp-tool-annotations-and-sandbox-status-refresh.md)

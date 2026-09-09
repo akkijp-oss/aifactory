@@ -76,11 +76,18 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `ticket_action` | start / review / done / reopen / block / set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
-| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
+| `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task / VM 名 / IP / since / 稼働状態）と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
 
-`job_wait` は既定 60 秒・上限 300 秒待つ。終わらなければ `state` が `running` のまま返るので、長く待ちたいときは繰り返し呼ぶ（Claude Code は 120 秒でバックグラウンド化するので、それ以上待たせる意味が薄い）。待っている間も他のツールは別スレッドで即応する（ADR-0028）。
+`tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、`sandbox_release` / `job_stop` / `computer_close` には `destructiveHint`）を返す。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされる（ADR-0037）。
+
+### 運転の型
+
+1. `ticket_run(id)` でジョブが返る（`kb run` は 5〜80 分）
+2. 監視は `job_show(id, tail=2000)` か `run_show(name)` を数十秒おきに。`job_wait` は既定 60 秒・上限 300 秒待ち、終わらなければ `state` が `running` のまま返る（Claude Code は 120 秒でバックグラウンド化するので、それ以上待たせる意味が薄い）。サーバーは待ちを別スレッドに逃がすので他の呼び出しは即応する（ADR-0028）が、annotations を読まないクライアントでは呼び手の側で直列になる。止まって見えたら `timeout_s` を短くするか `job_show` で回す
+3. 終わったら `run_show(name)` の `outcome` と `ticket_show(id)` の `sync_preview` を見て、詳しくは `read_file(path)` で `agent-*.log` / `code-*.log` / `work/*.md` を読む
+4. VM の空きは `sandbox_status`。`ls` が 600 秒より古ければ裏で `sandbox ls` を起こし、今回は古い値に `ls_refreshing: true` と `ls_refresh_job` を付けて返す（次の呼び出しで `pool_actual` / `free` が最新になる。起こせなければ `ls_refresh_error`）。貸出中 VM の task / VM 名 / IP / since / 稼働状態は `leases[]` にそのまま出るので、`~/.config/sandbox/state.json` を ssh で読みに行かなくてよい。台帳の場所は環境変数 `SANDBOX_STATE`（`glue/bin/dispatch` と同じ規則）で、無いときは `state_exists: false`（「貸出なし」と読み違えないため）
 
 resources: `aifactory://board`（BOARD.md）、`aifactory://ledger`（台帳）、`aifactory://ticket/<id>`（本文）。
 
