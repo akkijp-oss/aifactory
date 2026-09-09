@@ -21,7 +21,30 @@
 | `forbidden` | array | | Project-specific prohibitions | Added to every role's prompt as "Forbidden in this project" |
 | `workflow_overrides` | object | | workflow name → overrides (v1: `base_branch` only) | Base decision |
 | `known_red_gates` | array | | Names of gates already red on the base branch (names from `gates.sh`) | The runner downgrades FAIL to INFO and does not send the agent back to "fix it" |
+| `auto_merge` | boolean / object | | Let the runner merge a PR into `base_branch` when the gates are green, the review is PASS and CI is all green (off by default) | Runs the `automerge` step after `pr`. Without it the step is skipped entirely and the PR is handed to a human |
 
+
+### `auto_merge`
+
+Writing `true` turns it on with the defaults. Write an object to choose the values.
+
+```yaml
+auto_merge:
+  method: merge          # merge / squash / rebase (default merge)
+  wait_min: 20           # How long to wait for CI checks, in minutes (default 20)
+  delete_branch: true    # Delete the working branch on origin after merging (default true)
+  require_checks: true   # Do not merge when there are zero checks (default true; set false for a project without CI)
+```
+
+It merges only when **all** of these hold (ADR-0041):
+
+- No `FAIL` in `gates.txt` (`INFO`, i.e. a gate that is red on base too, is fine)
+- If the workflow has a reviewer, the first line of `review.md` is `# レビュー: PASS`
+- The PR is open, not a draft, and its base and head are the ones of this run
+- Every `gh pr checks` entry passed (polled every 30 seconds up to `wait_min`; a single failure stops it right away)
+- GitHub reports `MERGEABLE`
+
+If anything is missing it does not merge: the PR stays open and goes to a human. The reason is kept on one line in `error` in `state.json`, such as `automerge: CI 赤 (test)`, and is readable from the board, the console and `run_show`.
 
 For Windows, set `backend: windows-pull`, a registered `worker`, `app_dir: <work_root>/app`, and a `.ps1` gate. See [Windows worker setup](../guides/windows-worker.md).
 
@@ -63,6 +86,7 @@ forbidden:
 - Quote values containing backticks or `: ` with `"..."` (PyYAML misreads them otherwise)
 - The most useful `facts` are "how to run tests", "where generated files go" and "known issues (dated)". If they get long, just point at the relevant part of the README or `CLAUDE.md`
 - Do not write rules that apply to every project (those go in `workflow/kit/roles/_common.md`)
+- `auto_merge` applies to **every workflow**. Turning it on in a project with `hotfix_base: main` lets a hotfix land on `main` automatically
 - `known_red_gates` is temporary. Remove entries once the fixing PR is merged
 - You do not have to fill in `known_red_gates` by hand: the runner records the gates it confirmed red on base in the run record (see below)
 - Changes take effect from the next run
