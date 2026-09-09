@@ -131,6 +131,8 @@ TOOLS = [
              "dry_run": {**BOOL, "description": "sync 専用。既定 true = 書かずに前後を返す。false を明示したときだけ状態とメモを上書きする"}}, ["id", "action"]), t_ticket_action),
     ("ticket_run", "チケットを runner で回す（kb run）。VM を貸し出し step を順に実行し PR まで進める。ジョブを返す。dry_run なら VM を触らず依頼文だけ組む",
      schema({"id": INT, "dry_run": BOOL, "workflow": {**STR, "description": "種別と違う workflow で回すとき"}, "keep": {**BOOL, "description": "終了後 VM を返却しない"}, "resume": {**BOOL, "description": "貸出中の VM で続きから"},
+             "from_step": {**STR, "description": "human で止まった run を新しい VM で、この step からやり直す（research / design は走らない）。記録の wip ブランチの続きから始まり、前回の work/*.md と review.md の指摘が依頼文に入る。空文字列なら記録の resume_step に任せる。打つべき値は ticket_show の runs[].resume に出る"},
+             "from_branch": {**STR, "description": "from_step のとき続きに使うブランチ。既定は記録の wip_branch"},
              "wait": {**INT, "description": "VM に空きが無いとき最大 n 分待つ（既定は待たずに失敗）"}}, ["id"]), t_ticket_run),
     ("intake", "自由文から起票する（glue/bin/intake。LLM 1 回で pj / kind / 題名 / 完了条件を決める）。ジョブを返す。pj / kind が分かっていれば渡す",
      schema({"text": STR, "pj": STR, "kind": STR, "dry_run": {**BOOL, "description": "起票せず判定 JSON だけ"}}, ["text"]), t_intake),

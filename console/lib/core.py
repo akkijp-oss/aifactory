@@ -177,6 +177,14 @@ def ts_state(s):
     return out
 
 
+def resume_command(task, s):
+    """human で止まった run を、新しい VM で続きから回すコマンド（チケット 333）。文言は console が組み、記録（state.json）には
+    事実だけを置く（ADR-0025 / ADR-0034）。続けるのに要る事実（wip ブランチ・やり直す step）が揃っていなければ None"""
+    wip, step = s.get("wip_branch"), s.get("resume_step")
+    if s.get("result") != "human" or not (task and wip and step): return None
+    return f"kb run {task} --from {step} --branch {wip}"
+
+
 def run_summary(d):
     st = d / "state.json"
     s = {}
@@ -198,6 +206,7 @@ def run_summary(d):
             "state_error": s.get("_error"), "runner": None, "workflow": s.get("workflow"),
             "branch": s.get("branch"), "base": s.get("base"), "started": ts_aware(s.get("started")), "finished": ts_aware(s.get("finished")),
             "elapsed_s": s.get("elapsed_s"), "result": s.get("result"), "pr_url": s.get("pr_url"), "wip_branch": s.get("wip_branch"),
+            "resume_step": s.get("resume_step"), "resumed_from": s.get("resumed_from"), "resume": resume_command(task, s),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
             "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
             "mtime": ts_file(st if st.exists() else d)}
@@ -210,6 +219,7 @@ def v0_summary(f):
     return {"name": f.name, "kind": "v0", "status": "finished", "pj": m.group(1) if m else None, "task": m.group(2) if m else None,
             "from_name": False, "state_error": None, "runner": None, "workflow": "spin-v0",
             "started": ts_aware(started), "finished": None, "result": None, "pr_url": None, "steps_done": None, "dry": False, "attempt": False,
+            "resume_step": None, "resumed_from": None, "resume": None,
             "mtime": ts_file(f)}
 
 
@@ -288,7 +298,8 @@ def run_outcome(d, s, state, wf, files):
     """「結果・止まった工程・理由の在り処」を、今ある記録（history / loops / gates.txt / ログの有無）だけから導く。
        runner は停止の理由を自由文で残さないので、導けないものは unknown（＝画面では「記録にありません」）にする"""
     o = {"reason": "unknown", "stopped_step": None, "stopped_index": None, "detail_file": None,
-         "gate_fails": [], "fail_count": 0, "loops_hit": False, "job": None, "error_summary": None, "pr_url": s.get("pr_url")}
+         "gate_fails": [], "fail_count": 0, "loops_hit": False, "job": None, "error_summary": None, "pr_url": s.get("pr_url"),
+         "resume": s.get("resume")}   # 続きから回すコマンド（human で止まり wip が残っている run だけ。333）
     if s.get("kind") == "v0": o["reason"] = "v0"; return o
     if s.get("status") == "not_started": o["reason"] = "not_started"; return o
     state = state or {}
@@ -822,7 +833,12 @@ def ticket_run(tid, b):
     for f in ("dry_run", "keep", "resume"):
         if b.get(f): cmd.append("--" + f.replace("_", "-"))
     if b.get("wait"): cmd += ["--wait", str(int(b["wait"]))]   # VM の空き待ちの上限（分。242）
-    label = f"kb run {tid}" + (" --dry-run" if b.get("dry_run") else "") + (" --resume" if b.get("resume") else "")
+    # human で止まった run を新しい VM で続きから（333）。step を省くと runner が記録の resume_step を使う
+    fs = b.get("from_step")
+    if fs is not None: cmd.append(f"--from={fs}" if fs else "--from")
+    if b.get("from_branch"): cmd.append(f"--branch={b['from_branch']}")
+    label = f"kb run {tid}" + (" --dry-run" if b.get("dry_run") else "") + (" --resume" if b.get("resume") else "") \
+        + ((" --from " + fs) if fs else (" --from" if fs is not None else "")) + (f" --branch {b['from_branch']}" if b.get("from_branch") else "")
     hint = f"{datetime.date.today().isoformat()}-{t[0]['pj']}-{tid}" + ("-dry" if b.get("dry_run") else "")
     if b.get("resume") and not b.get("dry_run") and t[0].get("run"):
         hint = t[0]["run"]
