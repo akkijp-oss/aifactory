@@ -5,7 +5,7 @@
 ## The five contract operations plus ls
 
 ```
-sandbox take <pj> <task-id>      lend a free VM (DNS task-<id>.sb.internal, env injected)
+sandbox take <pj> <task-id> [--need=fable,other]   lend a free VM (DNS task-<id>.sb.internal, env injected). --need lists the key purposes required (default both); stops with 鍵なし: when the pool has none
 sandbox ssh <task-id> [cmd...]   log in as dev / run a command (via login shell)
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          roll back to snapshot clean (stays lent, env re-injected)
@@ -111,7 +111,7 @@ Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the contro
 | `keys token <name>` | Replace only the value (name, purposes and counters stay). Apply it to lent VMs with `reinject` |
 | `keys rm <name> [--force]` | Remove a key. `--force` is required while a lent VM still holds it |
 
-The pick is "the key this ticket used before (while it is still eligible), otherwise the enabled key with a matching purpose that has gone longest without being used". Only when no key matches a purpose does it fall back to `pj/<pj>.env` and `env` (`token set` below, deprecated). Keys reach the VM through the per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`.
+The pick is "the key this ticket used before (while it is still eligible), otherwise the enabled key with a matching purpose that has gone longest without being used". While the pool holds any key, env keys are never handed to the VM. If a purpose the run needs (the runner passes `--need=fable,other`) has no key, `take` stops with `鍵なし:` without taking a VM and the run pauses until a key is registered (ADR-0046). Only an empty pool falls back to `pj/<pj>.env` and `env` (`token set` below, deprecated). Keys reach the VM through the per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`.
 
 ### token
 
@@ -119,7 +119,7 @@ The pick is "the key this ticket used before (while it is still eligible), other
 |---|---|
 | `token set <pj> gh` | `GH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` (fallback when the App is not configured) |
 | `token set <pj>` / `token set <pj> claude:<family>` | **Deprecated** (ADR-0045). `CLAUDE_CODE_OAUTH_TOKEN` (`_<FAMILY>`) in `pj/<pj>.env`. Still works for compatibility, prints a notice, and is not used while the pool has a key for that purpose. Use `keys add` instead |
-| `token set global` | `~/.config/sandbox/env` (last resort when the pool has no matching key; deprecated as well) |
+| `token set global` | `~/.config/sandbox/env` (used only while the pool is empty; deprecated as well) |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env`. For claude its main job is replacing intake's key in `ctl.env`; it does not touch the pool |
 | `token show [pj]` | Source and masked value of the effective key, days since it was saved, whether this host is the control plane, and the pool's key counts per purpose |
 

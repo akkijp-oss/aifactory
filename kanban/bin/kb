@@ -12,7 +12,7 @@
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
   kb detach <id> <name>                          # 添付を 1 件消す
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
-  kb resumable [--pj P] [--json]                 # 鍵の利用枠切れで一時停止中（todo に戻した）チケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む）
+  kb resumable [--pj P] [--json]                 # 一時停止中（利用枠切れ / 鍵なし で todo に戻した）チケットと、続きを回せるか（解除時刻を過ぎた / 鍵が登録された。dispatch --resume-paused が読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
                                                  # --from は human で止まった run を新しい VM で STEP からやり直す（既定は記録の resume_step、続きは記録の wip ブランチ）。--resume とは併用できない
@@ -319,6 +319,26 @@ def fmt_when(iso):
     except (TypeError, ValueError): return str(iso)
 
 
+def key_purposes(need):
+    return "、".join({"fable": "Fable に使う鍵", "other": "Opus・Sonnet・Haiku に使う鍵"}[k] for k in need) or "鍵"
+
+
+def sandbox_keys_path():
+    """鍵プール（keys.json）の置き場。sandbox CLI / console と同じ規則（SANDBOX_KEYS → state.json の隣）。値は読まない（用途と有効だけ）"""
+    v = os.environ.get("SANDBOX_KEYS")
+    if v: return pathlib.Path(v).expanduser()
+    st = pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config/sandbox/state.json")).expanduser()
+    return st.parent / (st.name[:-len("state.json")] + "keys.json" if st.name.endswith("state.json") else "keys.json")
+
+
+def key_pool_has(need):
+    """鍵プールに、要る用途（fable / other）の有効な鍵がそろっているか（ADR-0046）。プールを読めなければ False"""
+    try: keys = json.loads(sandbox_keys_path().read_text(encoding="utf-8")).get("keys") or []
+    except (OSError, ValueError): return False
+    ok = {g: any(isinstance(k, dict) and k.get("enabled", True) is not False and (k.get("allow") or {}).get(g) is True for k in keys) for g in ("fable", "other")}
+    return all(ok.get(g) for g in need) if need else any(ok.values())
+
+
 def resume_plan(r):
     """チケットが「利用枠切れで一時停止中」なら、その続きを回すのに要る事実と、今回せるか（380）。
     根拠は台帳の run が指す state.json だけ（result: human / failure: quota / wip_branch / resume_step）。それ以外は None。
@@ -327,7 +347,14 @@ def resume_plan(r):
     st = paths.run_path(r["run"]) / "state.json"
     try: s = json.loads(st.read_text(encoding="utf-8"))
     except (OSError, ValueError): return None
-    if s.get("result") != "human" or s.get("failure") != "quota" or "finished" not in s: return None
+    if "finished" not in s: return None
+    if s.get("result") == "failed" and s.get("failure") == "nokey":
+        # 鍵が無くて VM を取らずに止まった run（ADR-0046）。続きではなく初めから（step / branch は無し）。鍵がそろえば ready
+        need = [k for k in (s.get("needed_keys") or []) if k in ("fable", "other")] or ["fable", "other"]
+        return {"id": r["id"], "pj": r["pj"], "kind": r["kind"], "title": r["title"], "run": r["run"], "step": None, "branch": None,
+                "quota_type": None, "quota_hits": 0, "retry_after": None, "until": None, "needed_keys": need,
+                "ready": key_pool_has(need), "hits_exceeded": False, "paused": "nokey"}
+    if s.get("result") != "human" or s.get("failure") != "quota": return None
     step, wip = s.get("resume_step"), s.get("wip_branch")
     if not (step and wip): return None
     now_dt = datetime.datetime.now().astimezone()
@@ -340,7 +367,7 @@ def resume_plan(r):
     return {"id": r["id"], "pj": r["pj"], "kind": r["kind"], "title": r["title"], "run": r["run"],
             "step": step, "branch": wip, "quota_type": s.get("quota_type"), "quota_hits": int(s.get("quota_hits") or 0),
             "retry_after": s.get("retry_after"), "until": until.isoformat(timespec="seconds") if until else None,
-            "ready": bool(until is None or now_dt >= until), "hits_exceeded": int(s.get("quota_hits") or 0) >= resume_max_hits()}
+            "ready": bool(until is None or now_dt >= until), "hits_exceeded": int(s.get("quota_hits") or 0) >= resume_max_hits(), "paused": "quota"}
 
 
 def cmd_resumable(a):
@@ -350,6 +377,11 @@ def cmd_resumable(a):
     if a.json: print(json.dumps(plans, ensure_ascii=False)); return
     if not plans: print("(一時停止中のチケットなし)"); return
     for pl in plans:
+        if pl.get("paused") == "nokey":
+            when = "今すぐ" if pl["ready"] else f"鍵の登録待ち（{key_purposes(pl['needed_keys'])}）"
+            print(f"{pl['id']:>4} {pl['pj']:<10} {'(初めから)':<10} {when}  {pl['run']}  {pl['title'][:40]}")
+            print(f"     kb run {pl['id']}")
+            continue
         when = "今すぐ" if pl["ready"] else f"{fmt_when(pl['until'])} 以降"
         print(f"{pl['id']:>4} {pl['pj']:<10} {pl['step']:<10} {when:<14} {pl['quota_type'] or '?'} x{pl['quota_hits']}  {pl['run']}  {pl['title'][:40]}")
         print(f"     kb run {pl['id']} --from {pl['step']} --branch {pl['branch']}")
@@ -520,6 +552,13 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             status = "todo"
             note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
                     "空きが出たら kb run --wait / dispatch --wait で再開")
+        elif result == "failed" and s.get("failure") == "nokey":
+            # 要る用途の Claude の鍵が鍵プールに無く、VM を取らずに止まった run（ADR-0046）。鍵が登録されれば回せるので todo に戻し、
+            # dispatch --resume-paused（timer）が鍵の登録を見て初めから回し直す。人が直すのは鍵の登録だけ
+            need = [k for k in (s.get("needed_keys") or []) if k in ("fable", "other")]
+            status = "todo"
+            note = (f"Claude の鍵が無いので一時停止（必要: {key_purposes(need)}）。console の「鍵」画面か sandbox keys add で登録すると自動で再開"
+                    "（dispatch --resume-paused）")
         elif result == "failed" and s.get("failure") == "prepare":
             # 貸出直後の準備で落ちた run（330）。VM は取れているので「取得できず」ではない。直す所は prepare.sh か VM の側
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]

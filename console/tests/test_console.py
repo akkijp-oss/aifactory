@@ -915,6 +915,17 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.step_timeout", app)
 
+    def test_run_outcome_no_key_is_a_pause_not_a_failure(self):
+        """鍵プールに要る用途の鍵が無く VM を取らずに止まった run（ADR-0046）。「VM の準備で止まった」ではなく「鍵が無いので一時停止」と読める"""
+        state = {**self._state([], workflow="bug"), "result": "failed", "failure": "nokey", "needed_keys": ["fable", "other"],
+                 "error": "鍵なし: Fable に使う鍵が鍵プールに無い", "current": None}
+        name = self._fixture_run("2026-09-10-kumitate-993", state, {})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "nokey"); self.assertEqual(o["needed_keys"], ["fable", "other"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.nokey", app)
+
     def test_run_outcome_quota_pause_says_when_it_resumes(self):
         """鍵の利用枠の上限で止まった工程（チケット 380 / ADR-0043）。「工程が失敗した」ではなく「一時停止・HH:MM 以降に自動再開」と読める。
         鍵そのものが使えない（key）は別の理由（人が鍵を直す）。MCP run_show も同じ outcome を返す"""

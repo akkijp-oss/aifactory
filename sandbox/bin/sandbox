@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sandbox: aifactory sandbox CLI（Mac 側）。区画間の契約はこの5操作 + ls。
-#   sandbox take <pj> <task-id>      空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）
+#   sandbox take <pj> <task-id> [--need=fable,other]   空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）。--need は要る鍵の用途（既定は両方）。鍵プールに無ければ「鍵なし:」で止まる（ADR-0046）
 #   sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
 #   sandbox url <task-id>            http://task-<id>.sb.internal:3000
 #   sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
@@ -365,20 +365,39 @@ _pool_fable=""; _pool_other=""   # 今回の take / reset / reinject が選ん�
 _pool_assign() { # group name token
   case "$1" in
     fable) _pool_fable="$2"; CLAUDE_CODE_OAUTH_TOKEN_FABLE="$3" ;;
-    other) _pool_other="$2"; CLAUDE_CODE_OAUTH_TOKEN_OPUS="$3"; CLAUDE_CODE_OAUTH_TOKEN_SONNET="$3"; CLAUDE_CODE_OAUTH_TOKEN_HAIKU="$3"
-           # 無印の鍵が env に無くてもプールだけで運用できるように other の鍵で埋める（env にあればそちらが勝つ）
-           [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || { CLAUDE_CODE_OAUTH_TOKEN="$3"; _src_claude="pool/$2"; } ;;
+    other) _pool_other="$2"; CLAUDE_CODE_OAUTH_TOKEN_OPUS="$3"; CLAUDE_CODE_OAUTH_TOKEN_SONNET="$3"; CLAUDE_CODE_OAUTH_TOKEN_HAIKU="$3" ;;   # 無印は _pool_apply_locked が埋める
   esac
 }
 _pool_mark_used() { # name
   keys_write "$(keys_load | jq --arg n "$1" --arg t "$(date -Iseconds)" \
     '.keys |= map(if .name==$n then (.last_used=$t | .uses=((.uses // 0)+1)) else . end)')"
 }
+# _pool_need: この take / reset / reinject が要る用途（fable / other。空白区切り）。take は --need=fable,other で受け取り（既定は両方）、
+#   reset / reinject は貸出台帳に残っている用途（無ければ両方）。_pool_missing: 足りなかった用途（呼び元が「鍵なし」で止める。ADR-0046）
+_pool_need="fable other"; _pool_missing=""
+_pool_need_from_state() { # task → 台帳の keys の用途。無ければ両方
+  local g; g="$(jq -r --arg id "$1" '(.[$id].keys // {}) | keys | join(" ")' "$STATE" 2>/dev/null || true)"
+  _pool_need="${g:-fable other}"
+}
 _pool_apply_locked() { # task
   local task=$1 group cur name tok
-  _pool_fable=""; _pool_other=""
-  [[ -f "$KEYS_FILE" ]] || return 0
-  for group in fable other; do
+  _pool_fable=""; _pool_other=""; _pool_missing=""
+  # プールが空（ファイルが無い / 鍵が 0 本）なら従来どおり env の鍵（非推奨）。1 本でもあればプールが正本で、env の Claude の鍵は使わない
+  if [[ ! -f "$KEYS_FILE" ]] || [[ "$(keys_load | jq '.keys | length')" == 0 ]]; then
+    for group in $_pool_need; do
+      case "$group" in
+        fable) [[ -n "${CLAUDE_CODE_OAUTH_TOKEN_FABLE:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || _pool_missing+="$group " ;;
+        other) [[ -n "${CLAUDE_CODE_OAUTH_TOKEN_OPUS:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || _pool_missing+="$group " ;;
+      esac
+    done
+    return 0
+  fi
+  # 先に、要る用途の鍵が全部そろうかを見る（足りなければ何も選ばない。使用回数も動かさない）
+  for group in $_pool_need; do
+    cur="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
+    [[ -n "$(keys_pick "$group" "$cur")" ]] || _pool_missing+="$group "
+  done
+  [[ -z "$_pool_missing" ]] && for group in fable other; do
     cur="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
     name="$(keys_pick "$group" "$cur")"
     [[ -n "$name" ]] || continue
@@ -387,7 +406,18 @@ _pool_apply_locked() { # task
     _pool_assign "$group" "$name" "$tok"
     _pool_mark_used "$name"
   done
+  # プールが正本: env に残っている Claude の鍵（無印・系統別）は VM に渡さない。プールで選ばなかった用途は空のまま
+  [[ -n "$_pool_fable" ]] || unset CLAUDE_CODE_OAUTH_TOKEN_FABLE
+  if [[ -n "$_pool_other" ]]; then CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_OPUS"; _src_claude="pool/$_pool_other"
+  else unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU; fi
   return 0
+}
+# pool_require_keys: 要る用途の鍵が無ければ「鍵なし:」で止める（runner がこの目印を読んで一時停止にする。ADR-0046）
+pool_require_keys() {
+  [[ -z "$_pool_missing" ]] && return 0
+  local label="" g
+  for g in $_pool_missing; do label+="$([[ "$g" == fable ]] && echo "Fable に使う" || echo "Opus・Sonnet・Haiku に使う")、"; done
+  die "鍵なし: ${label%、}鍵が鍵プールに無い（console の「鍵」画面か sandbox keys add で登録すると、止まった run は自動で再開する）"
 }
 # pool_apply_keys <task>: 系統ごとに鍵を選び、CLAUDE_CODE_OAUTH_TOKEN_* を上書きする。
 #   グローバルに返すので $( ) の中で呼ばない。keys.json の更新（last_used / uses）は state.json のロックの中でやる（234 と同じ）
@@ -654,7 +684,14 @@ _reserve_vm_locked() {
 reserve_vm() { with_state_lock _reserve_vm_locked "$@"; }
 
 cmd_take() {
-  local pj=${1:?pj} task=${2:?task-id}
+  local pj=${1:?pj} task=${2:?task-id}; shift 2 || true
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --need=*) _pool_need="${a#--need=}"; _pool_need="${_pool_need//,/ }" ;;   # runner が workflow から要る用途を渡す（fable / other）
+      *) die "take: 知らない引数 $a（使えるのは --need=fable,other）" ;;
+    esac
+  done
   load_pj "$pj"
   local pick; pick="$(reserve_vm "$pj" "$task")"   # die はサブシェルを抜けるだけなので、空なら止める
   [[ -n "$pick" ]] || exit 1
@@ -662,7 +699,7 @@ cmd_take() {
   # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）。
   # VM を押さえてから選ぶ: 空きなしで落ちた take が last_used / uses を動かすと、貸し出してもいない回で順番が回ってしまう
   pool_apply_keys "$task"
-  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] Claude の鍵が無い（sandbox keys add <名前> --fable --other か console の「鍵」画面で登録する）" >&2
+  pool_require_keys     # 要る用途の鍵が無ければここで止まる（予約は _on_exit が消す）。VM も鍵も持たないまま人を待たせず、runner が一時停止にする
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
   if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
@@ -696,7 +733,7 @@ cmd_reset() {
   [[ -n "$vmid" ]] || die "task $task は未貸出"
   load_pj "$pj"
   echo "[reset] $(state_field "$task" name) → clean"
-  pool_apply_keys "$task"
+  _pool_need_from_state "$task"; pool_apply_keys "$task"; pool_require_keys
   rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（${_rollback_err}）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
   inject_env "$ip" "$task" "$pj"
   state_set_keys "$task"
@@ -891,7 +928,7 @@ cmd_reinject() {
     local ip pj; ip="$(state_field "$task" ip)"; pj="$(state_field "$task" pj)"
     [[ -n "$ip" ]] || die "task $task は未貸出"
     load_pj "$pj"
-    pool_apply_keys "$task"   # 同じ task は同じ鍵を使い続ける（その鍵が無効・削除されたときだけ選び直す）
+    _pool_need_from_state "$task"; pool_apply_keys "$task"; pool_require_keys   # 同じ task は同じ鍵を使い続ける（その鍵が無効・削除されたときだけ選び直す）
     inject_env "$ip" "$task" "$pj"
     state_set_keys "$task"
     touch_used "$(state_field "$task" vmid)"

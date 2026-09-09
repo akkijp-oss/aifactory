@@ -28,6 +28,7 @@ case "$1" in
   take)
     ls "$RUNS/$RUN_NAME/state.json" > "$MARKER" 2>&1 || true
     if [ -n "$TAKE_FAILS" ]; then echo "[error] pj=$2 に空きなし" >&2; exit 1; fi
+    if [ -n "$NO_KEY" ]; then echo "[error] 鍵なし: Fable に使う鍵が鍵プールに無い（console の「鍵」画面か sandbox keys add で登録すると、止まった run は自動で再開する）" >&2; exit 1; fi
     echo "take: sb-t-$2-01 10.77.1.1"
     ;;
   ssh)
@@ -83,6 +84,44 @@ class TakeFailureTest(unittest.TestCase):
         self.assert_failed_record(self.state(run_dir), "空きなし")
         self.assertNotIn("No such file", self.marker.read_text())   # ticket.md だけの run を作らない
         self.assertNotIn("release 901", self.calls.read_text())     # 貸し出されていないので返さない
+
+    def test_take_passes_the_needed_key_purposes_from_the_workflow(self):
+        """research（Sonnet の research + Fable の judge）は fable と other の両方を要る用途として take に渡す（ADR-0046）"""
+        p, run_dir = self.run_runner("904", TAKE_FAILS="1")
+        self.assertIn("take kumitate 904 --need=fable,other", self.calls.read_text())
+        self.assertEqual(self.state(run_dir)["needed_keys"], ["fable", "other"])
+
+    def test_no_key_in_the_pool_pauses_the_run_without_a_vm(self):
+        """鍵プールに要る用途の鍵が無い: take が「鍵なし:」で止まり、runner は failure nokey で終わる（VM は取らない）。kb は todo に戻す"""
+        p, run_dir = self.run_runner("905", NO_KEY="1")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        s = self.state(run_dir)
+        self.assert_failed_record(s, "鍵なし")
+        self.assertEqual(s["failure"], "nokey"); self.assertEqual(s["needed_keys"], ["fable", "other"])
+        self.assertNotIn("release 905", self.calls.read_text())
+        env = self.env(run_dir.name, NO_KEY="1")
+        new = subprocess.run([sys.executable, str(KB), "new", "kumitate", "research", "鍵なしの一時停止", "--body", "-", "--id", "905"],
+                             input=TICKET, text=True, capture_output=True, env=env)
+        self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
+        subprocess.run([sys.executable, str(KB), "set", "905", "--run", run_dir.name], env=env, capture_output=True)
+        r = subprocess.run([sys.executable, str(KB), "sync", "905"], text=True, capture_output=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("未着手", r.stdout)
+        show = subprocess.run([sys.executable, str(KB), "show", "905"], text=True, capture_output=True, env=env).stdout
+        self.assertIn("鍵が無いので一時停止", show); self.assertIn("Fable", show); self.assertIn("自動で再開", show)
+        # 鍵が無い間は resumable に「登録待ち」で載り、鍵プールに両用途の鍵が入ると ready になる
+        keys = self.ws / "keys.json"; env["SANDBOX_KEYS"] = str(keys)
+        r = subprocess.run([sys.executable, str(KB), "resumable", "--json"], text=True, capture_output=True, env=env)
+        pl = json.loads(r.stdout)[0]
+        self.assertEqual((pl["id"], pl["paused"], pl["ready"], pl["step"]), (905, "nokey", False, None))
+        keys.write_text(json.dumps({"keys": [{"name": "a", "token": "x", "allow": {"fable": True, "other": False}, "enabled": True}]}))
+        r = subprocess.run([sys.executable, str(KB), "resumable", "--json"], text=True, capture_output=True, env=env)
+        self.assertFalse(json.loads(r.stdout)[0]["ready"])                    # other が無い
+        keys.write_text(json.dumps({"keys": [{"name": "a", "token": "x", "allow": {"fable": True, "other": True}, "enabled": True}]}))
+        r = subprocess.run([sys.executable, str(KB), "resumable", "--json"], text=True, capture_output=True, env=env)
+        self.assertTrue(json.loads(r.stdout)[0]["ready"])
+        r = subprocess.run([sys.executable, str(KB), "resumable"], text=True, capture_output=True, env=env)
+        self.assertIn("kb run 905", r.stdout); self.assertNotIn("--from", r.stdout)   # 続きではなく初めから
 
     def test_prepare_failure_releases_the_vm_and_is_recorded(self):
         p, run_dir = self.run_runner("902", SSH_FAILS="1")

@@ -25,6 +25,10 @@ agent が Claude の鍵の利用枠（5 時間 / 7 日の窓、429）で止ま�
 その step 自身）。kb はチケットを todo に戻し、制御系の timer（`glue/bin/dispatch --resume-paused`）が解除時刻の後に `kb run --from` で続きを回す。
 鍵そのものが使えない（無効・失効・残高不足）ときは `failure: "key"` で、kb は blocked にする（鍵を直してから `kb run --from`）。チケット 380 / ADR-0043。
 
+要る用途の Claude の鍵（workflow の agent step のモデルから fable / other を決めて `sandbox take --need=…` に渡す）が鍵プールに無ければ、
+take が「鍵なし:」で止まり、runner は `failure: "nokey"` で終わる（VM は取らない）。kb はチケットを todo に戻し、鍵が登録されると
+`dispatch --resume-paused` が初めから回し直す（ADR-0046）。
+
 チケットの添付（kb attach）は take のときに VM の ~/work/<task>/attachments/ へ置き、各 step の依頼文で場所を案内する（チケット 353）。
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
 step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
@@ -114,6 +118,13 @@ def _iso_from_epoch(v):
 
 # sandbox take が「プールに空きが無い」と言うときの目印（sandbox/bin/sandbox の die 文言）。ここを変えるなら sandbox 側も一緒に直す
 POOL_BUSY = "に空きなし"
+# sandbox take が「要る用途の Claude の鍵が鍵プールに無い」と言うときの目印（同上。ADR-0046）。鍵が登録されるまで一時停止にする
+NO_KEY = "鍵なし:"
+
+
+class NoKey(RuntimeError):
+    """sandbox take が鍵プールに要る用途の鍵を見つけられなかった（VM は取っていない）。鍵が登録されれば回せるので、
+    利用枠切れと同じく一時停止にする: kb はチケットを todo に戻し、dispatch --resume-paused が鍵の登録を見て回し直す（ADR-0046）"""
 
 
 class PoolBusy(RuntimeError):
@@ -447,11 +458,15 @@ class Run:
             return
         if self.resume: return
         self.log("take")
-        r = sh(["sandbox", "take", self.pj, self.task], check=False)
+        # この workflow の agent step が使うモデルから、要る鍵の用途（fable / other）を渡す。無い用途は take が「鍵なし:」で止める（ADR-0046）
+        need = self.needed_keys()
+        self.state["needed_keys"] = need; self.save()
+        r = sh(["sandbox", "take", self.pj, self.task, "--need=" + ",".join(need)], check=False)
         if r.returncode != 0:
             why = scrub((r.stderr or "") + (r.stdout or "")).strip()[-2000:]
             # 「空きなし」だけは待てば解ける失敗なので分けて上げる（--wait。チケット 242）。他の take 失敗は従来どおり即 failed
             if POOL_BUSY in why: raise PoolBusy(why)
+            if NO_KEY in why: raise NoKey(([l.strip() for l in why.splitlines() if NO_KEY in l] or [why])[-1])
             raise RuntimeError(f"command failed ({r.returncode}): sandbox take {self.pj} {self.task}\n{why}")
         print(((r.stdout or "").strip().splitlines() or [""])[-1])
         self.taken = True   # ここから先で落ちたら VM を返す（238）
@@ -562,6 +577,16 @@ class Run:
         return wip if ok else ""
 
     # ---------- steps
+    def needed_keys(self):
+        """この workflow の agent step が使う鍵の用途（"fable" / "other"）。step のモデル名の系統で決める（Fable → fable、それ以外 → other）。
+        どちらも無い（agent step が無い）workflow は other 1 つにしておく（take が何も要求しないと env の鍵で通ってしまうため）"""
+        need = []
+        for st in self.wf["steps"]:
+            if "role" not in st: continue
+            g = "fable" if self.token_family(self.model_for(st)[0]) == "FABLE" else "other"
+            if g not in need: need.append(g)
+        return sorted(need) or ["other"]
+
     def model_for(self, step):
         cls = step.get("model_class") or {"planner": "judgment", "reviewer": "judgment", "researcher": "research", "implementer": "coding"}[step["role"]]
         return os.environ.get("CLAUDE_MODEL") or self.routes.get(f"MODEL_{cls}") or self.routes["MODEL_default"], cls
@@ -899,6 +924,9 @@ class Run:
         except PrepareFailed as e:
             # 準備で落ちた run。直す所は VM か prepare.sh 側にあるので、agent を起こさず人間へ返す（330）
             return self.fail_before_start(e, failure="prepare")
+        except NoKey as e:
+            # 要る用途の Claude の鍵が鍵プールに無い。VM は取っていない。鍵が登録されれば回せるので一時停止（kb が todo に戻し、timer が回し直す。ADR-0046）
+            return self.fail_before_start(e, failure="nokey")
         except Exception as e:
             return self.fail_before_start(e)
         cur = self.state["next"]; retry_note = self.first_retry_note(); result = "end"

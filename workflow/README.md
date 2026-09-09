@@ -188,6 +188,8 @@ agent の `claude -p` が Claude の鍵の**利用枠**（5 時間 / 7 日の窓
 | `quota`（利用枠。待てば戻る） | 追跡済みの変更を `wip: usage limit` でコミット → wip ブランチへ。`state.json` に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は**その step 自身** | **todo** に戻す（メモに「一時停止」と `kb run --from`） | 制御系の `aifactory-resume.timer`（5 分ごと）が `dispatch --resume-paused` を呼び、`retry_after` を過ぎたものを `kb run <id> --from` で続きから回す |
 | `key`（鍵が無効・失効・残高不足） | 同じく `wip: token unusable` で保全。`failure: "key"` | **blocked** | 人が鍵プール（`sandbox keys token <名前>` か「鍵」画面）で鍵を直して `kb run <id> --from` |
 
+鍵プールに要る用途の鍵が 1 本も無いときは、`take` が VM を取らずに「鍵なし:」で止まり、runner は `failure: "nokey"` で終わる。kb はチケットを todo に戻し、鍵が登録されると同じ timer が**初めから**回し直す（ADR-0046）。
+
 どちらも `on_fail` の戻し（gates → implement など）は消費しない。`retry_after` が読めない回（旧形式の文言・stderr だけ）は `finished` から
 `AIFACTORY_RESUME_BACKOFF_MIN` 分（既定 30）で再開を試し、`quota_hits` が `AIFACTORY_RESUME_MAX_HITS`（既定 6）に達したら blocked にして人へ返す。
 一時停止中のチケットと解除時刻は `kb resumable` で見える。通常の `dispatch` も、解除前の一時停止チケットは飛ばし、解除後は `--from` で続きから回す。
