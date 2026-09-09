@@ -82,6 +82,7 @@ flowchart TD
   I -->|yes| Z
 ```
 
+- Before it starts, `dispatch` calls `kb sync --all-review` once (passing `--pj` when given) so PRs a human merged or closed on GitHub land on the board (345 / ADR-0050). The result is one `sync …` line in `dispatch.log`. It is not called with `--dry-run` (which promises not to advance state) or `--resume-paused` (the 5-minute timer should not keep hitting GitHub)
 - Sequential. The next ticket does not start until the current one finishes
 - Makes no decisions. The kind is held by kanban
 - Pool size is `POOL_PER_PJ = 3` (match the number created with `40-pool.sh`)
@@ -94,6 +95,7 @@ flowchart TD
 The same lines on standard output and in `workspace/logs/dispatch.log`.
 
 ```
+[dispatch] sync sync --all-review: 対象 5 件 / done 2 / blocked 1 / 変更なし 2 / 飛ばした 0
 [dispatch] start 204 kumitate bug fix: pin the calendar title tests …
 [kb] …/workflow/bin/run kumitate 204 bug …/tickets/204-….md
 [run kumitate/204 …]

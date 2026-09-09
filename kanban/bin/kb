@@ -16,7 +16,8 @@
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
                                                  # --from は human で止まった run を新しい VM で STEP からやり直す（既定は記録の resume_step、続きは記録の wip ブランチ）。--resume とは併用できない
-  kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
+  kb sync <id> [--run DIR] [--dry-run]           # runs/<run>/state.json と PR の状態（gh）を読み直して状態を合わせる（--dry-run は書かずに前後を JSON で出す）
+  kb sync --all-review [--pj P] [--dry-run]      # review のチケット全件について、PR が GitHub でマージ / クローズされていないか見る
   kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]   # 人間の後始末（wip から PR を作ってマージ／打ち切り）を run 記録に残す
   kb history <id>
   kb render                                      # BOARD.md を再生成（状態を変える操作は自動で行う）
@@ -35,7 +36,7 @@ import argparse, datetime, json, os, pathlib, re, sqlite3, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # kanban/
 REPO = HERE.parent                                              # repo root
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh
 ROOT = paths.KB_ROOT
 DB = ROOT / "kanban.db"
 TICKETS = ROOT / "tickets"
@@ -487,15 +488,20 @@ def actor():
     return os.environ.get("AIFACTORY_ACTOR") or os.environ.get("USER") or "human"
 
 
+def repo_for(pj):
+    """PJ 定義の `repo:`（"owner/name"）。無ければ ""。yaml は読み込まない（kb は本文とこの 1 行しか要らない）"""
+    pd = paths.project_dir(pj) if pj else None
+    f = (pd / "project.yml") if pd else None
+    if not (f and f.exists()): return ""
+    m = re.search(r"^repo:\s*[\"']?([\w.-]+/[\w.-]+)[\"']?\s*$", f.read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else ""
+
+
 def pr_url_for(pj, pr):
     """PR 番号を記録に書く形にする。PJ 定義に repo があれば URL、無ければ `#N`（console はどちらからも番号を取る）"""
     if not pr: return ""
-    pd = paths.project_dir(pj) if pj else None
-    f = (pd / "project.yml") if pd else None
-    if f and f.exists():
-        m = re.search(r"^repo:\s*[\"']?([\w.-]+/[\w.-]+)[\"']?\s*$", f.read_text(encoding="utf-8"), re.M)
-        if m: return f"https://github.com/{m.group(1)}/pull/{pr}"
-    return f"#{pr}"
+    repo = repo_for(pj)
+    return f"https://github.com/{repo}/pull/{pr}" if repo else f"#{pr}"
 
 
 def human_note(run_dir, result=None, pr=None, text=None, force=False):
@@ -642,10 +648,113 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
     return rc
 
 
+# ---------- PR の状態から進める（345）
+GH_AMBIENT = os.environ.get("GH_TOKEN") or ""   # 最初から env にあるトークン。あれば PJ を問わずそれを使う（runner と同じ）
+_GH_TOKENS = {}                                 # pj → (トークン, 使えない理由)。値はメモリに置くだけでログにも記録にも出さない
+
+
+def warn(msg):
+    """チケットを変えずに飛ばしたことを知らせる。stdout は汚さず rc も 0 のまま（gh が無い環境でも sync は成功で終える）"""
+    print(f"[kb] warn: {msg}", file=sys.stderr)
+
+
+def gh_ready(pj):
+    """この PJ の repo に対して `gh` を使えるようにする。戻り: 使えない理由（使えるなら None）。
+
+    GitHub App のトークンは PJ のリポジトリ限定（ADR-0008 / ADR-0030）なので、--all-review で PJ を跨ぐときに
+    前の PJ のトークンを使い回さない。払い出しは 1 PJ 1 回だけ（失敗も覚えて何度も sandbox を呼ばない）"""
+    if GH_AMBIENT:
+        os.environ["GH_TOKEN"] = GH_AMBIENT
+        return None
+    if pj not in _GH_TOKENS:
+        os.environ.pop("GH_TOKEN", None)
+        why = gh.ensure_gh_token(pj)
+        _GH_TOKENS[pj] = (os.environ.get("GH_TOKEN") or "", why)
+    token, why = _GH_TOKENS[pj]
+    if why:
+        os.environ.pop("GH_TOKEN", None)
+        return why
+    os.environ["GH_TOKEN"] = token
+    return None
+
+
+def sync_pr(c, r, dry=False):
+    """review のチケットの PR が GitHub 上でどうなったかを見て状態を進める（345）。
+
+    拾うのは「人が GitHub で merge / close した PR」。runner が自分でマージした run は state.json の
+    `merged` を apply_result が読む（ADR-0042）ので、こちらは触らない。
+    判定は gh が返す `state` と `mergedAt` の 2 つだけを見る。誤って done にするのが最大の害なので、
+    分からない・失敗はすべて「何もしない」に倒す（推し量らない）。
+
+    戻り: (結果, 説明)。結果は done / blocked / open（変えない）/ skip（gh が使えず飛ばした）/ na（対象外）。
+    状態を変えないときは DB を一切触らない"""
+    if r["status"] != "review": return "na", "review ではない"
+    if not r["pr"]: return "na", "PR 番号が無い"
+    repo = repo_for(r["pj"])
+    if not repo: return "na", f"{r['pj']} の project.yml に repo が無い"
+    why = gh_ready(r["pj"])
+    if why: return "skip", f"GH_TOKEN を用意できない: {why}"
+    info, why = gh.pr_state(r["pr"], repo)
+    if why: return "skip", f"gh pr view {repo}#{r['pr']} が失敗: {why}"
+    state = str(info.get("state") or "").upper()
+    merged_at, closed_at = info.get("mergedAt") or "", info.get("closedAt") or ""
+    # 時刻は gh が返した値（Z 付き）をそのまま書く。こちらで時間帯を推し量らない
+    if state == "MERGED":
+        status = "done"
+        note = f"PR #{r['pr']} マージ済み {merged_at or '（日時不明）'}"
+    elif state == "CLOSED" and not merged_at:
+        status = "blocked"
+        note = (f"PR #{r['pr']} がマージされずに閉じられた {closed_at or '（日時不明）'}。"
+                f"作り直すなら kb reopen {r['id']} → kb run {r['id']}")
+    else:
+        return "open", state or "?"       # OPEN と、こちらが知らない状態は触らない
+    note = run_note(r["note"], note)
+    if dry:
+        # 形は apply_result の dry と同じ（console の下見は最後の 1 行だけを読み、そこに最終の after が来る）
+        print(json.dumps({"id": r["id"], "run": r["run"], "pr_state": state,
+                          "before": {"status": r["status"], "note": r["note"], "run": r["run"], "pr": r["pr"], "updated": r["updated"]},
+                          "after": {"status": status, "note": note, "pr": r["pr"], "run": r["run"]}}, ensure_ascii=False))
+        return status, note
+    # PR 由来の更新でも run 記録への転記はしない（sync は転記しない。ADR-0039 / 342）
+    update(c, r["id"], status=status, note=note, transcribe=False); render(c)
+    return status, note
+
+
+def cmd_sync_all(c, a):
+    """review のチケット全件について PR の状態だけを見る（run の再判定はしない。大量の run を読み直さない）。
+       gh が使えない環境では PJ ごとに 1 行 warn を出し、チケットは変えずに rc=0 で終える"""
+    q = "SELECT * FROM tickets WHERE status = 'review'" + (" AND pj = ?" if a.pj else "") + " ORDER BY id"
+    rows = c.execute(q, (a.pj,) if a.pj else ()).fetchall()
+    n = {"done": 0, "blocked": 0, "open": 0, "skip": 0, "na": 0}
+    warned = set()
+    for r in rows:
+        out, why = sync_pr(c, r, dry=a.dry_run)
+        n[out] += 1
+        if out == "skip":
+            if r["pj"] not in warned:
+                warned.add(r["pj"]); warn(f"{r['pj']}: {why} → この PJ の PR は見ない")
+        elif out in ("done", "blocked") and not a.dry_run:
+            print(f"[kb] {fmt(get(c, r['id']))}")
+    print(f"[kb] sync --all-review: 対象 {len(rows)} 件 / done {n['done']} / blocked {n['blocked']}"
+          f" / 変更なし {n['open']} / 飛ばした {n['skip'] + n['na']}")
+
+
 def cmd_sync(a):
+    if a.all_review:
+        if a.id is not None: die("--all-review と id は一緒に使えない")
+        if a.run: die("--all-review と --run は一緒に使えない")
+        return cmd_sync_all(db(), a)
+    if a.id is None: die("チケットの id が要る（review 全件を回すなら kb sync --all-review）")
+    if a.pj: die("--pj は --all-review のときだけ使える")
     c = db(); r = get(c, a.id)
-    run_dir = a.run or r["run"] or die(f"{a.id} に run が無い。--run で指定")
-    apply_result(c, a.id, run_dir, dry=a.dry_run)
+    run_dir = a.run or r["run"]
+    # run が無くても review かつ PR があれば GitHub だけ見る（人が板で PR を付けたチケット）。両方無いときだけ断る
+    if not run_dir and not (r["status"] == "review" and r["pr"]):
+        die(f"{a.id} に run が無い。--run で指定")
+    if run_dir: apply_result(c, a.id, run_dir, dry=a.dry_run)
+    # GitHub の事実は run 記録より後に見る（run 由来の `PR 待ち` を上書きする）
+    out, why = sync_pr(c, get(c, a.id), dry=a.dry_run)
+    if out == "skip": warn(f"{a.id}: {why}")
     if not a.dry_run: print(fmt(get(c, a.id)))
 
 
@@ -677,7 +786,10 @@ def main():
     p.add_argument("--from", dest="from_step", nargs="?", const="", metavar="STEP",
                    help="human で止まった run を新しい VM でこの step からやり直す（既定は記録の resume_step）")
     p.add_argument("--branch", dest="from_branch", metavar="B", help="--from のとき続きに使うブランチ（既定は記録の wip_branch）")
-    p = sp.add_parser("sync"); p.add_argument("id", type=int); p.add_argument("--run"); p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
+    p = sp.add_parser("sync"); p.add_argument("id", type=int, nargs="?"); p.add_argument("--run")
+    p.add_argument("--all-review", action="store_true", help="review のチケット全件の PR を見る（id は取らない。345）")
+    p.add_argument("--pj", help="--all-review のとき PJ を絞る（省略なら全 PJ）")
+    p.add_argument("--dry-run", action="store_true", help="書き換えずに前後を JSON で出す")
     p = sp.add_parser("run-note"); p.add_argument("run", help="run 名（例 2026-09-06-kumitate-206）")
     p.add_argument("--result", choices=["done", "abandoned"], help="人間がどう決着させたか（既定 done）")
     p.add_argument("--pr", type=int, help="人間が作ってマージした PR の番号")

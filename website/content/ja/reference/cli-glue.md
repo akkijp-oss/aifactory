@@ -82,6 +82,7 @@ flowchart TD
   I -->|yes| Z
 ```
 
+- 回し始める前に `kb sync --all-review`（`--pj` があればそれも）を 1 回だけ呼び、人が GitHub でマージ / クローズした PR を板に反映する（345 / ADR-0050）。結果は `dispatch.log` に `sync …` の 1 行で残る。`--dry-run`（状態を進めない約束）と `--resume-paused`（5 分ごとの timer なので GitHub を叩き続けない）では呼ばない
 - 直列。1 件終わるまで次は始めない
 - 判断はしない。種別は kanban が持つ
 - プール台数は `POOL_PER_PJ = 3`（`40-pool.sh` で作った台数に合わせる）
@@ -94,6 +95,7 @@ flowchart TD
 標準出力と `workspace/logs/dispatch.log` に、同じ内容を出力します。
 
 ```
+[dispatch] sync sync --all-review: 対象 5 件 / done 2 / blocked 1 / 変更なし 2 / 飛ばした 0
 [dispatch] start 204 kumitate bug fix: calendar の表題テストを…
 [kb] …/workflow/bin/run kumitate 204 bug …/tickets/204-….md
 [run kumitate/204 …]
