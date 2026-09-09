@@ -68,6 +68,7 @@ workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず�
 
 - `--keep` は終了後に release しない（中を見たいとき）、`--resume` は貸出中の VM で state.json の次の step から続ける
 - `--from[=step]` は human で止まった run を**新しい VM**で指定の step からやり直す（`--branch=<名前>` の続きから。既定は前回の `wip_branch`）。step を省くと前回の `resume_step` を使う。前回の run は `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡し、その `work/*.md` を持ち込み、`review.md` を最初の依頼文に「前回の結果（直すこと）」として入れる（ADR-0036）
+- 鍵の利用枠切れ（トークン切れ）で止まった run は、runner が wip を保全して `failure: "quota"` を残し、kb がチケットを todo に戻す。続きは制御系の timer（`dispatch --resume-paused`）が解除時刻の後に `kb run --from` で回す（下の「鍵の利用枠切れ」）
 - `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す
 
 runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**（`project.yml` に `auto_merge` を書いた PJ だけ、次の `automerge` が条件を確かめて機械がマージする）。
@@ -176,6 +177,20 @@ auto_merge:                 # 値を選ぶなら dict で
 に途中までの実装が残る。`state.json` の `error` は `implement: 時間上限 60 分で中断（timeout）` の 1 行、agent の
 stdout の末尾は `last_output`、`history` の末尾に `failure: "timeout"` と `timeout_min` が入る（チケット 329）。
 14 ファイル超の作業を 60 分で回すと切られるので、大きい実装は `feature-long` を使うかチケットを割る。
+
+### 鍵の利用枠切れ（トークン切れ）で止まったら、機械が続きから回す（`failure: quota`）
+
+agent の `claude -p` が Claude の鍵の**利用枠**（5 時間 / 7 日の窓、429）で拒否されると、CLI は `rate_limit_event`（`status: rejected`、
+`resetsAt` が解除時刻）を流して rc≠0 で終わる。runner はこれを普通の失敗と分けて扱う（チケット 380 / ADR-0043）。
+
+| 止まり方 | runner が残すもの | kb | 次 |
+|---|---|---|---|
+| `quota`（利用枠。待てば戻る） | 追跡済みの変更を `wip: usage limit` でコミット → wip ブランチへ。`state.json` に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は**その step 自身** | **todo** に戻す（メモに「一時停止」と `kb run --from`） | 制御系の `aifactory-resume.timer`（5 分ごと）が `dispatch --resume-paused` を呼び、`retry_after` を過ぎたものを `kb run <id> --from` で続きから回す |
+| `key`（鍵が無効・失効・残高不足） | 同じく `wip: token unusable` で保全。`failure: "key"` | **blocked** | 人が `sandbox token set/rotate` で鍵を直して `kb run <id> --from` |
+
+どちらも `on_fail` の戻し（gates → implement など）は消費しない。`retry_after` が読めない回（旧形式の文言・stderr だけ）は `finished` から
+`AIFACTORY_RESUME_BACKOFF_MIN` 分（既定 30）で再開を試し、`quota_hits` が `AIFACTORY_RESUME_MAX_HITS`（既定 6）に達したら blocked にして人へ返す。
+一時停止中のチケットと解除時刻は `kb resumable` で見える。通常の `dispatch` も、解除前の一時停止チケットは飛ばし、解除後は `--from` で続きから回す。
 
 ## 音声・チケットの入口
 

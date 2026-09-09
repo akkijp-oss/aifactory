@@ -53,7 +53,7 @@ intake <text-file|-> [--pj P] [--kind K] [--model M] [--attach FILE ...] [--dry-
 ## dispatch
 
 ```
-dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]]
+dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]] [--resume-paused]
 ```
 
 | 引数 | 意味 |
@@ -63,6 +63,7 @@ dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]]
 | `--max N` | N 件まで（既定は無制限） |
 | `--dry-run` | `kb run --dry-run`。VM を触らず、状態も進まない |
 | `--wait [分]` | プールが満杯の PJ を飛ばさず、`kb run --wait <分>` で空くまで待たせる（分。値を省くと 60 分） |
+| `--resume-paused` | 鍵の利用枠切れで一時停止中のチケット（`kb resumable`）**だけ**を、解除時刻を過ぎたものから `kb run <id> --from` で続きから回す。他の todo には手を付けない。制御系の `aifactory-resume.timer` が 5 分ごとに呼ぶ（ADR-0043） |
 
 ### 動き
 
@@ -86,6 +87,7 @@ flowchart TD
 - プール台数は `POOL_PER_PJ = 3`（`40-pool.sh` で作った台数に合わせる）
 - `--dry-run` ではプール確認をしない
 - `--wait` でもプール確認をしない。待つのは runner 1 か所（`kb run --wait` → `workflow/bin/run --wait`。ADR-0031）。上限を超えたチケットは `todo` に戻るので、次の `dispatch` が拾い直せる
+- 鍵の利用枠切れで一時停止中のチケット（runner が `failure: quota` を残し、kb が `todo` に戻したもの）は、解除時刻（`retry_after`）を過ぎるまで飛ばし、過ぎていれば初めからではなく `kb run <id> --from` で**続き**（記録の退避ブランチと工程）から回す。`--resume-paused` はこの続きだけを対象にする（ADR-0043）
 
 ### 出力
 
@@ -97,6 +99,8 @@ flowchart TD
 [run kumitate/204 …]
 [dispatch] end   204 kumitate bug rc=0 status=review 1830s
 [dispatch] 205 myapp bug: project.yml 無し → blocked
+[dispatch] 206 kumitate: 利用枠切れで一時停止中（2026-09-09T15:00:00+09:00 以降に続きを回す）→ 飛ばす
+[dispatch] start 207 kumitate feature 空表示の文言… [続き: implement から origin/sandbox/207-feature-wip・利用枠切れ 1 回目]
 [dispatch] todo が無い（または全部飛ばした）。終了
 ```
 

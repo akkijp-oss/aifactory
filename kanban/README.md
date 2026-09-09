@@ -33,6 +33,7 @@ $kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--note TEXT]   # 起票
 $kb list [--status S] [--pj P] [--all]                                  # 一覧（既定は done 以外）
 $kb show <id>                                                           # メタ + 本文
 $kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（glue のルーターが読む）
+$kb resumable [--pj P] [--json]                                         # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む）
 $kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]] # workflow/bin/run を呼び、結果で状態を進める
                                                                         # --wait は VM の空きを待つ（分。既定 60）。上限超過は todo に戻す
 $kb run <id> --from [STEP] [--branch B]                                 # 人間待ちで終わった run を新しい VM で続きから（既定は記録の resume_step と wip ブランチ。--resume とは併用不可）
@@ -55,7 +56,8 @@ $kb render                                                              # BOARD.
 - `kind` は「何の仕事か」、run の `workflow` は「今回どう回したか」。`kb run --workflow X` は `kind` を書き換えず、履歴に `workflow → X` を残す（種別を変えるのは `kb set --kind`。ADR-0030）
 - id は 3 桁以上の連番（`MAX(id)+1`、最小 100）。DNS 名 `task-{id}.sb.internal` に使える
 - `run` 列には run ディレクトリ名（例 `2026-09-06-kumitate-206`）が入る。実体は `$AIFACTORY_WORKSPACE/runs/<NAME>/`。`kb sync --run` / `kb set --run` もこの名前で指定する
-- `kb run` の結果判定: `state.json` に `merged` あり → `done`（runner が条件を確かめて自動マージした。ADR-0042）/ `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`
+- `kb run` の結果判定: `state.json` に `merged` あり → `done`（runner が条件を確かめて自動マージした。ADR-0042）/ `pr_url` に MERGED → `done` / PR あり → `review`（人間がレビューしてマージ）/ PR 無しで `end` → `done`（research 等）/ `human` → `blocked`（wip ブランチをメモに残す）/ `human` で `failure: quota`（鍵の利用枠切れ）→ **`todo`**（一時停止。`dispatch --resume-paused` が解除後に `--from` で続きを回す。`quota_hits` が上限なら `blocked`）/ `human` で `failure: key`（鍵が使えない）→ `blocked` / `failed`（VM が取れず工程が始まらなかった）→ `blocked` / runner 異常終了・記録なし → `blocked`
+- `kb resumable [--pj P] [--json]`: 一時停止中（利用枠切れで todo に戻した）チケットと、解除時刻（`retry_after`。無ければ `finished` + `AIFACTORY_RESUME_BACKOFF_MIN` 分、既定 30）を過ぎて続きを回せるか。上限は `AIFACTORY_RESUME_MAX_HITS`（既定 6 回）。ADR-0043
 - take 失敗を `todo` に戻さず `blocked` にするのは、`glue/bin/dispatch` が古い順に `todo` を拾うため。プールが埋まっている間は同じチケットを取り直して失敗し続ける。理由を `note` に残して人間に返し、直したら `kb reopen` → `kb run` で戻す
 - `--pr` を変えると本文の `pr:` 行も書き換える（runner は本文の `pr:` を読むため）
 - `kb append` は**本文の末尾**に足す。`--section` を付けると `## <見出し>` を先に書く（例 `## PM 補足`）。「`## 完了条件` の手前」には入れない: 節を見分ける仕組みが `kb` に無く、末尾なら diff が 1 か所で済むため。見出しで後から書き足したものだと分かる

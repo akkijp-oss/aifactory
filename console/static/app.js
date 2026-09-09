@@ -412,6 +412,14 @@ function outcomeLead(o, s) {
   if (o.reason === 'prepare_failed') return tt(T.outcome.prepare_failed, { summary: o.error_summary || '' });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });
+  /* 鍵の利用枠切れで一時停止（チケット 380）。解除時刻が記録にあればそれを、無ければ「しばらく待つ」と言う。回数超過は自動再開を止めている */
+  if (o.reason === 'quota_paused') {
+    const type = o.quota_type || 'unknown';
+    if (o.quota_hits >= (o.quota_max_hits || 6)) return tt(T.outcome.quota_exceeded, { step: o.stopped_step, n: o.quota_hits });
+    return o.retry_after ? tt(T.outcome.quota_paused, { step: o.stopped_step, type, when: fmtT(o.retry_after) })
+                         : tt(T.outcome.quota_paused_unknown, { step: o.stopped_step, type });
+  }
+  if (o.reason === 'key_failed') return tt(T.outcome.key_failed, { step: o.stopped_step, summary: o.error_summary || '' });
   if (o.reason === 'step_failed') return tt(T.outcome.step_failed, { step: o.stopped_step });
   /* runner が条件を確かめて自分でマージした run（チケット 358） */
   if (o.reason === 'merged') { const n = prNumber(o.pr_url), b = (o.merged || {}).base || ''; return n ? tt(T.outcome.merged, { pr: n, base: b }) : tt(T.outcome.merged_nopr, { base: b }); }
@@ -422,7 +430,7 @@ function outcomeLead(o, s) {
 }
 function outcomePanel(name, d) {
   const o = d.outcome || { reason: 'unknown' }, s = d.summary, tk = d.ticket;
-  const stopped = ['loop_limit', 'step_failed', 'step_timeout', 'unknown'].includes(o.reason);
+  const stopped = ['loop_limit', 'step_failed', 'step_timeout', 'quota_paused', 'key_failed', 'unknown'].includes(o.reason);
   const gone = o.reason === 'runner_gone', job = o.job || null;
   const lines = [outcomeLead(o, s)];
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
