@@ -162,6 +162,8 @@ const T = {
     "failed_before_start": "VM の準備で止まりました: {summary}",
     "wait_timeout": "VM の空きを {n} 分待ちましたが出ませんでした。チケットは未着手に戻っています。",
     "prepare_failed": "貸出直後の準備（prepare）で止まりました: {summary}",
+    "nokey": "Claude の鍵が無いので一時停止しました（必要: {need}）。「鍵」画面で登録すると自動で回し直します。チケットは未着手に戻っています。",
+    "needFable": "Fable に使う鍵", "needOther": "Opus・Sonnet・Haiku に使う鍵",
     "lease": "VM {name} は貸出中のままです。",
     "noDetail": "理由を書いたファイルは残っていません。",
     "ticketNow": "この run は {end} に終わりました。チケット {id} の今の状態は「{status}」です（{at} 更新）。",

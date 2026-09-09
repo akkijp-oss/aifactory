@@ -5,7 +5,7 @@
 ## 5 つの基本操作と ls
 
 ```
-sandbox take <pj> <task-id>      空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）
+sandbox take <pj> <task-id> [--need=fable,other]   空き VM を貸し出す（DNS: task-<id>.sb.internal、env 注入）。--need は要る鍵の用途（既定は両方）。鍵プールに無ければ「鍵なし:」で止まる
 sandbox ssh <task-id> [cmd...]   dev で入る / コマンド実行（login shell 経由）
 sandbox url <task-id>            http://task-<id>.sb.internal:3000
 sandbox reset <task-id>          snapshot clean に巻き戻す（貸出継続、env 再注入）
@@ -111,7 +111,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | `keys token <名前>` | トークンだけ入れ替える（名前・用途・使用回数はそのまま）。実行中の VM には `reinject` で反映する |
 | `keys rm <名前> [--force]` | 消す。実行中の VM が使っていれば `--force` が要る |
 
-選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。用途に合う鍵が 1 本も無いときだけ、`pj/<pj>.env` と `env` の鍵（下の `token set`。非推奨）に落ちます。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
+選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途（runner が `--need=fable,other` で渡す）の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（下の `token set`。非推奨）を使います。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
 
 ### token
 
@@ -119,7 +119,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 |---|---|
 | `token set <pj> gh` | `~/.config/sandbox/pj/<pj>.env` の `GH_TOKEN`（GitHub App 未設定時のフォールバック） |
 | `token set <pj>` / `token set <pj> claude:<系統>` | **非推奨**（ADR-0045）。`pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN`（`_<系統>`）。互換のため動くが、実行すると注意が出て、プールに用途の合う鍵があるときは使われない。代わりに `keys add` |
-| `token set global` | `~/.config/sandbox/env`（プールに合う鍵が無いときの最後の保険。同じく非推奨） |
+| `token set global` | `~/.config/sandbox/env`（プールが空のときだけ使われる。同じく非推奨） |
 | `token rotate [claude\|gh]` | `~/.config/sandbox/env` と、その鍵を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env`。claude では intake 用の `ctl.env` を替えるのが主な用途。プールは触らない |
 | `token show [pj]` | 効いている鍵の出どころとマスク表示、保存からの日数、実行ホストが制御系かどうか、プールの本数と用途ごとの数 |
 

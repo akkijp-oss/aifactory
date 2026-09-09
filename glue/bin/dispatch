@@ -82,7 +82,7 @@ def main():
         queue = [p for p in sorted(paused.values(), key=lambda p: p["id"]) if p["ready"] and not p["hits_exceeded"]]
         if not queue:
             waiting = [p for p in paused.values() if not p["ready"]]
-            print("[dispatch] 一時停止中で今回せるものは無い" + (f"（待ち {len(waiting)} 件: " + ", ".join(f"{p['id']}→{p['until']}" for p in waiting) + "）" if waiting else ""), flush=True)
+            print("[dispatch] 一時停止中で今回せるものは無い" + (f"（待ち {len(waiting)} 件: " + ", ".join(f"{p['id']}→{p['until'] or '鍵の登録'}" for p in waiting) + "）" if waiting else ""), flush=True)
             return 0
     while done < limit:
         if a.resume_paused:
@@ -95,7 +95,9 @@ def main():
         plan = paused.get(tid)
         # 利用枠切れで一時停止中のチケットは、解除時刻を過ぎるまで回さない（回しても同じ所で止まり VM を取り直すだけ。380）
         if plan and not plan["ready"]:
-            log(f"{tid} {pj}: 利用枠切れで一時停止中（{plan['until']} 以降に続きを回す）→ 飛ばす"); skip.add(tid); continue
+            why = (f"鍵が無くて一時停止中（{'、'.join(plan.get('needed_keys') or [])} の鍵が鍵プールに登録されたら回す）" if plan.get("paused") == "nokey"
+                   else f"利用枠切れで一時停止中（{plan['until']} 以降に続きを回す）")
+            log(f"{tid} {pj}: {why} → 飛ばす"); skip.add(tid); continue
         if plan and plan["hits_exceeded"]:
             log(f"{tid} {pj}: 利用枠切れが {plan['quota_hits']} 回続いている → 自動では回さない"); skip.add(tid); continue
         pd = paths.project_dir(pj)
@@ -115,9 +117,10 @@ def main():
         if not a.dry_run and not a.wait and pj in busy_pj: skip.add(tid); continue
         if not a.dry_run and not a.wait and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
             log(f"{tid} {pj}: プール {POOL_PER_PJ} 台すべて貸出中 → この PJ は飛ばす"); busy_pj.add(pj); skip.add(tid); continue
-        cont = ["--from"] if plan else []           # 続きから（記録の resume_step と wip ブランチ。kb run --from）
+        cont = ["--from"] if plan and plan.get("step") else []   # 続きから（記録の resume_step と wip ブランチ。kb run --from）。鍵なしで止まった run は初めから
         log(f"start {tid} {pj} {t['kind']} {t['title'][:50]}{' (dry-run)' if a.dry_run else ''}"
-            + (f" [続き: {plan['step']} から origin/{plan['branch']}・利用枠切れ {plan['quota_hits']} 回目]" if plan else ""))
+            + (f" [続き: {plan['step']} から origin/{plan['branch']}・利用枠切れ {plan['quota_hits']} 回目]" if cont else
+               " [鍵が登録されたので初めから回し直す]" if plan else ""))
         t0 = time.time()
         rc = subprocess.run([str(KB), "run", str(tid)] + cont + (["--dry-run"] if a.dry_run else [])
                             + (["--wait", str(a.wait)] if a.wait and not a.dry_run else [])).returncode

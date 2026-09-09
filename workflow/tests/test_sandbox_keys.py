@@ -67,8 +67,9 @@ class SandboxKeysTest(unittest.TestCase):
     def keys_cmd(self, *args, stdin=None):
         return self.run_sh('cmd_keys "$@"\n', *args, stdin=stdin)
 
-    def take(self, task, pj='pj'):
-        return self.run_sh('cmd_take "$@"\n', pj, task)
+    def take(self, task, pj='pj', need=None):
+        """need は要る用途（'fable' / 'other' / 'fable,other'）。runner は workflow から渡す。省略は両方（ADR-0046）"""
+        return self.run_sh('cmd_take "$@"\n', pj, task, *([f'--need={need}'] if need else []))
 
     def reinject(self, task):
         return self.run_sh('cmd_reinject "$@"\n', task, token_part=True)
@@ -148,7 +149,7 @@ class SandboxKeysTest(unittest.TestCase):
 
     def test_rm_of_a_key_in_use_needs_force(self):
         self.add('k1', '--other')
-        self.assertEqual(self.take('379').returncode, 0)
+        self.assertEqual(self.take('379', need='other').returncode, 0)
         r = self.keys_cmd('rm', 'k1')
         self.assertNotEqual(r.returncode, 0); self.assertIn('379', r.stderr)
         self.assertEqual(len(self.keys_json()['keys']), 1)
@@ -159,7 +160,7 @@ class SandboxKeysTest(unittest.TestCase):
 
     def test_disable_points_at_the_leases_that_use_the_key(self):
         self.add('k1', '--fable')
-        self.assertEqual(self.take('379').returncode, 0)
+        self.assertEqual(self.take('379', need='fable').returncode, 0)
         r = self.keys_cmd('set', 'k1', '--disable')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('sandbox reinject 379', r.stdout)
@@ -185,8 +186,8 @@ class SandboxKeysTest(unittest.TestCase):
     def test_the_next_take_picks_the_least_recently_used_key(self):
         self.add('fable-a', '--fable', token='fake-token-fable-aaaa')
         self.add('fable-b', '--fable', token='fake-token-fable-bbbb')
-        self.assertEqual(self.take('379').returncode, 0)
-        self.assertEqual(self.take('380').returncode, 0)
+        self.assertEqual(self.take('379', need='fable').returncode, 0)
+        self.assertEqual(self.take('380', need='fable').returncode, 0)
         first = self.state_json()['379']['keys']['fable']
         second = self.state_json()['380']['keys']['fable']
         self.assertNotEqual(first, second)
@@ -195,7 +196,7 @@ class SandboxKeysTest(unittest.TestCase):
     def test_reinject_keeps_the_same_key_until_it_is_disabled(self):
         self.add('fable-a', '--fable', token='fake-token-fable-aaaa')
         self.add('fable-b', '--fable', token='fake-token-fable-bbbb')
-        self.assertEqual(self.take('379').returncode, 0)
+        self.assertEqual(self.take('379', need='fable').returncode, 0)
         picked = self.state_json()['379']['keys']['fable']
         self.assertEqual(self.reinject('379').returncode, 0)
         self.assertEqual(self.state_json()['379']['keys']['fable'], picked)   # 同じ task は同じ鍵
@@ -205,17 +206,30 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertNotEqual(again, picked)                                    # 使えなくなった鍵は選び直す
         self.assertEqual(self.vm_env()['CLAUDE_KEY_NAME_FABLE'], again)
 
-    def test_a_family_without_a_candidate_falls_back_to_the_env_key(self):
+    def test_a_purpose_without_a_key_stops_the_take_instead_of_using_the_env_key(self):
+        """プールに 1 本でも鍵があれば env の鍵には落ちない。要る用途の鍵が無ければ「鍵なし:」で止まり、VM も予約も残らない（ADR-0046）"""
         pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\n')
         self.add('opus-a', '--other', token='fake-token-other-bbbb')
         r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain\nCLAUDE_CODE_OAUTH_TOKEN_FABLE=env-fable\ncmd_take "$@"\n', 'pj', '379')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('鍵なし:', r.stderr); self.assertIn('Fable に使う', r.stderr)
+        self.assertNotIn('379', self.state_json())                             # 予約は消えている
+        self.assertEqual(self.keys_json()['keys'][0]['uses'], 0)               # 止まった回は使用回数を動かさない
+        # 要る用途が other だけ（chore など）なら通る。env の鍵は VM に渡らない（無印も other の鍵で埋まる）
+        r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain\nCLAUDE_CODE_OAUTH_TOKEN_FABLE=env-fable\ncmd_take "$@"\n', 'pj', '379', '--need=other')
         self.assertEqual(r.returncode, 0, r.stderr)
         env = self.vm_env()
-        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_FABLE'], 'env-fable')   # fable の候補が無いので env のまま
-        self.assertNotIn('CLAUDE_KEY_NAME_FABLE', env)
-        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN'], 'env-plain')         # 無印は env の値が勝つ
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-token-other-bbbb')
         self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN_OPUS'], 'fake-token-other-bbbb')
+        self.assertEqual(env.get('CLAUDE_CODE_OAUTH_TOKEN_FABLE', ''), '')
+        self.assertNotIn('CLAUDE_KEY_NAME_FABLE', env)
         self.assertEqual(self.state_json()['379']['keys'], {'other': 'opus-a'})
+
+    def test_no_key_anywhere_stops_the_take_too(self):
+        """プールが空で env にも鍵が無ければ、[warn] で通さず「鍵なし:」で止める（鍵が無い run は一時停止にする）"""
+        r = self.run_sh('cmd_take "$@"\n', 'pj', '379')
+        self.assertNotEqual(r.returncode, 0); self.assertIn('鍵なし:', r.stderr)
+        self.assertNotIn('379', self.state_json())
 
     def test_an_empty_pool_writes_exactly_what_it_used_to(self):
         r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain\ncmd_take "$@"\n', 'pj', '379')
