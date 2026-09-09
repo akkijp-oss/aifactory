@@ -203,7 +203,7 @@ func mcp() {
 		case "ping":
 			result = map[string]any{}
 		case "tools/list":
-			result = map[string]any{"tools": []any{map[string]any{"name": "computer", "description": "Operate this dedicated VM desktop. Screenshot first; x/y are pixels in that image. key uses CTRL/ALT/SHIFT/WIN (Windows), CMD/ALT/SHIFT/CTRL (Mac), ENTER/TAB/ESC/arrows or A-Z/0-9. type sends Unicode text. Positive scroll moves up. Desktop must be unlocked. Never operate a host desktop.", "inputSchema": schema()}}}
+			result = map[string]any{"tools": []any{map[string]any{"name": "computer", "description": "Operate this dedicated VM desktop. Screenshot first; x/y are pixels in that image. key takes 1-4 of these names (case-insensitive, same on every OS): CTRL ALT SHIFT WIN CMD ENTER TAB ESC SPACE BACKSPACE DELETE LEFT RIGHT UP DOWN HOME END PAGEUP PAGEDOWN F1-F12 A-Z 0-9 and the US-layout symbols = - + , . / ; ' [ ] \\ ` (WIN and CMD both mean the local meta key; + is SHIFT and =). type sends Unicode text. Positive scroll moves up. Desktop must be unlocked. Never operate a host desktop.", "inputSchema": schema()}}}
 		case "tools/call":
 			r, e := decode(msg.Params.Arguments)
 			var out response

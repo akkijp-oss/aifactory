@@ -54,10 +54,13 @@ import UniformTypeIdentifiers
      try await Task.sleep(nanoseconds:200_000_000)
     }
    case "key":
-    let codes:[String:CGKeyCode]=["A":0,"S":1,"D":2,"F":3,"H":4,"G":5,"Z":6,"X":7,"C":8,"V":9,"B":11,"Q":12,"W":13,"E":14,"R":15,"Y":16,"T":17,"1":18,"2":19,"3":20,"4":21,"6":22,"5":23,"9":25,"7":26,"8":28,"0":29,"O":31,"U":32,"I":34,"P":35,"ENTER":36,"L":37,"J":38,"K":40,"N":45,"M":46,"TAB":48,"SPACE":49,"BACKSPACE":51,"ESC":53,"CMD":55,"SHIFT":56,"ALT":58,"CTRL":59,"LEFT":123,"RIGHT":124,"DOWN":125,"UP":126,"DELETE":117,"HOME":115,"END":119,"PAGEUP":116,"PAGEDOWN":121,"F1":122,"F2":120,"F3":99,"F4":118,"F5":96,"F6":97,"F7":98,"F8":100,"F9":101,"F10":109,"F11":103,"F12":111]
+    // Key names are the 3 OS contract (ticket 344); values are kVK_ANSI_* / kVK_* virtual key
+    // codes for the US layout. "WIN" is an alias of Command, and "+" is Equal (24) plus SHIFT.
+    let codes:[String:CGKeyCode]=["A":0,"S":1,"D":2,"F":3,"H":4,"G":5,"Z":6,"X":7,"C":8,"V":9,"B":11,"Q":12,"W":13,"E":14,"R":15,"Y":16,"T":17,"1":18,"2":19,"3":20,"4":21,"6":22,"5":23,"9":25,"7":26,"8":28,"0":29,"O":31,"U":32,"I":34,"P":35,"ENTER":36,"L":37,"J":38,"K":40,"N":45,"M":46,"TAB":48,"SPACE":49,"BACKSPACE":51,"ESC":53,"CMD":55,"SHIFT":56,"ALT":58,"CTRL":59,"LEFT":123,"RIGHT":124,"DOWN":125,"UP":126,"DELETE":117,"HOME":115,"END":119,"PAGEUP":116,"PAGEDOWN":121,"F1":122,"F2":120,"F3":99,"F4":118,"F5":96,"F6":97,"F7":98,"F8":100,"F9":101,"F10":109,"F11":103,"F12":111,"=":24,"-":27,"]":30,"[":33,"'":39,";":41,"\\":42,",":43,"/":44,".":47,"`":50,"+":24,"WIN":55]
     let keys=(r["keys"] as? [String] ?? []).map{$0.uppercased()}
-    guard !keys.isEmpty,keys.count<=4,keys.allSatisfy({codes[$0] != nil}) else {throw Failure("unsupported key")}
-    var flags=CGEventFlags();for key in keys {switch key {case "CMD":flags.insert(.maskCommand);case "CTRL":flags.insert(.maskControl);case "ALT":flags.insert(.maskAlternate);case "SHIFT":flags.insert(.maskShift);default:break}}
+    guard !keys.isEmpty,keys.count<=4 else {throw Failure("provide 1 to 4 keys")}
+    for key in keys where codes[key] == nil {throw Failure("unsupported key: \(key.prefix(12)); supported: \(codes.keys.sorted().joined(separator:" "))")}
+    var flags=CGEventFlags();for key in keys {switch key {case "CMD","WIN":flags.insert(.maskCommand);case "CTRL":flags.insert(.maskControl);case "ALT":flags.insert(.maskAlternate);case "SHIFT","+":flags.insert(.maskShift);default:break}}
     for key in keys {let e=CGEvent(keyboardEventSource:nil,virtualKey:codes[key]!,keyDown:true);e?.flags=flags;e?.post(tap:.cghidEventTap)}
     for key in keys.reversed() {let e=CGEvent(keyboardEventSource:nil,virtualKey:codes[key]!,keyDown:false);e?.post(tap:.cghidEventTap)}
    case "scroll":

@@ -34,7 +34,7 @@ Reconnect AIFactory MCP after deployment to refresh its tool list.
 {"session":"desktop-...","action":"scroll","amount":-3}
 ```
 
-PNG screenshots have a maximum width of 1024 pixels. The helper maps image coordinates to the physical desktop; the origin is the image's top-left corner. Windows captures the virtual desktop, while Mac captures the main display. `move` also accepts `x` and `y`. Click options are `button: left|right` and `count: 1|2`. Typing supports up to 8192 UTF-8 bytes. On Mac it replaces the guest clipboard and pastes the string; fields that prohibit pasting are unsupported. Key combinations contain up to four keys: `WIN` on Windows, `CMD` on Mac, and common modifiers, letters, digits, arrows, `ENTER`, `TAB`, and `ESC`. Scroll amounts range from -20 to 20 excluding zero; positive means up.
+PNG screenshots have a maximum width of 1024 pixels. The helper maps image coordinates to the physical desktop; the origin is the image's top-left corner. Windows captures the virtual desktop, while Mac captures the main display. `move` also accepts `x` and `y`. Click options are `button: left|right` and `count: 1|2`. Typing supports up to 8192 UTF-8 bytes. On Mac it replaces the guest clipboard and pastes the string; fields that prohibit pasting are unsupported. Key combinations contain up to four keys; key names are the same on all three operating systems and are case-insensitive. Scroll amounts range from -20 to 20 excluding zero; positive means up.
 
 Direct-session screenshots are stored under `$AIFACTORY_WORKSPACE/computer/<session>/` on the control plane. Responses include the image, path, and hash. `actions.jsonl` records operation IDs and action types, without copying typed text into those audit rows. Screenshots and command output can still contain that text. Storage is not automatically pruned.
 
@@ -45,6 +45,40 @@ workers/bin/computer open mac-worker-01
 printf '%s' '{"action":"screenshot"}' | workers/bin/computer action desktop-...
 workers/bin/computer close desktop-...
 ```
+
+## Key names
+
+`key` accepts the same 79 names on all three operating systems. Names are case-insensitive.
+
+| Group | Names |
+| --- | --- |
+| Modifiers | `CTRL` `ALT` `SHIFT` `WIN` `CMD` |
+| Special keys | `ENTER` `TAB` `ESC` `SPACE` `BACKSPACE` `DELETE` `LEFT` `RIGHT` `UP` `DOWN` `HOME` `END` `PAGEUP` `PAGEDOWN` |
+| Function keys | `F1`-`F12` |
+| Letters and digits | `A`-`Z` / `0`-`9` |
+| Symbols | `=` `-` `+` `,` `.` `/` `;` `'` `[` `]` `\` `` ` `` |
+
+- `WIN` and `CMD` both mean the local meta key (Windows key on Windows, Command on Mac, Super on Linux). Sending `CMD` does not fail on Windows.
+- `+` has no physical key, so it is sent as the `=` key with `SHIFT`. Passing `SHIFT` and `=` explicitly does the same thing.
+- Symbol positions assume a **US layout**. On a guest with a JIS or other layout, symbol keys produce different characters.
+- An unknown name returns an error that lists every accepted name (`unsupported key: <name>; supported: ...`). Pick a name from that list instead of guessing again.
+
+```json
+{"session":"desktop-...","action":"key","keys":["CMD","SHIFT","="]}
+{"session":"desktop-...","action":"key","keys":["CTRL","-"]}
+{"session":"desktop-...","action":"key","keys":["F5"]}
+{"session":"desktop-...","action":"key","keys":["ESC"]}
+```
+
+## When a key does not work
+
+A key press only does something when the target window has focus and the application actually binds that shortcut; a successful `key` action is not proof that the shortcut took effect. If repeating `key` does not change the screen, switch approach instead of retrying.
+
+1. Take a `screenshot` and check the current state. If another window has focus, click the target window and send the key again.
+2. Click the menu. Zoom, save, and find are usually available as menu items, and clicking lets you confirm the result on screen.
+3. Use `type` when you only need to enter characters. It inserts Unicode directly, so it is unaffected by symbols or the keyboard layout.
+4. Change the application's own shortcut settings to a combination that is available.
+5. Keys outside the list (`INSERT`, the numeric keypad, media keys, `F13` and above) cannot be sent. Use steps 1-4 instead, or change the procedure so the key is not needed.
 
 ## Windows setup
 
@@ -94,5 +128,7 @@ Scroll actions returned successfully, but the one-line Windows document did not 
 On Mac, a fresh guest cloned from the configured base was used to click and type Japanese text in TextEdit through AIFactory MCP. Capture and input worked without additional permission prompts.
 
 The Mac research ticket also collected its Japanese-input PNG, report, and judgment, then released the lease. That test revealed character loss with long synthetic-key input. After changing Mac typing to paste, an AIFactory MCP test entered 41 lines / 942 characters with Japanese, emoji, and newlines. Selecting and copying the TextEdit contents reproduced the original text exactly. The clipboard was cleared before copying to avoid reading back the input clipboard instead of the document.
+
+Symbol, function, and special key support (ticket 344) is unverified on real Mac and Windows hardware. What is verified: an automated test that the key-name tables agree across the three operating systems, plus the swiftc build and the PowerShell syntax check in CI. Only on Linux is a symbol key actually sent to a text field under Xvfb and compared against the resulting document.
 
 Linux uses the same MCP interface. See [standalone Linux setup and limits](linux-worker.md).

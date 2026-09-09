@@ -9,6 +9,20 @@ import sys
 import time
 
 
+# 受け付けるキー名 -> X11 keysym 名。3 OS で同じ名前を受けるための正典表（チケット 344）。
+# 記号は US 配列の keysym 名。'plus' は xdotool が SHIFT を補う。生の文字列は xdotool へ渡さない。
+KEYS = dict(CTRL='ctrl', ALT='alt', SHIFT='shift', WIN='super', CMD='super', ENTER='Return',
+            TAB='Tab', ESC='Escape', SPACE='space', BACKSPACE='BackSpace',
+            DELETE='Delete', LEFT='Left', RIGHT='Right', UP='Up', DOWN='Down',
+            HOME='Home', END='End', PAGEUP='Prior', PAGEDOWN='Next')
+KEYS.update({k: k.lower() for k in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'})
+KEYS.update({f'F{i}': f'F{i}' for i in range(1, 13)})
+KEYS.update({'=': 'equal', '-': 'minus', '+': 'plus', ',': 'comma', '.': 'period', '/': 'slash',
+             ';': 'semicolon', "'": 'apostrophe', '[': 'bracketleft', ']': 'bracketright',
+             '\\': 'backslash', '`': 'grave'})
+SUPPORTED = ' '.join(sorted(KEYS))
+
+
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, timeout=10, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, **kwargs)
@@ -52,16 +66,13 @@ def native(request):
             run('xdotool', 'key', '--clearmodifiers', 'ctrl+v')
             time.sleep(.2)
     elif action == 'key':
-        mapping = dict(CTRL='ctrl', ALT='alt', SHIFT='shift', WIN='super', ENTER='Return',
-                       TAB='Tab', ESC='Escape', SPACE='space', BACKSPACE='BackSpace',
-                       DELETE='Delete', LEFT='Left', RIGHT='Right', UP='Up', DOWN='Down',
-                       HOME='Home', END='End', PAGEUP='Prior', PAGEDOWN='Next')
-        mapping.update({k: k.lower() for k in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'})
-        mapping.update({f'F{i}': f'F{i}' for i in range(1, 13)})
         keys = request.get('keys', [])
-        if not isinstance(keys, list) or not 1 <= len(keys) <= 4 or any(not isinstance(k, str) or k.upper() not in mapping for k in keys):
-            raise ValueError('unsupported key')
-        run('xdotool', 'key', '--clearmodifiers', '+'.join(mapping[k.upper()] for k in keys))
+        if not isinstance(keys, list) or not 1 <= len(keys) <= 4 or any(not isinstance(k, str) for k in keys):
+            raise ValueError('provide 1 to 4 keys')
+        for key in keys:
+            if key.upper() not in KEYS:
+                raise ValueError(f'unsupported key: {key[:12]}; supported: {SUPPORTED}')
+        run('xdotool', 'key', '--clearmodifiers', '+'.join(KEYS[k.upper()] for k in keys))
     elif action == 'scroll':
         amount = request.get('amount')
         if type(amount) is not int or amount == 0 or not -20 <= amount <= 20:
