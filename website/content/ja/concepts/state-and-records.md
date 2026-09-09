@@ -50,6 +50,7 @@ flowchart LR
 | コンソールが起動した CLI の出力 | `console/jobs/<id>/log`（`CONSOLE_JOBS` で変更可） | Web コンソール | 外 |
 | スクリプトが担当する工程の出力 | 同 `code-<step>-<n>.log` | 人間 | workspace |
 | 成果物（plan.md / report.md / review.md / summary.md / gates.txt） | VM `~/work/<id>/` → release 時に同 `work/` | 次の工程、reviewer、人間 | workspace |
+| 赤かったゲートのログの抜粋 | VM `~/gates/<名前>.log` → gates.sh が `~/work/<id>/gates/` へ → 同 `work/gates/` | 実装役（依頼文に抜粋が入る）、reviewer、人間 | workspace |
 | VM の貸出 | `~/.config/sandbox/state.json`（`sandbox ls`） | sandbox CLI、dispatch、runner、他セッション | 外 |
 | チケット作成と実行の割り当てのログ | `workspace/logs/intake.log` / `workspace/logs/dispatch.log` | 人間 | workspace |
 | 構築の進捗と実機確認コマンド | `sandbox/STATUS.md` | 次のセッション | repo |

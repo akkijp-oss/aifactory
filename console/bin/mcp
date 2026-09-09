@@ -21,7 +21,7 @@ INSTRUCTIONS = """aifactory（ソフトウェアファクトリー）の操作�
 - 状態を変える操作はすべて既存 CLI（kb / intake / dispatch / sandbox）を呼ぶ。人間や他セッションが同じ CLI を使っている前提で、勝手に VM を返却・run を止めない
 - 長い操作（ticket_run / intake / dispatch / sandbox_ls / sandbox_release）はジョブとして返る。job_wait で待ち、job_show で出力を読む。ticket_run は 5〜80 分かかる
 - 本番の run は VM を貸し出して PR まで進む。試すだけなら dry_run: true
-- 読める記録: overview → ticket_show → run_show → read_file（agent-*.log / code-*.log / work/*.md）の順に深く読める"""
+- 読める記録: overview → ticket_show → run_show → read_file（agent-*.log / code-*.log / work/*.md / 赤いゲートのログ work/gates/*.log）の順に深く読める"""
 
 
 def j(obj):
@@ -146,7 +146,7 @@ TOOLS = [
              "result": {"type": "string", "enum": ["done", "abandoned"], "description": "close の決着。既定 done"},
              "pr": {**INT, "description": "人間が作ってマージした PR の番号"}, "text": {**STR, "description": "後始末の説明（run 画面に出る）"}}, ["name"]), t_run_action),
     ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数",
-     schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
+     schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log。赤いゲートの中身は同 work/gates/<ゲート名>.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
     ("sandbox_status", "VM の貸出状況（~/.config/sandbox/state.json）と PJ 一覧、直近の sandbox ls（成否問わず）と、最後に成功した回の VM 一覧（貸出先 / VM 名 / IP / 稼働状態 / pj）。templates[] のプールは 4 つに分かれる: pool_defined（設定の定義台数）/ pool_actual（最後に成功した ls に出た実体台数。ls が無ければ null）/ lent（貸出中の台数）/ free（空き = 実体 - 貸出、0 で下げ止まり）。実体が定義より少ないと unbuilt 台が未構築で、hint に足し方が入る（定義の数だけ同時に走らせると take が空きなしで落ちる）。実体は ls_fetched 時点の値で、ls_age_s 秒前・600 秒超なら ls_stale が true。古ければ裏で sandbox ls のジョブを起こし、今回は古い値のまま ls_refreshing: true と ls_refresh_job（ジョブ id）を付けて返す（次の呼び出しで最新になる。起こせなければ ls_refresh_error）。leases[] は貸出台帳（state.json）の写しで、貸出 1 件 = 1 行（task / vmid / name / ip / pj / since / phase / url / vm_status）。台帳そのものが無いときは state_exists が false（「貸出なし」と読み違えないため）。同じ VM に複数の貸出があると貸出先は 221,222 のカンマ区切りで、shared に組が入る（台数は vm_count、件数は lease_count）。idle_stop は節電で止めた VM の記録（{hours: 何時間使われなければ停止候補にするか, keep: 候補のうち起動したまま残す台数（足切り。候補がこれを超えた分だけ古い順に止める）, last_run: 最後に判定した時刻, stopped: [{vmid, name, at, last_used}], candidates: [{vmid, name, last_used}]（候補だが足切りの内で起動したまま）}。一度も動いていなければ null）。ここに載っている stopped の VM は壊れているのではなく節電で、次の貸出（take）が自動で起動する", schema({}), t_sandbox_status),
     ("sandbox_ls", "Proxmox に ssh して VM の実勢を取る（sandbox ls）。VM 1 台 = 1 行で、貸出が複数あれば貸出先は 221,222 のカンマ区切り。ジョブを返す（数秒）", schema({}), t_sandbox_ls),
     ("sandbox_release", "貸出中の VM を snapshot clean に巻き戻して返却する。動いている run は止まる。ジョブを返す", schema({"task": {**STR, "description": "task-id（3 桁以上）"}}, ["task"]), t_sandbox_release),

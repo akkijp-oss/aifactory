@@ -628,6 +628,25 @@ class ApiTest(unittest.TestCase):
         for nm in ("state.json", "agent-implement-6.jsonl", "prompt-implement-6.md", "linux.lock"): self.assertIn(nm, other)
         self.assertEqual(d["ticket"]["id"], self.seed); self.assertIn("updated", d["ticket"])   # チケットの「今」を出すのに要る
 
+    def test_gate_logs_are_listed_and_readable(self):
+        """赤いゲートの中身（work/gates/<名前>.log）が run のファイル一覧に載り、そのまま読める（チケット 331）。
+           VM は run の終わりに初期化されるので、ここに残っていないと終わった run の赤は誰にも読めない。
+           見せ方は変えない（判定は今までどおり gates.txt から。ログは「その他」に並ぶ）"""
+        hist = [("implement", True), ("gates", False)]
+        name = self._fixture_run("2026-09-07-kumitate-990", self._state(hist), {
+            "work/gates.txt": "PASS lint\nFAIL test\n\n=== test.log (tail 60)\nFAIL something-in-log\n",
+            "work/gates/test.log": "# test.log on HEAD (sandbox/x)\n\n=== excerpt\nFAIL tests.test_x\n=== tail 300\nRan 3 tests\n",
+            "work/ticket.md": "# x\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        f = next((x for x in d["files"] if x["name"] == "work/gates/test.log"), None)
+        self.assertIsNotNone(f, "work/gates/test.log がファイル一覧に無い")
+        g = d["groups"]
+        self.assertIn("work/gates/test.log", [x["name"] for x in g["other"]])
+        self.assertNotIn("work/gates/test.log", [x["name"] for x in g["artifacts"]])
+        self.assertEqual(d["outcome"]["gate_fails"], ["test"])       # 判定は gates.txt のまま（ログの FAIL は拾わない）
+        st, body = self.http.get(f"/api/file?path={urllib.parse.quote(f['path'])}")
+        self.assertEqual(st, 200); self.assertIn("FAIL tests.test_x", body["text"])
+
     def test_run_outcome_pr_and_unknown(self):
         """PR まで進んだ run は pr_created。記録が足りない run は unknown（推測しない）"""
         ok = [("research", True), ("design", True), ("implement", True), ("gates", True), ("review", True), ("pr", True)]

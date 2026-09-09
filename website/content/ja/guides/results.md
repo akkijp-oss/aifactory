@@ -56,6 +56,7 @@ PR の本文は `kit/steps/pr-create.sh` が組み立てます。内容は次の
 | `report.md` | implementer | 何を変えたか、実行したテストと結果、範囲外の発見、判断に迷った点 |
 | `review.md` | reviewer | PASS / FAIL、根拠、直すべき点、人間向けメモ |
 | `gates.txt` | gates.sh | ゲートごとの PASS / FAIL / INFO とログの場所 |
+| `gates/<名前>.log` | gates.sh | 赤かったゲートの中身（エラー行の抜粋と末尾 300 行、1 ゲート 200KB まで）。VM を返した後もここで読める |
 | `summary.md` | judge（research ワークフロー） | 調査の結論と次にやるべきこと |
 
 ## 失敗の切り分け
@@ -73,7 +74,7 @@ flowchart TD
 
 | 症状 | 読む場所 | よくある原因 |
 |---|---|---|
-| gates が失敗して `human` | `code-gates-<n>.log`、VM 内 `~/gates/<name>.log`（回収後は `work/`） | 変更前のブランチでも失敗（`known_red_gates` に書く）、環境依存のテスト、依存の未インストール |
+| gates が失敗して `human` | `code-gates-<n>.log`、`work/gates/<name>.log`（VM 内 `~/gates/<name>.log` の抜粋） | 変更前のブランチでも失敗（`known_red_gates` に書く）、環境依存のテスト、依存の未インストール |
 | review が FAIL | `work/review.md` | 範囲外の変更、テストを弱めて成功させた、migration の後方互換 |
 | エージェントが成果物を書かず工程失敗 | `agent-<step>-<n>.log` の末尾 | トークン失効、`timeout_min` 超過、依頼文の出力先指定を見落とし |
 | `pr-create.sh` が「コミットがない」 | `code-pr-<n>.log` | implementer がコミットしなかった。`report.md` に理由があるはず |

@@ -141,7 +141,7 @@ Three levels of override: the step's `model_class` > the environment variable `C
 
 | Script | What it does | Fails when |
 |---|---|---|
-| `gates.sh` | Copies the project's `gates.sh` to the VM and runs it. If anything is red, runs only those gates against base as well, and downgrades the ones red on base too — plus FAILs in `known_red_gates` — to INFO. Writes the result to `~/work/<id>/gates.txt` | Any FAIL that was not downgraded to INFO remains |
+| `gates.sh` | Copies the project's `gates.sh` to the VM and runs it. If anything is red, runs only those gates against base as well, and downgrades the ones red on base too — plus FAILs in `known_red_gates` — to INFO. Writes the result to `~/work/<id>/gates.txt` and an excerpt of each red gate's log to `~/work/<id>/gates/<name>.log` | Any FAIL that was not downgraded to INFO remains |
 | `pr-create.sh` | Checks for commits → push → `gh pr create` with the artifacts as the body → writes the URL to `~/work/<id>/pr_url` | No commits, push failed |
 | `pr-merge.sh` | Checks for leftover conflict markers → checks base is merged in → pushes to the head → posts gate and review results as a PR comment → `gh pr merge` | Markers left, base not merged in, merge failed |
 | `sync-base` | **Built into the runner** (no file in `kit/steps/`). `git fetch origin <base>`, then `git merge` unless it is already merged in. On a conflict it records the conflicting file names and runs `git merge --abort`; afterwards it checks `docs/adr/` for duplicate numbers | A conflict, a duplicate ADR number, or a failed fetch |

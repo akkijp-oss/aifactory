@@ -51,3 +51,4 @@
 - [0037: MCP のツールに annotations を付ける／`sandbox_status` は古ければ裏で `sandbox ls` を起こす](0037-mcp-tool-annotations-and-sandbox-status-refresh.md)
 - [0038: 貸出直後の準備は `project.yml` の `prepare` で行い、「base でも赤いゲート」は runner が base で回して確かめる](0038-prepare-hook-and-base-red-gate-check.md)
 - [0039: 人間の後始末は kb が run 記録に転記する（`result` は上書きせず `human` を別に持つ）](0039-human-closeout-recorded-by-kb.md)
+- [0040: 赤いゲートのログは `work/gates/<名前>.log` に残し、実装役へ戻す依頼文の抜粋はそこから作る](0040-gate-logs-kept-in-work-gates.md)
