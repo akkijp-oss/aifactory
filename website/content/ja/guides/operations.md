@@ -14,19 +14,22 @@ sandbox gh-app status                    # App と install が生きているか
 
 ## トークン
 
-### Claude Code のトークン（プロジェクトごと）
+### Claude の鍵（鍵プール）
 
-`claude setup-token` の長期トークンには有効期限があります。切れるとエージェントが担当する工程が認証エラーで失敗し、チケットは `blocked` になります。
+VM の中のエージェントが使う Claude の鍵は、制御系の**鍵プール**で持ちます（ADR-0044 / ADR-0045）。入口は console の「鍵」画面（`#/keys`）か `sandbox keys` で、どちらも同じ `~/.config/sandbox/keys.json` を読み書きします。鍵ごとに「Fable に使う」「Opus・Sonnet・Haiku に使う」を決め、チケットを実行するときにモデルごとに 1 本選ばれます（最後に使ってから一番時間が経った鍵）。鍵を何本か登録しておくと、利用枠の消費を分散できます。
 
 ```bash
-claude setup-token
-sandbox token rotate                     # global・鍵を持つ全 PJ・ctl.env をまとめて更新し、console 再起動と reinject --all まで
-sandbox token set <pj>                   # 1 プロジェクトだけ保存し直すとき
-sandbox reinject <id>                    # 貸出中の VM にも反映（巻き戻しなし）
-sandbox reinject --all
+claude setup-token                                   # 鍵の値（sk-ant-oat01-…）を作る
+sandbox keys add max-akki --fable --other --note "akki の Max プラン"   # 値は対話入力（エコー無し）か標準入力
+sandbox keys list                                    # 登録してある鍵と、最後に使った日時・使用回数
+sandbox keys set max-akki --disable                  # 使わないようにする（使っている VM には別の鍵が入り直る）
+sandbox keys token max-akki                          # 値だけ入れ替える（期限切れのとき）
+sandbox reinject <id>                                # 実行中の VM に今の鍵を入れ直す
 ```
 
-`sandbox token rotate` は制御系（`~/.config/aifactory/ctl.env` のあるホスト）で実行します。保存した日は各ファイルにコメントで残るので、`sandbox token show` の「発行から N 日」で期限が近いことに気づけます。
+`claude setup-token` の長期トークンには有効期限があります。切れると工程が `failure: key` で止まり、チケットは `blocked` になります。`sandbox keys list` の登録日で期限が近いことに気づけます。
+
+**`sandbox token set <pj>` は非推奨です。** PJ ごとの設定ファイルに鍵を置く古い方式で、互換のため動きますが、プールに合う鍵があるときは使われません（実行すると注意が出ます）。`sandbox token rotate` は、intake が使う `ctl.env` の鍵と、プールに合う鍵が無いときの保険（`~/.config/sandbox/env`）を差し替えるためのもので、プールは触りません。
 
 ### Claude の鍵プール（制御系にまとめて置く）
 
@@ -143,13 +146,13 @@ sandbox release 999
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | なければ破棄して `40-pool.sh` |
 | VM から外に出られない | `iptables -t nat -S \| grep 10.77`、`pve-firewall status` | SDN 再適用 `pvesh set /cluster/sdn`。LAN・他 VM・tailnet 宛ては仕様で不可 |
 | Mac から VM に届かない（ファイアウォール有効化後） | `/etc/pve/firewall/<vmid>.fw`、`qm config <vmid> \| grep firewall` | `50-firewall.sh` を再実行 |
-| Claude Code が認証エラー | VM 内 `env \| grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show` の発行日数 | `claude setup-token` → `sandbox token rotate`（全 PJ・`ctl.env`・再注入まで 1 コマンド）。止まった run は `kb run <id> --from` で続きから |
-| 工程が「利用枠の上限」で止まった（チケットが未着手に戻り、メモに一時停止） | `kb resumable`、`journalctl -u aifactory-resume` | 何もしない。解除時刻を過ぎると timer が続きを回す。急ぐなら別の鍵を `sandbox token set` して `dispatch --resume-paused` |
+| Claude Code が認証エラー（`failure: key`） | 実行記録の `key=… (pool: <名前>)` でどの鍵か分かる。`sandbox keys list` の登録日 | `claude setup-token` → `sandbox keys token <名前>`（値の入れ替え）か「鍵」画面。intake の鍵は `sandbox token rotate`。止まった run は `kb run <id> --from` で続きから |
+| 工程が「利用枠の上限」で止まった（チケットが未着手に戻り、メモに一時停止） | `kb resumable`、`journalctl -u aifactory-resume` | 何もしない。解除時刻を過ぎると timer が続きを回す。急ぐなら「鍵」画面で別の鍵を足して `dispatch --resume-paused` |
 | Proxmox ホストが落ちた | `ssh $PVE_HOST` 不可、`pvecm nodes`（クラスタなら別ノードから） | 電源を入れる（WoL / IPMI / 物理ボタン）。プールは onboot=0 なので手で `qm start` |
 
 ## 定期メンテナンス
 
 - 月 1: base テンプレートの OS 更新
-- トークンの期限が近づいたら（`sandbox token show` の発行日数）`claude setup-token` → `sandbox token rotate`
+- 鍵の期限が近づいたら（`sandbox keys list` の登録日）`claude setup-token` → `sandbox keys token <名前>`（intake 用の `ctl.env` は `sandbox token rotate`）
 - `workspace/runs/` が増えたら、古い run を消すか別置きにする（記録としては `state.json` と `work/` があれば十分）
 - 完了したチケットが増えても、通常は削除する必要はありません。履歴は `kb list --all` で確認できます

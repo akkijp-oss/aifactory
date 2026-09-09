@@ -507,6 +507,27 @@ def read_file(relpath, tail=None, offset=None):
 
 
 # ---------- sandbox
+def env_has_claude_key(path):
+    """env ファイルに無印の Claude の鍵（CLAUDE_CODE_OAUTH_TOKEN=…）が入っているか。有無だけを見て値は持たない"""
+    try: return any(re.match(r"^CLAUDE_CODE_OAUTH_TOKEN=\S", l.strip()) for l in pathlib.Path(path).read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError: return False
+
+
+def key_pool_counts():
+    """鍵プールのうち有効な鍵の数（用途ごと）。sandbox 画面が「この PJ の鍵はどこから来るか」を言うのに使う（ADR-0045）"""
+    ks = [k for k in keys_view().get("keys") or [] if k.get("enabled")]
+    return {"fable": sum(1 for k in ks if k["allow"].get("fable")), "other": sum(1 for k in ks if k["allow"].get("other")), "total": len(ks)}
+
+
+def key_source_for(pj, pool):
+    """この PJ の VM に渡る Claude の鍵の出どころ。pool（両用途ともプール）/ pool_partial（片方だけプール、残りは env）/
+    pj（PJ 別 env。非推奨）/ global（全体の env）/ none。値は見ない（有無だけ）"""
+    if pool["fable"] and pool["other"]: return "pool"
+    fallback = "pj" if env_has_claude_key(SANDBOX_PJ_DIR / f"{pj}.env") else "global" if env_has_claude_key(SANDBOX_STATE.parent / "env") else "none"
+    if pool["fable"] or pool["other"]: return "pool_partial" if fallback != "none" else "pool_partial_nofallback"
+    return fallback
+
+
 def sandbox_env():
     """~/.config/sandbox/env から表示に要る 2 項目だけ読む（トークン等の他の行は読まない）"""
     out = {"SB_DOMAIN": "sb.internal", "APP_PORT": "3000"}
@@ -630,6 +651,7 @@ def sandbox_view():
     # 「実体」は最後に成功した ls の時点の台数。ls を一度も取れていなければ数を作らない（0 台と言い切らない）
     actual = {pj: sum(1 for v in vms if v["pj"] == pj) for pj in known} if last_ok_ls else {}
     tpl = []
+    pool = key_pool_counts()
     for pj in known:
         py = project_yml(pj)
         y = load_yaml(py) if py.exists() else None
@@ -643,6 +665,7 @@ def sandbox_view():
         red_gates += [g for g in recent_red_gates(pj) if g not in red_gates]
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
+                    "key_source": key_source_for(pj, pool),   # VM に渡る Claude の鍵の出どころ（ADR-0045）
                     "lent": n_lent, "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
                     "pool_defined": POOL_PER_PJ, "pool_actual": n_actual, "free": free, "unbuilt": unbuilt,
                     "hint": f"未構築 {unbuilt} 台。proxmox/40-pool.sh {pj} {unbuilt} で足せます" if unbuilt else None,
@@ -664,7 +687,7 @@ def sandbox_view():
                "keys": v.get("keys") if isinstance(v.get("keys"), dict) else None}
               for t, v in sorted(lent.items(), key=lambda kv: _task_key(kv[0])) if isinstance(v, dict)]
     return {"lent": lent, "leases": leases, "state_exists": state_exists, "state_error": state_error,
-            "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE),
+            "urls": urls, "templates": tpl, "pool_per_pj": POOL_PER_PJ, "state_file": str(SANDBOX_STATE), "key_pool": pool,
             "lease_count": sum(1 for v in lent.values() if isinstance(v, dict)), "vm_count": len(by_vmid), "shared": shared,
             "last_ls": last_ls, "last_ok_ls": last_ok_ls, "vms": vms,
             "ls_fetched": fetched, "ls_age_s": age, "ls_stale": bool(age is not None and age > LS_STALE_S),

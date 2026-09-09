@@ -56,3 +56,4 @@
 - [0042: PR は `base_branch`（aifactory は `develop`）宛てに作り、条件を満たせば runner がマージする。main への昇格は人間](0042-auto-merge-into-develop.md)
 - [0043: 鍵の利用枠切れで止まった run は「wip を保全して一時停止し、解除後に機械が続きから回す」](0043-pause-and-resume-on-usage-limit.md)
 - [0044: Claude の鍵は PJ ではなく制御系のプールで持ち、take がフラグで選ぶ](0044-claude-key-pool-in-control-plane.md)
+- [0045: VM に渡す Claude の鍵は鍵プールを正本にし、`sandbox token set <pj> claude` は非推奨にする](0045-key-pool-is-the-source-token-set-deprecated.md)

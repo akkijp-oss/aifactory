@@ -81,15 +81,17 @@ workflow/bin/run
 
 ## 4. Save a Claude Code token per project 🧑
 
-To run Claude Code inside a VM, issue and save a long-lived token per project.
+To run Claude Code inside a VM, issue a long-lived token and register it in the **key pool** (one place, not per project; ADR-0044 / ADR-0045).
 
 ```bash
-claude setup-token                 # authenticate in the browser → the token is printed
-sandbox token set kumitate         # paste it interactively → saved to ~/.config/sandbox/pj/kumitate.env
-sandbox token show kumitate        # masked confirmation
+claude setup-token                              # authenticate in the browser → the token is printed
+sandbox keys add max-akki --fable --other       # paste it interactively → saved to ~/.config/sandbox/keys.json (the console's Keys screen works too)
+sandbox keys list                               # masked confirmation (last 4 characters)
 ```
 
-The per-project file (`~/.config/sandbox/pj/<pj>.env`) also holds `GH_REPO=owner/name`, which the GitHub App uses to scope its token.
+`--fable` marks a key for Fable (planning, design and review steps), `--other` for Opus, Sonnet and Haiku (implementation and research steps); one key may carry both. `sandbox token set <pj>`, the old per-project file, is deprecated.
+
+The per-project file (`~/.config/sandbox/pj/<pj>.env`) holds `GH_REPO=owner/name`, which the GitHub App uses to scope its token.
 
 ```bash
 cat ~/.config/sandbox/pj/kumitate.env
@@ -149,7 +151,7 @@ The rule that keeps your machine in the same shape as any other user's: two clon
 1. Clone both. If you have no workspace yet, start with empty `projects kanban runs logs docs` directories
 2. Point at the workspace: `echo ~/Documents/GitHub/<you>/aifactory-workspace > ~/.config/aifactory/workspace` (or `export AIFACTORY_WORKSPACE=…` in your shell; the variable wins when both exist)
 3. In the framework clone: `pip install pyyaml jsonschema`, `bin/install-hooks.sh` (with gitleaks on PATH), `console/bin/install.sh --launchd`, `sandbox/bin/install.sh`
-4. Enter secrets by hand: `~/.config/sandbox/env` (from `env.example`), `~/.config/sandbox/pj/<pj>.env` (`sandbox token set`), the GitHub App under `~/.config/sandbox/gh-app/`, the ssh key under `~/.ssh/conf.d/aifactory/`. None of these go into any repository
+4. Enter secrets by hand: `~/.config/sandbox/env` (from `env.example`), `~/.config/sandbox/keys.json` (`sandbox keys add`), `~/.config/sandbox/pj/<pj>.env` (`GH_REPO`), the GitHub App under `~/.config/sandbox/gh-app/`, the ssh key under `~/.ssh/conf.d/aifactory/`. None of these go into any repository
 5. Done when `kanban/bin/kb list` and http://127.0.0.1:8765/ show the workspace contents
 
 The workspace is its own private git repository: when tickets and run records accumulate, commit and push there too (they never show up in the framework clone's `git status`).

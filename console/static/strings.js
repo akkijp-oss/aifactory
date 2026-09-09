@@ -38,7 +38,7 @@ const T = {
   "th": {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
     "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
-    "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "トークン", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
+    "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "Claude の鍵", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
     "lentTo": "貸出先", "power": "稼働状態",
     "poolDefined": "定義", "poolActual": "実体", "free": "空き",
     "model": "モデル", "steps": "工程数", "turns": "ターン", "avgTurns": "平均ターン", "avgMin": "平均分", "input": "入力", "cacheWrite": "キャッシュ書込", "cacheRead": "キャッシュ読出", "output": "出力",
@@ -176,7 +176,8 @@ const T = {
     "sharedWith": "チケット {tasks} と同じ VM です。",
     "sharedWarn": "VM {vm}（{vmid}）がチケット {tasks} に同時に貸出中です。同じ VM なので 2 台ではありません。実際の重複か表示のずれかを「一覧を取り直す」で確かめ、どのチケットの作業を残すか決まるまで返却しないでください。",
     "leasesOnPool": "貸出 {n} 件", "runOn": "run が動いています（工程 {step}）", "yes": "あり", "no": "なし",
-    "tokenSaved": "保存済み", "tokenMissing": "未設定", "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした",
+    "keySource": { "pool": "鍵プール", "pool_partial": "鍵プール（片方の用途だけ）", "pool_partial_nofallback": "鍵プール（片方の用途だけ）", "pj": "PJ 別の設定ファイル（非推奨）", "global": "全体の設定ファイル", "none": "未設定" },
+    "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした",
     "actualAt": "実体は {t} 取得", "actualStale": "実体は {t} 取得（{n} 分前）", "actualNever": "実体はまだ取っていません",
     "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。"
   },
@@ -249,7 +250,8 @@ const T = {
     "lsFailed": "Proxmox に届かなかったか、ssh が切れました。ジョブの記録を見てから「一覧を取り直す」を押してください。",
     "pjPool": "定義は設定の台数、実体は Proxmox にある VM の台数です。実体が定義より少ないと、定義の数だけ同時に走らせても貸出のときに空きなしで止まります。",
     "pjPoolMore": "空きは実体から貸出を引いた数です。snapshot clean の無い VM は一覧からは分からないので、空きに数えたまま貸出で飛ばされることがあります。",
-    "pjPoolYml": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
+    "pjPoolYml": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。",
+    "pjPoolKeys": "Claude の鍵は「鍵」画面のプールから選ばれます。プールに Fable 用と Opus・Sonnet 用の両方があれば、PJ 別や全体の設定ファイルの鍵は使われません。値は見ていません（有無だけ）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
     "keysHow": "鍵ごとに、どのモデルに使うかをチェックで決めます。Fable は計画・設計・レビューの工程で、Opus・Sonnet は実装・調査の工程で使うモデルです。両方にチェックを付けた鍵は、どちらにも使われます。",
     "keys": "チケットを実行するとき、モデルごとに、有効でチェックの合う鍵の中から「最後に使ってから一番時間が経っている鍵」を選びます。使用量が特定の鍵に偏らないようにするためです。",

@@ -31,7 +31,7 @@
 
 | 何を | 誰が | 状態 |
 |---|---|---|
-| `claude setup-token` の出力を `sandbox token set <pj>` で保存する（PJ ごと。期限も書く） | メンテナ | |
+| `claude setup-token` の出力を鍵プールに登録する（`sandbox keys add` か console の「鍵」画面。PJ ごとの `token set` は非推奨） | メンテナ | |
 | GitHub App を作り、対象リポジトリの所有アカウント（ユーザー / org）ごとに install する（Actions: Read-only を足すと VM から `gh run list` が使える。任意で Checks: Read-only） | メンテナ | |
 | Step 2b: Tailscale の認証 URL を承認し、route を Approve する | メンテナ | |
 | Step 4: 対象 PJ の選定と、そのリポジトリを読める `gh auth token` | メンテナ | |
