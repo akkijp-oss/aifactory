@@ -55,24 +55,27 @@ A `take` that finds nothing free prints the breakdown and the next move:
 A pool VM that is not lent out keeps holding CPU and memory while it runs. `sandbox idle-stop` stops the pool VMs that are **not lent out and have not been used for a while** (ADR-0033). The systemd timer `aifactory-idle-stop.timer` on the control-plane LXC calls it every 15 minutes.
 
 ```
-sandbox idle-stop [--hours N] [--dry-run]
+sandbox idle-stop [--hours N] [--keep K] [--dry-run]
 ```
 
 | Item | Detail |
 |---|---|
 | Scope | qemu VMs named `sb-<t>-<pj>-NN` that are currently running. The control-plane `ctl` / `gw` are LXCs and never match; `-base` and `-tpl-` are excluded too |
-| Stops when | The vmid is absent from the ledger (`state.json`) and the last use was `N` hours ago or more |
-| Default `N` | `--hours` > `SB_IDLE_STOP_HOURS` > `3`. `0` disables it. Put it in `pj/<pj>.env` to override per project (for a project you want always on) |
+| Candidate when | The vmid is absent from the ledger (`state.json`) and the last use was `N` hours ago or more |
+| Stops when | Candidates are sorted oldest first; the newest `K` are kept running and only the ones beyond them are stopped (with `K` or fewer candidates nothing stops; ADR-0035) |
+| Default `N` | `--hours` > `SB_IDLE_STOP_HOURS` > `24`. `0` disables it. Put it in `pj/<pj>.env` to override per project (for a project you want always on) |
+| Default `K` | `--keep` > `SB_IDLE_STOP_KEEP` > `10`. `0` stops every candidate. Global only (no per-project override) |
 | Last use | `~/.config/sandbox/last-used.json`, updated by `take` / `reset` / `release` / `reinject`. With no record it falls back to the VM's `uptime`; if that is unavailable too, the VM is **left running** |
 | How it stops | `status/shutdown` (120 s timeout; guest agent / ACPI), then `status/stop` if that did not take |
-| Record | `~/.config/sandbox/idle-stop.json` (`hours` / `last_run` / `stopped[]`). The `sandbox ls` footnote, the console and the MCP `sandbox_status` read it |
+| Record | `~/.config/sandbox/idle-stop.json` (`hours` / `keep` / `last_run` / `stopped[]` / `candidates[]` = candidates still running). The `sandbox ls` footnote, the console and the MCP `sandbox_status` read it |
 | `--dry-run` | Prints the verdicts without stopping anything and without writing the record |
 
 Example output:
 
 ```
-[idle-stop] sb-main-kumitate-02 (9205): shutdown（最終利用 3h12m 前、3h 超）
-[idle-stop] 対象 3 台: 停止 1 / 貸出中 1 / 未経過 1 / 不明 0
+[idle-stop] sb-main-kumitate-02 (9205): shutdown（最終利用 51h12m 前、24h 超）
+[idle-stop] sb-main-kumitate-01 (9204): 候補だが残す（最終利用 26h03m 前。新しい方から 10 台の内）
+[idle-stop] 対象 13 台: 候補 11（停止 1 / 残す 10。足切り 10 台）/ 貸出中 1 / 未経過 1 / 不明 0
 ```
 
 **There is no command to start a VM back up.** The next `take` does it: `rollback` starts a stopped VM and waits for ssh. That costs an extra 30–60 seconds, and this line appears in the log:
@@ -120,7 +123,7 @@ The permissions requested are "those we want that the App actually holds". Add a
 
 | File | Contents |
 |---|---|
-| `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`) / `SB_IDLE_STOP_HOURS` (hours of disuse before a VM is stopped; default 3, `0` disables). Skeleton `sandbox/templates/env.example` |
+| `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`) / `SB_IDLE_STOP_HOURS` (hours of disuse before a VM becomes a stop candidate; default 24, `0` disables) / `SB_IDLE_STOP_KEEP` (candidates kept running; default 10). Skeleton `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | Another tenant's settings on the maintainer's machine. `SB_TENANT=<t>` makes `sandbox` and `proxmox/run.sh` read it; state goes to `<t>.state.json`, per-project files to `<t>.pj/` |
 | `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, (fallback `GH_TOKEN`), `SB_IDLE_STOP_HOURS` (override for this project only) |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App. Created by `sandbox/bin/gh-app-setup` |

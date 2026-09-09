@@ -14,7 +14,7 @@
 #   sandbox token clear <pj|global> [claude|gh] トークンを消す
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
-#   sandbox idle-stop [--hours N] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（既定 3 時間。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
+#   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
 # GitHub トークン: ~/.config/sandbox/gh-app/{app.env,private-key.pem} があれば take / reinject / gh-app refresh のたびに
 #   その PJ のリポジトリ（pj/<pj>.env の GH_REPO）だけに効く 1 時間有効の installation token を払い出して注入する（ADR-0008）。
 #   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
@@ -232,10 +232,13 @@ touch_used() { [[ -n "${1:-}" ]] || return 0; with_state_lock _touch_used_raw "$
 # ls / status の脚注。`[` 始まりなので console の parse_ls は捨てる（表の列は増やさない）
 idle_stop_note() {
   [[ -f "$IDLE_STOP_FILE" ]] || return 0
-  local n; n="$(jq -r '(.stopped // []) | length' "$IDLE_STOP_FILE" 2>/dev/null || echo 0)"
-  [[ "$n" =~ ^[0-9]+$ ]] || return 0
-  (( n > 0 )) || return 0
-  echo "[idle-stop] $n 台が節電で停止中（次の take で起動、+30〜60 秒）。最終実行 $(jq -r '.last_run // "?"' "$IDLE_STOP_FILE")"
+  local n c; n="$(jq -r '(.stopped // []) | length' "$IDLE_STOP_FILE" 2>/dev/null || echo 0)"
+  c="$(jq -r '(.candidates // []) | length' "$IDLE_STOP_FILE" 2>/dev/null || echo 0)"
+  [[ "$n" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ ]] || return 0
+  (( n > 0 )) && echo "[idle-stop] $n 台が節電で停止中（次の take で起動、+30〜60 秒）。最終実行 $(jq -r '.last_run // "?"' "$IDLE_STOP_FILE")"
+  # 候補（使われていないが足切りの内なので起動したまま）。候補が増えて足切りを超えると、古いものから止まる
+  (( c > 0 )) && echo "[idle-stop] $c 台が停止候補（最終利用から $(jq -r '.hours // "?"' "$IDLE_STOP_FILE")h 超。$(jq -r '.keep // "?"' "$IDLE_STOP_FILE") 台までは起動したまま残す）"
+  return 0
 }
 
 wait_port() { # ip port tries
@@ -650,10 +653,13 @@ cmd_gh_app() {
   esac
 }
 
-# ---------- idle-stop（使われていないプール VM を止める。次の take が起動し直す。252）
-# 止めるのは「貸出中でない・最終利用から N 時間経った」プール VM だけ。制御系の ctl / gw は LXC なので
-# pve_vms（API モードは qemu 限定）にも名前の除外にも掛からず、対象に入らない。
-# 判定 → shutdown 完了まで 1 台ずつ $STATE.lock を持つ: ロックを出た直後に take が予約すると、その VM は
+# ---------- idle-stop（使われていないプール VM を止める。次の take が起動し直す。252 / 2026-09-09 に足切りを追加）
+# 2 段で決める:
+#   1. 候補にする = 貸出中でなく、最終利用から N 時間（既定 24。SB_IDLE_STOP_HOURS）経ったプール VM
+#   2. 止める     = 候補を最終利用の古い順に並べ、新しい方から K 台（既定 10。SB_IDLE_STOP_KEEP）を残して、それより古いものだけ
+# 候補が K 台以下なら 1 台も止めない（K=0 なら候補を全部止める）。候補のまま残した VM は idle-stop.json の candidates に載せる。
+# 制御系の ctl / gw は LXC なので pve_vms（API モードは qemu 限定）にも名前の除外にも掛からず、対象に入らない。
+# 止める 1 台ごとに、判定のやり直し → shutdown 完了まで $STATE.lock を持つ: ロックを出た直後に take が予約すると、その VM は
 # まだ running・ssh も生きているので rollback() の起動待ちを飛ばし、直後に落ちて run が死ぬ。
 _epoch() { # ISO 8601（オフセット付き。ADR-0026）→ epoch 秒。読めなければ空
   date -d "$1" +%s 2>/dev/null && return 0
@@ -665,12 +671,12 @@ idle_hours_for() { # pj 既定 → その PJ の SB_IDLE_STOP_HOURS
   # load_pj は env を累積 source するので、PJ A の値が PJ B に漏れないようサブシェルで読む
   ( load_pj "$1" >/dev/null 2>&1 || true; echo "${SB_IDLE_STOP_HOURS:-$2}" )
 }
-# _idle_stop_one vmid name hours now dry → 判定を $_idle_verdict に入れる（stopped / lent / fresh / unknown / off / fail）。
-# 止めた VM の記録（idle-stop.json 用）は $_idle_entry に JSON で入る
-_idle_verdict=""; _idle_entry=""
-_idle_stop_one() {
-  local vmid=$1 name=$2 h=$3 now=$4 dry=$5
-  _idle_verdict=unknown; _idle_entry=""
+# _idle_classify vmid name hours now → 判定を $_idle_verdict に入れる（candidate / lent / fresh / unknown / off）。
+# candidate と fresh のとき $_idle_since（最終利用の epoch）/ $_idle_age（秒）/ $_idle_src（最終利用 | 起動から）/ $_idle_last（記録。無ければ空）
+_idle_verdict=""; _idle_since=""; _idle_age=0; _idle_src=""; _idle_last=""; _idle_entry=""
+_idle_classify() {
+  local vmid=$1 name=$2 h=$3 now=$4
+  _idle_verdict=unknown; _idle_since=""; _idle_age=0; _idle_src=""; _idle_last=""
   if (( h == 0 )); then _idle_verdict=off; return 0; fi
   local task; task="$(jq -r --arg v "$vmid" 'to_entries[] | select(.value.vmid==($v|tonumber)) | .key' "$STATE" | paste -sd, -)"
   if [[ -n "$task" ]]; then _idle_verdict=lent; return 0; fi
@@ -681,17 +687,28 @@ _idle_stop_one() {
     local up; up="$(pve_uptime "$vmid" </dev/null || true)"
     if [[ "$up" =~ ^[0-9]+$ ]] && (( up > 0 )); then since=$(( now - up )); src="起動から"; fi
   fi
-  if [[ -z "$since" ]]; then
-    echo "[idle-stop] $name ($vmid): 見送り（最終利用の記録なし・uptime も不明）"
-    _idle_verdict=unknown; return 0
-  fi
+  if [[ -z "$since" ]]; then _idle_verdict=unknown; return 0; fi
   local age=$(( now - since )); (( age < 0 )) && age=0
+  _idle_since=$since; _idle_age=$age; _idle_src=$src; _idle_last=$last
   if (( age < h * 3600 )); then _idle_verdict=fresh; return 0; fi
+  _idle_verdict=candidate; return 0
+}
+# _idle_stop_one vmid name hours now dry → ロックの中で判定し直してから止める。$_idle_verdict は
+# stopped / fail、または判定し直しで候補でなくなったときの lent / fresh / unknown / off。止めた VM の記録は $_idle_entry に JSON で入る
+_idle_stop_one() {
+  local vmid=$1 name=$2 h=$3 now=$4 dry=$5
+  _idle_entry=""
+  _idle_classify "$vmid" "$name" "$h" "$now"
+  case "$_idle_verdict" in
+    candidate) ;;
+    unknown) echo "[idle-stop] $name ($vmid): 見送り（最終利用の記録なし・uptime も不明）"; return 0 ;;
+    *) echo "[idle-stop] ${name} (${vmid}): 見送り（判定のあとに状態が変わった: ${_idle_verdict}）"; return 0 ;;
+  esac
   if (( dry )); then
-    echo "[idle-stop] $name ($vmid): 止める（$src $(_hm "$age") 前、${h}h 超）※ --dry-run なので止めない"
+    echo "[idle-stop] ${name} (${vmid}): 止める（${_idle_src} $(_hm "$_idle_age") 前、${h}h 超）※ --dry-run なので止めない"
     _idle_verdict=stopped; return 0
   fi
-  echo "[idle-stop] $name ($vmid): shutdown（$src $(_hm "$age") 前、${h}h 超）"
+  echo "[idle-stop] ${name} (${vmid}): shutdown（${_idle_src} $(_hm "$_idle_age") 前、${h}h 超）"
   if ! pve_shutdown "$vmid" </dev/null; then
     echo "[warn] $name ($vmid): shutdown が 120 秒で止まらず stop" >&2
     if ! pve_stop "$vmid" </dev/null; then
@@ -699,28 +716,33 @@ _idle_stop_one() {
       _idle_verdict=fail; return 0
     fi
   fi
-  _idle_entry="$(jq -nc --arg v "$vmid" --arg n "$name" --arg a "$(date -Iseconds)" --arg l "$last" \
+  _idle_entry="$(jq -nc --arg v "$vmid" --arg n "$name" --arg a "$(date -Iseconds)" --arg l "$_idle_last" \
     '{vmid:($v|tonumber), name:$n, at:$a, last_used:(if $l == "" then null else $l end)}')"
   _idle_verdict=stopped; return 0
 }
 
-cmd_idle_stop() { # [--hours N] [--dry-run]
-  local hours="" dry=0
+cmd_idle_stop() { # [--hours N] [--keep K] [--dry-run]
+  local hours="" keep="" dry=0
   while (( $# )); do
     case "$1" in
       --hours) hours=${2:?--hours には時間数が要る}; shift 2 ;;
       --hours=*) hours=${1#*=}; shift ;;
+      --keep) keep=${2:?--keep には台数が要る}; shift 2 ;;
+      --keep=*) keep=${1#*=}; shift ;;
       --dry-run) dry=1; shift ;;
-      *) die "usage: sandbox idle-stop [--hours N] [--dry-run]" ;;
+      *) die "usage: sandbox idle-stop [--hours N] [--keep K] [--dry-run]" ;;
     esac
   done
-  [[ -n "$hours" ]] || hours="${SB_IDLE_STOP_HOURS:-3}"
-  [[ "$hours" =~ ^[0-9]+$ ]] || die "idle-stop: 時間数は 0 以上の整数（受け取った値: $hours）"
+  [[ -n "$hours" ]] || hours="${SB_IDLE_STOP_HOURS:-24}"
+  [[ "$hours" =~ ^[0-9]+$ ]] || die "idle-stop: 時間数は 0 以上の整数（受け取った値: ${hours}）"
+  [[ -n "$keep" ]] || keep="${SB_IDLE_STOP_KEEP:-10}"
+  [[ "$keep" =~ ^[0-9]+$ ]] || die "idle-stop: 残す台数（--keep / SB_IDLE_STOP_KEEP）は 0 以上の整数（受け取った値: ${keep}）"
   if (( hours == 0 )); then echo "[idle-stop] 無効（SB_IDLE_STOP_HOURS=0）。何もしない"; return 0; fi
   local all; all="$(pve_vms | awk -v p="^$SB_PREFIX-" '$2 ~ p && $2 !~ /-(base|gw|ctl)$/ && $2 !~ /-tpl-/ {print $1, $2, $3}')"
   local now; now="$(date +%s)"
-  local n_stop=0 n_lent=0 n_fresh=0 n_unknown=0 n_off=0 n_fail=0 total=0
-  local mine="[]" vmid name status pj h
+  local n_stop=0 n_keep=0 n_lent=0 n_fresh=0 n_unknown=0 n_off=0 n_fail=0 total=0 n_cand=0
+  local mine="[]" cands="[]" cand="" vmid name status pj h since src
+  # 1 段目: 候補を集める（ロック無し。止める直前にロックの中で判定し直す）
   while read -r vmid name status; do
     [[ -n "$vmid" ]] || continue
     [[ "$status" == running ]] || continue    # 既に止まっている VM は数えない（前回止めた分は下の still で引き継ぐ）
@@ -729,24 +751,46 @@ cmd_idle_stop() { # [--hours N] [--dry-run]
     h="$hours"
     if [[ -n "$pj" ]]; then h="$(idle_hours_for "$pj" "$hours")"; fi
     [[ "$h" =~ ^[0-9]+$ ]] || h="$hours"
+    _idle_classify "$vmid" "$name" "$h" "$now"
+    case "$_idle_verdict" in
+      candidate) n_cand=$(( n_cand + 1 )); cand+="$_idle_since $vmid $name $h $_idle_src"$'\n' ;;
+      lent) n_lent=$(( n_lent + 1 )) ;;
+      fresh) n_fresh=$(( n_fresh + 1 )) ;;
+      off) n_off=$(( n_off + 1 )) ;;
+      *) echo "[idle-stop] $name ($vmid): 見送り（最終利用の記録なし・uptime も不明）"; n_unknown=$(( n_unknown + 1 )) ;;
+    esac
+  done <<< "$all"
+  # 2 段目: 候補を古い順に並べ、新しい方から $keep 台を残して、それより古いものだけ止める
+  local n_to_stop=$(( n_cand - keep )); (( n_to_stop < 0 )) && n_to_stop=0
+  local i=0
+  while read -r since vmid name h src; do
+    [[ -n "$vmid" ]] || continue
+    i=$(( i + 1 ))
+    if (( i > n_to_stop )); then
+      echo "[idle-stop] ${name} (${vmid}): 候補だが残す（${src} $(_hm $(( now - since ))) 前。新しい方から ${keep} 台の内）"
+      n_keep=$(( n_keep + 1 ))
+      cands="$(jq -c --arg v "$vmid" --arg n "$name" --arg s "$since" \
+        '. + [{vmid:($v|tonumber), name:$n, last_used:($s|tonumber|todate)}]' <<< "$cands")"
+      continue
+    fi
     if (( dry )); then
       _idle_stop_one "$vmid" "$name" "$h" "$now" 1 || true
     else
-      # 判定 → shutdown 完了までロックを持つ（take が予約した直後の VM を止めないため）
+      # 判定のやり直し → shutdown 完了までロックを持つ（take が予約した直後の VM を止めないため）
       state_lock_acquire
       _idle_stop_one "$vmid" "$name" "$h" "$now" 0 || true
       state_lock_release
     fi
     case "$_idle_verdict" in
       stopped) n_stop=$(( n_stop + 1 )); [[ -n "$_idle_entry" ]] && mine="$(jq -c --argjson e "$_idle_entry" '. + [$e]' <<< "$mine")" ;;
-      lent) n_lent=$(( n_lent + 1 )) ;;
-      fresh) n_fresh=$(( n_fresh + 1 )) ;;
-      off) n_off=$(( n_off + 1 )) ;;
       fail) n_fail=$(( n_fail + 1 )) ;;
-      *) n_unknown=$(( n_unknown + 1 )) ;;
+      lent) n_lent=$(( n_lent + 1 )); n_cand=$(( n_cand - 1 )) ;;
+      fresh) n_fresh=$(( n_fresh + 1 )); n_cand=$(( n_cand - 1 )) ;;
+      off) n_off=$(( n_off + 1 )); n_cand=$(( n_cand - 1 )) ;;
+      *) n_unknown=$(( n_unknown + 1 )); n_cand=$(( n_cand - 1 )) ;;
     esac
-  done <<< "$all"
-  local sum="[idle-stop] 対象 $total 台: 停止 $n_stop / 貸出中 $n_lent / 未経過 $n_fresh / 不明 $n_unknown"
+  done <<< "$(sort -n -k1,1 -k2,2 <<< "$cand")"
+  local sum="[idle-stop] 対象 ${total} 台: 候補 ${n_cand}（停止 ${n_stop} / 残す ${n_keep}。足切り ${keep} 台）/ 貸出中 ${n_lent} / 未経過 ${n_fresh} / 不明 ${n_unknown}"
   (( n_off )) && sum="$sum / 対象外 $n_off"
   (( n_fail )) && sum="$sum / 失敗 $n_fail"
   echo "$sum"
@@ -759,8 +803,8 @@ cmd_idle_stop() { # [--hours N] [--dry-run]
     '($mine | map(.vmid|tostring)) as $new
      | $mine + ($prev | map(select((.vmid|tostring) as $v | ($ids | index($v)) != null and ($new | index($v)) == null)))')"
   local tmp; tmp="$(mktemp)"
-  jq -nc --arg h "$hours" --arg t "$(date -Iseconds)" --argjson s "$list" \
-    '{hours:($h|tonumber), last_run:$t, stopped:$s}' > "$tmp" && mv "$tmp" "$IDLE_STOP_FILE"
+  jq -nc --arg h "$hours" --arg k "$keep" --arg t "$(date -Iseconds)" --argjson s "$list" --argjson c "$cands" \
+    '{hours:($h|tonumber), keep:($k|tonumber), last_run:$t, stopped:$s, candidates:$c}' > "$tmp" && mv "$tmp" "$IDLE_STOP_FILE"
 }
 
 cmd_ls() {

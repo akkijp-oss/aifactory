@@ -119,16 +119,17 @@ base を直したら PJ 層も作り直しになる。`30-base-template.sh` → 
 
 ## VM が `stopped` になっている
 
-`sandbox ls` の STATUS が `stopped` なのは、たいてい**故障ではなく節電**です。貸し出されておらず、最後に使われてから 3 時間（既定）経ったプール VM は `sandbox idle-stop` が止めます。表の下に `[idle-stop] N 台が節電で停止中（次の take で起動、+30〜60 秒）` と出ていれば、それです。
+`sandbox ls` の STATUS が `stopped` なのは、たいてい**故障ではなく節電**です。`sandbox idle-stop` は 2 段で決めます: 貸し出されておらず、最後に使われてから 24 時間（既定）経ったプール VM を**停止候補**にし、候補が 10 台（既定。足切り）を超えたぶんだけ、最終利用の古い順に止めます。候補が 10 台以下なら 1 台も止めません。表の下に `[idle-stop] N 台が節電で停止中（次の take で起動、+30〜60 秒）` と出ていれば止まった VM、`[idle-stop] N 台が停止候補` と出ていれば候補のまま起動している VM です（ADR-0035）。
 
 **手で起こす必要はありません**。次の `take` が自動で起動し、ssh が上がるまで待って `[start] vm <vmid>: 停止中だったので起動した（N 秒）` を出します（起こすためだけのコマンドは用意していません。ADR-0033）。
 
 ```bash
-sandbox idle-stop --dry-run     # 何が止まる判定になるか、止めずに見る
-sandbox idle-stop --hours 6     # この 1 回だけ 6 時間に
+sandbox idle-stop --dry-run     # 何が候補になり、何が止まる判定になるか、止めずに見る
+sandbox idle-stop --hours 6     # この 1 回だけ候補の条件を 6 時間に
+sandbox idle-stop --keep 0      # この 1 回だけ足切りなし（候補を全部止める）
 ```
 
-常時起動にしたい PJ は `~/.config/sandbox/pj/<pj>.env` に `SB_IDLE_STOP_HOURS=0`、全体で止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0` を書きます。最終利用は `~/.config/sandbox/last-used.json`、直近の判定結果は `~/.config/sandbox/idle-stop.json` にあります。
+常時起動にしたい PJ は `~/.config/sandbox/pj/<pj>.env` に `SB_IDLE_STOP_HOURS=0`、全体で止めたくないときは `~/.config/sandbox/env` に `SB_IDLE_STOP_HOURS=0` を書きます。足切りの台数は `SB_IDLE_STOP_KEEP`（全体のみ）で変えます。最終利用は `~/.config/sandbox/last-used.json`、直近の判定結果は `~/.config/sandbox/idle-stop.json` にあります。
 
 `stopped` のまま次の `take` でも起動してこないなら故障です。`journalctl -u aifactory-idle-stop` と Proxmox 側を見てください。
 

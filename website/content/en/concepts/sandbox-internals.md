@@ -61,7 +61,7 @@ flowchart LR
 
 ### VMs nobody uses get stopped (idle-stop)
 
-Left alone, a pool VM that is not lent out stays `running` and holds CPU and memory. A systemd timer on the control plane calls `sandbox idle-stop` every 15 minutes, stopping the pool VMs that are **not lent out and were last used more than 3 hours ago** (default, configurable; ADR-0033).
+Left alone, a pool VM that is not lent out stays `running` and holds CPU and memory. A systemd timer on the control plane calls `sandbox idle-stop` every 15 minutes, marking the pool VMs that are **not lent out and were last used more than 24 hours ago** (default, configurable) as candidates and stopping **only the oldest ones beyond a cutoff of 10 candidates** (default, configurable; ADR-0033 / ADR-0035).
 
 - Nothing was added to start them again. `rollback()` — which `take` / `reset` / `release` all go through — already starts a stopped VM and waits for ssh, so the next `take` brings it back. That costs an extra 30–60 seconds and logs `[start] vm <vmid>: 停止中だったので起動した（N 秒）`
 - Last use is kept in a separate `last-used.json`. The lending ledger (`state.json`) drops the entry on return, so it cannot say how long a returned VM has been idle. With no record the VM's `uptime` stands in; if that is unavailable too, the VM is left running

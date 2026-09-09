@@ -441,8 +441,11 @@ async function viewSandbox() {
   /* 停止中の VM が「節電で止めた（次の貸出で起きる）」のか「起きてこない」のかは、idle-stop の一覧に載っているかどうかで分ける */
   const idle = d.idle_stop || null;
   const idleIds = new Set((idle && idle.stopped || []).map(v => String(v.vmid)));
+  /* 停止候補 = 使われないまま既定の時間が経ったが、足切り（keep 台）の内なので起動したまま残している VM。候補が増えると古いものから止まる */
+  const candIds = new Set((idle && idle.candidates || []).map(v => String(v.vmid)));
   const power = (st, vmid) => {
     if (st === 'stopped' && idleIds.has(String(vmid))) return `<span class="st todo" title="${esc(T.help.idleStop)}">${esc(T.power.idle)}</span>`;
+    if (st === 'running' && candIds.has(String(vmid))) return `<span class="st done">${esc(T.power.running)}</span> <span class="tag" title="${esc(T.help.idleCandidate)}">${esc(T.power.candidate)}</span>`;
     return T.power[st] ? `<span class="st ${st === 'running' ? 'done' : 'todo'}">${esc(T.power[st])}</span>` : `<span class="tag">${esc(st)}</span>`;
   };
   const runOf = task => o && o.runs_active.find(r => String(r.task) === String(task));
@@ -470,7 +473,7 @@ async function viewSandbox() {
       ${d.vms.length ? `<table class="top"><tr><th>${esc(T.th.lentTo)}</th><th>VM</th><th>IP</th><th>${esc(T.label.pj)}</th><th>${esc(T.th.power)}</th><th>${esc(T.th.lentSince)}</th></tr>
         ${d.vms.map(v => `<tr><td>${v.task ? lentToCell(v.task) : `<span class="tag">${esc(T.label.vacant)}</span>`}</td><td class="mono nw">${esc(v.name)}</td><td class="mono nw">${esc(v.ip)}</td><td>${esc(v.pj || '')}</td><td>${power(v.status, v.vmid)}</td><td class="nw">${v.since ? `${fmtT(v.since)}（${since(v.since)}）` : ''}</td></tr>`).join('')}</table>
         <div class="help top">${esc(T.help.lsAxes)}</div>
-        ${idle && idle.hours ? `<div class="help">${esc(tt(T.help.idleStopAxes, { h: idle.hours }))}</div>` : ''}` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
+        ${idle && idle.hours ? `<div class="help">${esc(tt(T.help.idleStopAxes, { h: idle.hours, k: idle.keep == null ? 0 : idle.keep }))}</div>` : ''}` : d.last_ok_ls ? `<div class="help top">${esc(T.empty.lsVms)}</div>` : lsFailed ? '' : `<div class="help">${esc(T.empty.ls)}</div>`}</div>`);
   schedule(viewSandbox, 10000);
 }
 
