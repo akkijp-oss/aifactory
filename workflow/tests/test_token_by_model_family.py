@@ -73,8 +73,10 @@ class InjectEnvFamilyLinesTest(unittest.TestCase):
     def lines(self, **env):
         text = SCRIPT.read_text()
         fn = text[text.index('claude_family_lines() {'):text.index('inject_env() {')]
+        # VM の中で回すと /run/sandbox/env の CLAUDE_CODE_OAUTH_TOKEN_* が bash に引き継がれて期待と食い違うので、鍵の変数は引き継がない
+        base = {k: v for k, v in os.environ.items() if not k.startswith('CLAUDE_CODE_OAUTH_TOKEN')}
         r = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + fn + 'claude_family_lines\n'], text=True,
-                           env={**os.environ, **env}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           env={**base, **env}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout.splitlines()
 
@@ -83,11 +85,7 @@ class InjectEnvFamilyLinesTest(unittest.TestCase):
                          ['CLAUDE_CODE_OAUTH_TOKEN_FABLE=f1', 'CLAUDE_CODE_OAUTH_TOKEN_SONNET=s1'])
 
     def test_nothing_when_no_family_key_is_set(self):
-        env = {k: v for k, v in os.environ.items() if not k.startswith('CLAUDE_CODE_OAUTH_TOKEN')}
-        r = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + SCRIPT.read_text()[SCRIPT.read_text().index('claude_family_lines() {'):SCRIPT.read_text().index('inject_env() {')] + 'claude_family_lines\n'],
-                           text=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout, '')
+        self.assertEqual(self.lines(), [])
 
 
 class RunnerTokenFamilyTest(unittest.TestCase):
