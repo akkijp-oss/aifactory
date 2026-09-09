@@ -1,0 +1,15 @@
+# aifactory: 鍵の利用枠切れ（トークン切れ）で一時停止した run を、解除時刻を過ぎたら続きから回し直す（チケット 380 / ADR-0043）。timer が 5 分ごとに起動する
+# 対象は kb が todo に戻した「一時停止中」のチケットだけ（`kb resumable`）。他の todo には手を付けない。回すものが無ければ何もしない
+# sandbox/bin/install.sh --systemd が @@USER@@ / @@HOME@@ / @@PATH@@ / @@REPO@@ を埋めて置く。ログ: journalctl -u aifactory-resume と $AIFACTORY_WORKSPACE/logs/dispatch.log
+[Unit]
+Description=aifactory: resume runs paused by the Claude usage limit
+
+[Service]
+Type=oneshot
+User=@@USER@@
+WorkingDirectory=@@REPO@@
+Environment=HOME=@@HOME@@
+Environment=PATH=@@PATH@@
+Environment=LANG=ja_JP.UTF-8
+EnvironmentFile=-@@HOME@@/.config/aifactory/ctl.env
+ExecStart=/usr/bin/python3 @@REPO@@/glue/bin/dispatch --resume-paused

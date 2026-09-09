@@ -78,7 +78,7 @@ class InstallSystemdTest(unittest.TestCase):
     def test_every_timer_is_enabled_and_started(self):
         self.assertEqual(self.run_install("--systemd").returncode, 0)
         enabled = re.findall(r"^systemctl enable --now (\S+)$", self.calls_text(), re.M)   # sudo 経由の重複を数えない
-        self.assertEqual(sorted(enabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer"])
+        self.assertEqual(sorted(enabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer", "aifactory-resume.timer"])
         self.assertIn("systemctl daemon-reload", self.calls_text())
 
     def test_the_cli_is_copied_too(self):
@@ -92,7 +92,18 @@ class InstallSystemdTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.unit_names(), [])
         disabled = re.findall(r"^systemctl disable --now (\S+)$", self.calls_text(), re.M)
-        self.assertEqual(sorted(disabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer"])
+        self.assertEqual(sorted(disabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer", "aifactory-resume.timer"])
+
+    def test_resume_timer_calls_dispatch_in_the_checkout_every_5_minutes(self):
+        """利用枠切れで止まった run の続きは checkout の dispatch --resume-paused が回す（380）。@@REPO@@ はこの checkout に埋まる"""
+        self.assertEqual(self.run_install("--systemd").returncode, 0)
+        svc = (self.units / "aifactory-resume.service").read_text()
+        self.assertIn(f"ExecStart=/usr/bin/python3 {REPO}/glue/bin/dispatch --resume-paused", svc)
+        self.assertIn(f"WorkingDirectory={REPO}", svc)
+        self.assertIn(f"EnvironmentFile=-{self.home}/.config/aifactory/ctl.env", svc)
+        timer = (TEMPLATES / "aifactory-resume.timer").read_text()
+        self.assertIn("OnUnitActiveSec=5min", timer)
+        self.assertIn("Unit=aifactory-resume.service", timer)
 
     def test_idle_stop_timer_runs_every_15_minutes(self):
         """止まっている時間が長いほど節電になるが、次の take の待ちは増やせない。15 分ごと"""

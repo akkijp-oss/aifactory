@@ -28,6 +28,21 @@ sandbox reinject --all
 
 `sandbox token rotate` は制御系（`~/.config/aifactory/ctl.env` のあるホスト）で実行します。保存した日は各ファイルにコメントで残るので、`sandbox token show` の「発行から N 日」で期限が近いことに気づけます。
 
+### 利用枠切れ（トークン切れ）は自動で続きから再開する
+
+鍵の**利用枠**（5 時間 / 7 日の窓）を使い切ると、エージェントの工程は `claude -p` が拒否されて止まります。runner はこれを普通の失敗と分けて扱い、途中までの変更を `wip: usage limit` としてコミットして退避ブランチに保全し、チケットを **未着手（todo）に戻します**（メモに「一時停止」と解除見込み時刻）。制御系の systemd timer `aifactory-resume.timer` が 5 分ごとに `dispatch --resume-paused` を呼び、解除時刻を過ぎたものから `kb run <id> --from` で**続き**（同じ工程を退避ブランチの上で）を回します。人が何かする必要はありません（ADR-0043）。
+
+```bash
+kb resumable                             # 一時停止中のチケットと、いつから続きを回せるか
+dispatch --resume-paused                 # 今すぐ回す（timer と同じこと）
+journalctl -u aifactory-resume           # timer のログ。回したものは workspace/logs/dispatch.log にも
+kb run <id> --from                       # 手で続きを回す（メモに入っているコマンド）
+```
+
+- 解除時刻が記録に無い回（CLI の出力に `rate_limit_event` が無かった）は、止まってから `AIFACTORY_RESUME_BACKOFF_MIN` 分（既定 30）で試します
+- 続けて `AIFACTORY_RESUME_MAX_HITS` 回（既定 6）止まったら自動再開をやめて `blocked` にします（鍵の枠が小さすぎる等）。どちらも `ctl.env` で変えられます
+- 鍵そのものが無効・失効・残高不足（`failure: key`）のときは待っても戻らないので `blocked` です。上の手順で鍵を直してから `kb run <id> --from` で続きを回します
+
 ### GitHub のトークン（自動）
 
 GitHub App の installation token は 1 時間で切れます。制御系の systemd timer `aifactory-gh-refresh.timer` が 45 分ごとに貸出中の VM へ払い出し直し、runner もスクリプトが担当する工程の前に払い出し直します。手動なら:
@@ -116,7 +131,8 @@ sandbox release 999
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | なければ破棄して `40-pool.sh` |
 | VM から外に出られない | `iptables -t nat -S \| grep 10.77`、`pve-firewall status` | SDN 再適用 `pvesh set /cluster/sdn`。LAN・他 VM・tailnet 宛ては仕様で不可 |
 | Mac から VM に届かない（ファイアウォール有効化後） | `/etc/pve/firewall/<vmid>.fw`、`qm config <vmid> \| grep firewall` | `50-firewall.sh` を再実行 |
-| Claude Code が認証エラー | VM 内 `env \| grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show` の発行日数 | `claude setup-token` → `sandbox token rotate`（全 PJ・`ctl.env`・再注入まで 1 コマンド） |
+| Claude Code が認証エラー | VM 内 `env \| grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show` の発行日数 | `claude setup-token` → `sandbox token rotate`（全 PJ・`ctl.env`・再注入まで 1 コマンド）。止まった run は `kb run <id> --from` で続きから |
+| 工程が「利用枠の上限」で止まった（チケットが未着手に戻り、メモに一時停止） | `kb resumable`、`journalctl -u aifactory-resume` | 何もしない。解除時刻を過ぎると timer が続きを回す。急ぐなら別の鍵を `sandbox token set` して `dispatch --resume-paused` |
 | Proxmox ホストが落ちた | `ssh $PVE_HOST` 不可、`pvecm nodes`（クラスタなら別ノードから） | 電源を入れる（WoL / IPMI / 物理ボタン）。プールは onboot=0 なので手で `qm start` |
 
 ## 定期メンテナンス

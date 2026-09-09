@@ -373,6 +373,15 @@ def run_outcome(d, s, state, wf, files):
         if last.get("failure") == "timeout":
             o["reason"] = "step_timeout"; o["timeout_min"] = last.get("timeout_min")
             o["error_summary"] = last_line(state.get("error"))
+        # 鍵の利用枠の上限（quota）/ 鍵そのもの（key）で止まった工程（チケット 380 / ADR-0043）。工程の失敗ではない。
+        # quota はチケットが todo に戻っていて、解除時刻（retry_after）の後に timer が続きを回す。key は人が鍵を直す
+        if last.get("failure") in ("quota", "key"):
+            o["reason"] = "quota_paused" if last["failure"] == "quota" else "key_failed"
+            o["quota_type"] = state.get("quota_type") or last.get("quota_type")
+            o["retry_after"] = ts_aware(state.get("retry_after") or last.get("retry_after"))
+            o["quota_hits"] = int(state.get("quota_hits") or 0)
+            o["quota_max_hits"] = int(os.environ.get("AIFACTORY_RESUME_MAX_HITS") or 6)   # kb と同じ上限（超えたら自動再開は止まっている）
+            o["error_summary"] = last_line(state.get("error"))
         by_name = {f["name"]: f for f in files}
         if "gates.txt" in (sd.get("outputs") or []) and "work/gates.txt" in by_name:
             o["gate_fails"] = gate_fails(d / "work" / "gates.txt")

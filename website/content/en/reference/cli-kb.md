@@ -71,6 +71,7 @@ kb list --pj kumitate --all      # by project; --all includes done
 kb show 204                      # all fields + body
 kb next                          # the oldest todo
 kb next --pj kumitate --json     # JSON (for dispatch and external tools; path holds the body's absolute path)
+kb resumable [--pj P] [--json]   # tickets paused by the Claude usage limit, and whether their reset time has passed (read by dispatch --resume-paused; ADR-0043)
 ```
 
 ### Advancing state
@@ -153,6 +154,8 @@ With `--from`, a run that ended at `human` is redone **on a new VM**, continuing
 | `pr_url` present | review | PR URL |
 | `result: end`, no PR | done | Finished without a PR (research etc.) |
 | `result: human`, no PR | blocked | Handed to a human (wip branch) |
+| `result: human`, `failure: quota` (Claude usage limit) | **todo** | paused; after `retry_after` (the reset time) `dispatch --resume-paused` continues it with `kb run --from`. Once `quota_hits` reaches `AIFACTORY_RESUME_MAX_HITS` (default 6) it becomes blocked |
+| `result: human`, `failure: key` (token invalid, expired or out of credit) | blocked | fix the token, then `kb run --from` (the note holds the command) |
 | `result: failed` | blocked | Could not take a VM, so no step ran (the last line of `error` goes into the note) |
 | `result: failed` with `failure: wait_timeout` | todo | `--wait` ran out before a VM came free. There is nothing to fix, so the ticket goes back to todo |
 | No `finished`, runner exited non-zero | blocked | Runner exited without a record, rc=N |

@@ -28,6 +28,21 @@ sandbox reinject --all
 
 Run `sandbox token rotate` on the control plane (the host that has `~/.config/aifactory/ctl.env`). The day each token was saved is recorded as a comment in the file, so `sandbox token show` can tell you how many days ago that was.
 
+### Running out of usage (the usage limit) resumes by itself
+
+When the token's **usage limit** (the 5-hour or 7-day window) is used up, `claude -p` is rejected and the agent step stops. The runner treats this apart from an ordinary failure: it commits whatever was changed so far as `wip: usage limit`, pushes it to the wip branch, and puts the ticket **back to todo** (the note says it is paused and when the limit is expected to reset). The control plane's systemd timer `aifactory-resume.timer` calls `dispatch --resume-paused` every 5 minutes, and once the reset time has passed it **continues** the run with `kb run <id> --from` (the same step, on top of the wip branch). Nobody has to do anything (ADR-0043).
+
+```bash
+kb resumable                             # paused tickets and when each can continue
+dispatch --resume-paused                 # do it now (what the timer does)
+journalctl -u aifactory-resume           # timer log; runs also land in workspace/logs/dispatch.log
+kb run <id> --from                       # continue by hand (the command is in the note)
+```
+
+- When no reset time was recorded (the CLI output had no `rate_limit_event`), the retry happens `AIFACTORY_RESUME_BACKOFF_MIN` minutes (default 30) after the stop
+- After `AIFACTORY_RESUME_MAX_HITS` stops in a row (default 6) the automatic resume gives up and the ticket becomes `blocked` (the token's window is too small, etc.). Both can be set in `ctl.env`
+- If the token itself is invalid, expired or out of credit (`failure: key`), waiting does not help, so the ticket is `blocked`. Fix the token as above and continue with `kb run <id> --from`
+
 ### GitHub token (automatic)
 
 GitHub App installation tokens expire after one hour. The systemd timer `aifactory-gh-refresh.timer` on the control plane reissues them to every lent VM every 45 minutes, and the runner reissues before each code step. By hand:
@@ -117,6 +132,7 @@ sandbox release 999
 | VM has no internet | `iptables -t nat -S \| grep 10.77`, `pve-firewall status` | Reapply SDN with `pvesh set /cluster/sdn`. LAN / other VMs / tailnet are unreachable by design |
 | Mac cannot reach a VM (after enabling the firewall) | `/etc/pve/firewall/<vmid>.fw`, `qm config <vmid> \| grep firewall` | Rerun `50-firewall.sh` |
 | Claude Code authentication error | `env \| grep CLAUDE_CODE_OAUTH_TOKEN` inside the VM; the age shown by `sandbox token show` | `claude setup-token` → `sandbox token rotate` (every project, `ctl.env` and re-injection in one command) |
+| A step stopped at the usage limit (ticket back to todo, note says paused) | `kb resumable`, `journalctl -u aifactory-resume` | Nothing. Once the reset time passes the timer continues the run. In a hurry, `sandbox token set` another token and run `dispatch --resume-paused` |
 | The Proxmox host is down | `ssh $PVE_HOST` fails, `pvecm nodes` (from another node if clustered) | Power it on (WoL / IPMI / the physical button). The pool has onboot=0, so `qm start` by hand |
 
 ## Periodic maintenance
