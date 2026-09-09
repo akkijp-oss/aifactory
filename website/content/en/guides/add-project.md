@@ -90,6 +90,7 @@ hotfix_base: main             # target for hotfix (defaults to base_branch)
 app_dir: /home/dev/app        # the app directory inside the VM (becomes cwd)
 url: http://localhost:3000    # the app URL as seen from inside the VM
 gates: gates.sh               # the gate script in the same directory
+prepare: prepare.sh           # optional. Aligns the environment with base right after checkout
 stack: "pnpm 10 monorepo / Node 22 / Next.js / PostgreSQL 16 / vitest"
 facts:                        # facts told to the agent every time. One line per item
   - "Dependencies: `pnpm install --frozen-lockfile`. pnpm is pinned by packageManager"
@@ -109,6 +110,7 @@ known_red_gates: []           # gates already red on base. Remove once the fixin
 | `stack` | Recommended | One line. Appears at the top of the prompt |
 | `facts` | Recommended | How to run tests, where generated files go, known issues. **Do not write rules that apply to every project** (those go in `roles/_common.md`) |
 | `review_points` / `forbidden` | Recommended | Project-specific checks and prohibitions |
+| `prepare` | If needed | Setup script run right after checkout. Closes the gap between the VM template and base (dependencies, migrations) |
 | `known_red_gates` | If needed | The runner downgrades those FAILs to INFO and does not send the agent back to "fix it" |
 | `workflow_overrides` | Rare | Workflow name → `base_branch` override |
 
@@ -122,7 +124,11 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 cd "${SANDBOX_APP_DIR:-$HOME/app}"
 mkdir -p "$HOME/gates"; rc=0
-gate() { local name=$1; shift; if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi; }
+SELECT="$*"   # with arguments, run only those gates (the runner uses this to check base)
+gate() { local name=$1; shift
+  if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
+  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+}
 gate typecheck pnpm --filter @myapp/web typecheck
 gate lint      pnpm --filter @myapp/web lint
 gate test      pnpm --filter @myapp/web test
@@ -130,6 +136,20 @@ exit $rc
 ```
 
 Anything you want treated as information (red does not stop the run) should print `INFO` instead of going through `gate`, or be listed in `known_red_gates`. Most of the run time is spent here, so start with "the same as CI" and think about incremental runs later if it is too slow. For Rails, line up `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` in the same way.
+
+When a gate is red, the runner runs **only that gate** against base as well, and does not send it back to the implementer if it is red on base too. The `SELECT` line above is the contract that makes this possible (with no arguments everything runs, as before).
+
+**Do not put dependency installs or migrations in the gates.** That is setup done before you measure quality, and a failure there belongs to a different audience (a red gate goes to the implementing agent, a failed setup goes to a human). Put setup in `prepare.sh` and name it in `project.yml` under `prepare`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${SANDBOX_APP_DIR:-$HOME/app}"
+pnpm install --frozen-lockfile
+pnpm --filter @myapp/db db:migrate
+```
+
+The VM rolls back to its template after every run while base moves on; `prepare` closes that gap. If it fails, the runner ends the run without starting any agent (`failure: prepare`).
 
 ## 5. Save the tokens 🧑
 
