@@ -1,0 +1,2 @@
+### Fixed
+- **pull worker（macOS / Windows / Linux）を他の run が使っている間、`kb run --wait N` が待つようになった**。共有の 1 台を別 PJ の run が押さえていると、`--wait` を付けていても 0 秒で `failed` になりチケットが `blocked` に落ちていた。Proxmox のプール満杯と同じ「待てば解ける失敗」として扱い、待っている間は `wait-vm`（console に「VM の空き待ち」）と見える。上限を超えた run と `--wait` 無しの run はチケットを `todo` のまま残し、note に「どの run がいつから使っているか」を書く（空き次第 dispatch が拾う）。「調べられるよう lease は残す」の記録も、この run 自身の lease が残っているときだけ出る（ADR-0049）。

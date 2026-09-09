@@ -60,3 +60,4 @@
 - [0046: 要る用途の Claude の鍵が鍵プールに無ければ、env の鍵に落ちず一時停止し、鍵が登録されたら機械が回し直す](0046-pause-when-no-key.md)
 - [0047: `--resume` の開始工程は `next` ではなく工程履歴から決め、続きが無い run は VM に触る前に止める](0047-resume-start-step-from-history.md)
 - [0048: チケットの `note` は先頭の `[run] ` 行だけが機械のもので、残りの行は人のもの](0048-run-note-line-keeps-human-note.md)
+- [0049: pull worker を他の run が使っているのは「待てば解ける失敗」（`PoolBusy`）として扱う](0049-pull-worker-lease-wait-is-pool-busy.md)

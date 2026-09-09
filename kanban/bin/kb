@@ -572,8 +572,14 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
         elif result == "failed" and s.get("failure") == "wait_timeout":
             # --wait で空きを待ったが出なかった run。直す所は無い（VM が空けば回る）ので、人間待ちにせず todo に戻す（242）
             status = "todo"
-            note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
-                    "空きが出たら kb run --wait / dispatch --wait で再開")
+            why = (s.get("wait_reason") or "").strip()
+            if why:
+                # pull worker（macOS / Windows / Linux）は PJ を跨ぐ共有資源。誰がいつから使っているかを
+                # runner がそのまま書いてくるので、板にも同じ事実を置く（推し量らない。373）
+                note = f"{why[:160]}。空き次第 dispatch が拾う（急ぐなら kb run {tid} --wait <分>）"
+            else:
+                note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
+                        "空きが出たら kb run --wait / dispatch --wait で再開")
         elif result == "failed" and s.get("failure") == "nokey":
             # 要る用途の Claude の鍵が鍵プールに無く、VM を取らずに止まった run（ADR-0046）。鍵が登録されれば回せるので todo に戻し、
             # dispatch --resume-paused（timer）が鍵の登録を見て初めから回し直す。人が直すのは鍵の登録だけ

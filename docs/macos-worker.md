@@ -103,6 +103,8 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 ワーカーの `online` と `info` 内の `lifecycle`・`base_ready`・`network_ready`、予約状態を確認する。直接開始したrunは、onlineのワーカーの基準VM・Softnet準備を最大6時間待てる（`AIFACTORY_MAC_PREPARE_WAIT_S` で変更）。その間はVMもleaseも割り当てない。dispatchは未準備・offline・予約中のワーカーを見送る。
 
+ワーカーはPJを跨いで共有する1台である（`project.yml` の `worker` に同じidを書いた複数のPJが同じMacを使う）。別のrunがleaseを持っている間、`kb run <ID> --wait <分>` はそのleaseが空くまで最大その分数だけ待ってから開始する。待っている間は `state.json` の `current` が `wait-vm` になり、consoleには「VMの空き待ち」と出る（VMもleaseも割り当てない）。上限まで空かなかったrunと `--wait` を付けなかったrunは、チケットをblockedにせずtodoのまま残し、`state.json` の `wait_reason` とチケットのnoteに「どのrunがいつから使っているか」を書く。空き次第dispatchが同じチケットを拾うので、人が投入し直す必要はない。offlineやlifecycle未設定のワーカーは待たずに人へ返す（ADR-0049）。
+
 ## 成果物と終了確認
 
 `$AIFACTORY_WORKSPACE/runs/<run>/` に記録される。

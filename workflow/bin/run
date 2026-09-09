@@ -20,8 +20,10 @@
               「前回の結果（直すこと）」として依頼文に入る。--resume とは別物（あちらは貸出中の同じ VM で続ける）
 - --branch  : --from のとき、続きに使うブランチ（既定は前回の state.json の `wip_branch`）。origin/<名前> から作業ブランチを作る
 - --wait    : プールに空きが無い（sandbox take が「空きなし」）とき、失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限を指定。チケット 242）
+              pull backend（macOS / Windows / Linux）では「worker を他の run が使っている」＝ lease / 前の操作の競合を同じ待ちに乗せる（373 / ADR-0049）。
               待っている間は state.json の `current` が `wait-vm`（console のジョブ一覧・run 画面・MCP に「VM の空き待ち」と出る）。
-              再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す
+              再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す。
+              worker の取り合いは `--wait` 無しでも `wait_timeout`（誰が使っているかを `wait_reason` に残す）で終わり、チケットは todo のまま（blocked にしない）
 
 agent が Claude の鍵の利用枠（5 時間 / 7 日の窓、429）で止まったら、追跡済みの変更を `wip: usage limit` としてコミットして wip ブランチに
 保全し、戻しの回数を消費せず human で終わる（state.json に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は
@@ -131,13 +133,20 @@ class NoKey(RuntimeError):
 
 
 class PoolBusy(RuntimeError):
-    """sandbox take がプール満杯で失敗した（待てば空く見込みがある失敗。--wait のときだけ再試行する）"""
+    """VM / worker が塞がっていて take できなかった（待てば空く見込みがある失敗。--wait のときだけ再試行する）。
+
+    reason は「誰がいつから使っているか」の 1 行（pull backend が入れる。チケット 373）。これがある失敗は
+    「直す所が無い」ので、--wait を付けていなくてもチケットは todo に戻す（kb が wait_reason を note に写す）。
+    Proxmox のプール満杯（sandbox take の「空きなし」）は従来どおり reason 無し"""
+    def __init__(self, msg, reason=""):
+        super().__init__(msg); self.reason = reason
 
 
 class PoolTimeout(RuntimeError):
-    """--wait の上限まで待っても空きが出なかった。チケットは todo に戻す（kb が failure: wait_timeout を見る）"""
-    def __init__(self, msg, waited_s):
-        super().__init__(msg); self.waited_s = waited_s
+    """--wait の上限まで待っても空きが出なかった。チケットは todo に戻す（kb が failure: wait_timeout を見る）。
+    why は最後に見た待ちの理由（PoolBusy.reason。kb の note に出る）"""
+    def __init__(self, msg, waited_s, why=""):
+        super().__init__(msg); self.waited_s = waited_s; self.why = why
 
 
 class PrepareFailed(RuntimeError):
@@ -296,6 +305,11 @@ def resume_start(state, steps):
 
 
 class Run:
+    # backend（macos / windows / linux）が「待てば解ける失敗」を上げるための入口。
+    # backend は Run クラスしか受け取らないので、例外の種類はクラス属性で渡す（チケット 373）
+    PoolBusy = PoolBusy
+    PoolTimeout = PoolTimeout
+
     def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
         self.wait_s = wait_s        # プールに空きが無いときに待つ上限（秒。0 なら待たずに失敗する）
@@ -560,6 +574,7 @@ class Run:
                 return self.take()
             except PoolBusy as e:
                 if not self.wait_s: raise
+                reason = getattr(e, "reason", "")
                 if started is None:
                     started = time.time()
                     # since は待ち始めの 1 度だけ（毎回書き直すと console の経過時間が振り出しに戻る）
@@ -569,7 +584,7 @@ class Run:
                 waited = int(time.time() - started)
                 why = ([l.strip() for l in str(e).splitlines() if l.strip()] or ["(理由なし)"])[-1]
                 if waited >= self.wait_s:
-                    raise PoolTimeout(f"VM の空き待ちが上限 {self.wait_s // 60} 分（{self.wait_s} 秒）を超えました。{waited} 秒待機: {why}", waited)
+                    raise PoolTimeout(f"VM の空き待ちが上限 {self.wait_s // 60} 分（{self.wait_s} 秒）を超えました。{waited} 秒待機: {why}", waited, reason)
                 self.log(f"VM 空き待ち {waited // 60} 分（上限 {self.wait_s // 60} 分）: {why}")
                 time.sleep(poll)
 
@@ -930,7 +945,7 @@ class Run:
         t = step.get("on_fail")
         return t["goto"] if isinstance(t, dict) and t.get("goto") in self.steps else step["id"]
 
-    def fail_before_start(self, e, failure=None, waited_s=None):
+    def fail_before_start(self, e, failure=None, waited_s=None, wait_reason=None):
         """take（VM の取得と準備）で落ちたときの終わり方。工程は 1 つも走っていないので、記録に理由を残して人間へ返す（チケット 238）。
         記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう。
         failure は「同じ failed でも扱いが違う終わり方」の目印。kb と console がこれを見て見せ方と次の一手を変える。
@@ -941,6 +956,8 @@ class Run:
                            "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
         if failure: self.state["failure"] = failure
         if waited_s is not None: self.state["waited_s"] = int(waited_s)   # 待っていない終わり方に「0 秒待った」と書かない
+        # 「誰がいつから使っているか」（pull backend の worker 競合）。kb がそのまま note に写す（373）
+        if wait_reason: self.state["wait_reason"] = wait_reason
         self.save()
         self.log(f"take failed: {([l for l in err.splitlines() if l.strip()] or ['(理由なし)'])[-1]}")
         # take が通った後（fetch など）で落ちると VM は貸出中のまま。sandbox backend では返す（take 自体が失敗したなら貸出は無い）。
@@ -949,7 +966,12 @@ class Run:
             try: self.release()
             except Exception as e2: self.log(f"release も失敗: {e2}")
         elif type(self).release is not Run.release:
-            self.log(f"{getattr(self, 'backend_label', 'pull')}: 調べられるよう lease は残す")
+            # lease を取れていない失敗（他 run が使用中、worker が offline）で「lease は残す」と言うと、
+            # 自分の lease が残っていると読めて調査を空振りさせる（373）。取れているときだけ言う
+            if self.state.get("lease"):
+                self.log(f"{getattr(self, 'backend_label', 'pull')}: 調べられるよう lease は残す")
+            else:
+                self.log(f"{getattr(self, 'backend_label', 'pull')}: lease は取っていない（この run が使っている worker は無い）")
         self.log(f"result: failed  run: {self.run_dir}")
         return 2
 
@@ -964,7 +986,12 @@ class Run:
         try:
             self.take_waiting()
         except PoolTimeout as e:
-            return self.fail_before_start(e, failure="wait_timeout", waited_s=e.waited_s)
+            return self.fail_before_start(e, failure="wait_timeout", waited_s=e.waited_s, wait_reason=e.why)
+        except PoolBusy as e:
+            # --wait を付けずに worker が他 run に使われていた（pull backend）。待てば解ける失敗なので、
+            # 人間待ち（blocked）ではなく todo に戻す。理由が無い失敗（Proxmox のプール満杯）は従来どおり即 failed（373）
+            if not getattr(e, "reason", ""): return self.fail_before_start(e)
+            return self.fail_before_start(e, failure="wait_timeout", wait_reason=e.reason)
         except PrepareFailed as e:
             # 準備で落ちた run。直す所は VM か prepare.sh 側にあるので、agent を起こさず人間へ返す（330）
             return self.fail_before_start(e, failure="prepare")

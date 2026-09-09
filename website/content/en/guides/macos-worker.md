@@ -103,6 +103,8 @@ Through MCP, call `ticket_run` for the ticket and monitor the returned job ID wi
 
 Check `online`, `lifecycle` / `base_ready` / `network_ready` under `info`, and the lease. A directly started run can wait up to six hours for an online worker's base VM or Softnet setup, configurable with `AIFACTORY_MAC_PREPARE_WAIT_S`. No VM or lease is allocated while waiting. Dispatch skips unready, offline, or leased workers.
 
+A worker is a single machine shared across projects (several projects may name the same worker id in `project.yml`). While another run holds the lease, `kb run <ID> --wait <minutes>` waits up to that many minutes for the lease to be released before starting. While waiting, `current` in `state.json` is `wait-vm` and the console shows "waiting for a free VM"; no VM or lease is allocated. A run that reaches the limit, and a run started without `--wait`, leave the ticket in `todo` instead of `blocked` and record which run has held the worker since when, in `wait_reason` in `state.json` and in the ticket note. Dispatch picks the ticket up once the worker is free, so no manual resubmission is needed. Offline workers and workers without lifecycle support are returned to a human immediately rather than waited on (ADR-0049).
+
 ## Artifacts and completion
 
 Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
