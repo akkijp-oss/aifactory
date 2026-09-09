@@ -10,6 +10,8 @@
 # runner から次の env で呼ばれる: PJ TASK RUN_DIR PROJECT_DIR GATES WORK BASE BRANCH KNOWN_RED
 set -uo pipefail
 : "${TASK:?}" "${PROJECT_DIR:?}" "${GATES:?}" "${WORK:?}"
+# ログの転記は秘密の形（sk-ant-… / gh*_ / KEY=値）を伏せてから run に置く（scrub.sh。PR 本文にも同じものが通る）
+SCRUB="$(dirname "${BASH_SOURCE[0]}")/scrub.sh"
 GATES_LOG_LINES="${GATES_LOG_LINES:-300}"           # work/gates/<name>.log に残す末尾の行数
 GATES_LOG_MAX_BYTES="${GATES_LOG_MAX_BYTES:-204800}"  # 1 ゲートあたりの上限。超える分は末尾を優先して切る
 GATES_LOG_RE='✗|×|FAIL|Error|error:|Traceback'      # 抜粋に拾うエラーらしい行
@@ -53,7 +55,7 @@ for g in $red_head; do
       tail -c "$keep" "$tmp/excerpt-$g.log"; } > "$tmp/cut-$g.log"
     mv "$tmp/cut-$g.log" "$tmp/excerpt-$g.log"
   fi
-  sandbox ssh "$TASK" "cat > $WORK/gates/$q.log" < "$tmp/excerpt-$g.log"
+  bash "$SCRUB" < "$tmp/excerpt-$g.log" | sandbox ssh "$TASK" "cat > $WORK/gates/$q.log"
 done
 
 if [ -n "$fails" ] && [ -n "${BASE:-}" ] && [ -n "${BRANCH:-}" ]; then
@@ -112,7 +114,7 @@ left="$(awk '/^FAIL/{print $2}' <<< "$out")"
 { printf '%s\n' "$out"
   if [ -n "$base_block" ]; then printf '%s\n' "$base_block"; fi
   for g in $left; do printf '\n=== %s.log (tail 60)\n' "$g"; cat "$tmp/head-$g.log" 2>/dev/null; done
-} > "$tmp/gates.txt"
+} | bash "$SCRUB" > "$tmp/gates.txt"
 sandbox ssh "$TASK" "mkdir -p $WORK && cat > $WORK/gates.txt" < "$tmp/gates.txt"
 # 実装役に戻す依頼文には標準出力が入る。判定の根拠（base での結果）まで見せる
 printf '%s\n' "$out"

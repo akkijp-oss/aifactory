@@ -4,11 +4,15 @@
 set -euo pipefail
 : "${TASK:?}" "${BASE:?}" "${BRANCH:?}" "${WORK:?}" "${WORKFLOW:?}" "${TITLE:?}"
 sb() { sandbox ssh "$TASK" "$@"; }
+# scrub: PR 本文に貼る前に、既知の秘密の形（Claude の長期トークン sk-ant-…、GitHub の ghs_/ghp_/gho_/ghu_/ghr_、
+# KEY=値 の形の CLAUDE_CODE_OAUTH_TOKEN* / GH_TOKEN*）を伏せる。テスト出力や base 確認の転記に env の値が混ざった事故（2026-09-09 run 358）の再発防止。
+# 判定の正本は workflow/kit/steps/scrub.sh（gates.sh も同じものを使う）
+scrub() { bash "$(dirname "${BASH_SOURCE[0]}")/scrub.sh"; }
 commits="$(sb "cd \$SANDBOX_APP_DIR && git log --oneline origin/$BASE..HEAD")"
 [[ -n "$commits" ]] || { echo "[pr] コミットが無いので PR を作らない"; exit 1; }
 sb "cd \$SANDBOX_APP_DIR && git push -q -u origin $BRANCH"
 section() { local f=$1; sb "test -f $WORK/$f && { echo; echo \"## $f\"; echo; cat $WORK/$f; }" 2>/dev/null || true; }
-sb "cat > $WORK/pr-body.md" <<EOF
+scrub <<EOF | sb "cat > $WORK/pr-body.md"
 aifactory sandbox（VM 内の agent）による自動作業。workflow: **$WORKFLOW**。人間レビュー用の PR で、マージは人間が判断する。
 
 ## コミット
