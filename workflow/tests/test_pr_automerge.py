@@ -34,7 +34,8 @@ case "$*" in
   *"--json name,state,bucket"*)
     if [ -n "${GH_CHECKS}" ]; then printf '%s\n' "${GH_CHECKS}"; exit 1; fi ;;
   *"--json mergeable"*) echo "${GH_MERGEABLE}" ;;
-  *"--json state,url,mergeCommit"*) echo "${GH_AFTER}" ;;
+  *"--json state,url"*) echo "${GH_AFTER}" ;;
+  *"--json mergeCommit"*) echo "${GH_SHA}" ;;
   "pr merge"*)
     if [ -n "${GH_MERGE_FAILS}" ]; then echo "fatal: base branch was modified" >&2; exit 1; fi
     echo "Merged pull request #1" ;;
@@ -68,7 +69,7 @@ class PrAutomergeTest(unittest.TestCase):
                  AUTO_MERGE_DELETE_BRANCH="0", AUTO_MERGE_REQUIRE_CHECKS="1",
                  AUTOMERGE_POLL_S="0", AUTOMERGE_ZERO_CHECKS_GRACE_S="0", AUTOMERGE_MERGEABLE_POLL_S="0",
                  GH_VIEW=f"OPEN false develop {BRANCH}", GH_CHECKS="pass ci / test\npass ci / docs",
-                 GH_MERGEABLE="MERGEABLE", GH_AFTER="MERGED https://github.com/akkijp-oss/aifactory/pull/1 abc1234",
+                 GH_MERGEABLE="MERGEABLE", GH_AFTER="MERGED https://github.com/akkijp-oss/aifactory/pull/1", GH_SHA="abc1234",
                  GH_MERGE_FAILS="")
         e.update({k: str(v) for k, v in env.items()})
         return subprocess.run(["bash", str(SCRIPT)], text=True, capture_output=True, env=e)
@@ -161,6 +162,14 @@ class PrAutomergeTest(unittest.TestCase):
         self.assertIn("pr merge 1 --merge", self.gh_calls())
         self.assertIn("checks 0 本 pass", self.gh_calls())
 
+    def test_a_merge_commit_that_is_not_visible_yet_still_records_the_merge(self):
+        """マージ直後は mergeCommit が null で返ることがある。sha が空でも「マージした」事実は残す"""
+        p = self.run_step(GH_SHA="null")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        m = json.loads((self.work / "merged.json").read_text(encoding="utf-8"))
+        self.assertEqual(m["sha"], "")
+        self.assertTrue(m["at"] and m["pr_url"])
+
     # ---------- マージ自体が失敗した
     def test_a_failing_gh_pr_merge_is_reported_on_the_last_line(self):
         p = self.run_step(GH_MERGE_FAILS="1")
@@ -169,7 +178,7 @@ class PrAutomergeTest(unittest.TestCase):
         self.assertFalse((self.work / "merged.json").exists())
 
     def test_a_pr_that_is_still_open_after_the_merge_call_is_not_recorded_as_merged(self):
-        p = self.run_step(GH_AFTER="OPEN https://github.com/akkijp-oss/aifactory/pull/1 null")
+        p = self.run_step(GH_AFTER="OPEN https://github.com/akkijp-oss/aifactory/pull/1", GH_SHA="null")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(self.last_line(p), "NOMERGE: gh pr merge の後も PR #1 が MERGED になっていない (OPEN)")
         self.assertFalse((self.work / "merged.json").exists())

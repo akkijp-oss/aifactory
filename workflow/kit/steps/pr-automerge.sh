@@ -90,9 +90,17 @@ done
 if ! merge_out="$(ghq "pr merge $num --$METHOD" 2>&1)"; then
   nomerge "gh pr merge が失敗: $(printf '%s\n' "$merge_out" | tr -d '\r' | grep . | tail -1)"
 fi
-after="$(ghq "pr view $num --json state,url,mergeCommit -q '\"\\(.state) \\(.url) \\(.mergeCommit.oid)\"'" || true)"
-read -r state2 url2 sha <<<"$(printf '%s\n' "$after" | tail -1)"
+after="$(ghq "pr view $num --json state,url -q '\"\\(.state) \\(.url)\"'" || true)"
+read -r state2 url2 <<<"$(printf '%s\n' "$after" | tail -1)"
 [[ "$state2" == "MERGED" ]] || nomerge "gh pr merge の後も PR #$num が MERGED になっていない (${state2:-状態を読めない})"
+# マージコミットの sha は GitHub 側の反映が少し遅れて null で返ることがある。数回だけ待ち、取れなくても記録は残す
+sha=""
+for _ in $(seq 1 3); do
+  sha="$(ghq "pr view $num --json mergeCommit -q '.mergeCommit.oid'" 2>/dev/null | tail -1 | tr -d '\r' || true)"
+  if [[ "$sha" == "null" ]]; then sha=""; fi
+  if [[ -n "$sha" ]]; then break; fi
+  sleep "$MERGEABLE_POLL_S"
+done
 
 at="$(date -Iseconds)"
 sb "cat > $WORK/merged.json" <<EOF

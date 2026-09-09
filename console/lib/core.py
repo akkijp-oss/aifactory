@@ -348,7 +348,7 @@ def run_outcome(d, s, state, wf, files):
     # runner が条件（ゲート緑・レビュー PASS・CI 緑）を確かめて自分でマージした run（ADR-0041）。
     # 根拠は runner が書いた `merged` だけで、PR ができた話より先に言う（もう人間の出番は無い）
     merged = state.get("merged")
-    if isinstance(merged, dict) and merged.get("sha") and s.get("finished"):
+    if isinstance(merged, dict) and merged.get("at") and s.get("finished"):
         o["reason"] = "merged"; o["merged"] = merged
         o["pr_url"] = merged.get("pr_url") or o["pr_url"]
         o["resume"] = None                     # 片が付いた run に「続きから回す」は出さない
