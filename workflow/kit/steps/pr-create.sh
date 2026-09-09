@@ -32,7 +32,9 @@ $(section gates.txt | head -40)
 
 🤖 Generated with aifactory sandbox (task $TASK)
 EOF
-draft=""; sb "grep -q '^FAIL' $WORK/gates.txt 2>/dev/null" && draft="--draft" || true
+# draft にするのは判定行（`=== base check:` より前）に FAIL があるときだけ。base 確認の記録に残る FAIL（base でも赤＝INFO に落ちた分）は数えない
+# （数えると automerge が「draft」で見送る。2026-09-10 run 347。pr-automerge.sh と同じ読み方）
+draft=""; sb "awk '/^=== /{exit} /^FAIL /{f=1} END{exit !f}' $WORK/gates.txt 2>/dev/null" && draft="--draft" || true
 url="$(sb "cd \$SANDBOX_APP_DIR && gh pr create --base $BASE --head $BRANCH --title \"$TITLE\" --body-file $WORK/pr-body.md $draft 2>&1 | tail -1")"
 echo "PR: $url"
 sb "printf '%s\n' \"$url\" > $WORK/pr_url"

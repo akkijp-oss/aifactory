@@ -37,9 +37,12 @@ class TokenSetByFamilyTest(unittest.TestCase):
                 'load_pj() { CUR_PJ=$1; }\nghapp_ready() { return 1; }\n' % (self.env, self.pj_dir, self.state, self.ctl))
         return head + body + tail
 
+    # VM の中で回すと /run/sandbox/env の CLAUDE_CODE_OAUTH_TOKEN_* が bash に引き継がれて期待と食い違うので、鍵の変数は引き継がない
+    ENV = {k: v for k, v in os.environ.items() if not k.startswith('CLAUDE_CODE_OAUTH_TOKEN') and not k.startswith('CLAUDE_KEY_NAME')}
+
     def run_token(self, *args, stdin=''):
         return subprocess.run(['bash', '-c', self.script('cmd_token "$@"\n'), 'sandbox', *args], input=stdin, text=True,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                              env=self.ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def test_set_claude_family_writes_the_family_key_only(self):
         r = self.run_token('set', 'alpha', 'claude:fable', stdin='fable-token-1\n')
@@ -60,7 +63,7 @@ class TokenSetByFamilyTest(unittest.TestCase):
     def test_show_lists_the_family_keys_that_are_set(self):
         pathlib.Path(self.pj_dir, 'alpha.env').write_text('CLAUDE_CODE_OAUTH_TOKEN_OPUS=opus-token-aaaabbbbcccc\n')
         script = self.script('set -a; source "$PJ_DIR/alpha.env"; set +a\ncmd_token show alpha\n')
-        r = subprocess.run(['bash', '-c', script], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        r = subprocess.run(['bash', '-c', script], text=True, env=self.ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('CLAUDE_CODE_OAUTH_TOKEN_OPUS: opus-tok', r.stdout)
         self.assertIn('claude-opus-*', r.stdout)
