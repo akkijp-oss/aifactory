@@ -9,7 +9,7 @@
 - 読み書きの正本は lib/core.py。Web コンソール（bin/console）と同じ関数を呼ぶので、どちらから動かしても同じジョブ記録（console/jobs/）に載る
 - MCP の実装は最小: initialize / ping / tools/list / tools/call / resources/list / resources/read。1 行 1 メッセージの JSON-RPC 2.0
 - 起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読む。ssh の非ログイン環境でも console API と同じ secrets で動く
-- 待つだけの job_wait だけは別スレッドで処理し、待っている間も他の呼び出しに即応する。それ以外は到着順に直列（ADR-0028）
+- 待つだけの job_wait / run_wait は別スレッドで処理し、待っている間も他の呼び出しに即応する。それ以外は到着順に直列（ADR-0028 / ADR-0051）
 """
 import base64, binascii, json, pathlib, sys, threading, traceback
 
@@ -21,7 +21,8 @@ INSTRUCTIONS = """aifactory（ソフトウェアファクトリー）の操作�
 - 状態を変える操作はすべて既存 CLI（kb / intake / dispatch / sandbox）を呼ぶ。人間や他セッションが同じ CLI を使っている前提で、勝手に VM を返却・run を止めない
 - 長い操作（ticket_run / intake / dispatch / sandbox_ls / sandbox_release）はジョブとして返る。job_wait で待ち、job_show で出力を読む。ticket_run は 5〜80 分かかる
 - 本番の run は VM を貸し出して PR まで進む。試すだけなら dry_run: true
-- 読める記録: overview → ticket_show → run_show → read_file（agent-*.log / code-*.log / work/*.md / 赤いゲートのログ work/gates/*.log）の順に深く読める"""
+- 読める記録: overview → ticket_show → run_show → read_file（agent-*.log / code-*.log / work/*.md / 赤いゲートのログ work/gates/*.log）の順に深く読める
+- run を追う型: ticket_run(id) → run_wait(name) で次の工程まで待つ（既定 60 秒・上限 300 秒。timeout なら changed: false で返るので繰り返す）→ run_show(name) の progress / outcome で経過秒とゲートの PASS/FAIL を見る → 詳しくは read_file。ログ本文を読んで終了を判定しない（agent 自身の出力に result: success が混ざる）"""
 
 
 def j(obj):
@@ -112,6 +113,17 @@ def t_job_wait(a):
     jb = core.job_wait(a.get("id") or "", timeout)
     d = core.job_view(jb["id"]); d["log"]["text"] = d["log"]["text"][-4000:]
     return d
+RUN_WAIT_DEFAULT_S, RUN_WAIT_MAX_S = 60, 300
+
+
+def t_run_wait(a):
+    # job_wait と同じ上限。Claude Code は 120 秒でツール呼び出しをバックグラウンド化するので、それより長く待たせても呼び手に届く形にならない（ADR-0028）
+    want = arg_int(a, "timeout_s", required=False) or RUN_WAIT_DEFAULT_S   # 0 / 未指定は既定
+    if want < 0: raise core.ApiError("timeout_s は 0 以上の整数")
+    until = a.get("until") or "step"
+    return core.run_wait(a.get("name") or "", until, min(want, RUN_WAIT_MAX_S))
+
+
 def t_job_stop(a): return core.op_job_stop(a.get("id") or "")
 def t_logs(a): return core.logs_view()
 def t_config(a): return core.config_view()
@@ -173,7 +185,15 @@ TOOLS = [
     ("run_list", "実行記録の一覧（$AIFACTORY_WORKSPACE/runs/）。既定は dry-run と退避分を除く", schema({"all": BOOL, "limit": INT}), t_run_list),
     ("stats", "工程ごとの消費統計（agent step の agent-*.jsonl から）。モデル別 / 工程別 / 日別 / PJ 別に、工程数・ターン・所要秒・トークン（input / cache_write / cache_read / output）・thinking のブロック数と文字数・費用換算（claude CLI の total_cost_usd。利用枠の重みではない）と、費用の高い工程の上位 20。days で今日からさかのぼる日数（省略で全部）、pj で絞る",
      schema({"days": {**INT, "description": "今日からさかのぼる日数。1 なら今日だけ。省略で全部"}, "pj": STR, "dry": {**BOOL, "description": "dry-run の記録も含める"}}), t_stats),
-    ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
+    ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット、outcome（止まった理由）、"
+     "progress（記録から導いた進み具合。elapsed_s = run 全体の経過秒 / current = 今の工程 {step, kind, since, elapsed_s} / history[].elapsed_s = 工程ごとの経過秒 / "
+     "gates = work/gates.txt の PASS・FAIL・INFO 一覧。ゲートのログを読まなくても赤が分かる）。"
+     "経過秒は前の工程が終わった時刻からの差なので、--from で再開した run や VM の空き待ちを挟んだ run では工程の外の時間が混ざる。導けないときは null", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
+    ("run_wait", "run の工程が変わるまで待つ（最大 timeout_s 秒、既定 60、上限 300）。until: step（既定。history が 1 件増える / current の step が変わる / 終わる）か result（run が終わるまで）。"
+     "変化した瞬間に {changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history, elapsed_s} を返す。ログ本文は含まないので、中身は read_file で読む。"
+     "timeout に達したら changed: false のまま running で返るので、長い run は繰り返し呼ぶ（1 工程は 3〜40 分）。サーバーは待ちを別スレッドに逃がすので他の呼び出しは即応する（ADR-0028）",
+     schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206。ticket_run の返りや ticket_show の runs[] に出る"},
+             "until": {"type": "string", "enum": ["step", "result"], "description": "既定 step"}, "timeout_s": INT}, ["name"]), t_run_wait),
     ("run_action", "人間が run の後始末をしたことを実行記録に残す（kb run-note）。human で止まった run を人が wip ブランチから PR にしてマージした・打ち切ったときに使う。runner が書いた result は変えず human だけを足すので、run_show と console の run 画面が「人間が PR#n で仕上げた」と読めるようになる。action: close（決着を記録する。result は done / abandoned、既定 done。既に記録があれば断る）/ note（記録済みの説明を書き直す。text 必須）",
      schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}, "action": {"type": "string", "enum": ["close", "note"]},
              "result": {"type": "string", "enum": ["done", "abandoned"], "description": "close の決着。既定 done"},
@@ -202,6 +222,7 @@ DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}   # 取り返し�
 ANNOTATIONS = {
     "overview": ("概況", RO), "ticket_list": ("チケット一覧", RO), "ticket_show": ("チケット 1 件", RO),
     "run_list": ("実行記録の一覧", RO), "run_show": ("実行記録 1 件", RO), "read_file": ("記録のファイルを読む", RO),
+    "run_wait": ("run の工程遷移を待つ", RO),                # 待つだけで何も変えない（ASYNC_TOOLS に入れる条件。ADR-0051）
     "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0038）
     "job_list": ("ジョブ一覧", RO), "job_show": ("ジョブ 1 件", RO), "job_wait": ("ジョブを待つ", RO),
     "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO), "stats": ("工程ごとの消費統計", RO),
@@ -276,7 +297,7 @@ def handle(msg):
 
 
 OUT_LOCK = threading.Lock()
-ASYNC_TOOLS = {"job_wait"}   # 待つだけのツール。別スレッドに逃がす（安易に増やさない。順序保証が要る操作は直列のまま）
+ASYNC_TOOLS = {"job_wait", "run_wait"}   # 待つだけ・何も変えないツールだけ別スレッドに逃がす（安易に増やさない。順序保証が要る操作は直列のまま。ADR-0028 / ADR-0051）
 
 
 def reply(resp):
