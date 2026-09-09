@@ -50,6 +50,15 @@ r.after(50,save);r.mainloop()
                 deadline=time.monotonic()+5
                 while output.read_text()!=text and time.monotonic()<deadline:time.sleep(.05)
                 self.assertEqual(output.read_text(),text)
+                # 記号キー（チケット 344）。押した文字がそのまま入ることを本文で確かめる。
+                symbols='=-+,./;\'[]\\`'
+                for key in symbols:module.native({'action':'key','keys':[key]})
+                deadline=time.monotonic()+5
+                while output.read_text()!=text+symbols and time.monotonic()<deadline:time.sleep(.05)
+                self.assertEqual(output.read_text(),text+symbols)
+                # 文字を入れないキーは例外なく通り、本文を変えないこと。
+                for keys in (['ESC'],['F5'],['CTRL','-'],['CMD','SHIFT','=']):module.native({'action':'key','keys':keys})
+                self.assertEqual(output.read_text(),text+symbols)
                 module.native({'action':'key','keys':['CTRL','HOME']})
                 module.native({'action':'scroll','amount':-3})
                 self.assertTrue(module.native({'action':'screenshot'})['ok'])

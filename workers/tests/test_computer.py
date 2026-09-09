@@ -7,6 +7,12 @@ class ComputerTests(unittest.TestCase):
  def test_unbounded_or_arbitrary_commands_rejected(self):
   for r in [{'action':'shell','command':'whoami'},{'action':'click','x':-1,'y':4},{'action':'click','x':True,'y':4},{'action':'key','keys':[]},{'action':'type','text':'x'*8193},{'action':'scroll','amount':21},{'action':'screenshot','host':'other'}]:
    with self.assertRaises(Error):validate(r)
+ def test_symbol_and_function_keys_pass_validation(self):
+  # チケット 344 の失敗例。名前の可否は各 OS のヘルパーが決め、ここは個数と長さだけ見る。
+  for keys in (['CMD','SHIFT','='],['CTRL','-'],['F5'],['ESC'],['\\'],['`']):
+   self.assertEqual(validate({'action':'key','keys':keys})['keys'],keys)
+  for keys in (['x'*13],[],['A','B','C','D','E'],[1]):
+   with self.assertRaises(Error):validate({'action':'key','keys':keys})
  def test_unicode_text_supported(self):self.assertEqual(validate({'action':'type','text':'日本語🙂'})['text'],'日本語🙂')
  def test_session_paths_cannot_escape(self):
   d=Desktop(root='/tmp/computer-test')

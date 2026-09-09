@@ -142,7 +142,8 @@ def schema(props, required=()):
 STR = {"type": "string"}; INT = {"type": "integer"}; BOOL = {"type": "boolean"}
 TOOLS = [
     ("computer_open", "専用Mac/Windows/Linux環境を画面操作用に予約・準備する。他のrunで使用中なら失敗する。返却はcomputer_close。", schema({"worker": STR}, ["worker"]), t_computer_open),
-    ("computer_action", "予約したVMの画面取得・入力。まずscreenshotで確認し、その画像のピクセル座標を使う。typeはUnicode、keyはCTRL/ALT/SHIFT/WINまたはCMDとENTER等、scrollは正で上。", schema({"session":STR,"action":{"type":"string","enum":["screenshot","click","move","type","key","scroll"]},"x":INT,"y":INT,"button":{"type":"string","enum":["left","right"]},"count":INT,"text":STR,"keys":{"type":"array","items":STR},"amount":INT},["session","action"]), t_computer_action),
+    ("computer_action", "予約したVMの画面取得・入力。まずscreenshotで確認し、その画像のピクセル座標を使う。typeはUnicode、scrollは正で上。"
+     "keyは1〜4個のキー名（大小どちらでもよく、3 OSで同じ）: CTRL ALT SHIFT WIN CMD / ENTER TAB ESC SPACE BACKSPACE DELETE / LEFT RIGHT UP DOWN HOME END PAGEUP PAGEDOWN / F1〜F12 / A〜Z / 0〜9 / 記号（US配列）= - + , . / ; ' [ ] \\ ` 。WINとCMDはどちらもそのOSのメタキー、+はSHIFTと=。", schema({"session":STR,"action":{"type":"string","enum":["screenshot","click","move","type","key","scroll"]},"x":INT,"y":INT,"button":{"type":"string","enum":["left","right"]},"count":INT,"text":STR,"keys":{"type":"array","items":STR},"amount":INT},["session","action"]), t_computer_action),
     ("computer_close", "画面操作用の予約を返却する。Macは専用VMを削除、Windows/Linuxはworkspaceを削除。保存済みスクリーンショットは保持する。",schema({"session":STR},["session"]),t_computer_close),
     ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数、枠組みの checkout が origin と食い違っていないか（repo）。pj を渡すと run の一覧だけその PJ に絞る（チケット数は常に全 PJ）", schema({"pj": STR}), t_overview),
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),

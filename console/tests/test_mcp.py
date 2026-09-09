@@ -73,6 +73,9 @@ class McpTest(unittest.TestCase):
         ra = next(t for t in tools if t["name"] == "run_action")["inputSchema"]["properties"]
         self.assertEqual(ra["action"]["enum"], ["close", "note"]); self.assertEqual(ra["result"]["enum"], ["done", "abandoned"])
         for t in tools: self.assertEqual(t["inputSchema"]["type"], "object"); self.assertTrue(t["description"])
+        # 対応キー名が説明に載っていること（チケット 344）。載っていないと agent が推測で送る
+        ca = next(t for t in tools if t["name"] == "computer_action")["description"]
+        for key in ("=", "F1", "ESC", "CMD"): self.assertIn(key, ca)
 
     def test_03_reads(self):
         err, o = self.c.tool("overview"); self.assertFalse(err); self.assertIn("counts", o)

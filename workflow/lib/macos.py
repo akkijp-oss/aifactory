@@ -4,6 +4,7 @@ Guest commands, inputs and artifacts travel via the durable worker queue.
 No control-plane SSH/SCP connection to a Mac is used.
 """
 import base64
+import datetime
 import fcntl
 import hashlib
 import json
@@ -45,22 +46,83 @@ for f in sorted(p.iterdir()):
 print(json.dumps({'files':out,'skipped':skipped}))'''
 
 
+# ---- worker の取り合い（チケット 373）
+# pull worker は PJ を跨いで共有する 1 台なので、「他 run が使っている」は Proxmox のプール満杯と同じ
+# 「待てば解ける失敗」。PoolBusy に寄せて runner の take_waiting（--wait）に待たせる。
+# offline / lifecycle 無しは設定・稼働の問題で待っても直らないので、従来どおり即失敗のまま。
+LEASE_BUSY = ("leased to another run", "worker busy")
+
+
+def _since(created):
+    """lease を取った時刻（epoch）を ISO に。読めなければ None"""
+    try: n = float(created)
+    except (TypeError, ValueError): return None
+    if n <= 0: return None
+    return datetime.datetime.fromtimestamp(n).astimezone().isoformat(timespec="seconds")
+
+
+def holder_run(run, lease_id):
+    """lease を持っている run の名前（runs/<run>/state.json の lease で引く）。分からなければ lease id をそのまま"""
+    try:
+        for f in sorted(run.run_dir.parent.glob("*/state.json")):
+            try:
+                if json.loads(f.read_text(encoding="utf-8")).get("lease") == lease_id: return f.parent.name
+            except (OSError, ValueError): continue
+    except OSError: pass
+    return lease_id
+
+
+def busy_reason(run, worker, lease):
+    """worker を他 run が握っているなら、その 1 行（誰がいつから）。空いていれば None"""
+    worker_id = run.project["worker"]
+    held = (worker.get("lease") or {}).get("id")
+    if held and held != lease:
+        since = _since((worker.get("lease") or {}).get("created"))
+        return f"{worker_id} は {holder_run(run, held)} が使用中" + (f"（{since}）" if since else "")
+    if not held:
+        op = worker.get("operation") or {}
+        # 前の run の後始末（queued / running / uncertain）が残っている。これも待てば解ける
+        if op.get("id"): return f"{worker_id} は前の操作（{op['id']} / {op.get('state')}）の終了待ち"
+    return None
+
+
+def pool_busy(run, reason):
+    """待てる失敗として上げる例外を作る（例外の種類は runner が Run.PoolBusy で渡してくる）"""
+    cls = getattr(run, "PoolBusy", None)
+    return cls(reason, reason=reason) if cls else RuntimeError(reason)
+
+
+def acquire_lease(run, worker, lease):
+    """worker の lease を取る。他 run が使っている間は PoolBusy（--wait なら待ち直す）にする（チケット 373）"""
+    reason = busy_reason(run, worker, lease)
+    if reason: raise pool_busy(run, reason)
+    try:
+        run.client.store.acquire(run.project["worker"], lease)
+    except Exception as e:
+        # 見てから取るまでの間に他 run が入った（レース）。queue の 409 文言だけが手掛かりなので、
+        # 待てる失敗（lease / 操作の競合）に限って包み直す。他の 409（offline・base 未準備）はそのまま
+        if any(m in str(e) for m in LEASE_BUSY):
+            raise pool_busy(run, busy_reason(run, worker, lease) or f"{run.project['worker']} は他の run が使用中") from e
+        raise
+
+
 def backend(Run):
     class MacRun(Run):
         backend_label = "Mac VM"
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"}
+            # auto_merge の無い PJ では runner が automerge 工程を飛ばす（ADR-0042）ので、未対応の判定からも外す
+            skipped = set() if getattr(self, "auto_merge", None) else {"pr-automerge.sh"}
+            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"} - skipped
             if unsupported: raise ValueError("unsupported pull-worker code steps: " + ", ".join(sorted(unsupported)))
             self.work = str(pathlib.PurePosixPath(self.project["app_dir"]).parent / "work" / self.task)
             self.env_file = str(pathlib.PurePosixPath(self.work) / "runtime.env")
             self.client = None
             self.run_lock = None
+            self.lease_id = None
             self.state["backend"] = "macos-pull"
             self.state["worker"] = self.project["worker"]
-            if self.resume:
-                for field in ("finished", "error", "result"):
-                    self.state.pop(field, None)
+            # `--resume` で前回の終わり方（result / finished / error …）を消すのは Run.__init__ に寄せた（チケット 338）
 
         def main(self):
             try:
@@ -117,32 +179,45 @@ def backend(Run):
         def take(self):
             if self.dry: return
             import aifactory_paths as paths
-            self.run_lock = open(self.run_dir / "macos.lock", "a")
-            fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            lease = self.state.get("lease") if self.resume else f"run-{self.task}-{uuid.uuid4().hex[:16]}"
-            if not lease: raise RuntimeError("Mac resume has no recorded lease")
-            self.client = Client(os.environ.get("AIFACTORY_WORKER_DB") or paths.WORKSPACE / "workers" / "queue.sqlite3",
-                                 self.project["worker"], lease, self.run_dir)
+            # --wait のとき take は呼び直される（373）。lock と lease id と Client は最初の 1 回だけ作る
+            # （呼ぶたびに同じファイルを開き直すと、同じプロセスの別 fd への flock で必ず落ちる）
+            if self.run_lock is None:
+                self.run_lock = open(self.run_dir / "macos.lock", "a")
+                fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self.client is None:
+                lease = self.state.get("lease") if self.resume else f"run-{self.task}-{uuid.uuid4().hex[:16]}"
+                if not lease: raise RuntimeError("Mac resume has no recorded lease")
+                self.lease_id = lease
+                self.client = Client(os.environ.get("AIFACTORY_WORKER_DB") or paths.WORKSPACE / "workers" / "queue.sqlite3",
+                                     self.project["worker"], lease, self.run_dir)
+            lease = self.lease_id
             if self.resume:
                 self.resume_guest(lease)
                 return
             # A direct MCP run may wait for first-time image preparation. Dispatch
             # skips an unready worker, so a downloading Mac does not stall its queue.
             deadline = time.monotonic() + int(os.environ.get("AIFACTORY_MAC_PREPARE_WAIT_S", "21600"))
-            self.set_current("prepare", "code", "prepare.log")
+            prepared = False
             while True:
                 available = next((w for w in self.client.store.workers() if w["id"] == self.project["worker"]), {})
                 if not available.get("online") or not available.get("info", {}).get("lifecycle"):
                     raise RuntimeError("Mac worker is offline or not configured for lifecycle operations")
+                # 他 run が使っている間は待てる失敗として上げる。set_current より前に見て、
+                # 待ちの表示（wait-vm）を prepare で上書きしない（373）
+                busy = busy_reason(self, available, lease)
+                if busy: raise pool_busy(self, busy)
                 network_ready = available["info"].get("network_ready") is not False
                 if available["info"].get("base_ready") is not False and network_ready: break
+                if not prepared:
+                    self.set_current("prepare", "code", "prepare.log"); prepared = True
                 reason = "Mac base image" if network_ready else "Mac network setup (Softnet root/SUID)"
                 message = f"waiting for the {reason}; no VM or lease allocated yet"
                 self.log(message)
                 with (self.run_dir / "prepare.log").open("a") as f: f.write(message + "\n")
                 if time.monotonic() > deadline: raise TimeoutError("Mac worker preparation timed out")
                 time.sleep(30)
-            self.client.store.acquire(self.project["worker"], lease)
+            self.set_current("prepare", "code", "prepare.log")
+            acquire_lease(self, available, lease)
             self.state["lease"] = lease; self.save()
             self.log("Mac VM prepare")
             _, r = self.client.execute("guest-prepare")

@@ -69,8 +69,15 @@ class KbRunNoteTest(unittest.TestCase):
         return json.loads((self.ws / "runs" / name / "state.json").read_text(encoding="utf-8"))
 
     def note(self):
-        show = self.kb("show", "906")
-        return next((l.split(" ", 1)[1].strip() for l in show.stdout.splitlines() if l.startswith("note ")), "")
+        """kb show の note 欄。run 由来の行を足した後は複数行になる（342）ので、次の欄が来るまでを note とする"""
+        lines = self.kb("show", "906").stdout.splitlines()
+        i = next((i for i, l in enumerate(lines) if l.startswith("note ")), None)
+        if i is None: return ""
+        out = [lines[i].split(" ", 1)[1].strip()]
+        for l in lines[i + 1:]:
+            if l.startswith(("created ", "updated ", "-" * 10)): break
+            out.append(l)
+        return "\n".join(out).strip()
 
     def test_run_note_records_the_human_closeout_without_touching_the_runner_result(self):
         """人間が PR を作ってマージしたことを run 記録に足す。runner が確定した result は動かさない"""
@@ -160,11 +167,13 @@ class KbRunNoteTest(unittest.TestCase):
         self.assertNotIn("人間へ", self.note())
 
     def test_a_first_run_leaves_the_note_alone(self):
-        """初回の run はメモを触らない（今までどおり。空のメモで上書きしない）"""
+        """初回の run はメモを触らない（今までどおり。空のメモで上書きしない）。
+           run が終わった後も人の文は消えない（342。history だけ見ていると上書きに気づけないので note も見る）"""
         self.assertEqual(self.kb("set", "906", "--note", "PM: 急ぎ").returncode, 0)
         r = self.kb("run", "906")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("PM: 急ぎ", self.kb("history", "906").stdout)
+        self.assertIn("PM: 急ぎ", self.note())
 
 
 if __name__ == "__main__":

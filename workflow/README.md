@@ -66,10 +66,14 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず定義と依頼文だけ確認
 ```
 
-- `--keep` は終了後に release しない（中を見たいとき）、`--resume` は貸出中の VM で state.json の次の step から続ける
+- `--keep` は終了後に release しない（中を見たいとき）、`--resume` は貸出中の VM で続きを回す。再開する step は `state.json` の工程履歴から決める:
+  履歴が空（準備で落ちて 1 工程も終えていない）なら workflow の先頭 step、履歴があれば最後に走った step（gates の戻しを使い切った run なら `gates`）。
+  `next: human` をそのまま引き継いで工程を 1 つも走らせずに VM を返却することは無く、続きが無い run（PR まで出ている / `next: end`）は VM に触る前に止まる（ADR-0047）
+- **base が赤くて gates で止まった run**（`gates.txt` の `=== base check:` に元からの赤がある）は、人が base を直してから続けられる:
+  VM が貸出中のまま（pull backend や `--keep`）なら `kb run <id> --resume`、返却済みなら `kb run <id> --from gates`。どちらも gates から回り直し、実装をやり直さない
 - `--from[=step]` は human で止まった run を**新しい VM**で指定の step からやり直す（`--branch=<名前>` の続きから。既定は前回の `wip_branch`）。step を省くと前回の `resume_step` を使う。前回の run は `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡し、その `work/*.md` を持ち込み、`review.md` を最初の依頼文に「前回の結果（直すこと）」として入れる（ADR-0036）
 - 鍵の利用枠切れ（トークン切れ）で止まった run は、runner が wip を保全して `failure: "quota"` を残し、kb がチケットを todo に戻す。続きは制御系の timer（`dispatch --resume-paused`）が解除時刻の後に `kb run --from` で回す（下の「鍵の利用枠切れ」）
-- `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す
+- `--wait` はプールに空きが無いとき失敗せず空くまで待って take し直す（単独なら 3600 秒、`--wait=秒` で上限。間隔は `AIFACTORY_WAIT_POLL_S` 秒・既定 30）。待機中は `current` が `wait-vm`、上限超過は `failure: "wait_timeout"` を書いて終わり `kb` がチケットを todo に戻す。pull backend（macOS / Windows / Linux）では「worker を他の run が使っている」も同じ待ちに乗る。取り合いは `--wait` 無しでも `wait_timeout`（`wait_reason` に誰がいつから使っているか）で終わり、チケットは todo のまま（ADR-0049）
 
 runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**（`project.yml` に `auto_merge` を書いた PJ だけ、次の `automerge` が条件を確かめて機械がマージする）。
 

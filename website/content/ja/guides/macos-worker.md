@@ -103,6 +103,8 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 ワーカーの `online` と `info` 内の `lifecycle`・`base_ready`・`network_ready`、予約状態を確認する。直接開始したrunは、onlineのワーカーの基準VM・Softnet準備を最大6時間待てる（`AIFACTORY_MAC_PREPARE_WAIT_S` で変更）。その間はVMもleaseも割り当てない。dispatchは未準備・offline・予約中のワーカーを見送る。
 
+ワーカーはPJを跨いで共有する1台である（`project.yml` の `worker` に同じidを書いた複数のPJが同じMacを使う）。別のrunがleaseを持っている間、`kb run <ID> --wait <分>` はそのleaseが空くまで最大その分数だけ待ってから開始する。待っている間は `state.json` の `current` が `wait-vm` になり、consoleには「VMの空き待ち」と出る（VMもleaseも割り当てない）。上限まで空かなかったrunと `--wait` を付けなかったrunは、チケットをblockedにせずtodoのまま残し、`state.json` の `wait_reason` とチケットのnoteに「どのrunがいつから使っているか」を書く。空き次第dispatchが同じチケットを拾うので、人が投入し直す必要はない。offlineやlifecycle未設定のワーカーは待たずに人へ返す（ADR-0049）。
+
 ## 成果物と終了確認
 
 `$AIFACTORY_WORKSPACE/runs/<run>/` に記録される。
@@ -135,6 +137,8 @@ PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切�
 | 成果物回収・VM削除に失敗 | leaseを保持する。回収状況・ゲストの実状態を確定してから復旧する |
 
 `--resume` はそのrunのleaseを所有している場合に限る。認証情報・リポジトリ・工程履歴がまだないprovision失敗なら、同じ稼働中ゲストで再試行できる。途中まで作られたリポジトリや停止したゲストは自動で作り直さない。
+
+再開する工程は `state.json` の工程履歴（`history`）から決まる。履歴が空（provisionで落ちて1工程も終えていない）ならworkflowの先頭工程から、履歴があれば最後に走った工程から続く。`next: human` を引き継いで工程を1つも走らせずにVMを返却することはない。続きが無いrun（PRまで出ている、`next: end`）はVMに触る前に止まる（ADR-0047）。
 
 `control cancel` は停止要求であり、停止確認ではない。`resolve <operation-id> --confirmed-stopped` は管理者が停止確認した後だけ使う。操作の解決とrunのlease解放は別で、後者は成功した `guest-release` を指定する `control release-lease` が必要。詳しい引数と通信断時の動作は [workersの復旧手順](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧)を参照する。
 

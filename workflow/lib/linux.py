@@ -4,7 +4,7 @@ import os
 import pathlib
 import shlex
 import uuid
-from macos import backend as pull_backend, Client
+from macos import acquire_lease, backend as pull_backend, Client
 
 
 def backend(Run):
@@ -32,14 +32,19 @@ def backend(Run):
             if self.dry:
                 return
             import aifactory_paths as paths
-            self.run_lock = open(self.run_dir / 'linux.lock', 'a')
-            fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            lease = self.state.get('lease') if self.resume else f'run-{self.task}-{uuid.uuid4().hex[:16]}'
-            if not lease:
-                raise RuntimeError('Linux resume has no recorded lease')
-            self.paths(lease)
-            self.client = Client(os.environ.get('AIFACTORY_WORKER_DB') or paths.WORKSPACE / 'workers/queue.sqlite3',
-                                 self.project['worker'], lease, self.run_dir)
+            # --wait で take を呼び直せるよう、lock と lease id と Client は 1 回だけ作る（チケット 373）
+            if self.run_lock is None:
+                self.run_lock = open(self.run_dir / 'linux.lock', 'a')
+                fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self.client is None:
+                lease = self.state.get('lease') if self.resume else f'run-{self.task}-{uuid.uuid4().hex[:16]}'
+                if not lease:
+                    raise RuntimeError('Linux resume has no recorded lease')
+                self.lease_id = lease
+                self.paths(lease)
+                self.client = Client(os.environ.get('AIFACTORY_WORKER_DB') or paths.WORKSPACE / 'workers/queue.sqlite3',
+                                     self.project['worker'], lease, self.run_dir)
+            lease = self.lease_id
             worker = next((w for w in self.client.store.workers() if w['id'] == self.project['worker']), {})
             info = worker.get('info', {})
             if not worker.get('online') or info.get('os') != 'linux' or not info.get('lifecycle'):
@@ -51,7 +56,7 @@ def backend(Run):
                     raise RuntimeError('resume requires this run’s retained lease')
                 self.resume_guest(lease)
                 return
-            self.client.store.acquire(self.project['worker'], lease)
+            acquire_lease(self, worker, lease)
             self.state['lease'] = lease
             self.save()
             self.set_current('prepare', 'code', 'prepare.log')

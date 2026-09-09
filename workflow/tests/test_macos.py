@@ -1,17 +1,30 @@
 import base64
+import datetime
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('macos_backend', ROOT/'workflow/lib/macos.py')
 macos=importlib.util.module_from_spec(spec);spec.loader.exec_module(macos)
+REAL_CLIENT=macos.Client
+
+# 「他 run が worker を使っている」ときの待ち（チケット 373）は take_waiting / fail_before_start の本物を通す。
+# runner を module として読み、置き場だけ一時 dir に向ける（test_macos_preserve.py と同じ流儀）
+rspec=importlib.util.spec_from_loader('macos_lease_run', importlib.machinery.SourceFileLoader('macos_lease_run', str(ROOT/'workflow/bin/run')))
+run_mod=importlib.util.module_from_spec(rspec);rspec.loader.exec_module(run_mod)
+run_mod.paths=types.SimpleNamespace(project_dir=run_mod.paths.project_dir, PROJECT_DIRS=run_mod.paths.PROJECT_DIRS, RUNS=None, run_path=None)
+MacWaitRun=macos.backend(run_mod.Run)
+KB=ROOT/'kanban/bin/kb'
 
 
 class MacBackendTest(unittest.TestCase):
@@ -179,6 +192,152 @@ class MacBackendTest(unittest.TestCase):
         MacRun=macos.backend(Base)
         MacRun({'steps':[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'}]})
         with self.assertRaises(ValueError):MacRun({'steps':[{'code':'pr-merge.sh'}]})
+
+    def test_automerge_step_is_skipped_when_project_has_no_auto_merge(self):
+        # ADR-0042 で全 workflow に automerge step が入った。auto_merge の無い PJ では runner が工程ごと飛ばすので、
+        # pull worker の未対応判定でも拒否しない（asura #381 が起動前に落ちた）。auto_merge がある PJ は従来どおり拒否する
+        class Base:
+            def __init__(self,wf,auto_merge=None):
+                self.wf=wf;self.project={'app_dir':'/Users/admin/app','worker':'mac1'}
+                self.task='381';self.resume=False;self.state={};self.auto_merge=auto_merge
+        MacRun=macos.backend(Base)
+        steps=[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'},{'code':'pr-automerge.sh'}]
+        MacRun(steps and {'steps':steps})
+        with self.assertRaises(ValueError):MacRun({'steps':steps},auto_merge={'method':'merge'})
+
+
+class MacLeaseWaitTest(unittest.TestCase):
+    """worker を他 run が使っている間の `kb run --wait`（チケット 373）。
+
+    Mac 実機も claude も VM も使わない。偽の worker queue（`workers()` の戻りで lease を出し入れする）だけ差し替え、
+    take_waiting / fail_before_start / kb apply_result は本物を通す。
+    - 他 run の lease は「待てば解ける失敗」（Proxmox のプール満杯と同じ）で、`--wait` の間は wait-vm で待つ
+    - 上限を超えても failed / blocked にせず todo に戻し、note に「誰がいつから使っているか」を残す
+    - 「lease は残す」は自 run の lease が実在するときだけ
+    """
+
+    LEASE_CREATED = 1757415600      # 他 run が lease を取った時刻（epoch）
+
+    def setUp(self):
+        d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
+        self.ws = pathlib.Path(d.name)
+        run_mod.paths.RUNS = self.ws / 'runs'
+        self.ticket = self.ws / 'ticket.md'
+        self.ticket.write_text('# 調査: lease 待ちの再現\n\n偽の worker で lease を握らせる。\n', encoding='utf-8')
+        # lease を持っている他 PJ の run（この名前が note に出ること）
+        self.holder = self.ws / 'runs' / '2026-09-09-termarium-251'
+        self.holder.mkdir(parents=True)
+        (self.holder / 'state.json').write_text(json.dumps({'lease': 'run-251-abc'}), encoding='utf-8')
+        os.environ['AIFACTORY_WAIT_POLL_S'] = '0.01'
+        self.addCleanup(os.environ.pop, 'AIFACTORY_WAIT_POLL_S', None)
+        self.addCleanup(setattr, macos, 'Client', REAL_CLIENT)
+        self.acquired = []      # store.acquire の呼ばれ方
+        self.logs = []          # runner の log 行
+        self.seen = []          # workers() が呼ばれた時点の state.json の写し
+
+    def since(self):
+        return datetime.datetime.fromtimestamp(self.LEASE_CREATED).astimezone().isoformat(timespec='seconds')
+
+    def build(self, task, wait_s=0, busy_calls=0):
+        """偽の Mac worker で run を組む。busy_calls 回目までは他 run の lease が居る"""
+        r = object.__new__(MacWaitRun)
+        run_mod.Run.__init__(r, 'kumitate', str(task), 'research', str(self.ticket), wait_s=wait_s)
+        r.project = {**r.project, 'worker': 'mac1'}
+        r.work = '/Users/admin/work/' + str(task)
+        r.env_file = r.work + '/runtime.env'
+        r.client = None
+        r.run_lock = None
+        r.state['backend'] = 'macos-pull'
+        r.state['worker'] = 'mac1'
+        calls = {'n': 0}
+
+        def workers():
+            calls['n'] += 1
+            self.seen.append(json.loads((r.run_dir / 'state.json').read_text(encoding='utf-8')))
+            busy = calls['n'] <= busy_calls
+            return [{'id': 'mac1', 'online': True, 'info': {'lifecycle': True},
+                     'lease': {'id': 'run-251-abc', 'created': self.LEASE_CREATED} if busy else None,
+                     'operation': None}]
+
+        store = types.SimpleNamespace(workers=workers, acquire=lambda w, l: self.acquired.append((w, l)))
+        client = types.SimpleNamespace(store=store, lease=None,
+                                       execute=lambda *a, **k: ('op-1', types.SimpleNamespace(returncode=0, stdout='')))
+        macos.Client = lambda *a, **k: client
+        r.setup_project = lambda: None
+        r.log = lambda m: self.logs.append(m)
+        r.t0 = time.time()
+        return r
+
+    def test_a_lease_held_by_another_run_is_waited_out(self):
+        """他 run が lease を持っている間は wait-vm で待ち、空いたら take する（完了条件 1）"""
+        r = self.build(373, wait_s=60, busy_calls=2)
+        r.take_waiting()
+        self.assertEqual(len(self.seen), 3)                                  # 使用中 2 回 → 3 回目で取れた
+        self.assertEqual(self.acquired, [('mac1', r.state['lease'])])
+        self.assertTrue(r.state['lease'].startswith('run-373-'), r.state['lease'])
+        self.assertEqual(self.seen[0]['current']['step'], 'take')            # 待つ前（238 の初期書き込み）
+        waits = [s['current'] for s in self.seen[1:]]
+        self.assertEqual([w['step'] for w in waits], ['wait-vm', 'wait-vm'], waits)
+        self.assertEqual(waits[0]['since'], waits[1]['since'])               # 経過時間を振り出しに戻さない
+        self.assertTrue([m for m in self.logs if '2026-09-09-termarium-251 が使用中' in m], self.logs)
+        # 二重 flock で落ちない（同じ run が take を呼び直す）
+        self.assertIsNotNone(r.run_lock)
+
+    def test_waiting_past_the_limit_stays_todo_with_the_holder_in_the_note(self):
+        """上限まで待って空かなければ、lease は取らず wait_timeout で終わり、理由に使用中の run と開始時刻が残る（完了条件 2）"""
+        r = self.build(374, wait_s=1, busy_calls=10 ** 9)
+        self.assertEqual(r.main(), 2)
+        s = json.loads((r.run_dir / 'state.json').read_text(encoding='utf-8'))
+        self.assertEqual((s['result'], s['next'], s['failure']), ('failed', 'human', 'wait_timeout'))
+        self.assertGreaterEqual(s['waited_s'], 1)
+        self.assertNotIn('lease', s)
+        self.assertIn('mac1 は 2026-09-09-termarium-251 が使用中', s['wait_reason'])
+        self.assertIn(self.since(), s['wait_reason'])
+        self.assertEqual(self.acquired, [])
+        self.assertFalse([m for m in self.logs if 'lease は残す' in m], self.logs)
+
+    def test_the_kb_note_names_the_holder_and_keeps_the_ticket_todo(self):
+        """kb は wait_reason を note に写し、チケットは todo のまま（blocked にしない。完了条件 2）"""
+        env = dict(os.environ, AIFACTORY_WORKSPACE=str(self.ws))
+        new = subprocess.run([sys.executable, str(KB), 'new', 'kumitate', 'research', 'lease 待ちの再現',
+                              '--body', '-', '--id', '375'], input='# lease 待ち\n', text=True, capture_output=True, env=env)
+        self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
+        name = '2026-09-09-kumitate-375'
+        (self.ws / 'runs' / name).mkdir(parents=True)
+        state = {'result': 'failed', 'next': 'human', 'finished': '2026-09-09T12:09:00+09:00', 'waited_s': 1800,
+                 'failure': 'wait_timeout',
+                 'wait_reason': f'mac1 は 2026-09-09-termarium-251 が使用中（{self.since()}）'}
+        (self.ws / 'runs' / name / 'state.json').write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+        sync = subprocess.run([sys.executable, str(KB), 'sync', '375', '--run', name], text=True, capture_output=True, env=env)
+        self.assertEqual(sync.returncode, 0, sync.stdout + sync.stderr)
+        show = subprocess.run([sys.executable, str(KB), 'show', '375'], text=True, capture_output=True, env=env)
+        head = show.stdout.split('-' * 60)[0].splitlines()
+        t = {l.split(' ', 1)[0]: l.split(' ', 1)[1].strip() for l in head if l.strip()}
+        self.assertEqual(t['status'], 'todo', t)
+        self.assertIn('2026-09-09-termarium-251 が使用中', t['note'])
+        self.assertIn('dispatch', t['note'])
+
+    def test_the_retained_lease_note_is_only_for_this_runs_lease(self):
+        """「調べられるよう lease は残す」は自 run の lease が実在するときだけ（完了条件 3）"""
+        r = self.build(376)
+        r.fail_before_start(RuntimeError('guest prepare failed'))
+        self.assertFalse([m for m in self.logs if 'lease は残す' in m], self.logs)
+        self.logs.clear()
+        r2 = self.build(377)
+        r2.state['lease'] = 'run-377-abcdef'
+        r2.fail_before_start(RuntimeError('guest prepare failed'))
+        self.assertTrue([m for m in self.logs if 'lease は残す' in m], self.logs)
+
+    def test_without_wait_a_busy_worker_goes_back_to_todo_not_blocked(self):
+        """`--wait` 無しでも、他 run の lease は「直す所が無い失敗」。blocked にせず todo に戻す（チケット 373 (b)）"""
+        r = self.build(378, wait_s=0, busy_calls=10 ** 9)
+        self.assertEqual(r.main(), 2)
+        s = json.loads((r.run_dir / 'state.json').read_text(encoding='utf-8'))
+        self.assertEqual((s['result'], s['failure']), ('failed', 'wait_timeout'))
+        self.assertNotIn('waited_s', s)                                      # 待っていないので「0 秒待った」とは書かない
+        self.assertIn('2026-09-09-termarium-251 が使用中', s['wait_reason'])
+        self.assertEqual(self.acquired, [])
+        self.assertFalse([m for m in self.logs if 'lease は残す' in m], self.logs)
 
 
 if __name__=='__main__':unittest.main()

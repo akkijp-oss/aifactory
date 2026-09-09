@@ -103,6 +103,8 @@ Through MCP, call `ticket_run` for the ticket and monitor the returned job ID wi
 
 Check `online`, `lifecycle` / `base_ready` / `network_ready` under `info`, and the lease. A directly started run can wait up to six hours for an online worker's base VM or Softnet setup, configurable with `AIFACTORY_MAC_PREPARE_WAIT_S`. No VM or lease is allocated while waiting. Dispatch skips unready, offline, or leased workers.
 
+A worker is a single machine shared across projects (several projects may name the same worker id in `project.yml`). While another run holds the lease, `kb run <ID> --wait <minutes>` waits up to that many minutes for the lease to be released before starting. While waiting, `current` in `state.json` is `wait-vm` and the console shows "waiting for a free VM"; no VM or lease is allocated. A run that reaches the limit, and a run started without `--wait`, leave the ticket in `todo` instead of `blocked` and record which run has held the worker since when, in `wait_reason` in `state.json` and in the ticket note. Dispatch picks the ticket up once the worker is free, so no manual resubmission is needed. Offline workers and workers without lifecycle support are returned to a human immediately rather than waited on (ADR-0049).
+
 ## Artifacts and completion
 
 Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
@@ -135,6 +137,8 @@ Collection accepts regular files directly under the guest working directory, up 
 | Artifact collection or guest deletion fails | Keep the lease and establish artifact and guest state before recovery |
 
 `--resume` requires ownership of the run's lease. A provisioning failure can be retried in the same running guest if credentials, repository, and step history have not been created. A partially created repository or stopped guest is not automatically recreated.
+
+Which step it restarts from is decided from the step history (`history`) in `state.json`: from the first step of the workflow when the history is empty (provisioning failed before any step ran), and from the last step that ran when it is not. It never carries over `next: human` and releases the guest without running a single step. A run with nothing left to continue (the PR is already out, or `next: end`) stops before the guest is touched (ADR-0047).
 
 `control cancel` requests a stop; it does not confirm it. Use `resolve <operation-id> --confirmed-stopped` only after an administrator verifies shutdown. Resolving an operation is separate from releasing the run's lease: `control release-lease` requires a successful `guest-release` operation. See the [worker recovery reference](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧) for arguments and disconnection behavior.
 
