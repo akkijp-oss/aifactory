@@ -120,9 +120,11 @@ class SeverityBonusTest(unittest.TestCase):
 class RealWorkflowTest(unittest.TestCase):
     """実物の workflow 定義（`kit/workflows/*.yml` の review step）で、戻る回数が max_loops + 1 で止まることを固定する"""
 
-    def review_step(self, name):
-        wf = run.load_yaml(REPO / "workflow/kit/workflows" / f"{name}.yml")
-        return next(s for s in wf["steps"] if s.get("role") == "reviewer")
+    def review_steps(self):
+        """`role: reviewer` を持つ step を全部の workflow から拾う（workflow が増えても取りこぼさない）"""
+        for f in sorted((REPO / "workflow/kit/workflows").glob("*.yml")):
+            for s in run.load_yaml(f)["steps"]:
+                if s.get("role") == "reviewer": yield f.stem, s
 
     def loops_until_human(self, step, severity):
         r = fake_run(severity=severity)
@@ -133,12 +135,15 @@ class RealWorkflowTest(unittest.TestCase):
         return n
 
     def test_minor_adds_exactly_one_loop_to_every_workflow(self):
-        for name in ("bug", "docs", "feature", "feature-long", "hotfix"):
-            step = self.review_step(name)
+        seen = []
+        for name, step in self.review_steps():
+            seen.append(name)
             limit = step["on_fail"]["max_loops"]
             self.assertEqual(self.loops_until_human(step, None), limit, name)
             self.assertEqual(self.loops_until_human(step, "major"), limit, name)
             self.assertEqual(self.loops_until_human(step, "minor"), limit + 1, name)
+        # goto 先が implement でない merge-pr（goto: resolve）も含め、review がある workflow は全部見たか
+        self.assertEqual(sorted(seen), ["bug", "docs", "feature", "feature-long", "hotfix", "merge-pr"])
 
 
 if __name__ == "__main__":

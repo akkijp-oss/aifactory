@@ -137,6 +137,21 @@ class KbRunFromTest(unittest.TestCase):
         self.assertIn("--force", r.stdout + r.stderr)
         self.assertFalse(self.calls.exists(), "runner を呼ぶ前に止まること")
 
+    def test_the_refusal_offers_a_way_out_that_actually_works(self):
+        """断るときは効く対処だけを勧める。この状態（記録に finished が無い）で `kb sync` を打っても
+           apply_result() が in_progress を書き直すだけで台帳は動かないので、案内に出してはいけない（352 のレビュー指摘）"""
+        self.running_run(self.prev)
+        msg = (lambda r: r.stdout + r.stderr)(self.kb("run", "905", "--from", "implement"))
+        self.assertNotIn("kb sync", msg)
+        self.assertIn(f"kb reopen 905", msg)
+        self.assertEqual(self.kb("sync", "905").returncode, 0)                 # 打っても台帳は in_progress のまま
+        self.assertNotEqual(self.kb("run", "905", "--from", "implement").returncode, 0)
+        self.assertFalse(self.calls.exists(), "ここまで runner は呼ばれない")
+        self.assertEqual(self.kb("reopen", "905").returncode, 0)               # 案内した対処なら通る
+        r = self.kb("run", "905", "--from", "implement")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)                 # take が失敗して終わる（= runner まで届いた）
+        self.assertIn(f"FROM_RUN: {self.prev}", self.calls.read_text(encoding="utf-8"))
+
     def test_force_lets_the_second_resume_through(self):
         self.running_run(self.prev)
         r = self.kb("run", "905", "--from", "implement", "--force")

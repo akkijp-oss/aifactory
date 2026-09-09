@@ -16,7 +16,7 @@ ADR-0036 で `kb run <id> --from <step> --branch <wip>`（新しい VM で wip �
 1. **reviewer は FAIL のときに `severity: minor|major` を 1 行書く。** 置き場は **2 行目以降の独立した 1 行**。1 行目の `# レビュー: PASS|FAIL` は 5 つの workflow と `pr-automerge.sh`（ADR-0042）が共有する契約なので**変えない**。読むのは `workflow/bin/run` の module 関数 `review_severity()`（1 行目は見ない＝`# レビュー: PASS` を severity と誤読しない）。判定そのものは `review_verdict()` に切り出し、`run_agent()` と `first_retry_note()` の両方が同じ 1 か所を使う。
 2. **`severity: minor` の FAIL に限り、戻せる回数の上限を 1 回だけ超えて `goto` に戻す。** 加点は **1 遷移につき 1 回きり**（`state.json` の `severity_bonus: {"<from>-><to>": 1}` に事実だけを残す。文言は書かない＝ADR-0025）。何度 minor と書かれても増えない。`major` と無指定は従来どおり `else`（human）。加点するのは**上限を使い切ったときだけ**で、上限内なら加点を温存する。reviewer 以外の role の step（`gates` の戻しなど）は対象外。`workflow/kit/workflows/*.yml` の `max_loops` は変えない。
 3. **再開の依頼文に前回の review.md を入れるのは、1 行目が FAIL のときだけ。** 既存の「`review` からやり直すときは入れない」はそのまま。PASS だったときは、これまでどおり `state.json` の `error` の最終行 1 行（止まった理由）を添える分岐に落ちる。チケットは `resolve` / `pr` のときと限定していたが、PASS の review.md が残る状況は reviewer 以外の step からの再開全般で起こるので**一般化する**。
-4. **台帳が `in_progress` で、その `run` の記録も終わっていない（`state.json` に `finished` が無い、または記録がまだ無い）ときは `kb run --from` を断る。** `--force` を付けたときだけ通す。判定は `kb` の `run_in_progress()` 1 か所（`human_note()` と同じ見方）。`--dry-run` では判定しない。断り方は「どの run が実行中か」と「`kb sync` で台帳を合わせるか `--force`」が分かる 1〜2 行（表示は kb 側＝ADR-0025）。
+4. **台帳が `in_progress` で、その `run` の記録も終わっていない（`state.json` に `finished` が無い、または記録がまだ無い）ときは `kb run --from` を断る。** `--force` を付けたときだけ通す。判定は `kb` の `run_in_progress()` 1 か所（`human_note()` と同じ見方）。`--dry-run` では判定しない。断り方は「どの run が実行中か」と「動いているなら待つ・止まっているなら `kb reopen` か `--force`」が分かる 1〜2 行（表示は kb 側＝ADR-0025）。`kb sync` は勧めない: このガードが発火する状態（`finished` 無し）で `kb sync` を打っても `apply_result()` は `in_progress` を書き直すだけで、台帳は動かない。
 
 ## 理由
 

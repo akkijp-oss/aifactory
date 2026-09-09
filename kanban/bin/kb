@@ -460,8 +460,8 @@ def cmd_run(a):
     # 同じチケットを 2 本同時に `--from` で再開すると、wip ブランチ（task + workflow で決まる）が後勝ちで上書きされる（ADR-0036 / ADR-0053）。
     # 台帳が実行中を指していて、その run の記録もまだ終わっていないときは断る（--force で明示的に許す）
     if restarting and not a.dry_run and not a.force and r["status"] == "in_progress" and run_in_progress(r["run"]):
-        die(f"{a.id} は {r['run']} が実行中（--from の再開は 1 本ずつ）。"
-            f"終わっているなら kb sync {a.id} で台帳を合わせるか、承知の上なら --force を付ける")
+        die(f"{a.id} は {r['run']} が実行中（--from の再開は 1 本ずつ）。動いているなら終わるのを待つ。"
+            f"もう動いていない（runner を止めた・VM が落ちた）なら kb reopen {a.id} で板を戻すか、承知の上なら --force を付ける")
     if resuming:
         run_dir = r["run"]
     # kind は「何の仕事か」、workflow は「今回どう回すか」。--workflow は kind を書き換えない（チケット 249）

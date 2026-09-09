@@ -152,7 +152,7 @@ With `--from`, a run that ended at `human` is redone **on a new VM**, continuing
 
 !!! warning "Resuming the same ticket twice at once is refused"
 
-    The wip branch name is derived from the ticket and the workflow, so resuming the same ticket twice with `--from` lets whichever run finishes last overwrite the other's work. While the ledger says the ticket is in progress and that run's record has not finished either (no `finished` in `state.json`), `kb run --from` stops with an error. If the run is actually done and only the ledger is stale, bring it up to date with `kb sync <id>`. Add `--force` only when you mean to go ahead anyway (ADR-0053).
+    The wip branch name is derived from the ticket and the workflow, so resuming the same ticket twice with `--from` lets whichever run finishes last overwrite the other's work. While the ledger says the ticket is in progress and that run's record has not finished either (no `finished` in `state.json`), `kb run --from` stops with an error. If it really is still running, wait for it to finish. If it is not running any more (you stopped the runner, or the VM went down), `kb reopen <id>` puts the ticket back on the board and lets the resume through (`kb sync` does not: a record with no `finished` stays `in_progress`). Add `--force` only when you mean to go ahead anyway (ADR-0053).
 
 | state.json | State | Note |
 |---|---|---|

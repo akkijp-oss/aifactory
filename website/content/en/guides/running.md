@@ -115,7 +115,7 @@ The exact line to type is shown in the ticket's note, in the "Outcome" panel of 
 - The previous `work/plan.md` and friends are copied to the new VM. The previous `review.md` goes into the first prompt as "what the last run produced (fix this)" **only when it was a FAIL** (for a run that stopped after the review passed, the one-line reason it stopped goes in instead)
 - The previous run stays as it was, and the new run's `state.json` records `resumed_from`. The loop counters start over
 - It is a different thing from `--resume` (continue on the **same** VM while it is still lent), and the two cannot be combined
-- Do not resume the same ticket twice at once: the wip branch name is derived from the ticket and the workflow, so whichever finishes last overwrites the other. While a run is still going, `kb run --from` stops with an error; if only the ledger is stale run `kb sync <id>`, and add `--force` when you mean to go ahead anyway
+- Do not resume the same ticket twice at once: the wip branch name is derived from the ticket and the workflow, so whichever finishes last overwrites the other. While a run is still going, `kb run --from` stops with an error; if that run is not running any more, `kb reopen <id>` puts the ticket back on the board and lets the resume through (`kb sync` does not), and add `--force` when you mean to go ahead anyway
 
 ## Calling the runner directly
 
