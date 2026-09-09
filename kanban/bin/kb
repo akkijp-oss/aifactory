@@ -292,6 +292,10 @@ def cmd_run(a):
         env.pop("AIFACTORY_FROM_RUN", None)
     rc = subprocess.run(cmd, env=env).returncode
     if a.dry_run: print(f"[kb] dry-run 終了 rc={rc}"); return rc
+    # --from が弾かれて記録が 1 つも残らなかったら、台帳の run を前回に戻す（333）。
+    # 戻さないと AIFACTORY_FROM_RUN が存在しない run 名になり、打ち直しても wip も前回の work/*.md も辿れない
+    if restarting and rc != 0 and r["run"] and not (paths.run_path(run_dir) / "state.json").exists():
+        run_dir = r["run"]
     rc = apply_result(c, a.id, run_dir, rc)
     print(f"[kb] {fmt(get(c, a.id))}")
     return rc

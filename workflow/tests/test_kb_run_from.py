@@ -105,6 +105,17 @@ class KbRunFromTest(unittest.TestCase):
         self.assertIn("人間へ", note)
         self.assertIn("kb run 905 --from implement --branch sandbox/905-feature-wip", note)
 
+    def test_a_rejected_from_keeps_the_previous_run_in_the_ledger(self):
+        """step を打ち間違えて runner が記録を残さず落ちたら、台帳の run は前回のまま（打ち直せる状態を壊さない）"""
+        self.stopped_run(self.prev)
+        r = self.kb("run", "905", "--from", "implemnt")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse((self.ws / "runs" / self.today / "state.json").exists(), "記録が残っていない前提のテスト")
+        show = self.kb("show", "905").stdout
+        self.assertIn(self.prev, show)                                         # 前回の run に戻っている
+        self.assertNotIn(self.today, show)
+        self.assertIn("kb run 905 --from implement --branch sandbox/905-feature-wip", self.note())
+
     def test_a_human_run_without_a_wip_branch_keeps_the_old_note(self):
         """wip も resume_step も無い（古い）記録では、従来どおりのメモにする（打てないコマンドを出さない）"""
         self.stopped_run(self.prev, wip_branch="", resume_step=None)
