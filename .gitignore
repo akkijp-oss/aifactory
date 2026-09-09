@@ -43,3 +43,4 @@ __pycache__/
 
 # MkDocs のビルド生成物
 website/site/
+.playwright-mcp/

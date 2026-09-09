@@ -780,6 +780,58 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.quota_paused", app); self.assertIn("T.outcome.key_failed", app)
 
+    def test_stats_aggregates_agent_steps_from_the_raw_events(self):
+        """工程ごとの消費統計（チケット 382）。根拠は agent-*.jsonl の result / usage と init の model だけ。
+        thinking は回数と「本文が見える回数・文字数」を分ける（Opus は本文が空で署名だけ）。code の工程は載らず、dry-run は既定で除く"""
+        def jsonl(model, turns, usage, cost, thinking=(), rejected=False):
+            lines = [{"type": "system", "subtype": "init", "model": model, "tools": [], "cwd": "/app"}]
+            for th in thinking:
+                lines.append({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": th, "signature": "x"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}]}})
+            if rejected: lines.append({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1788976200, "rateLimitType": "five_hour"}})
+            lines.append({"type": "result", "subtype": "success", "is_error": rejected, "num_turns": turns, "duration_ms": 120000, "usage": usage, "total_cost_usd": cost, "result": "ok"})
+            return "\n".join(json.dumps(l) for l in lines) + "\n"
+        today = datetime.date.today().isoformat(); tid = "7777"   # 種のチケットとは別の番号（他のテストが種の run を名前で探すので混ぜない）
+        u = lambda i, cw, cr, o: {"input_tokens": i, "cache_creation_input_tokens": cw, "cache_read_input_tokens": cr, "output_tokens": o}
+        self._fixture_run(f"{today}-{PJ}-{tid}", {**self._state([("plan", True), ("implement", True)], workflow="bug"), "task": tid}, {
+            "agent-plan-0.jsonl": jsonl("claude-fable-5-1", 10, u(100, 20000, 300000, 5000), 1.5, thinking=["原因を確定した", ""]),
+            "agent-implement-1.jsonl": jsonl("claude-opus-5", 40, u(50, 60000, 2000000, 20000), 4.0, thinking=["", "", ""]),
+            "agent-review-2.jsonl": jsonl("claude-fable-5-1", 1, u(0, 15000, 10000, 100), 0.2, rejected=True),
+            "code-gates-3.log": "PASS x\n"})
+        self._fixture_run(f"{today}-{PJ}-{tid}-dry", {**self._state([("plan", True)], workflow="bug"), "task": tid}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 1, u(0, 1, 1, 1), 9.0)})
+        self._fixture_run("2019-01-01-otherpj-1", {**self._state([("plan", True)], workflow="bug"), "pj": "otherpj", "task": "1"}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 3, u(0, 10, 10, 10), 0.5)})
+        st, d = self.http.get("/api/stats?days=1")
+        self.assertEqual(st, 200)
+        self.assertGreaterEqual(d["files"], 5)
+        # 他のテストの run が混ざらないよう、この run の分だけ拾って見る（期間の中に dry と 2019 年の分は入らない）
+        mine = [r for r in d["top"] if r["task"] == tid]
+        self.assertEqual(sorted(r["step"] for r in mine), ["implement", "plan", "review"])
+        t = {k: sum(r[k] for r in mine) for k in ("turns", "cost", "input", "cache_write", "cache_read", "output", "thinking_blocks", "thinking_visible", "thinking_chars", "tool_calls")}
+        t["steps"] = len(mine); t["steps_with_thinking"] = sum(1 for r in mine if r["thinking_blocks"]); t["rate_limited"] = sum(1 for r in mine if r["rate_limited"])
+        t["cost"] = round(t["cost"], 2)
+        self.assertEqual((t["steps"], t["turns"], t["cost"]), (3, 51, 5.7))
+        self.assertEqual((t["input"], t["cache_write"], t["cache_read"], t["output"]), (150, 95000, 2310000, 25100))
+        self.assertEqual((t["thinking_blocks"], t["thinking_visible"], t["thinking_chars"], t["steps_with_thinking"]), (5, 1, 7, 2))
+        self.assertEqual(t["rate_limited"], 1); self.assertEqual(t["tool_calls"], 5)
+        self.assertEqual(d["by_model"][0]["model"], "claude-opus-5")                                   # 費用の高い順
+        self.assertIn(("plan", "claude-fable-5-1"), {(a["step"], a["model"]) for a in d["by_step"]})
+        self.assertIn(("review", "claude-fable-5-1"), {(a["step"], a["model"]) for a in d["by_step"]})
+        imp = next(r for r in mine if r["step"] == "implement")
+        self.assertEqual(imp["log"], "agent-implement-1.log"); self.assertTrue(imp["log_path"].endswith("agent-implement-1.log"))
+        # PJ で絞れる（期間を外せば 2019 年の分も入る）。dry は dry=1 のときだけ
+        _, d2 = self.http.get("/api/stats"); self.assertIn("otherpj", d2["pjs"]); self.assertGreater(d2["selected"], d["selected"])
+        _, d3 = self.http.get("/api/stats?pj=otherpj"); self.assertEqual((d3["selected"], d3["total"]["cost"]), (1, 0.5))
+        _, d4 = self.http.get("/api/stats?days=1&dry=1"); self.assertEqual(d4["selected"], d["selected"] + 1)
+        # 2 度目はキャッシュから（読んだ結果がジョブ記録の置き場に残る）。中身が変わったファイルだけ読み直す
+        cache = self.tmp / "jobs" / "stats-cache.json"
+        self.assertTrue(cache.exists())
+        f = self.ws / "runs" / f"{today}-{PJ}-{tid}" / "agent-plan-0.jsonl"
+        f.write_text(jsonl("claude-fable-5-1", 10, u(100, 20000, 300000, 5000), 2.5), encoding="utf-8")
+        os.utime(f, (time.time() + 5, time.time() + 5))
+        _, d5 = self.http.get("/api/stats?days=1")
+        self.assertEqual(round(sum(r["cost"] for r in d5["top"] if r["task"] == tid), 2), 6.7)
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("async function viewStats", app); self.assertIn("'stats'", app)
+
     def test_run_outcome_drives_the_run_view(self):
         """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")

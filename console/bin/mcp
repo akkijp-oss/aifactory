@@ -59,6 +59,7 @@ def t_ticket_run(a): return core.ticket_run(arg_int(a, "id"), a)
 def t_run_action(a): return core.run_action(a.get("name") or "", a)
 def t_intake(a): return core.op_intake(a)
 def t_dispatch(a): return core.op_dispatch(a)
+def t_stats(a): return core.stats_view(days=int(a["days"]) if a.get("days") else None, pj=a.get("pj") or None, include_dry=bool(a.get("dry")))
 def t_run_list(a):
     runs = core.list_runs()
     if not a.get("all"): runs = [r for r in runs if not r.get("dry") and not r.get("attempt")]
@@ -168,6 +169,8 @@ TOOLS = [
     ("dispatch", "todo を古い順に kb run する（glue/bin/dispatch。直列）。ジョブを返す", schema({"pj": STR, "once": {**BOOL, "description": "1 件だけ"}, "max": INT, "dry_run": BOOL,
              "wait": {**INT, "description": "VM に空きが無いとき最大 n 分待つ（満杯の PJ を飛ばさない）"}}), t_dispatch),
     ("run_list", "実行記録の一覧（$AIFACTORY_WORKSPACE/runs/）。既定は dry-run と退避分を除く", schema({"all": BOOL, "limit": INT}), t_run_list),
+    ("stats", "工程ごとの消費統計（agent step の agent-*.jsonl から）。モデル別 / 工程別 / 日別 / PJ 別に、工程数・ターン・所要秒・トークン（input / cache_write / cache_read / output）・thinking のブロック数と文字数・費用換算（claude CLI の total_cost_usd。利用枠の重みではない）と、費用の高い工程の上位 20。days で今日からさかのぼる日数（省略で全部）、pj で絞る",
+     schema({"days": {**INT, "description": "今日からさかのぼる日数。1 なら今日だけ。省略で全部"}, "pj": STR, "dry": {**BOOL, "description": "dry-run の記録も含める"}}), t_stats),
     ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット", schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}}, ["name"]), t_run_show),
     ("run_action", "人間が run の後始末をしたことを実行記録に残す（kb run-note）。human で止まった run を人が wip ブランチから PR にしてマージした・打ち切ったときに使う。runner が書いた result は変えず human だけを足すので、run_show と console の run 画面が「人間が PR#n で仕上げた」と読めるようになる。action: close（決着を記録する。result は done / abandoned、既定 done。既に記録があれば断る）/ note（記録済みの説明を書き直す。text 必須）",
      schema({"name": {**STR, "description": "例 2026-09-06-kumitate-206"}, "action": {"type": "string", "enum": ["close", "note"]},
@@ -198,7 +201,7 @@ ANNOTATIONS = {
     "run_list": ("実行記録の一覧", RO), "run_show": ("実行記録 1 件", RO), "read_file": ("記録のファイルを読む", RO),
     "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0038）
     "job_list": ("ジョブ一覧", RO), "job_show": ("ジョブ 1 件", RO), "job_wait": ("ジョブを待つ", RO),
-    "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO),
+    "logs": ("起票・配車のログ", RO), "config": ("設定と経路", RO), "stats": ("工程ごとの消費統計", RO),
     "ticket_new": ("チケットを起票", RW), "ticket_action": ("チケットを進める・直す", RW),
     "ticket_attach": ("チケットにファイルを添付", RW),
     "ticket_detach": ("チケットの添付を消す", DESTRUCTIVE),     # 添付の実体が消える
