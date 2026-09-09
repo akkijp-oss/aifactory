@@ -447,7 +447,7 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
         result, pr_url, wip = s.get("result"), s.get("pr_url") or "", s.get("wip_branch") or ""
         m = re.search(r"/pull/(\d+)", pr_url); pr = int(m.group(1)) if m else None
         # chore / bug / feature は pr step の後 `human`（= 人間がレビューしてマージ）で終わるので、PR があれば review
-        # runner が条件を確かめて自分でマージした run（ADR-0041）。事実は state.json の merged だけを見る（推し量らない）
+        # runner が条件を確かめて自分でマージした run（ADR-0042）。事実は state.json の merged だけを見る（推し量らない）
         m2 = s.get("merged")
         if isinstance(m2, dict) and m2.get("at"):        # at は script が必ず書く（sha は GitHub の反映が遅れると空になる）
             n = re.search(r"/pull/(\d+)", m2.get("pr_url") or "")

@@ -1,0 +1,2 @@
+### Security
+- **PR 本文・PR コメント・gates の転記から既知の秘密の形を伏せる**。テスト出力に VM の env の値（`CLAUDE_CODE_OAUTH_TOKEN_*=sk-ant-…`）が混ざると、gates.sh の base 確認の転記（ADR-0038）→ `gates.txt` → `pr-create.sh` の PR 本文という経路で公開 PR に載りうる（2026-09-09 の run 358 で寸前まで行った）。`kit/steps/scrub.sh` に判定を 1 か所置き、`pr-create.sh` / `pr-merge.sh` / `gates.sh`（`gates.txt` と `work/gates/*.log`）がそこを通す。Claude の長期トークン（`sk-ant-…`）、GitHub のトークン（`ghs_` / `ghp_` / `gho_` / `ghu_` / `ghr_` / `github_pat_`）、`KEY=値` の形（`CLAUDE_CODE_OAUTH_TOKEN*` / `GH_TOKEN*` / `ANTHROPIC_API_KEY`）を先頭だけ残して `****` にする。行は消さない。

@@ -260,7 +260,7 @@ class Run:
 
     @staticmethod
     def normalize_auto_merge(v):
-        """project.yml の `auto_merge` を「無し（None）」か「全部の値が埋まった dict」のどちらかにする（ADR-0041）。
+        """project.yml の `auto_merge` を「無し（None）」か「全部の値が埋まった dict」のどちらかにする（ADR-0042）。
         無し / false は今までどおり（PR を作って人間に渡す）。true は既定値、dict は書かれた分だけ上書き"""
         if not v: return None
         return {**Run.AUTO_MERGE_DEFAULTS, **(v if isinstance(v, dict) else {})}
@@ -688,7 +688,7 @@ class Run:
                 "RUN_NAME": self.run_dir.name}
 
     def note_merged(self):
-        """pr-automerge.sh が実際にマージしたとき、その事実を run の記録に残す（ADR-0041）。
+        """pr-automerge.sh が実際にマージしたとき、その事実を run の記録に残す（ADR-0042）。
 
         書き手は runner だけ（ADR-0039 の契約）。kb と console はこれを読むだけで、マージしたかどうかを推し量らない。
         マージしなかった回は merged.json が無いので、ここは何もしない（PR は開いたまま人間へ渡る）"""
@@ -807,7 +807,7 @@ class Run:
         while cur not in ("end", "human"):
             step = self.steps.get(cur) or die(f"step {cur} が無い")
             # auto_merge の無い PJ では automerge の工程そのものを回さない（PR を作って人間に渡す、今までどおりの終わり方）。
-            # workflow の定義は全 PJ 共通なので、飛ばす判断は PJ の設定を持っている runner 側に置く（ADR-0041）
+            # workflow の定義は全 PJ 共通なので、飛ばす判断は PJ の設定を持っている runner 側に置く（ADR-0042）
             if step.get("code") == "pr-automerge.sh" and not self.auto_merge:
                 self.log("automerge: この PJ は auto_merge が無いので飛ばす（PR は人間が判断する）")
                 self.state["next"] = cur = "human"; self.state["current"] = None; self.save()
@@ -832,7 +832,7 @@ class Run:
             # 戻すときは前回の結果を添える
             # base 確認で作業ツリーを戻せなかったときは、赤が全部 INFO に落ちて ok=True でも人間へ回す。理由と再開先を残す
             if (not ok or self.base_check_broken) and nxt == "human":
-                # 自動マージしなかった回（ADR-0041）。工程が失敗したのではなく PR ができた上での終わり方なので、
+                # 自動マージしなかった回（ADR-0042）。工程が失敗したのではなく PR ができた上での終わり方なので、
                 # 「戻せる回数を使い切った」とは書かず、続きから回す口（resume_step）も付けない
                 if step.get("code") == "pr-automerge.sh" and not self.base_check_broken:
                     why = ([l.strip() for l in str(info).splitlines() if l.strip()] or ["理由なし"])[-1][:300]

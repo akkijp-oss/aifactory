@@ -5,13 +5,17 @@ set -euo pipefail
 : "${TASK:?}" "${WORK:?}" "${BRANCH:?}" "${BASE:?}" "${PR_NUMBER:?}"
 METHOD="${MERGE_METHOD:-merge}"
 sb() { sandbox ssh "$TASK" "$@"; }
+# scrub: PR 本文に貼る前に、既知の秘密の形（Claude の長期トークン sk-ant-…、GitHub の ghs_/ghp_/gho_/ghu_/ghr_、
+# KEY=値 の形の CLAUDE_CODE_OAUTH_TOKEN* / GH_TOKEN*）を伏せる。テスト出力や base 確認の転記に env の値が混ざった事故（2026-09-09 run 358）の再発防止。
+# 判定の正本は workflow/kit/steps/scrub.sh（gates.sh も同じものを使う）
+scrub() { bash "$(dirname "${BASH_SOURCE[0]}")/scrub.sh"; }
 # コンフリクトマーカーが残っていたら止める
 if sb "cd \$SANDBOX_APP_DIR && git grep -n -E '^(<<<<<<<|>>>>>>>)' -- . ':!*.md' | head -3" | grep -q .; then echo "[merge] コンフリクトマーカーが残っている"; exit 1; fi
 # base を取り込み済みか（origin/base が HEAD の祖先か）
 sb "cd \$SANDBOX_APP_DIR && git fetch -q origin $BASE && git merge-base --is-ancestor origin/$BASE HEAD" || { echo "[merge] origin/$BASE が取り込まれていない"; exit 1; }
 sb "cd \$SANDBOX_APP_DIR && git push -q origin HEAD:$BRANCH"
 section() { local f=$1; sb "test -f $WORK/$f && { echo; echo \"### $f\"; echo; cat $WORK/$f; }" 2>/dev/null || true; }
-sb "cat > $WORK/merge-comment.md" <<EOF
+scrub <<EOF | sb "cat > $WORK/merge-comment.md"
 aifactory sandbox がコンフリクトを解消し、ゲートとレビューを通して **$BASE** へマージします（workflow: merge-pr / task ${TASK}）。
 $(section report.md)
 $(section review.md)
