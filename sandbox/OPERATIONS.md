@@ -139,7 +139,7 @@ cmux から使うときは surface で `sandbox take … && sandbox ssh …` を
 ```bash
 sandbox token rotate                  # 期限切れの差し替えはこれ 1 本（制御系で）。global・鍵を持つ全 PJ・ctl.env を対話入力 1 回で更新し、
                                       #   更新箇所を一覧、aifactory-console を restart、貸出中 VM に reinject --all まで（ADR-0029）
-sandbox token set kumitate            # 1 PJ だけ（初期登録・rotate 後に別アカウントへ戻すとき）→ ~/.config/sandbox/pj/kumitate.env
+sandbox token set kumitate            # 【非推奨・ADR-0045】Claude の鍵を PJ ファイルに置く古い方式。実行すると注意が出る。鍵は下の鍵プールへ
 sandbox token set myapp gh            # GitHub トークン（GitHub App 未設定時のフォールバック）
 sandbox token show myapp              # 今どれが効いているか（マスク表示・発行からの日数・このホストが制御系か）
 sandbox reinject --all                # 貸出中の VM 全部に差し替え後の値を再注入（巻き戻しなし）。VM 内の claude は再起動
@@ -148,24 +148,24 @@ SANDBOX_CLAUDE_TOKEN=xxx sandbox take kumitate 021      # 一回限りの上書�
 
 優先順位: `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（一回限り） > `pj/<pj>.env` > `env`。`token show <pj>` に出どころが出る。`take` / `reset` は task の PJ を覚えているので、以後の操作で PJ を指定し直す必要はない。
 
-### Claude の鍵プール（制御系にまとめて置く。ADR-0044）
+### Claude の鍵プール（VM に渡す Claude の鍵の正本。ADR-0044 / ADR-0045）
 
-鍵を PJ に貼り付ける代わりに、制御系の `~/.config/sandbox/keys.json`（600）に名前を付けて並べておくと、`take` が系統ごとに 1 本ずつ選んで VM に渡します。鍵には「fable に使う」「fable 以外（Opus / Sonnet / Haiku）に使う」の 2 つのフラグがあり、Fable 用の契約と Opus 用の契約を分けられます。
+VM に渡す Claude の鍵は、制御系の `~/.config/sandbox/keys.json`（600）に名前を付けて登録します。`take` がモデルごとに 1 本ずつ選んで VM に渡します。鍵ごとに「Fable に使う」（`--fable`。計画・設計・レビューの工程）「Opus・Sonnet・Haiku に使う」（`--other`。実装・調査の工程）を持ち、契約ごとに分けられます。console の「鍵」画面（`#/keys`）と同じファイルなので、どちらから登録しても同じです。2026-09-10 に main テナントの PJ ファイルの鍵は全部プールへ移しました。
 
 ```bash
 claude setup-token                                  # 鍵を作る（対話）
 sandbox keys add fable-main --fable --note "Fable 契約"   # 名前を付けて足す（token は対話入力。パイプでも可）
 sandbox keys add opus-a --other                     # Opus / Sonnet / Haiku 用
-sandbox keys list                                   # 名前・フラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出
+sandbox keys list                                   # 名前・用途・有効・末尾 4 文字・登録日・最後に使った日時・使用回数・使用中のチケット
 sandbox keys set opus-a --disable                   # しばらく使わない（貸出中の task が使っていれば reinject の案内が出る）
-sandbox keys set opus-a --fable=on                  # フラグを変える
+sandbox keys set opus-a --fable=on                  # 用途を変える
 sandbox keys token opus-a                           # 値だけ差し替える（名前と統計はそのまま）
 sandbox keys rm opus-a                              # 消す（貸出中の task が使っていれば --force が要る）
 sandbox reinject <task>                             # 無効化・削除・差し替えを貸出中の VM に反映（次の claude -p から効く）
 ```
 
-- 選び方は「その task が前に使った鍵（まだ使える設定なら）→ 無ければ、フラグの合う鍵のうち最後に使ってから最も時間が経ったもの」です。使用量が鍵の間で均されます。
-- 候補が 1 本も無い系統は、これまでどおり `pj/<pj>.env` と `env` の鍵を使います。プールが空なら挙動は今までと同じです。
+- 選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。使用量が鍵の間で均されます。
+- 用途に合う鍵が 1 本も無いときだけ、`pj/<pj>.env` と `env` の鍵（`sandbox token set`。非推奨）に落ちます。main テナントでは global の `env` に保険を 1 本残してあります。
 - 鍵の値はどこにも表示しません。`keys list` も console も MCP も、名前と末尾 4 文字だけを出します。run のログには `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` のように名前だけ残ります。
 - console の「鍵」画面（左のナビ。近道は `g k`）から同じことができます。使わない設定にする / 消すと、その鍵を使っている貸出に `sandbox reinject` のジョブが自動で起きます。
 - `sandbox token rotate` はプールを触りません（`env` と `ctl.env` の鍵だけを差し替えます）。プールの鍵を替えるのは `sandbox keys token <名前>` です。

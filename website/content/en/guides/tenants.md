@@ -87,7 +87,7 @@ Secrets go into the control plane by the organization itself. The maintainer nev
 
 ```bash
 ssh aifactory@ctl.acme.sb.internal
-sandbox token set <pj>                      # Claude Code long-lived token (output of claude setup-token)
+sandbox keys add <name> --fable --other     # Claude Code long-lived token (output of claude setup-token) into the key pool; the console's Keys screen works too
 ~/aifactory/sandbox/bin/gh-app-setup        # GitHub App (do the browser part locally; put app.env and private-key.pem under ~/.config/sandbox/gh-app/)
 vi ~/.config/aifactory/ctl.env              # CLAUDE_CODE_OAUTH_TOKEN (intake makes one LLM call on the control plane). GH_TOKEN can stay empty when the App is set up
 sudo systemctl restart aifactory-console

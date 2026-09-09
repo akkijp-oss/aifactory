@@ -120,7 +120,7 @@ kanban/bin/kb run 207
 | Symptom | Where to look |
 |---|---|
 | `take` reports no free VM | `sandbox ls`. If a lent VM is left over, `sandbox release <id>` |
-| The agent hits an authentication error | `sandbox token show <pj>` (it prints how many days ago the token was saved). If expired: `claude setup-token` → `sandbox token rotate` |
+| The agent hits an authentication error | `sandbox keys list` (issue date and last use). If expired: `claude setup-token` → `sandbox keys token <name>` (or the console's *Keys* screen) |
 | Gates stay red, get sent back twice, and the run goes to `human` | `code-gates-*.log`. If it is already red on the base branch, add it to `known_red_gates` in `project.yml` |
 | ssh to the VM was lost mid-run | Another session may have rebuilt the VM. See [Working with multiple sessions](../guides/multi-session.md) |
 

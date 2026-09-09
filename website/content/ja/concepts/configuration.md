@@ -69,7 +69,7 @@ flowchart LR
 
 | やりたいこと | 触るファイル | 効く範囲 |
 |---|---|---|
-| 新しいプロジェクトを工場に入れる | `workspace/projects/<pj>/{provision.sh, project.yml, gates.sh}`（`examples/projects/kumitate/` を写す）+ Proxmox でテンプレとプール + `sandbox token set` + GitHub App インストール | そのプロジェクト |
+| 新しいプロジェクトを工場に入れる | `workspace/projects/<pj>/{provision.sh, project.yml, gates.sh}`（`examples/projects/kumitate/` を写す）+ Proxmox でテンプレとプール + `GH_REPO`（`pj/<pj>.env`）+ GitHub App インストール。Claude の鍵は鍵プール（`sandbox keys` / 「鍵」画面）にあれば共通に使われる | そのプロジェクト |
 | ゲートを足す / 外す | `workspace/projects/<pj>/gates.sh`。base で既に失敗しているものは `project.yml` の `known_red_gates` | そのプロジェクト |
 | エージェントに毎回伝える事実（テストの実行方法、既知の注意点） | `project.yml` の `facts` | そのプロジェクトの全工程 |
 | このプロジェクトでやってはいけないこと / reviewer が必ず見ること | `project.yml` の `forbidden` / `review_points` | そのプロジェクト |
@@ -80,7 +80,7 @@ flowchart LR
 | チケットの分類基準 | `glue/bin/intake` のプロンプト、または依頼文の先頭に `kind:` 行 | チケット作成時 |
 | プール台数（実体） | `sandbox/proxmox/40-pool.sh <pj> <台数>`（作った台数がそのまま実体） | そのプロジェクトの並列数 |
 | プール台数（定義） | 環境変数 `SANDBOX_POOL_PER_PJ`（既定 3）。`glue/bin/dispatch`、`sandbox status`、コンソールの sandbox 画面が同じ値を読む。実体より多いと `take` が空きなしで落ちる | 配車と表示 |
-| Claude トークンの更新 | `sandbox token set <pj>`（貸出中は `sandbox reinject <id>`） | そのプロジェクト |
+| Claude の鍵の追加・入れ替え | `sandbox keys add` / `sandbox keys token <名前>`（console の「鍵」画面でも可。貸出中は `sandbox reinject <id>`）。`sandbox token set <pj>` は非推奨 | 全プロジェクト（鍵はプールで共有） |
 | Proxmox ホストや IP 空間 | `~/.config/sandbox/env`（`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`）、Proxmox 側は `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`。`sandbox/README.md` の命名規則 + ADR | 全体 |
 | 作業データの置き場 | 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace` | 全体 |
 
@@ -95,6 +95,6 @@ flowchart LR
 |---|---|
 | ワークフローの YAML / roles / routes.env / project.yml / gates.sh | **次の run から**。実行中の run には効かない（runner は起動時に読む） |
 | `sandbox/bin/sandbox` | `sandbox/bin/install.sh` を実行した後（PATH のコピーが更新される） |
-| トークン | `sandbox token set` の後の take から。貸出中は `reinject` |
+| Claude の鍵 | `sandbox keys add` / `set` の後の take から。貸出中は `reinject` |
 | `kb` / `intake` / `dispatch` | 即（リポジトリのパスを直接呼ぶ） |
 | Proxmox 側スクリプト | 再実行した後 |

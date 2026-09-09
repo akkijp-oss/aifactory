@@ -234,6 +234,24 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('pool: 2 本', r.stdout)
         self.assertIn('有効 1', r.stdout)
+        self.assertIn('Fable に使える 1', r.stdout)                                  # 用途の言い方は console の「鍵」画面と同じ
+
+    def test_list_names_the_purposes_like_the_console(self):
+        self.add('fable-a', '--fable')
+        r = self.keys_cmd('list')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('OPUS/SONNET', r.stdout); self.assertIn('ENABLED', r.stdout)
+        self.assertIn('Fable に使う', r.stdout)                                      # 末尾の凡例
+
+    def test_token_set_for_claude_is_deprecated_but_still_works(self):
+        """Claude の鍵を env ファイルに置く方式は非推奨（ADR-0045）。注意を stderr に出すが保存はする。gh には出さない"""
+        r = self.run_sh('cmd_token set "$@"\n', 'pj', 'claude', stdin='tokDEPR', token_part=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('[非推奨]', r.stderr); self.assertIn('sandbox keys add', r.stderr)
+        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN=tokDEPR', pathlib.Path(self.dir, 'pj', 'pj.env').read_text())
+        r = self.run_sh('cmd_token set "$@"\n', 'pj', 'gh', stdin='ghtok', token_part=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn('[非推奨]', r.stderr)
 
 
 if __name__ == '__main__':

@@ -182,5 +182,5 @@ echo
 echo "[ok] $NAME ($VMID, $IP) 制御系の入口（tailnet から。gw の route 承認後）:"
 echo "  console: http://ctl.$SB_DOMAIN:8765/?token=<ctl の ~/.config/aifactory/ctl.env の CONSOLE_TOKEN>   docs: http://ctl.$SB_DOMAIN:8765/docs/"
 echo "  ssh:     ssh -i <鍵> aifactory@ctl.$SB_DOMAIN   （$IP）"
-echo "[next] 貸出先が入れる secrets（ctl の中で）: sandbox token set <pj> / sandbox/bin/gh-app-setup / ~/.config/aifactory/ctl.env の CLAUDE_CODE_OAUTH_TOKEN"
+echo "[next] 貸出先が入れる secrets（ctl の中で）: sandbox keys add <名前> --fable --other（Claude の鍵。console の「鍵」画面でも可） / sandbox/bin/gh-app-setup / ~/.config/aifactory/ctl.env の CLAUDE_CODE_OAUTH_TOKEN（intake 用）"
 echo "[next] base テンプレート以降は制御系の鍵込みで焼く: 30-base-template.sh create（既存テンプレートには鍵が無いので作り直す）"
