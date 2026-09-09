@@ -551,10 +551,16 @@ def run_wait(name, until="step", timeout_s=60):
     t0 = time.time()
     s0 = run_state(d)
     base = run_mark(s0)
-    # もう終わっている run はこれ以上進まない。待たずに今の状態を返す（changed は「待っている間に動いたか」なので false）
+    # もう終わっている run はこれ以上進まない。待たずに今の状態を返す
+    # （until: result は待つ条件が既に満たされているので true、until: step は工程が動いていないので false）
     if (s0 or {}).get("finished"): return run_wait_view(d, name, until, until == "result", 0)
     while True:
         s = run_state(d)
+        if s is None and s0 is not None:
+            # 書いている途中の state.json を掴んだ（runner の save は tmp+rename ではない）。
+            # 読めなかっただけを「工程が変わった」と誤判定しないよう、判定せず次の周回に回す
+            if time.time() - t0 >= timeout_s: return run_wait_view(d, name, until, False, int(time.time() - t0))
+            time.sleep(1); continue
         done = bool((s or {}).get("finished")) or bool((s or {}).get("result"))
         changed = done if until == "result" else (run_mark(s) != base)
         if changed or time.time() - t0 >= timeout_s:

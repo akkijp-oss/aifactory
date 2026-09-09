@@ -454,6 +454,22 @@ class McpTest(unittest.TestCase):
         err, msg = self.c.tool("run_wait", name=name, timeout_s=-1); self.assertTrue(err)
         err, msg = self.c.tool("run_wait", name=name, until="nope", timeout_s=1); self.assertTrue(err)
 
+    def test_19b_run_wait_ignores_a_half_written_state_file(self):
+        """書いている途中の state.json（runner の save は tmp+rename ではない）を読めなかった周回を、
+           「工程が変わった」と誤判定しない"""
+        name, st = self.fake_run("921", self.RUNNING)
+        whole = st.read_text(encoding="utf-8")
+        t0 = time.time()
+        wait_id = self.c.send("tools/call", {"name": "run_wait", "arguments": {"name": name, "timeout_s": 8}})
+        time.sleep(1)
+        st.write_text(whole[:40], encoding="utf-8")                          # 途中まで（壊れた JSON）
+        time.sleep(2.5)
+        st.write_text(whole, encoding="utf-8")                               # 中身は同じまま書き直す
+        r = self.c.recv(); self.assertEqual(r["id"], wait_id)
+        d = json.loads(r["result"]["content"][0]["text"])
+        self.assertGreaterEqual(time.time() - t0, 7, "壊れた JSON を掴んだ周回で返ってしまっている")
+        self.assertFalse(d["changed"]); self.assertEqual(d["status"], "running"); self.assertEqual(d["step"], "implement")
+
     def test_20_run_show_carries_progress(self):
         """run_show の progress に工程ごとの経過秒・今の工程の経過秒・ゲートの PASS/FAIL/INFO 一覧が入る"""
         gates = "PASS lint\nFAIL unit (~/gates/unit.log)\nINFO typecheck red (also red on base; not a gate)\n=== unit.log (tail 60)\nPASS 拾ってはいけない\n"
