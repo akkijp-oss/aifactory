@@ -63,3 +63,4 @@
 - [0049: pull worker を他の run が使っているのは「待てば解ける失敗」（`PoolBusy`）として扱う](0049-pull-worker-lease-wait-is-pool-busy.md)
 - [0050: 「PR がどうなったか」は GitHub を正本に kb sync が見る（gh が使えなければ黙って飛ばす）](0050-pr-state-from-github-in-kb-sync.md)
 - [0051: run の工程遷移は run_wait で待つ／経過秒とゲート一覧は表示側で導く](0051-mcp-run-wait-and-derived-run-progress.md)
+- [0052: PJ 定義は MCP から読み書きする。書き先は workspace 側だけで、`examples/projects/` は読むだけ](0052-mcp-project-definition-read-write.md)

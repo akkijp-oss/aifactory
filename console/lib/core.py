@@ -1311,6 +1311,178 @@ def op_sandbox_release(b):
     return {"job": JobStore.start("sandbox-release", ["sandbox", "release", task], f"sandbox release {task}", ticket=int(task), conflict=busy)}
 
 
+# ---------- PJ 定義の読み書き（project.yml / gates.sh / provision.sh / prepare.sh。ADR-0052）
+# 読みは paths.project_dir()（workspace 優先・examples フォールバック）、書きは workspace 側 1 か所に固定する。
+# examples/projects/ はリポジトリの一部なので、ここから書き換えることは無い（書き先を組み立てるのは project_write_dir だけ）
+PROJECT_SCHEMA = KIT / "schema" / "project.schema.json"
+PROJECT_FILES = ("project.yml", "gates.sh", "provision.sh", "prepare.sh")
+PROJECT_WRITE_MAX = 1024 * 1024          # 1 MiB。PJ 定義はどれも数 KB なので、これを超えるのは事故
+PJ_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+BACKUP_SUFFIX = re.compile(r"\.bak-\d{8}T\d{6}(-\d+)?$")
+
+
+def project_name(pj):
+    """PJ 名を検査して返す。パスの部品になるので `..` や区切りを含むものはここで落とす"""
+    n = str(pj or "").strip()
+    if not PJ_NAME.match(n): raise ApiError("pj は英数字と - _ だけの PJ 名で指定してください（例 kumitate）")
+    return n
+
+
+def project_file_name(file):
+    """読み書きしてよいファイル名（PJ 定義ディレクトリ直下の 4 つだけ）。区切りを含む名前は弾く"""
+    n = str(file or "").strip()
+    if not n: raise ApiError(f"file を指定してください（{' / '.join(PROJECT_FILES)} のどれか）")
+    if "/" in n or "\\" in n or n != pathlib.Path(n).name or n.startswith("."):
+        raise ApiError("file にパス区切りは使えません（PJ 定義ディレクトリ直下のファイル名だけです）")
+    if n not in PROJECT_FILES:
+        raise ApiError(f"{n} は読み書きできません（できるのは {' / '.join(PROJECT_FILES)} だけです）")
+    return n
+
+
+def project_write_dir(pj):
+    """PJ 定義を書く場所。読みの解決順（paths.project_dir）とは別に workspace 側へ固定する"""
+    return paths.PROJECT_DIRS[0] / project_name(pj)
+
+
+def project_source(d):
+    """その PJ 定義ディレクトリがどちらの置き場か（workspace = 書ける / examples = 読むだけ）"""
+    return "workspace" if pathlib.Path(d).resolve().is_relative_to(paths.PROJECT_DIRS[0].resolve()) else "examples"
+
+
+def parse_project_yaml(text):
+    import yaml
+    try: obj = yaml.safe_load(text)
+    except Exception as e: raise ApiError(f"project.yml を YAML として読めません: {e}")
+    if not isinstance(obj, dict): raise ApiError("project.yml の中身は「キー: 値」の連想配列にしてください")
+    return obj
+
+
+def project_errors(obj):
+    """project.yml を schema で検査して違反の一覧を返す（空なら適合）。
+
+    workflow/bin/run の validate() は失敗すると die()（sys.exit）するので関数は使えない。schema ファイルだけ共有する。
+    """
+    import jsonschema
+    schema = json.loads(PROJECT_SCHEMA.read_text(encoding="utf-8"))
+    errs = sorted(jsonschema.Draft202012Validator(schema).iter_errors(obj), key=lambda e: list(e.absolute_path))
+    return [{"path": e.json_path, "message": e.message} for e in errs]
+
+
+def check_bash_syntax(name, text):
+    """*.sh を bash -n で構文検査する（実行はしない）。落ちたら ApiError"""
+    with tempfile.TemporaryDirectory(prefix="aifactory-pj-") as td:
+        p = pathlib.Path(td) / name
+        p.write_text(text, encoding="utf-8")
+        try: r = subprocess.run(["bash", "-n", str(p)], text=True, capture_output=True, errors="replace", timeout=10)
+        except FileNotFoundError: return   # bash の無い環境（Windows の制御系）では構文検査を飛ばす
+        except subprocess.TimeoutExpired: raise ApiError(f"{name} の構文検査（bash -n）が 10 秒で終わりませんでした")
+    if r.returncode != 0:
+        msg = ((r.stderr or r.stdout) or "").replace(str(p), name).strip()   # 一時ファイルのパスは呼び手に見せない
+        raise ApiError(f"{name} の構文が正しくありません（bash -n）: {msg[-800:]}")
+
+
+def project_backup_path(p):
+    """更新前のファイルの退避先 <name>.bak-YYYYmmddTHHMMSS（ADR-0026 の ISO 表記はコロンが入るのでファイル名用に変換）。
+       同じ秒に 2 回書いたときは -2, -3 と足す"""
+    base = p.with_name(p.name + ".bak-" + datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
+    cand, n = base, 1
+    while cand.exists():
+        n += 1; cand = base.with_name(base.name + f"-{n}")
+    return cand
+
+
+def project_read(pj, file):
+    """PJ 定義のファイルを 1 つ読む。読みは workspace 優先・examples フォールバック"""
+    pj = project_name(pj); name = project_file_name(file)
+    d = paths.project_dir(pj)
+    if not d: raise ApiError(f"PJ {pj} の定義が見つかりません", 404)
+    p = d / name
+    if not p.is_file(): raise ApiError(f"{pj} に {name} はありません", 404)
+    return {"pj": pj, "file": name, "source": project_source(d), "path": rel(p),
+            "text": p.read_text(encoding="utf-8", errors="replace"), "size": p.stat().st_size,
+            "executable": os.access(p, os.X_OK), "writable_dir": rel(project_write_dir(pj))}
+
+
+def project_show(pj):
+    """PJ 定義 1 件: project.yml の本文と schema 検証、直下のファイル一覧、置き場、sandbox の準備状態"""
+    pj = project_name(pj)
+    d = paths.project_dir(pj)
+    wdir = project_write_dir(pj)
+    if not d and not wdir.is_dir(): raise ApiError(f"PJ {pj} の定義が見つかりません", 404)
+    files, backups = [], []
+    for f in sorted((d or wdir).iterdir()) if (d or wdir).is_dir() else []:
+        if not f.is_file(): continue
+        item = {"name": f.name, "size": f.stat().st_size, "executable": os.access(f, os.X_OK)}
+        (backups if BACKUP_SUFFIX.search(f.name) else files).append(item)
+    yml = {"exists": False, "text": None, "parsed": None, "valid": False, "errors": []}
+    py = (d or wdir) / "project.yml"
+    if py.is_file():
+        text = py.read_text(encoding="utf-8", errors="replace")
+        yml.update({"exists": True, "text": text})
+        try:
+            obj = parse_project_yaml(text)
+            errs = project_errors(obj)
+            yml.update({"parsed": obj, "valid": not errs, "errors": errs})
+        except ApiError as e:
+            yml["errors"] = [{"path": "$", "message": str(e)}]
+    parsed = yml.get("parsed") or {}
+    # sandbox の準備状態は sandbox_view() の templates から該当 PJ の 1 件だけ。読み取りツールからジョブは起こさない（ADR-0038 の例外を増やさない）
+    tpl = None
+    try: tpl = next((t for t in sandbox_view()["templates"] if t["pj"] == pj), None)
+    except Exception as e: tpl = {"error": f"{type(e).__name__}: {e}"}
+    return {"pj": pj, "dir": rel(d) if d else None, "source": project_source(d) if d else None,
+            "writable_dir": rel(wdir), "writable_dir_exists": wdir.is_dir(),
+            "files": files, "backups": backups, "project_yml": yml,
+            "backend": parsed.get("backend"), "worker": parsed.get("worker"), "sandbox": tpl}
+
+
+def project_write(pj, file, content):
+    """PJ 定義のファイルを 1 つ置く。書き先は workspace/projects/<pj>/ 固定（examples には書かない）。
+
+    順番が要点: 検証 → （必要なら examples から複製）→ 退避 → 書く。検証で落ちたときは何も作らない。
+    """
+    pj = project_name(pj); name = project_file_name(file)
+    if not isinstance(content, str): raise ApiError("content は文字列で渡してください")
+    if not content.strip(): raise ApiError("content が空です（消したいなら制御系で消してください）")
+    data = content.encode("utf-8")
+    if len(data) > PROJECT_WRITE_MAX:
+        raise ApiError(f"content が大きすぎます（{len(data)} バイト、上限 {PROJECT_WRITE_MAX} バイト）")
+    # 1) 書く前に検証する。ここで落ちたらファイルもディレクトリも作らない
+    if name == "project.yml":
+        errs = project_errors(parse_project_yaml(content))
+        if errs:
+            detail = " / ".join(f"{e['path']}: {e['message']}" for e in errs[:5])
+            raise ApiError(f"project.yml が schema に合わないので書きませんでした: {detail}")
+    else:
+        check_bash_syntax(name, content)
+    # 2) examples 側にしか無い PJ を初めて書くときは、直下のファイルを一度だけ複製してから書く
+    #    （複製しないと project.yml だけの中途半端な PJ になり、gates: が指すファイルを runner が見失う）
+    wdir = project_write_dir(pj)
+    seeded_from, copied = None, []
+    if not wdir.is_dir():
+        src = paths.project_dir(pj)
+        wdir.mkdir(parents=True, exist_ok=True)
+        if src and project_source(src) != "workspace":
+            seeded_from = rel(src)
+            for f in sorted(src.iterdir()):
+                if not f.is_file() or BACKUP_SUFFIX.search(f.name): continue
+                shutil.copy2(f, wdir / f.name); copied.append(f.name)
+    # 3) 更新前のファイルを .bak-<timestamp> に残す（複製した直後なら examples から来た内容が退避される）
+    p = wdir / name
+    backup = None
+    if p.exists():
+        backup = project_backup_path(p)
+        shutil.copy2(p, backup)
+    # 4) 書いて mode を立てる
+    p.write_text(content, encoding="utf-8")
+    mode = 0o755 if name.endswith(".sh") else 0o644
+    os.chmod(p, mode)
+    return {"pj": pj, "file": name, "path": rel(p), "bytes": len(data), "valid": True,
+            "backup": rel(backup) if backup else None, "mode": oct(mode)[2:],
+            "executable": os.access(p, os.X_OK), "seeded_from": seeded_from, "copied": copied,
+            "note": "次の run から効きます（runner は制御系の作業ツリーを読みます）"}
+
+
 # ---------- Claude の鍵プール（keys.json。ADR-0044）
 # 読むのは名前・フラグ・末尾 4 文字だけ。token の値は keys_view にも応答にも例外文にも入れない。
 # 書くのは必ず sandbox CLI 経由（core が keys.json を直接書くことはない。state.json と同じ約束）

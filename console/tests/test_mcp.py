@@ -2,12 +2,22 @@
 
   python3 -m unittest discover -s console/tests -v
 """
-import json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
+import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MCP = REPO / "console" / "bin" / "mcp"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_console import seed_workspace, PJ
+
+
+EXAMPLES = REPO / "examples" / "projects"
+
+
+def examples_digest():
+    """examples/projects/ 直下の全ファイルの中身と mode。PJ 定義の書き込みツールがここを触っていないことを確かめる
+       （EXAMPLES はリポジトリ内の固定パスで AIFACTORY_WORKSPACE の影響を受けないため、一時 workspace にしても守られない）"""
+    return {str(f.relative_to(EXAMPLES)): (hashlib.sha256(f.read_bytes()).hexdigest(), f.stat().st_mode)
+            for f in sorted(EXAMPLES.rglob("*")) if f.is_file()}
 
 
 class McpClient:
@@ -49,6 +59,7 @@ class McpTest(unittest.TestCase):
         cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
         seed_workspace(cls.ws)
         cls.env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs")}
+        cls.examples0 = examples_digest()   # PJ 定義の書き込みが examples を汚していないことを各テストで突き合わせる
         cls.c = McpClient(cls.env)
 
     @classmethod
@@ -494,6 +505,97 @@ class McpTest(unittest.TestCase):
         # 運転の型（ticket_run → run_wait → run_show / read_file）を instructions に書く
         ins = self.c.call("initialize", {"protocolVersion": "2025-03-26"})["result"]["instructions"]
         for k in ("ticket_run", "run_wait", "run_show", "read_file"): self.assertIn(k, ins)
+
+    # ---- PJ 定義の読み書き（339）。メソッド名の順に走るので、22 は「まだ workspace 側に何も無い」状態を見る
+    def pj_dir(self):
+        return self.ws / "projects" / PJ
+
+    def backups(self):
+        return sorted(f.name for f in self.pj_dir().glob("*.bak-*")) if self.pj_dir().is_dir() else []
+
+    def assert_examples_untouched(self):
+        self.assertEqual(examples_digest(), self.examples0, "examples/projects/ が書き換わっている（書き先は workspace 側だけのはず）")
+
+    def test_22_project_show(self):
+        """project_show は examples 側の定義を読み、schema 検証と直下のファイル一覧を返す"""
+        self.assertFalse(self.pj_dir().exists(), "この時点では workspace 側に PJ 定義は無いはず")
+        err, d = self.c.tool("project_show", pj=PJ); self.assertFalse(err, d)
+        self.assertEqual(d["source"], "examples")
+        self.assertTrue(d["project_yml"]["valid"], d["project_yml"]["errors"])
+        self.assertEqual(d["project_yml"]["parsed"]["name"], PJ)
+        names = {f["name"] for f in d["files"]}
+        self.assertIn("gates.sh", names); self.assertIn("project.yml", names)
+        self.assertTrue(next(f for f in d["files"] if f["name"] == "gates.sh")["executable"])
+        self.assertEqual(d["backups"], [])
+        self.assertTrue(d["writable_dir"].endswith(f"projects/{PJ}")); self.assertFalse(d["writable_dir_exists"])
+        err, _ = self.c.tool("project_show", pj="../etc"); self.assertTrue(err)
+        self.assert_examples_untouched()
+
+    def test_23_project_read_limits_file(self):
+        """読めるのは PJ 定義ディレクトリ直下の 4 つだけ。パス区切り・allowlist 外は isError"""
+        err, d = self.c.tool("project_read", pj=PJ, file="project.yml"); self.assertFalse(err, d)
+        self.assertEqual(d["source"], "examples"); self.assertIn("name: " + PJ, d["text"]); self.assertFalse(d["executable"])
+        err, d = self.c.tool("project_read", pj=PJ, file="gates.sh"); self.assertFalse(err, d)
+        self.assertTrue(d["executable"])
+        for bad in ("../ctl.env", "a/b.sh", "secrets.env", ".env", ""):
+            err, _ = self.c.tool("project_read", pj=PJ, file=bad); self.assertTrue(err, f"{bad!r} を読めてしまった")
+        self.assert_examples_untouched()
+
+    def test_24_project_write_rejects_schema_violation(self):
+        """schema に合わない project.yml は書かずにエラー。workspace 側に何も生まれない"""
+        err, text = self.c.tool("project_write", pj=PJ, file="project.yml", content="name: " + PJ + "\nbogus: 1\n")
+        self.assertTrue(err); self.assertIn("schema", text)
+        self.assertFalse(self.pj_dir().exists(), "検証で落ちたのにディレクトリが作られている")
+        err, text = self.c.tool("project_write", pj=PJ, file="project.yml", content="- これは配列\n")
+        self.assertTrue(err); self.assertFalse(self.pj_dir().exists())
+        self.assert_examples_untouched()
+
+    def test_25_project_write_seeds_and_keeps_backup(self):
+        """examples 側にしか無い PJ は直下を一度だけ複製してから書く。2 回目からは .bak-<timestamp> が増える"""
+        err, src = self.c.tool("project_read", pj=PJ, file="project.yml"); self.assertFalse(err, src)
+        err, d = self.c.tool("project_write", pj=PJ, file="project.yml", content=src["text"]); self.assertFalse(err, d)
+        self.assertEqual(d["seeded_from"], f"examples/projects/{PJ}")
+        for n in ("gates.sh", "prepare.sh", "project.yml"): self.assertIn(n, d["copied"])
+        self.assertTrue((self.pj_dir() / "gates.sh").is_file()); self.assertEqual(d["mode"], "644")
+        before = self.backups()
+        err, d2 = self.c.tool("project_write", pj=PJ, file="project.yml", content=src["text"] + "\n# 追記\n")
+        self.assertFalse(err, d2); self.assertIsNotNone(d2["backup"]); self.assertIsNone(d2["seeded_from"])
+        after = self.backups()
+        self.assertEqual(len(after), len(before) + 1, f"{before} → {after}")
+        self.assertTrue((self.pj_dir() / "project.yml").read_text(encoding="utf-8").endswith("# 追記\n"))
+        # 読みは workspace 側が勝ち、退避は files[] ではなく backups[] に出る
+        err, sh = self.c.tool("project_show", pj=PJ); self.assertFalse(err, sh)
+        self.assertEqual(sh["source"], "workspace"); self.assertTrue(sh["backups"])
+        self.assertFalse([f for f in sh["files"] if ".bak-" in f["name"]])
+        self.assert_examples_untouched()
+
+    def test_26_project_write_shell_needs_bash_n(self):
+        """*.sh は bash -n を通ったものだけ置き、実行ビット（0755）を立てる"""
+        good = "#!/usr/bin/env bash\nset -euo pipefail\necho ok\n"
+        err, d = self.c.tool("project_write", pj=PJ, file="gates.sh", content=good); self.assertFalse(err, d)
+        p = self.pj_dir() / "gates.sh"
+        self.assertTrue(os.access(p, os.X_OK), "実行ビットが立っていない"); self.assertEqual(d["mode"], "755")
+        self.assertEqual(p.read_text(encoding="utf-8"), good)
+        err, text = self.c.tool("project_write", pj=PJ, file="gates.sh", content="if [ 1 ]; then\n")
+        self.assertTrue(err); self.assertIn("bash -n", text)
+        self.assertEqual(p.read_text(encoding="utf-8"), good, "構文エラーなのに上書きされている")
+        for bad in ("../ctl.env", "a/b.sh", "secrets.env"):
+            err, _ = self.c.tool("project_write", pj=PJ, file=bad, content=good); self.assertTrue(err, f"{bad!r} に書けてしまった")
+        self.assert_examples_untouched()
+
+    def test_27_project_tools_are_listed(self):
+        """3 ツールが tools/list に出て、show / read は読み取り・write は状態を変えると読める"""
+        tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
+        for n in ("project_show", "project_read", "project_write"): self.assertIn(n, tools)
+        self.assertTrue(tools["project_show"]["annotations"]["readOnlyHint"])
+        self.assertTrue(tools["project_read"]["annotations"]["readOnlyHint"])
+        self.assertFalse(tools["project_write"]["annotations"]["readOnlyHint"])
+        self.assertFalse(tools["project_write"]["annotations"].get("destructiveHint"), "退避を残すので取り返しはつく")
+        for n in ("project_read", "project_write"):
+            self.assertEqual(tools[n]["inputSchema"]["properties"]["file"]["enum"], ["project.yml", "gates.sh", "provision.sh", "prepare.sh"])
+        desc = tools["project_write"]["description"]
+        for k in ("workspace/projects/<pj>/", "examples", "次の run", ".bak-", "bash -n", "schema"): self.assertIn(k, desc)
+        self.assert_examples_untouched()
 
 
 if __name__ == "__main__":
