@@ -191,6 +191,9 @@ class Run:
         (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
         self.project = load_yaml(self.project_dir / "project.yml")
         validate(self.project, KIT / "schema" / "project.schema.json", f"{self.project_dir.name}/project.yml")
+        if self.project.get("prepare"):     # VM を借りる前に気づく（借りた後だと VM を返す手間が要る。330）
+            (self.project_dir / self.project["prepare"]).is_file() or die(
+                f"project.yml の prepare が指すスクリプトが無い: {self.project_dir / self.project['prepare']}")
         self.wf = load_yaml(KIT / "workflows" / f"{wf_name}.yml")
         validate(self.wf, KIT / "schema" / "workflow.schema.json", f"kit/workflows/{wf_name}.yml")
         self.steps = {s["id"]: s for s in self.wf["steps"]}
@@ -359,7 +362,10 @@ class Run:
         name = self.project.get("prepare")
         if not name: return
         src = self.project_dir / name
-        src.is_file() or die(f"project.yml の prepare が指すスクリプトが無い: {src}")
+        # ここは take の後（VM を借りた後）。die（= sys.exit）で抜けると VM を返さず state.json に result も残らないので、
+        # 例外にして main の except PrepareFailed に拾わせる（VM を返し failure: prepare で終える）。
+        # 借りる前に気づけるよう __init__ でも同じ存在確認をしている（--dry-run でもそこで止まる）
+        if not src.is_file(): raise PrepareFailed(f"project.yml の prepare が指すスクリプトが無い: {src}")
         self.log(f"prepare: {name}")
         self.scp_to(src, f"{self.work}/prepare.sh")
         # console と MCP が「今は準備中」と読めるようにする（pull backend の setup_project と同じ step 名・ログ名）
@@ -424,12 +430,14 @@ class Run:
         self.refresh_token()
         # ゲストの叩き方は backend ごとに違う（Proxmox は ssh、pull backend は worker queue）。self.sb に寄せて
         # pull backend からも同じ保全が使えるようにする（チケット 282）。stdout しか返らないので stderr を混ぜる
-        out = self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline -1 && git push -q --force origin HEAD:refs/heads/{wip} 2>&1 && echo pushed", check=False)
+        # HEAD ではなく作業ブランチを押す。gates の base 確認（330）が作業ツリーを戻し切れないと HEAD は origin/<base> に
+        # detached のままで、HEAD を押すと実装役のコミットが base で上書きされて release で消える。通常は HEAD == branch
+        out = self.sb(f"cd $SANDBOX_APP_DIR && git log --oneline -1 refs/heads/{self.branch} && git push -q --force origin refs/heads/{self.branch}:refs/heads/{wip} 2>&1 && echo pushed", check=False)
         ok = "pushed" in (out or "")
         self.log(f"preserve: {'origin/' + wip if ok else '失敗 ' + (out or '')[-200:]}")
         if not ok:
             # push できなくても作業を失わない: base からの差分をパッチとして run ディレクトリに残す（2026-09-06 に App の workflows 権限不足で push が拒否され、実装が巻き戻しで消えた）
-            patch = self.sb(f"cd $SANDBOX_APP_DIR && git format-patch --stdout origin/{self.base}..HEAD", check=False)
+            patch = self.sb(f"cd $SANDBOX_APP_DIR && git format-patch --stdout origin/{self.base}..refs/heads/{self.branch}", check=False)
             if patch.strip():
                 (self.run_dir / "wip.patch").write_text(patch, encoding="utf-8")
                 self.log(f"preserve: 代わりに {self.run_dir / 'wip.patch'} に差分を残した（git am で復元できる）")
@@ -693,7 +701,8 @@ class Run:
             self.save()
             self.log(f"{cur}: {'PASS' if ok else 'FAIL'} → {nxt}")
             # 戻すときは前回の結果を添える
-            if not ok and nxt == "human":
+            # base 確認で作業ツリーを戻せなかったときは、赤が全部 INFO に落ちて ok=True でも人間へ回す。理由と再開先を残す
+            if (not ok or self.base_check_broken) and nxt == "human":
                 # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）
                 self.state["resume_step"] = self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
@@ -707,10 +716,17 @@ class Run:
                 self.save()
             retry_note = "" if ok else (info if "role" in step else f"```\n{info}\n```")
             if not ok and nxt in self.steps and "role" in self.steps[nxt] and step.get("code") == "gates.sh":
+                # base を実際に見られなかった回（stash できない、origin/<base> が無い など）は言い切らない。
+                # 確かめていないのに「残る FAIL は自分の原因」と書くと、元からの赤を実装役に追わせることになる
+                checked = "BASE-CHECK-SKIP" not in str(info)
+                judged = ("**base でも赤いゲートは runner が base で実際に回して確かめ済みで、`INFO <名前> red (also red on base; not a gate)` "
+                          "に落としてある**（結果は gates.txt の `=== base check:` 以降にある）。"
+                          "そこに残っている `FAIL` は自分の変更が原因なので、推し測らずに直すこと。"
+                          if checked else
+                          "**base での確認は今回できなかった**（gates.txt の `=== base check:` に `BASE-CHECK-SKIP` の理由がある）。"
+                          "赤が base でも赤いと思うなら、直さずに理由を report.md に書くこと。")
                 retry_note = ("ゲートの結果（赤あり）。ログを読んで原因を直し、ゲートを全緑にしてコミットすること。\n"
-                              "**base でも赤いゲートは runner が base で実際に回して確かめ済みで、`INFO <名前> red (also red on base; not a gate)` "
-                              "に落としてある**（結果は gates.txt の `=== base check:` 以降にある）。"
-                              "そこに残っている `FAIL` は自分の変更が原因なので、推し測らずに直すこと。\n\n"
+                              + judged + "\n\n"
                               f"```\n{info}\n```")
             cur = nxt
         result = cur

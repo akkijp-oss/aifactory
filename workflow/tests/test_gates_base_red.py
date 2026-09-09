@@ -12,6 +12,7 @@ VM も claude も使わない。一時 dir に bare の origin と clone（= VM 
 - A 型（kumitate の DB migration。テンプレートから base が進んで環境がずれた）
   → prepare で直る。prepare が無ければ HEAD も base も赤くなり、INFO に落ちて記録に残る
 - HEAD だけ赤（自分の変更が壊した）→ FAIL のまま implement へ戻し、作業ツリーの未コミット変更も残す
+- base を見た後に作業ブランチへ戻せなかった → 赤が残っていなくても人間へ回し、退避は base ではなく作業ブランチを押す
 """
 import importlib.machinery
 import importlib.util
@@ -279,6 +280,91 @@ class GatesBaseRedTest(unittest.TestCase):
         self.assertNotIn("gates->implement", r.state["loops"])
         self.assertIn("INFO env-ready red (also red on base; not a gate)", self.gates_txt(r))
         self.assertEqual(r.state["known_red_gates"], ["env-ready"])
+
+    # ---------- 赤が無くなった回は base の判定を持ち越さない
+    def test_a_green_gates_run_clears_the_base_red_note_left_by_the_previous_round(self):
+        """base-red.txt は VM に残る。赤が出なかった回に書き直さないと、人が VM を直して --resume で回し直しても
+        runner が前の回の結果（名前や !restore-failed）を読んで、また人間へ回してしまう"""
+        self.make_repo(["feature-ok.txt"])          # strings は base でも赤
+        (self.vm / "prepared").touch()
+        def implement(n):
+            if n == 0:
+                git(self.app, "rm", "-q", "feature-ok.txt"); self.commit("feature-ok.txt を消した（壊した）")
+            else:                                   # 自分の赤を直し、base の赤も HEAD 側で埋めた
+                (self.app / "feature-ok.txt").write_text("feature-ok.txt\n", encoding="utf-8")
+                (self.app / "strings-ok.txt").write_text("strings-ok.txt\n", encoding="utf-8")
+                self.commit("戻して strings も足した")
+        r = self.build(907, implement)
+        r.main()
+        self.assertEqual(self.gates_n, 2)
+        self.assertEqual(r.state["result"], "human")            # pr まで進んだ（feature.yml の終わり）
+        self.assertEqual(self.steps(r)[-4:], ["gates", "review", "sync", "pr"])
+        self.assertEqual(r.state["known_red_gates"], ["strings"])   # 1 回目に確かめた分は記録に残る
+        # 2 回目（全緑・base を見に行っていない）が VM の base-red.txt を空に書き直している
+        self.assertEqual((pathlib.Path(r.work) / "base-red.txt").read_text(encoding="utf-8").strip(), "")
+        self.assertFalse(r.base_check_broken)
+
+    # ---------- base を見られなかった回は、実装役への依頼文で言い切らない
+    def test_when_the_base_check_is_skipped_the_retry_note_does_not_claim_base_was_checked(self):
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        def implement(n):
+            if n == 0:
+                git(self.app, "rm", "-q", "feature-ok.txt"); self.commit("feature-ok.txt を消した（壊した）")
+                # base が見えない状況（origin から base が消えた・fetch できない）を作る
+                git(self.origin, "branch", "-D", "develop")
+                git(self.app, "update-ref", "-d", "refs/remotes/origin/develop")
+            else:
+                (self.app / "feature-ok.txt").write_text("feature-ok.txt\n", encoding="utf-8"); self.commit("戻した")
+                git(self.app, "push", "-q", "origin", f"{r.branch}:develop")   # 後の工程のために base を戻す
+                git(self.app, "fetch", "-q", "origin", "develop")
+        r = self.build(908, implement)
+        r.main()
+        note = self.notes["implement"][1]
+        self.assertIn("BASE-CHECK-SKIP", note)
+        self.assertIn("base での確認は今回できなかった", note)
+        self.assertNotIn("確かめ済み", note)                 # 見ていないものを見たと言わない
+        self.assertEqual(r.state.get("known_red_gates"), None)
+        self.assertFalse(r.base_check_broken)               # 見に行けていないだけで、作業ツリーは壊れていない
+
+    # ---------- 戻せなかった VM に agent を入れない。赤が残っていなくても人間へ回し、理由を残す
+    def test_a_working_tree_left_on_base_goes_to_human_with_a_reason_even_when_no_gate_is_red(self):
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        r = self.build(905, lambda n: None)
+
+        def run_code(step):
+            self.done.append(step["id"])
+            if step["code"] == "gates.sh":
+                # 赤は全部 base でも赤くて INFO に落ちた（= ok）が、作業ツリーを base から戻せていない状況
+                (pathlib.Path(r.work) / "base-red.txt").write_text("strings\n!restore-failed\n", encoding="utf-8")
+                r.note_base_red()
+                return True, "INFO strings red (also red on base; not a gate)"
+            return True, ""
+        r.run_code = run_code
+        r.main()
+        self.assertEqual(self.steps(r), ["research", "design", "implement", "gates"])
+        self.assertEqual(r.state["result"], "human")
+        self.assertTrue(r.state["history"][-1]["ok"])           # ゲート自体は赤くない
+        self.assertEqual(r.state["history"][-1]["next"], "human")
+        # 赤が無くても、なぜ人間へ回したのかと、どこからやり直すのかが記録に残る（kb の note と console がここを読む）
+        self.assertIn("作業ブランチへ戻せなかった", r.state["error"])
+        self.assertEqual(r.state["resume_step"], "implement")
+        self.assertEqual(r.state["known_red_gates"], ["strings"])
+
+    # ---------- 退避は HEAD ではなく作業ブランチを押す（base に detached のままでも実装が消えない）
+    def test_preserve_pushes_the_working_branch_even_if_head_is_left_on_base(self):
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        r = self.build(906, lambda n: None)
+        git(self.app, "fetch", "-q", "origin", "develop")
+        git(self.app, "checkout", "-q", "-B", r.branch, "origin/develop")
+        (self.app / "impl.txt").write_text("実装\n", encoding="utf-8"); self.commit("実装した")
+        head = git_out(self.app, "rev-parse", r.branch).strip()
+        git(self.app, "checkout", "-q", "--detach", "origin/develop")   # base を見たまま戻れなかった状態
+        wip = run.Run.preserve(r)
+        self.assertTrue(wip, "退避ブランチへ push できていない")
+        self.assertEqual(git_out(self.origin, "rev-parse", wip).strip(), head)
 
 
 if __name__ == "__main__":

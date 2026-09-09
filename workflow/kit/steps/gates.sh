@@ -19,6 +19,9 @@ fails="$(awk '/^FAIL/{print $2}' <<< "$out")"
 
 # ---------- base でも赤か（赤が出たときだけ、赤いゲートだけ）
 base_block=""
+# 前の回の結果を残さない。base を見なかった回は空にする（--resume で回し直したとき、古い !restore-failed を
+# runner が読み直して再び人間へ回してしまうため）
+sandbox ssh "$TASK" "mkdir -p $WORK && : > $WORK/base-red.txt"
 if [ -n "$fails" ] && [ -n "${BASE:-}" ] && [ -n "${BRANCH:-}" ]; then
   # base で回し直すと ~/gates/<name>.log が base の結果で上書きされる。HEAD 側のログ末尾を先に取っておく
   for g in $fails; do sandbox ssh "$TASK" "tail -60 ~/gates/$g.log" > "$tmp/head-$g.log" 2>/dev/null; done
@@ -41,7 +44,9 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
 fi
 restore() {                     # どこで抜けても作業ブランチへ戻す。戻し切れなければそう言う（runner が人間へ回す）
   local back=0
-  git checkout -q "$branch" 2>/dev/null || back=1
+  # base 側の gate が追跡ファイルを書き換えていると素の checkout は通らない。ここで捨てるのは base 側 gate の副産物だけ
+  # （実装役の未コミット分は stash 済み、コミット分は $branch にある）ので -f で戻す。戻せないまま人間へ回すと wip が base になる
+  git checkout -q "$branch" 2>/dev/null || git checkout -q -f "$branch" 2>/dev/null || back=1
   [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$branch" ] || back=1
   if [ -n "$stashed" ]; then
     git stash pop -q 2>/dev/null || back=1

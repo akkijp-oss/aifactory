@@ -9,14 +9,18 @@ checkout も prepare もローカルの本物の git / bash がそのまま動�
 - prepare が非 0 → 工程を 1 つも始めずに failed（failure: prepare）で終わり、agent（claude）を起動しない
 - prepare が 0 → そのまま最初の agent 工程に入る
 - project.yml に prepare が無い PJ → 準備は走らない（code-prepare.log を作らない）
+- prepare が指すファイルが無い → VM を借りる前に止まる。借りた後に消えていた場合は PrepareFailed（VM を返す）
 - kb run 経由なら、チケットは実行中のまま残らず blocked になり、note に prepare と書いてある
 """
 import json
 import os
 import pathlib
+import importlib.machinery
+import importlib.util
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -151,6 +155,28 @@ class PrepareTest(unittest.TestCase):
         self.assertFalse((run_dir / "code-prepare.log").exists())
         self.assertNotIn("prepare.sh", self.calls.read_text(encoding="utf-8"))
         self.assertTrue((self.vm / "claude-ran").exists(), p.stdout[-2000:])
+
+    # ---------- c2: prepare が指すファイルが無い PJ は、VM を借りる前に止まる
+    def test_a_missing_prepare_script_stops_before_taking_a_vm(self):
+        d = self.project("prepmissing", prepare="#!/usr/bin/env bash\n")
+        (d / "prepare.sh").unlink()             # project.yml だけ prepare を指したまま残る（書き忘れ・消し忘れ）
+        p, run_dir = self.run_runner("prepmissing", "905")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("prepare が指すスクリプトが無い", p.stdout + p.stderr)
+        calls = self.calls.read_text(encoding="utf-8")
+        self.assertNotIn("take", calls)         # VM を借りていないので返す手間も要らない
+        self.assertNotIn("claude", calls)
+
+    # ---------- c3: 借りた後に消えていたら（借りる前の確認をすり抜けた）VM を返せる形で失敗する
+    def test_a_prepare_script_that_vanishes_after_the_check_fails_the_run_not_the_process(self):
+        """--wait で待っている間に PJ 定義が変わることはある。take の後は sys.exit（die）ではなく PrepareFailed に
+        しておかないと、VM を貸したまま・state.json に result も書かないまま落ちる（チケット 238 と同型）"""
+        spec = importlib.util.spec_from_loader("prepare_run", importlib.machinery.SourceFileLoader("prepare_run", str(RUNNER)))
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        fake = types.SimpleNamespace(project={"prepare": "prepare.sh"}, project_dir=self.ws / "projects" / "gone")
+        with self.assertRaises(mod.PrepareFailed) as e:
+            mod.Run.prepare(fake)
+        self.assertIn("prepare が指すスクリプトが無い", str(e.exception))
 
     # ---------- d: 板の側（kb）でも「準備で止まった」と分かる
     def test_kb_run_blocks_the_ticket_and_says_prepare(self):
