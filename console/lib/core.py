@@ -1007,9 +1007,16 @@ def overview(pj=None, limit=6):
     if SANDBOX_STATE.exists():
         try: lent = json.loads(SANDBOX_STATE.read_text(encoding="utf-8"))
         except Exception: lent = {}
+    # 一覧（runs_active）は帯のための上限つき、突き合わせ（runs_live）は上限なしの軽い形（チケット 376）。
+    # ボードのカードはチケット 1 枚ごとに動いている run を探すので、上限で切ると 7 本目以降のカードだけ工程が出ない。
+    # 工程（step / since）は current があるときだけ入れる（開始前・工程の切れ目に前の工程を出さない）。
+    live = [{**{k: r.get(k) for k in ("name", "pj", "task", "workflow", "next", "started")},
+             **({"step": r["current"].get("step"), "since": r["current"].get("since")} if r.get("current") else {})}
+            for r in active]
     return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:limit],
             "pj": pj or None, "limit": limit,
             "runs_active": active[:limit], "runs_active_n": len(active),          # 一覧は上限つき、件数は絞り込み後の全件（画面が「ほか n 件」を出す）
+            "runs_live": live,                                                    # 突き合わせ用（上限なし・list_runs() の新しい順のまま）
             "runs_not_started": {"n": len(not_started), "runs": not_started[:limit]},
             "runs_abandoned": {"n": len(abandoned), "runs": abandoned[:limit]},
             "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）

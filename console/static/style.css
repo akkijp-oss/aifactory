@@ -83,13 +83,22 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .col.s-blocked { background: var(--ground); }
 .col.s-blocked .card:hover { background: var(--panel); }
 .col .empty { padding: 18px 12px; color: var(--muted); font-size: 12.5px; }
-.card { display: block; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); color: var(--ink); }
+/* カードの外枠は div（中の題名と工程行がそれぞれ <a>。<a> の入れ子を作らない。376）。
+   題名リンクの ::after をカード全面に敷いて、これまでどおりどこを押してもチケットが開くようにする */
+.card { display: block; position: relative; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); color: var(--ink); }
 .card:last-child { border-bottom: 0; }
 .card:hover { background: var(--ground); text-decoration: none; }
 .card .id { font-family: var(--mono); color: var(--muted); font-size: 12px; margin-right: 6px; }
-.card .t { display: block; margin: 2px 0 4px; line-height: 1.4; }
+.card .t { display: block; margin: 2px 0 4px; line-height: 1.4; color: var(--ink); }
+.card .t:hover { text-decoration: none; }
+.card .t::after { content: ''; position: absolute; inset: 0; }
+/* 工程行は題名の当たり判定より前に出す（ここだけは実行記録へ移る） */
+.card .live { position: relative; z-index: 1; display: block; margin: 0 0 4px; font-size: 12px; color: var(--in_progress); }
+.card .live:hover { text-decoration: underline; }
 .card .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
-.card .note { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* メモは省略表示で、全文は title のツールチップでしか読めない。題名リンクの ::after に覆わせず、この 1 行だけ上に出す
+   （代償: メモの行はカード全面クリックから外れる。題名と工程行は残るので UX.md:50 の約束は満たす） */
+.card .note { position: relative; z-index: 1; display: block; font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .col.s-done .card { padding: 7px 12px; }
 .col.s-done .card .t { font-size: 12.5px; }
 
