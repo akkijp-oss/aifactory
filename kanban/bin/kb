@@ -405,7 +405,12 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             status = "done"
             note = f"自動マージ #{pr or '?'} → {m2.get('base') or '?'}（{m2.get('method') or 'merge'}）"
         elif "MERGED" in pr_url: status, note = "done", f"マージ済み {pr_url}"
-        elif pr_url: status, note = "review", f"PR 待ち {pr_url}"
+        elif pr_url:
+            # 自動マージしなかった run は、その理由（runner が書いた 1 行）も板に写す。判定は足さず事実をそのまま置く（ADR-0039）
+            why = ((s.get("error") or "").strip().splitlines() or [""])[0]
+            status = "review"
+            note = f"PR 待ち {pr_url}" + (f"（自動マージせず: {why.removeprefix('automerge: ')[:120]}）"
+                                          if why.startswith("automerge: ") else "")
         elif result == "end": status, note = "done", "PR 無しで終了（research 等）"
         elif result == "failed" and s.get("failure") == "wait_timeout":
             # --wait で空きを待ったが出なかった run。直す所は無い（VM が空けば回る）ので、人間待ちにせず todo に戻す（242）

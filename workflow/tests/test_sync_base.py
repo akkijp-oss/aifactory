@@ -260,6 +260,7 @@ class SyncBaseTest(unittest.TestCase):
         t = self.kb_sync(908, r)
         self.assertEqual(t["status"], "review", t)
         self.assertIn("/pull/8", t["note"])
+        self.assertIn("CI 赤 (test)", t["note"])           # 板だけ見て「なぜ自動マージしなかったか」が読める
 
     def kb_sync(self, tid, r):
         """run の記録を kb に流し込み、チケットの状態とメモを読み返す"""
