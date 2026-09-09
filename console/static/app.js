@@ -26,6 +26,19 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || (j.stderr ? j.stderr.trim() : `HTTP ${r.status}`));
   return j;
 }
+/* 添付は multipart で送る。Content-Type はブラウザーに付けさせる（境界の文字列を自分で作らない） */
+async function apiForm(path, files, fields) {
+  const fd = new FormData();
+  for (const k in (fields || {})) if (fields[k] != null && fields[k] !== '') fd.append(k, fields[k]);
+  (files || []).forEach(f => fd.append('files', f, f.name));
+  let r;
+  try { r = await fetch('/api/' + path, { method: 'POST', headers: { 'X-Console': '1' }, body: fd }); }
+  catch (e) { setConn(false); throw new Error(T.err.unreachable); }
+  setConn(true);
+  const j = await r.json().catch(() => ({ error: T.err.badJson }));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
 function setConn(ok) {
   const c = $('conn'); c.classList.toggle('off', !ok); c.textContent = ok ? T.conn.on : T.conn.off;
   $('offline').hidden = ok;
@@ -69,6 +82,33 @@ function ask(o) {
   });
 }
 const dlgOpen = () => $('dlg').open || $('help').open;
+
+/* ---------- 添付
+   選んだファイルはこの配列にだけ持つ。下書き（sessionStorage）にはファイルの中身を入れられないので、画面を離れると選び直しになる。
+   落とす（drop）とファイル選択のどちらでも同じ配列に入る。送るのは「添付する」「起票する」「取り込む」を押したときだけ */
+const picked = {};   // 領域の id → [File]
+const kbSize = n => (n / 1024).toFixed(n > 10240 ? 0 : 1) + 'K';
+function attachZone(id) {
+  const fs = picked[id] || [];
+  return `<div class="dropzone" id="${id}" data-zone="${id}">
+    <input type="file" id="${id}-input" data-act="attach-pick" data-zone="${id}" multiple>
+    <label for="${id}-input">${esc(T.label.dropHere)}</label>
+    ${fs.length ? `<ul class="picked">${fs.map((f, i) => `<li>${esc(f.name)} <span class="help">${esc(kbSize(f.size))}</span><button type="button" class="ghost x" data-act="attach-unpick" data-zone="${id}" data-i="${i}">×</button></li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+function paintZone(id) { const el = $(id); if (el) el.outerHTML = attachZone(id); }
+function addPicked(id, files) { picked[id] = (picked[id] || []).concat([...files]); paintZone(id); }
+function takePicked(id) { const fs = picked[id] || []; picked[id] = []; return fs; }
+/* 一覧。画像かどうかは API（lib の判定）が付ける image で決める。画面では拡張子を見ない */
+const attachUrl = (id, name) => `/api/tickets/${id}/attachments/${encodeURIComponent(name)}`;
+function attachItem(id, a) {
+  const u = attachUrl(id, a.name);
+  return `<figure class="attach">
+    ${a.image ? `<a href="${esc(u)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(u)}" alt="${esc(a.name)}" loading="lazy"></a>`
+              : `<a class="thumb none" href="${esc(u)}"><span>${esc((a.name.split('.').pop() || '').slice(0, 4))}</span></a>`}
+    <figcaption><a href="${esc(u)}">${esc(a.name)}</a> <span class="help">${esc(kbSize(a.size))}</span>
+      <button class="ghost x" data-act="detach" data-id="${id}" data-name="${esc(a.name)}" title="${esc(T.btn.detach)}">×</button></figcaption></figure>`;
+}
 
 /* ---------- 表示の部品 */
 const pad = n => String(n).padStart(2, '0');
@@ -301,6 +341,10 @@ async function viewTicket(id, flash) {
       </div>
       <div>
         <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.attachments)}</h2>
+          ${d.attachments.length ? `<div class="attach-grid">${d.attachments.map(a => attachItem(t.id, a)).join('')}</div>` : `<div class="help">${esc(T.help.attachEmpty)}</div>`}
+          ${attachZone('t-attach')}
+          <div class="actions"><button class="primary" data-act="attach" data-id="${t.id}" data-zone="t-attach">${esc(T.btn.attach)}</button><span class="help">${esc(T.help.attach)}</span></div></div>
         <div class="panel"><h2>${esc(T.h.history)}</h2><table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
           <div class="help top">${esc(tt(T.ticket.stamps, { c: fmtT(t.created), u: fmtT(t.updated) }))}</div></div>
       </div>
@@ -433,7 +477,8 @@ async function viewRun(name) {
       ${d.jobs && d.jobs.length ? `<dt>${esc(T.nav.jobs)}</dt><dd>${d.jobs.map(j => `<a href="#/job/${esc(j.id)}">${jst(j)} ${esc(j.label)}</a>`).join('<br>')}</dd>` : ''}</dl></div>`}
     ${runFiles(name, d, f)}
     ${file ? `<div class="panel"><div class="logbar"><span class="mono" title="${esc(file.path)}">${esc((d.files.find(x => x.path === file.path) || {}).name || file.path.split('/').pop())}</span>${file.truncated ? `<span>${esc(T.run.truncated)}</span>` : ''}<span class="spacer"></span>${running ? `<span><span class="dot pulse"></span>${cur && file.path === cur.path ? esc(tt(T.run.following, { step: state.current.step, kind: state.current.kind })) + ' ' : ''}${esc(T.run.refresh)}</span>` : ''}</div>
-      ${/\.md$/.test(file.path) && !/prompt-/.test(file.path) ? md(file.text) : `<pre class="log" id="runlog">${esc(file.text)}</pre>`}</div>` : ''}`);
+      ${file.base64 ? `<img class="filepic" src="data:${esc(file.type)};base64,${esc(file.base64)}" alt="${esc(file.path)}">`
+        : /\.md$/.test(file.path) && !/prompt-/.test(file.path) ? md(file.text) : `<pre class="log" id="runlog">${esc(file.text)}</pre>`}</div>` : ''}`);
   const pre = $('runlog'); if (pre && running) pre.scrollTop = pre.scrollHeight;
   if (running) schedule(() => viewRun(name), 5000); else clearInterval(timer);
 }
@@ -551,6 +596,8 @@ async function viewIntake() {
           <label class="help check"><input type="checkbox" id="in-dry" ${d.dry ? 'checked' : ''}> ${esc(T.label.intakeDry)}</label></div>
         <div class="${pjHelpClass(inPj)}" id="in-pj-help">${pjHelpHtml(inPj)}</div>
         <div class="help" id="in-kind-help">${esc(kindHelp(inKind))}</div>
+        <div class="field"><label for="in-attach-input">${esc(T.label.attachments)}</label>${attachZone('in-attach')}</div>
+        <div class="help">${esc(T.help.attachNotDraft)} ${esc(T.help.attach)}</div>
         <div class="actions"><button class="primary" data-act="intake">${esc(T.btn.intake)}</button>${clearBtn('intake-clear', DRAFT_FREE)}<span class="help">${esc(T.help.intake)}</span></div></div>
       <div class="panel"><h2>${esc(T.h.intakeNew)}<small>kb new</small></h2>
         <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj" data-act="pj-help">${opt(t.pjs, null, newPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(newKind)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100" value="${esc(d.newPr || '')}"></label></div>
@@ -558,6 +605,8 @@ async function viewIntake() {
         <div class="help" id="new-kind-help">${esc(kindHelp(newKind))}</div>
         <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}" value="${esc(d.title || '')}"></div>
         <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" class="h140" placeholder="${esc(T.label.bodyPlaceholder)}">${esc(d.body || '')}</textarea></div>
+        <div class="field"><label for="new-attach-input">${esc(T.label.attachments)}</label>${attachZone('new-attach')}</div>
+        <div class="help">${esc(T.help.attachNotDraft)}</div>
         <div class="actions"><button class="primary" data-act="new">${esc(T.btn.file)}</button>${clearBtn('new-clear', DRAFT_NEW)}<span class="help">${esc(T.help.newTicket)}</span></div></div>
     </div>
     <div class="help">${esc(T.help.dispatchMoved)} <a href="#/board">${esc(T.nav.board)}</a></div>`);
@@ -583,6 +632,7 @@ function jobNext(j, text, ticket) {
     if (j.state === 'done' && dry) { lead = T.next.intakeDry; acts = [link('#/intake', T.btn.openIntake, true)]; }
     else if (j.state === 'done' && id) { lead = tt(T.next.intakeDone, { id }); acts = [link(`#/ticket/${id}`, T.btn.openTicket, true), link('#/board', T.btn.openBoard)]; }
     else if (j.state === 'done') { lead = T.next.intakeDoneNoId; acts = [link('#/board', T.btn.openBoard, true)]; }
+    else if (id) { lead = tt(T.next.intakeDoneNoAttach, { id }); acts = [link(`#/ticket/${id}`, T.btn.openTicket, true), link('#/intake', T.btn.openIntake)]; }
     else { lead = T.next.intakeFailed; acts = [link('#/intake', T.btn.openIntake, true)]; }
   } else if (j.kind === 'kb-run') {
     const run = j.run_hint ? `#/run/${encodeURIComponent(j.run_hint)}` : null; const tk = j.ticket ? `#/ticket/${j.ticket}` : null;
@@ -700,7 +750,7 @@ async function viewConfig() {
 }
 async function viewFile(q) {
   clearInterval(timer); const p = new URLSearchParams(q).get('path'); const f = await api(`file?path=${encodeURIComponent(p)}&tail=300000`);
-  render(`<div class="head"><h1 class="mono">${esc(f.path)}</h1></div><div class="panel"><pre class="log">${esc(f.text)}</pre></div>`);
+  render(`<div class="head"><h1 class="mono">${esc(f.path)}</h1></div><div class="panel">${f.base64 ? `<img class="filepic" src="data:${esc(f.type)};base64,${esc(f.base64)}" alt="${esc(f.path)}">` : `<pre class="log">${esc(f.text)}</pre>`}</div>`);
 }
 
 /* ---------- 操作 */
@@ -769,15 +819,43 @@ const actions = {
   },
   'intake': async () => {
     const text = $('in-text').value; if (!text.trim()) { toast(esc(T.err.emptyRequest), { err: true }); $('in-text').focus(); return; }
-    const r = await api('intake', { text, pj: $('in-pj').value || undefined, kind: $('in-kind').value || undefined, dry_run: $('in-dry').checked });
+    const fs = picked['in-attach'] || [];
+    const b = { text, pj: $('in-pj').value || undefined, kind: $('in-kind').value || undefined, dry_run: $('in-dry').checked };
+    /* ファイルがあるときだけ multipart。無いときの経路は今までどおり JSON */
+    const r = fs.length ? await apiForm('intake', fs, { text, pj: b.pj, kind: b.kind, dry_run: b.dry_run ? '1' : '' }) : await api('intake', b);
+    takePicked('in-attach');
     draftDrop(DRAFT_FREE); go(`#/job/${r.job.id}`);            /* 送れたときだけ捨てる。失敗したときは残して、直して送り直せるようにする */
   },
   'new': async () => {
     const b = { pj: $('new-pj').value, kind: $('new-kind').value, title: $('new-title').value.trim(), body: $('new-body').value, pr: $('new-pr').value || undefined };
     if (!b.title) { toast(esc(T.err.needTitle), { err: true }); $('new-title').focus(); return; }
     const r = await api('tickets', b);
-    draftDrop(DRAFT_NEW); toast(esc(tt(T.msg.filed, { id: r.id || '' }))); if (r.id) go(`#/ticket/${r.id}`);
+    draftDrop(DRAFT_NEW);
+    /* 起票はできて添付だけ失敗することがある。そのときも作ったチケットの画面へ進み、そこで添付し直せると言う */
+    const fs = takePicked('new-attach');
+    let failed = null;
+    if (r.id && fs.length) { try { await apiForm(`tickets/${r.id}/attach`, fs); } catch (e) { failed = e.message; } }
+    if (failed) toast(esc(tt(T.err.attachFailedAfterNew, { id: r.id })) + ' ' + esc(failed), { err: true });
+    else toast(esc(tt(T.msg.filed, { id: r.id || '' })));
+    if (r.id) go(`#/ticket/${r.id}`);
   },
+  'attach': async el => {
+    const fs = picked[el.dataset.zone] || [];
+    if (!fs.length) { $(el.dataset.zone + '-input').click(); return; }
+    const r = await apiForm(`tickets/${el.dataset.id}/attach`, fs);
+    takePicked(el.dataset.zone);
+    toast(esc(tt(T.msg.attached, { n: r.added.length }))); viewTicket(el.dataset.id, true);
+  },
+  /* 添付を消すのは不可逆（ファイルが消える）。影響はその 1 件だけなので、危険色の確認までで番号は打たせない */
+  'detach': async el => {
+    const name = el.dataset.name;
+    const ok = await ask({ title: tt(T.dialog.detach.title, { name }), ok: T.dialog.detach.ok, danger: true, body: `<p>${esc(T.dialog.detach.body)}</p>` });
+    if (!ok) return;
+    await api(`tickets/${el.dataset.id}/detach`, { name });
+    toast(esc(tt(T.msg.detached, { name }))); viewTicket(el.dataset.id, true);
+  },
+  'attach-pick': el => { addPicked(el.dataset.zone, el.files); },
+  'attach-unpick': el => { (picked[el.dataset.zone] || []).splice(Number(el.dataset.i), 1); paintZone(el.dataset.zone); },
   'intake-clear': () => draftClear(DRAFT_FREE),
   'new-clear': () => draftClear(DRAFT_NEW),
   'sandbox-ls': async () => { const r = await api('sandbox/ls', {}); toast(`${esc(T.msg.lsStarted)} <a href="#/job/${esc(r.job.id)}">${esc(T.btn.openJob)}</a>`); viewSandbox(); },
@@ -816,8 +894,17 @@ document.addEventListener('input', e => {
     f.set(el.value);
   }, 150);
 });
-document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
+document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'file')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
 function go(h) { location.hash = h; }
+
+/* 落として添付する。render() で中身が入れ替わるので、個々の領域ではなく main に 1 度だけ付ける */
+main.addEventListener('dragover', e => { const z = e.target.closest && e.target.closest('.dropzone'); if (!z) return; e.preventDefault(); z.classList.add('over'); });
+main.addEventListener('dragleave', e => { const z = e.target.closest && e.target.closest('.dropzone'); if (z) z.classList.remove('over'); });
+main.addEventListener('drop', e => {
+  const z = e.target.closest && e.target.closest('.dropzone'); if (!z) return;
+  e.preventDefault(); z.classList.remove('over');
+  if (e.dataTransfer && e.dataTransfer.files.length) addPicked(z.dataset.zone, e.dataTransfer.files);
+});
 
 /* ---------- キーボード（毎日使う画面には近道を置く）: g + 頭文字で移動、? で一覧 */
 let gArmed = false;

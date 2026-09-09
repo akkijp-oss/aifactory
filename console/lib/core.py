@@ -881,7 +881,8 @@ def ticket_detail(tid):
     jobs = [j for j in JobStore.list() if j.get("ticket") == tid][:10]
     ks = kinds()
     return {"ticket": t, "body": body, "file": str(f.relative_to(REPO)) if f.exists() and f.resolve().is_relative_to(REPO.resolve()) else str(f),
-            "attachments": [{**a, "path": rel(attachments.dir_for(tid) / a["name"])} for a in attachments.listing(tid)],
+            "attachments": [{**a, "path": rel(attachments.dir_for(tid) / a["name"]), "image": attachments.is_image(a["name"])}
+                            for a in attachments.listing(tid)],
             "history": hist, "runs": runs, "jobs": jobs, "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL, "project_yml": py.exists()}
 
 

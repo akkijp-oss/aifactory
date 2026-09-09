@@ -263,7 +263,8 @@ class StaticTest(unittest.TestCase):
         self.assertIn("FormData", self.js)
         self.assertRegex(self.js, r"tickets/\$\{[^}]+\}/attach")
         self.assertRegex(self.js, r"tickets/\$\{[^}]+\}/detach")
-        self.assertRegex(self.js, r"<img[^>]*/api/tickets/")        # 画像はサムネイルで出す
+        self.assertRegex(self.js, r"/api/tickets/\$\{[^}]+\}/attachments/")   # 添付の配信の口
+        self.assertRegex(self.js, r"<img class=\"thumb\"")                     # 画像はサムネイルで出す
         self.assertIn("dropzone", self.js)                          # 落として添付できる
         self.assertIn("data:", self.js)                             # run 画面のファイルの画像（base64）
 
