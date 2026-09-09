@@ -93,10 +93,14 @@ sudo chmod u+s "$softnet_binary"
 ```bash
 python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" list
 python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" submit mac-worker probe
+python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" \
+  submit mac-worker guest-exec --lease auto --command 'pgrep -fl claude' --wait 60
 python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" show '<operation-id>'
 ```
 
-ゲスト操作は `{"command":"sw_vers; uname -m","timeout":30}` のようなJSONを非公開ファイルへ書き、`submit mac-worker guest-exec --payload-file <file>` で指定する。ホストVM名やホストシェルを操作のpayloadから選択することはできない。診断用payloadはDBに記録されるので、トークン・秘密情報は渡さない。
+ゲスト操作のコマンドは `--command '<sh>'` で直接渡せる（payloadの `timeout` 既定は60秒）。複数キーを細かく指定するときは `{"command":"sw_vers; uname -m","timeout":30}` のようなJSONを非公開ファイルへ書き、`submit mac-worker guest-exec --payload-file <file>` で指定する（`--command` はそのファイルの `command` を上書きする）。ホストVM名やホストシェルを操作のpayloadから選択することはできない。診断用payloadはDBに記録されるので、トークン・秘密情報は渡さない。
+
+`--lease auto` はそのworkerが現在保持しているleaseをDBから引いてpayloadに入れる。payloadファイルに `lease` があればそちらを優先し、`--lease <id>` の明示指定はpayloadを上書きする。leaseが無ければ入れないので、lifecycleワーカーでは従来どおり `lifecycle worker requires a lease` になる。`--wait <秒>` は完了まで待って `show` と同じJSONを表示する。期限内に終わらなければその時点のJSONを表示して非ゼロで終わる。
 
 - `cancel <operation-id>`: 停止要求。通信が切れている間は停止完了にはしない。
 - `disable <worker>`: そのワーカーの認証を失効。ゲストは通信断猶予の後に停止を試みる。失効と停止完了は別。

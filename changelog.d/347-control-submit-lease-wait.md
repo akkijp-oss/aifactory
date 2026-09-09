@@ -1,0 +1,2 @@
+### Added
+- **`control submit` に `--lease` / `--command` / `--wait` を追加**。`control submit <worker> guest-exec --lease auto --command 'pgrep -fl claude' --wait 60` の 1 行で、payload ファイルも lease id の写しも作らずにゲストの状態（`show` と同じ JSON）が読める。`--lease auto` は worker の現在の lease を DB から引き、`--lease <id>` は明示指定する（payload ファイルの `lease` は `auto` より優先、`--lease <id>` は payload を上書き）。`--command` 指定時の `timeout` 既定は 60 秒。

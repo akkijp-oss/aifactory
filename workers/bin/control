@@ -5,12 +5,51 @@ import json
 import os
 import pathlib
 import sys
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
 from pull import Store, Error, server
 
+WAIT_POLL_SECONDS = 0.5
+PENDING = ("queued", "running")
 
-def main():
+
+def worker_lease(store, worker):
+    """Lease ID currently held on the worker, or None. Backs --lease auto."""
+    for w in store.workers():
+        if w["id"] == worker:
+            return (w["lease"] or {}).get("id")
+    return None
+
+
+def submit_payload(store, a):
+    payload = json.loads(pathlib.Path(a.payload_file).read_text()) if a.payload_file else {}
+    if not isinstance(payload, dict):
+        raise Error("payload must be an object")
+    if a.command is not None:
+        payload = {"timeout": 60, **payload, "command": a.command}
+    if a.lease == "auto":
+        # A payload file's own lease wins; with no lease held, the store raises the usual lifecycle error.
+        held = None if "lease" in payload else worker_lease(store, a.worker)
+        if held:
+            payload = {**payload, "lease": held}
+    elif a.lease:
+        payload = {**payload, "lease": a.lease}
+    return payload
+
+
+def wait_for(store, operation, seconds):
+    """Block until the operation leaves queued/running, or the deadline passes."""
+    deadline = time.monotonic() + seconds
+    while True:
+        record = store.operation(operation)
+        remaining = deadline - time.monotonic()
+        if record["state"] not in PENDING or remaining <= 0:
+            return record
+        time.sleep(min(WAIT_POLL_SECONDS, remaining))
+
+
+def main(argv=None):
     os.umask(0o077)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", required=True)
@@ -30,6 +69,9 @@ def main():
     p.add_argument("worker")
     p.add_argument("kind", choices=["probe", "guest-exec", "guest-prepare", "guest-release"])
     p.add_argument("--payload-file")
+    p.add_argument("--command", help="guest-exec command; overrides the payload command, timeout defaults to 60")
+    p.add_argument("--lease", metavar="ID", help='payload lease ID; "auto" reads the worker\'s current lease from the database')
+    p.add_argument("--wait", type=int, metavar="SECONDS", help="wait for completion and print the same JSON as show")
     p.add_argument("--stdin-file", help="private transient input; never printed in operation records")
     p.add_argument("--operation-id")
     p = sub.add_parser("acquire")
@@ -45,7 +87,7 @@ def main():
     p = sub.add_parser("resolve")
     p.add_argument("operation")
     p.add_argument("--confirmed-stopped", action="store_true", required=True)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     store = Store(a.db)
     try:
         if a.action == "serve":
@@ -63,9 +105,18 @@ def main():
         elif a.action == "disable":
             store.disable(a.worker)
         elif a.action == "submit":
-            payload = json.loads(pathlib.Path(a.payload_file).read_text()) if a.payload_file else {}
+            if a.wait is not None and a.wait < 1:
+                raise Error("--wait must be at least one second")
             stdin = pathlib.Path(a.stdin_file).read_text() if a.stdin_file else None
-            print(store.submit(a.worker, a.kind, payload, a.operation_id, stdin=stdin))
+            operation = store.submit(a.worker, a.kind, submit_payload(store, a), a.operation_id, stdin=stdin)
+            if a.wait is None:
+                print(operation)
+            else:
+                record = wait_for(store, operation, a.wait)
+                print(json.dumps(record, ensure_ascii=False, indent=2))
+                if record["state"] in PENDING:
+                    print("timed out waiting for " + operation, file=sys.stderr)
+                    return 1
         elif a.action == "acquire":
             store.acquire(a.worker, a.lease)
         elif a.action == "release-lease":
