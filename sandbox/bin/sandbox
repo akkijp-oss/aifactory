@@ -13,7 +13,7 @@
 #   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
 #   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
 #   sandbox token clear <pj|global> [claude|gh|claude:<系統>] トークンを消す
-#   sandbox keys list|add|set|rm|token          Claude の鍵プール（名前 + fable 許可 / fable 以外許可）。take が系統ごとに 1 本選ぶ（ADR-0043）
+#   sandbox keys list|add|set|rm|token          Claude の鍵プール（名前 + fable 許可 / fable 以外許可）。take が系統ごとに 1 本選ぶ（ADR-0044）
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 #   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
@@ -173,7 +173,7 @@ STATE_LOCK="$STATE.lock"
 # 台帳の隣に置く 2 つ。state.json（貸出の正本）には混ぜない
 LAST_USED="${STATE%state.json}last-used.json"       # vmid → 最後に take / reset / release / reinject した時刻（ADR-0026 の書式）
 IDLE_STOP_FILE="${STATE%state.json}idle-stop.json"  # 直近の idle-stop の結果（ls / console / MCP が「節電で停止中」を出すのに読む）
-KEYS_FILE="${SANDBOX_KEYS:-${STATE%state.json}keys.json}"  # Claude の鍵プール（600。名前とフラグ付き。ADR-0043）
+KEYS_FILE="${SANDBOX_KEYS:-${STATE%state.json}keys.json}"  # Claude の鍵プール（600。名前とフラグ付き。ADR-0044）
 _state_locked=0; _lock_style=""; _reserved_task=""; _reserved_dns=""
 state_lock_acquire() {
   local use_mkdir=0
@@ -324,7 +324,7 @@ resolve_gh_token() {
   return 0
 }
 
-# ---------- 鍵プール（keys.json。ADR-0043）
+# ---------- 鍵プール（keys.json。ADR-0044）
 # 制御系に名前付きの Claude の鍵を並べ、take / reset / reinject が系統ごとに 1 本ずつ選ぶ。
 # 鍵には「fable 許可（allow.fable）」「fable 以外許可（allow.other）」のフラグがあり、Fable 用と Opus / Sonnet / Haiku 用を分けられる。
 #   書式: {"keys":[{name, token, allow:{fable,other}, enabled, note, issued:"YYYY-MM-DD", last_used:"<ISO 8601 offset>|null", uses:n}]}

@@ -71,6 +71,7 @@ kb list --pj kumitate --all      # PJ で絞る。--all で done も
 kb show 204                      # 全項目 + 本文
 kb next                          # 最も古い todo を 1 件
 kb next --pj kumitate --json     # JSON（dispatch や外部ツール向け。path に本文の絶対パス）
+kb resumable [--pj P] [--json]   # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む。ADR-0043）
 ```
 
 ### 状態を進める
@@ -113,10 +114,11 @@ kb new kumitate bug "不具合: 保存が効かない" --body - --attach 画面.
 
 チケットに画像（スクリーンショット・デザイン案）やファイル（仕様書 PDF・CSV・設定ファイル）を添付します。`$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` にコピーされ、**本文には書きません**。正本は実体のファイルで、一覧は `kb show` の末尾・コンソールのチケット画面・MCP `ticket_show` が実体から導きます（ADR-0041）。
 
-- 名前は sanitize されます（パス区切り・`..`・制御文字を落とす）。同じ名前の添付があれば拡張子の前に `-2`, `-3` … を付け、上書きしません
+- 名前は sanitize されます（パス区切り・`..`・制御文字を落とし、Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）は `_` に置き換え、連続する空白は 1 つにして、120 バイトに切ります）。名前は各工程の依頼文にそのまま埋まるので、読める長さと文字種に締めています。同じ名前の添付があれば拡張子の前に `-2`, `-3` … を付け、上書きしません
 - 上限は **1 ファイル 20 MiB・1 チケット合計 100 MiB**。超えるとエラー（終了コード 1）です。複数指定したときは失敗したファイルで止まり、そこまでに入った分は残ります
 - 追加・削除は履歴に `attachment  - → add 画面.png (12.3 KiB)` / `attachment  画面.png → removed` の形で残ります
 - 添付が 0 件のチケットでは `kb show` の出力は今までと変わりません
+- `kb new --attach` は **チケットは作れたのに添付だけ失敗する**ことがあります（上限を超えたときなど）。そのとき id は標準出力に出ますが終了コードは 0 ではありません。チケットは在るので、添付だけ `kb attach <id> <ファイル>` でやり直してください
 
 `kb run` すると、runner が添付を VM の `~/work/<id>/attachments/` に置き、各 step の依頼文に次の 1 行を足します。
 
@@ -153,6 +155,8 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 | `pr_url` あり | review | PR 待ち URL |
 | `result: end`、PR なし | done | PR なしで終了（research 等） |
 | `result: human`、PR なし | blocked | 人間へ（wip ブランチ） |
+| `result: human`、`failure: quota`（鍵の利用枠切れ） | **todo** | 一時停止。`retry_after`（解除時刻）以降に `dispatch --resume-paused` が `kb run --from` で続きを回す。`quota_hits` が `AIFACTORY_RESUME_MAX_HITS`（既定 6）に達したら blocked |
+| `result: human`、`failure: key`（鍵が無効・失効・残高不足） | blocked | 鍵を直してから `kb run --from`（メモにコマンド） |
 | `result: failed` | blocked | VM を取得できず工程が始まらなかった（`error` の最終行をメモに残す） |
 | `result: failed`、`failure: wait_timeout` | todo | `--wait` の上限まで待っても空きが出なかった。直す所はないので未着手に戻す |
 | `finished` なし、runner が rc≠0 | blocked | runner が記録を残さず終了 rc=N |

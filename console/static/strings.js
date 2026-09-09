@@ -16,7 +16,7 @@ const T = {
 
   "btn": {
     "cancel": "キャンセル", "close": "閉じる", "undo": "元に戻す", "draftClear": "下書きを捨てる",
-    "file": "起票する", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
+    "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "鍵を足す", "keyRemove": "削除する", "keyToken": "値を差し替える",
@@ -27,7 +27,7 @@ const T = {
 
   "h": {
     "outcome": "結果", "artifacts": "成果物", "stepLogs": "工程のログ", "otherFiles": "その他のファイル（{n} 件）",
-    "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "history": "履歴",
+    "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "attachments": "添付", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "keys": "鍵プール", "keyAdd": "鍵を足す",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
@@ -52,6 +52,7 @@ const T = {
     "blockNote": "何を待っていますか", "blockPlaceholder": "例: 本番 DB の権限を管理者に依頼中",
     "count": "件数", "count1": "1 件だけ", "count3": "3 件まで", "count10": "10 件まで", "countAll": "未着手が尽きるまで",
     "dispatchDry": "dry-run（VM を触らず、状態も進めません）", "intakeDry": "起票せず、判定だけ見る",
+    "attachments": "添付するファイル", "dropHere": "ここにファイルを落とすか、選んでください",
     "request": "依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）", "requestPlaceholder": "例: seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい",
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」を箇条書きで）",
     "bodyPlaceholder": "## 背景\n何に困っているか、どこで起きるかを書きます。\n\n## 完了条件\n- [ ] テストが緑になる\n- [ ] PR ができている",
@@ -126,6 +127,10 @@ const T = {
     "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",
     "step_failed": "工程 {step} で止まりました。",
     "step_timeout": "工程 {step} が時間上限 {n} 分で中断されました。コミット済みの分は wip ブランチに残っています。",
+    "quota_paused": "工程 {step} が Claude の鍵の利用枠の上限（{type}）で中断されました。途中までの変更は wip ブランチに残っています。{when} 以降に自動で続きから再開します。",
+    "quota_paused_unknown": "工程 {step} が Claude の鍵の利用枠の上限（{type}）で中断されました。途中までの変更は wip ブランチに残っています。解除時刻は記録に無く、しばらく待ってから自動で続きから再開します。",
+    "quota_exceeded": "工程 {step} が Claude の鍵の利用枠の上限で {n} 回続けて中断されました。自動再開は止めています。鍵の枠を確かめてください。",
+    "key_failed": "工程 {step} で Claude の鍵が使えず中断されました: {summary}。鍵を直してから続きを回してください。",
     "gateFails": "赤いゲート: {gates}。",
     "ended": "すべての工程が終わりました。",
     "waiting": "工程は終わり、人間の判断を待っています。",
@@ -232,7 +237,10 @@ const T = {
     "keysError": "鍵の一覧を読めませんでした。制御系の keys.json を確かめてください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",
-    "draftLost": "下書きの {v} は今は選べません。既定に戻しました。"
+    "draftLost": "下書きの {v} は今は選べません。既定に戻しました。",
+    "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
+    "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
+    "attachEmpty": "まだ添付はありません。"
   },
 
   "msg": {
@@ -242,6 +250,8 @@ const T = {
     "synced": "チケット {id} の状態を実行記録に合わせました。",
     "syncUndone": "チケット {id} の状態とメモを{to}に戻しました。",
     "filed": "チケット {id} を起票しました。",
+    "attached": "{n} 件を添付しました。",
+    "detached": "添付 {name} を消しました。",
     "stopSent": "止める合図（SIGTERM）を送りました。終わるまで数秒かかることがあります。",
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
     "draftRestored": "前回の下書きを復元しました。",
@@ -263,7 +273,8 @@ const T = {
     "needTitle": "題名を入れてください。",
     "needKeyName": "鍵の名前を入れてください。",
     "needKeyToken": "トークンを入れてください。",
-    "needKeyFlag": "「fable に使う」と「fable 以外に使う」のどちらかを選んでください。"
+    "needKeyFlag": "「fable に使う」と「fable 以外に使う」のどちらかを選んでください。",
+    "attachFailedAfterNew": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。"
   },
 
   "dialog": {
@@ -314,6 +325,11 @@ const T = {
       "body": "この鍵はチケット {tasks} が使っています。再注入のジョブを起こし、次の起動から別の鍵になります。",
       "ok": "使わないようにする"
     },
+    "detach": {
+      "title": "添付 {name} を消す",
+      "body": "この添付のファイルを消します。元に戻せません。",
+      "ok": "添付を消す"
+    },
     "stop": {
       "title": "ジョブを止める",
       "body": "プロセスグループに SIGTERM を送ります。kb run の途中なら、VM は貸出中のまま残ることがあります。",
@@ -325,6 +341,7 @@ const T = {
     "intakeDone": "チケット {id} を起票しました。内容を確かめて、実行するか配車してください。",
     "intakeDoneNoId": "取り込みは終わりました。ボードで新しいチケットを確かめてください。",
     "intakeDry": "判定だけ見ました（起票していません）。内容で良ければ、起票へ戻って取り込んでください。",
+    "intakeDoneNoAttach": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。",
     "intakeFailed": "取り込みはできませんでした。出力の最後の行を確かめ、依頼文を直してもう一度取り込んでください。",
     "runDone": "run は終わりました。実行記録で工程と結果を確かめてください。",
     "runDry": "dry-run が終わりました。状態は変わっていません。組まれた依頼文は実行記録で読めます。",

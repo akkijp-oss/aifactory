@@ -12,6 +12,7 @@
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
   kb detach <id> <name>                          # 添付を 1 件消す
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
+  kb resumable [--pj P] [--json]                 # 鍵の利用枠切れで一時停止中（todo に戻した）チケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
                                                  # --from は human で止まった run を新しい VM で STEP からやり直す（既定は記録の resume_step、続きは記録の wip ブランチ）。--resume とは併用できない
@@ -302,6 +303,58 @@ def cmd_next(a):
     else: print(fmt(r)); print(f"     {ROOT / r['file']}")
 
 
+def resume_max_hits():
+    """利用枠切れで続けて止まってよい回数。超えたら自動再開をやめて人間へ（380）"""
+    return int(os.environ.get("AIFACTORY_RESUME_MAX_HITS") or 6)
+
+
+def resume_backoff_min():
+    """解除時刻が記録に無いときに、止まってから自動再開を試すまでの分数（380）"""
+    return int(os.environ.get("AIFACTORY_RESUME_BACKOFF_MIN") or 30)
+
+
+def fmt_when(iso):
+    """記録の時刻（オフセット付き ISO）をメモ向けに短く。読めなければそのまま"""
+    try: return datetime.datetime.fromisoformat(iso).astimezone().strftime("%m-%d %H:%M")
+    except (TypeError, ValueError): return str(iso)
+
+
+def resume_plan(r):
+    """チケットが「利用枠切れで一時停止中」なら、その続きを回すのに要る事実と、今回せるか（380）。
+    根拠は台帳の run が指す state.json だけ（result: human / failure: quota / wip_branch / resume_step）。それ以外は None。
+    ready は retry_after を過ぎたか、無ければ finished から AIFACTORY_RESUME_BACKOFF_MIN 分過ぎたか。判定に使った時刻も返す"""
+    if r["status"] != "todo" or not r["run"]: return None
+    st = paths.run_path(r["run"]) / "state.json"
+    try: s = json.loads(st.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return None
+    if s.get("result") != "human" or s.get("failure") != "quota" or "finished" not in s: return None
+    step, wip = s.get("resume_step"), s.get("wip_branch")
+    if not (step and wip): return None
+    now_dt = datetime.datetime.now().astimezone()
+    until = None
+    try:
+        if s.get("retry_after"): until = datetime.datetime.fromisoformat(s["retry_after"])
+        else: until = datetime.datetime.fromisoformat(s["finished"]) + datetime.timedelta(minutes=resume_backoff_min())
+    except (TypeError, ValueError): until = None
+    if until is not None and until.tzinfo is None: until = until.astimezone()
+    return {"id": r["id"], "pj": r["pj"], "kind": r["kind"], "title": r["title"], "run": r["run"],
+            "step": step, "branch": wip, "quota_type": s.get("quota_type"), "quota_hits": int(s.get("quota_hits") or 0),
+            "retry_after": s.get("retry_after"), "until": until.isoformat(timespec="seconds") if until else None,
+            "ready": bool(until is None or now_dt >= until), "hits_exceeded": int(s.get("quota_hits") or 0) >= resume_max_hits()}
+
+
+def cmd_resumable(a):
+    c = db(); q = "SELECT * FROM tickets WHERE status = 'todo'"; p = []
+    if a.pj: q += " AND pj = ?"; p.append(a.pj)
+    plans = [pl for pl in (resume_plan(r) for r in c.execute(q + " ORDER BY id", p)) if pl]
+    if a.json: print(json.dumps(plans, ensure_ascii=False)); return
+    if not plans: print("(一時停止中のチケットなし)"); return
+    for pl in plans:
+        when = "今すぐ" if pl["ready"] else f"{fmt_when(pl['until'])} 以降"
+        print(f"{pl['id']:>4} {pl['pj']:<10} {pl['step']:<10} {when:<14} {pl['quota_type'] or '?'} x{pl['quota_hits']}  {pl['run']}  {pl['title'][:40]}")
+        print(f"     kb run {pl['id']} --from {pl['step']} --branch {pl['branch']}")
+
+
 def run_workflow(run_dir):
     """runs/<run>/state.json に残る「その run をどの workflow で回したか」。--resume は kind ではなくこれで再開する"""
     f = paths.run_path(run_dir) / "state.json"
@@ -476,6 +529,31 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
             status, note = "blocked", f"VM を取得できず開始前に終了: {why}。原因を直して kb reopen → kb run"
+        elif result == "human" and s.get("failure") == "quota":
+            # 鍵の利用枠の上限で止まった run（380 / ADR-0043）。直す所は無い（時間が経てば戻る）ので todo に戻し、
+            # dispatch --resume-paused（制御系の timer）が解除時刻を過ぎてから `kb run --from` で続きを回す。
+            # 続けて何度も止まる（鍵の枠が小さすぎる等）ときだけ人間へ（上限は AIFACTORY_RESUME_MAX_HITS、既定 6）
+            step, hits = s.get("resume_step"), int(s.get("quota_hits") or 0)
+            cont = f"kb run {tid} --from {step} --branch {wip}" if wip and step else f"kb run {tid}"
+            when = s.get("retry_after")
+            if hits >= resume_max_hits():
+                status = "blocked"
+                note = f"鍵の利用枠切れで {hits} 回続けて中断（{s.get('quota_type') or 'unknown'}）。鍵の枠を確かめてから {cont}"
+            elif not (wip and step):
+                # 続きに要る事実（wip ブランチ・やり直す step）が無い run は自動では回せない（wip の push に失敗した等。wip.patch を見る）
+                status = "blocked"
+                note = f"鍵の利用枠切れで中断したが、続きに要る記録（wip ブランチ / 再開する工程）が無い。runs/{run_dir}/ を確かめてから {cont}"
+            else:
+                status = "todo"
+                note = (f"鍵の利用枠切れで一時停止（{step or '?'} の途中・{s.get('quota_type') or 'unknown'}・{hits} 回目）。"
+                        + (f"{fmt_when(when)} 以降に" if when else f"解除時刻は不明。{resume_backoff_min()} 分後に")
+                        + f"自動再開（dispatch --resume-paused）。手で回すなら {cont}")
+        elif result == "human" and s.get("failure") == "key":
+            # 鍵そのものが使えない（無効・失効・残高不足）run。待っても戻らないので人間へ。直したら続きから（380）
+            why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:160]
+            step = s.get("resume_step")
+            status = "blocked"
+            note = f"鍵が使えず中断: {why}。sandbox token set/rotate で鍵を直してから" + (f" kb run {tid} --from {step} --branch {wip}" if wip and step else f" kb run {tid}")
         elif result == "human":
             # 止まった理由（どの step で・なぜ）を板だけ見て分かるようにする（239）。理由が無い run は従来どおり
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or [""])[-1][:160]
@@ -524,6 +602,7 @@ def main():
     p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")
     p = sp.add_parser("detach"); p.add_argument("id", type=int); p.add_argument("name", help="kb attachments で出る名前")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("resumable"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
     p.add_argument("--wait", nargs="?", type=float, const=60, help="VM のプールに空きが無いとき、空くまで待つ上限（分。既定 60）")
     p.add_argument("--from", dest="from_step", nargs="?", const="", metavar="STEP",
@@ -549,6 +628,7 @@ def main():
     elif a.cmd == "attachments": cmd_attachments(a)
     elif a.cmd == "detach": cmd_detach(a)
     elif a.cmd == "next": cmd_next(a)
+    elif a.cmd == "resumable": cmd_resumable(a)
     elif a.cmd == "run": sys.exit(cmd_run(a))
     elif a.cmd == "sync": cmd_sync(a)
     elif a.cmd == "run-note": cmd_run_note(a)

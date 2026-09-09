@@ -71,6 +71,7 @@ kb list --pj kumitate --all      # by project; --all includes done
 kb show 204                      # all fields + body
 kb next                          # the oldest todo
 kb next --pj kumitate --json     # JSON (for dispatch and external tools; path holds the body's absolute path)
+kb resumable [--pj P] [--json]   # tickets paused by the Claude usage limit, and whether their reset time has passed (read by dispatch --resume-paused; ADR-0043)
 ```
 
 ### Advancing state
@@ -113,10 +114,11 @@ kb new kumitate bug "Bug: saving does nothing" --body - --attach screen.png   # 
 
 Attach images (screenshots, design mockups) or files (spec PDFs, CSVs, config files) to a ticket. They are copied into `$AIFACTORY_WORKSPACE/kanban/attachments/<id>/` and **nothing is written into the ticket body**. The files themselves are the source of truth; the listing is derived from them by `kb show`, the console ticket page and MCP `ticket_show` (ADR-0041).
 
-- Names are sanitized (path separators, `..` and control characters are removed). A name that already exists gets `-2`, `-3` … before the extension instead of overwriting
+- Names are sanitized (path separators, `..` and control characters are removed, Markdown syntax (`` ` `` `*` `[` `]` `<` `>` `|`) becomes `_`, runs of whitespace collapse to one, and the name is cut to 120 bytes). The name is embedded verbatim in each step's prompt, which is why it is kept short and plain. A name that already exists gets `-2`, `-3` … before the extension instead of overwriting
 - Limits are **20 MiB per file and 100 MiB per ticket**. Exceeding either is an error (exit code 1). With several files, it stops at the first failure and keeps what already went in
 - Adding and removing are recorded in the history as `attachment  - → add screen.png (12.3 KiB)` / `attachment  screen.png → removed`
 - For a ticket with no attachments, the output of `kb show` is unchanged
+- `kb new --attach` can **create the ticket and still fail to attach** (over the size limit, for instance). The id is printed on standard output but the exit code is not 0. The ticket exists, so retry just the attachment with `kb attach <id> <file>`
 
 On `kb run`, the runner places the attachments in `~/work/<id>/attachments/` on the VM and adds one line to every step prompt:
 
@@ -153,6 +155,8 @@ With `--from`, a run that ended at `human` is redone **on a new VM**, continuing
 | `pr_url` present | review | PR URL |
 | `result: end`, no PR | done | Finished without a PR (research etc.) |
 | `result: human`, no PR | blocked | Handed to a human (wip branch) |
+| `result: human`, `failure: quota` (Claude usage limit) | **todo** | paused; after `retry_after` (the reset time) `dispatch --resume-paused` continues it with `kb run --from`. Once `quota_hits` reaches `AIFACTORY_RESUME_MAX_HITS` (default 6) it becomes blocked |
+| `result: human`, `failure: key` (token invalid, expired or out of credit) | blocked | fix the token, then `kb run --from` (the note holds the command) |
 | `result: failed` | blocked | Could not take a VM, so no step ran (the last line of `error` goes into the note) |
 | `result: failed` with `failure: wait_timeout` | todo | `--wait` ran out before a VM came free. There is nothing to fix, so the ticket goes back to todo |
 | No `finished`, runner exited non-zero | blocked | Runner exited without a record, rc=N |

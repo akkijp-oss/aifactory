@@ -243,3 +243,18 @@ dialog::backdrop { background: rgba(28,39,51,.35); }
 .preview .id { font-family: var(--mono); color: var(--muted); margin-right: 6px; }
 kbd { font: 11.5px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel); }
 .keys td { padding: 5px 10px; }
+
+/* 添付（チケット画面・起票画面）。落とす領域と、画像のサムネイル */
+.dropzone { border: 1px dashed var(--line); border-radius: 6px; padding: .6em .8em; background: var(--ground); }
+.dropzone.over { border-color: var(--accent); border-style: solid; background: var(--accent-soft); }
+.dropzone > label { display: block; color: var(--muted); font-size: .9em; cursor: pointer; }
+.dropzone input[type=file] { display: block; margin: .4em 0 0; max-width: 100%; font-size: .9em; }
+.dropzone .picked { list-style: none; margin: .5em 0 0; padding: 0; }
+.dropzone .picked li { display: flex; align-items: center; gap: .5em; padding: .15em 0; }
+.attach-grid { display: flex; flex-wrap: wrap; gap: .8em; margin-bottom: .8em; }
+.attach { margin: 0; width: 9.5em; }
+.attach figcaption { font-size: .85em; word-break: break-all; display: flex; align-items: center; gap: .3em; }
+.thumb { display: block; width: 9.5em; height: 6.5em; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; background: var(--ground); }
+.thumb.none { display: flex; align-items: center; justify-content: center; color: var(--muted); text-transform: uppercase; text-decoration: none; }
+button.x { padding: 0 .35em; line-height: 1.4; margin-left: auto; }
+.filepic { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; }

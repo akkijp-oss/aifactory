@@ -4,7 +4,7 @@
 - 動かす: kb / intake / dispatch / sandbox を子プロセスで。長いものは JobStore（console/jobs/）。判定（二重起動・入力検査）はここに 1 つ
 - 置き場は lib/aifactory_paths.py（AIFACTORY_WORKSPACE。KB_ROOT / CONSOLE_JOBS で個別に差し替え可）
 """
-import contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, threading, time
+import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
@@ -30,7 +30,7 @@ def sandbox_state_path():
 
 def sandbox_keys_path():
     """Claude の鍵プール（keys.json）の置き場。sandbox CLI と同じ規則で、環境変数 SANDBOX_KEYS が正。
-    無ければ台帳（state.json）の隣（テナント運用では <t>.keys.json）。値はここでは読まない（読むのは sandbox CLI だけ。ADR-0043）"""
+    無ければ台帳（state.json）の隣（テナント運用では <t>.keys.json）。値はここでは読まない（読むのは sandbox CLI だけ。ADR-0044）"""
     v = os.environ.get("SANDBOX_KEYS")
     if v: return pathlib.Path(v)
     s = sandbox_state_path()
@@ -45,7 +45,11 @@ LS_STALE_S = 600                                                # `sandbox ls` �
 STATUSES = ["todo", "in_progress", "review", "blocked", "done"]
 STATUS_LABEL = {"todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了"}
 # 画面から読めるファイルの根（これ以外は 403）
-READ_ROOTS = [RUNS, KB_ROOT / "tickets", LOGS, REPO / "workflow" / "kit", *paths.PROJECT_DIRS, JOBS]
+READ_ROOTS = [RUNS, KB_ROOT / "tickets", LOGS, REPO / "workflow" / "kit", *paths.PROJECT_DIRS, JOBS, paths.ATTACHMENTS]
+READ_IMAGE_MAX = 4 * 1024 * 1024        # read_file が画像を base64 で返す上限。base64 にすると約 1.33 倍に膨らむ（MCP の 1 応答に載る大きさ）
+# MCP の ticket_attach(path=...) が読んでよい根。添付の判定ではなく「入口」の判定なので lib には置かない。
+# `.` で始まる要素を含むパスは弾くので ~/.config/aifactory/ctl.env・~/.ssh はここで落ちる
+ATTACH_PATH_ROOTS = [pathlib.Path.home(), pathlib.Path("/tmp")]
 
 
 # ---------- 時刻（ADR-0026: 記録はオフセット付き ISO 8601。オフセットの無い古い記録は書いたホスト＝ここの時間帯とみなす）
@@ -384,6 +388,15 @@ def run_outcome(d, s, state, wf, files):
         if last.get("failure") == "timeout":
             o["reason"] = "step_timeout"; o["timeout_min"] = last.get("timeout_min")
             o["error_summary"] = last_line(state.get("error"))
+        # 鍵の利用枠の上限（quota）/ 鍵そのもの（key）で止まった工程（チケット 380 / ADR-0043）。工程の失敗ではない。
+        # quota はチケットが todo に戻っていて、解除時刻（retry_after）の後に timer が続きを回す。key は人が鍵を直す
+        if last.get("failure") in ("quota", "key"):
+            o["reason"] = "quota_paused" if last["failure"] == "quota" else "key_failed"
+            o["quota_type"] = state.get("quota_type") or last.get("quota_type")
+            o["retry_after"] = ts_aware(state.get("retry_after") or last.get("retry_after"))
+            o["quota_hits"] = int(state.get("quota_hits") or 0)
+            o["quota_max_hits"] = int(os.environ.get("AIFACTORY_RESUME_MAX_HITS") or 6)   # kb と同じ上限（超えたら自動再開は止まっている）
+            o["error_summary"] = last_line(state.get("error"))
         by_name = {f["name"]: f for f in files}
         if "gates.txt" in (sd.get("outputs") or []) and "work/gates.txt" in by_name:
             o["gate_fails"] = gate_fails(d / "work" / "gates.txt")
@@ -477,6 +490,12 @@ def read_file(relpath, tail=None, offset=None):
     if not any(p.is_relative_to(r.resolve()) for r in READ_ROOTS if r.exists()): return None, "この場所のファイルは表示できません（読めるのは runs / kanban/tickets / logs / workflow/kit / PJ 定義 / console/jobs の下だけです）"
     if not p.is_file(): return None, "ファイルが見つかりません"
     size = p.stat().st_size
+    if attachments.is_image(p.name):   # 画像はテキストにせず base64 で返す（MCP は image ブロック、画面は data: URL にする）
+        if size > READ_IMAGE_MAX:
+            return None, (f"画像が大きすぎて読めません（{attachments.human(size)}、上限 {attachments.human(READ_IMAGE_MAX)}）。"
+                          "コンソールの添付から開いて見てください")
+        return {"path": relpath, "size": size, "type": attachments.guess_type(p.name),
+                "base64": base64.b64encode(p.read_bytes()).decode("ascii"), "truncated": False}, None
     with open(p, "rb") as f:
         if offset is not None:
             f.seek(min(offset, size)); data = f.read()
@@ -638,7 +657,7 @@ def sandbox_view():
     urls = {t: f"http://task-{t}.{e['SB_DOMAIN']}:{e['APP_PORT']}" for t, v in lent.items() if isinstance(v, dict)}
     # 貸出 1 件 = 1 行の一覧（台帳の写し）。MCP から IP を引くのに state.json を ssh で直読みしなくて済むようにする（336）
     status_of = {str(v["vmid"]): v.get("status") for v in vms if v.get("vmid")}
-    # keys は take / reinject が書いた鍵プールの名前（{"fable": …, "other": …}）。値は台帳にも入らない（ADR-0043）
+    # keys は take / reinject が書いた鍵プールの名前（{"fable": …, "other": …}）。値は台帳にも入らない（ADR-0044）
     leases = [{"task": str(t), "vmid": None if v.get("vmid") in (None, "") else str(v["vmid"]), "name": v.get("name"),
                "ip": v.get("ip"), "pj": v.get("pj"), "since": v.get("since"), "phase": v.get("phase"),
                "url": urls.get(t), "vm_status": status_of.get(str(v.get("vmid"))),
@@ -703,8 +722,9 @@ class JobStore:
         return [j for j in cls.list() if j.get("rc") is None and j.get("state") == "running"]
 
     @classmethod
-    def start(cls, kind, cmd, label, ticket=None, stdin_text=None, run_hint=None, cwd=None, conflict=None):
-        """conflict: 実行中ジョブ j を受けて衝突なら理由文字列を返す関数。ロックの中で判定するので同時リクエストでも二重にならない"""
+    def start(cls, kind, cmd, label, ticket=None, stdin_text=None, run_hint=None, cwd=None, conflict=None, files=None):
+        """conflict: 実行中ジョブ j を受けて衝突なら理由文字列を返す関数。ロックの中で判定するので同時リクエストでも二重にならない。
+        files: [(名前, バイト列)]。<job>/files/ に落とし、cmd の "{files}" をそのパスの並びに置き換える（"{stdin}" と同じ流儀）"""
         with cls.lock, _flock():
             if conflict:
                 for j in cls.running():
@@ -718,6 +738,12 @@ class JobStore:
             if stdin_text is not None:
                 stdin_path = d / "stdin.txt"; stdin_path.write_text(stdin_text, encoding="utf-8")
                 cmd = [(str(stdin_path) if a == "{stdin}" else a) for a in cmd]
+            if files:
+                fd = d / "files"; fd.mkdir()
+                saved = []
+                for name, data in files:
+                    fp = fd / attachments.free_name(fd, name); fp.write_bytes(data); saved.append(str(fp))
+                cmd = [x for a in cmd for x in (saved if a == "{files}" else [a])]
             log = open(d / "log", "ab")
             log.write(f"$ {' '.join(cmd)}\n".encode()); log.flush()
             p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=str(cwd or REPO), env=child_env(), start_new_session=True)
@@ -890,7 +916,8 @@ def ticket_detail(tid):
     jobs = [j for j in JobStore.list() if j.get("ticket") == tid][:10]
     ks = kinds()
     return {"ticket": t, "body": body, "file": str(f.relative_to(REPO)) if f.exists() and f.resolve().is_relative_to(REPO.resolve()) else str(f),
-            "attachments": attachments.listing(tid),
+            "attachments": [{**a, "path": rel(attachments.dir_for(tid) / a["name"]), "image": attachments.is_image(a["name"])}
+                            for a in attachments.listing(tid)],
             "history": hist, "runs": runs, "jobs": jobs, "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL, "project_yml": py.exists()}
 
 
@@ -1017,15 +1044,67 @@ def ticket_new(b):
     return {"rc": rc, "stdout": out, "stderr": err, "id": tid}
 
 
-def op_intake(b):
+# ---------- 添付（正本は lib/aifactory_attachments.py。ここは入口で、書くのは必ず kb 経由＝ history と updated が揃う）
+def ticket_attach(tid, files):
+    """files=[(名前, バイト列)] をチケットに添付する。一時ファイルに落として kb attach を 1 件ずつ呼ぶ。
+       名前の締め（長さ・文字種）も大きさの上限も lib の判定をそのまま使う（数値をここに書かない）"""
+    if not files: raise ApiError("添付するファイルがありません")
+    names = lambda: [a["name"] for a in attachments.listing(tid)]
+    added, before = [], names()
+    with tempfile.TemporaryDirectory() as td:
+        for name, data in files:
+            p = pathlib.Path(td) / attachments.free_name(td, name)
+            p.write_bytes(data)
+            rc, out, err = kb("attach", tid, str(p))
+            # 入った名前は kb の出力を字句解析せず一覧の差分で取る（名前に空白があっても切れない。`-2` の付け替えも拾える）
+            after = names()
+            added += [n for n in after if n not in before]
+            before = after
+            if rc != 0:
+                msg = (err or out).strip() or f"kb attach が失敗 rc={rc}"
+                raise ApiError((f"{len(added)} 件（{'、'.join(added)}）は添付できました。" if added else "") + msg)
+    return {"id": int(tid), "added": added, "attachments": attachments.listing(tid)}
+
+
+def ticket_attach_path(tid, path):
+    """ctl の上にあるファイルを添付する（MCP の path 用）。読んでよいのはホームか /tmp の下で、
+       `.` で始まる要素を含まないものだけ（ctl.env・.ssh のような秘密の置き場をこの規則で弾く）"""
+    p = pathlib.Path(str(path)).expanduser()
+    if not p.is_absolute(): raise ApiError("path は絶対パスで指定してください（例 /tmp/画面.png）")
+    p = p.resolve()
+    if any(x.startswith(".") for x in p.parts):
+        raise ApiError("`.` で始まる名前を含むパスは添付できません（設定や鍵の置き場を避けるためです）")
+    if not any(p.is_relative_to(r.resolve()) for r in ATTACH_PATH_ROOTS if r.exists()):
+        raise ApiError("このパスは添付できません（添付できるのはホームディレクトリか /tmp の下だけです）")
+    if not p.is_file(): raise ApiError(f"ファイルが見つかりません: {p}", 404)
+    return ticket_attach(tid, [(p.name, p.read_bytes())])
+
+
+def ticket_detach(tid, name):
+    """添付を 1 件消す（kb detach）。history に残る"""
+    if not name: raise ApiError("消す添付の名前を指定してください")
+    rc, out, err = kb("detach", tid, name)
+    if rc != 0: raise ApiError((err or out).strip() or f"kb detach が失敗 rc={rc}", 404)
+    return {"id": int(tid), "removed": name, "attachments": attachments.listing(tid)}
+
+
+def attachment_file(tid, name):
+    """添付 1 件を配信するための (パス, Content-Type)。置き場の外を指す名前・無い名前は None（呼び元が 404）"""
+    p = attachments.path_of(tid, name)
+    return (p, attachments.guess_type(p.name)) if p else None
+
+
+def op_intake(b, files=None):
+    """自由文（と添付）から起票する。files があれば <job>/files/ に落として intake の --attach に渡す"""
     text = (b.get("text") or "").strip()
     if not text: raise ApiError("依頼文が空です。取り込む文章を text に入れてください")
     cmd = [str(REPO / "glue" / "bin" / "intake"), "{stdin}"]
     if b.get("pj"): cmd += ["--pj", b["pj"]]
     if b.get("kind"): cmd += ["--kind", b["kind"]]
     if b.get("dry_run"): cmd.append("--dry-run")
-    label = "intake" + (" --dry-run" if b.get("dry_run") else "") + f"（{text[:30]}…）"
-    return {"job": JobStore.start("intake", cmd, label, stdin_text=text + "\n")}
+    if files: cmd += ["--attach", "{files}"]
+    label = "intake" + (" --dry-run" if b.get("dry_run") else "") + f"（{text[:30]}…）" + (f"添付 {len(files)} 件" if files else "")
+    return {"job": JobStore.start("intake", cmd, label, stdin_text=text + "\n", files=files)}
 
 
 def op_dispatch(b):
@@ -1089,7 +1168,7 @@ def op_sandbox_release(b):
     return {"job": JobStore.start("sandbox-release", ["sandbox", "release", task], f"sandbox release {task}", ticket=int(task), conflict=busy)}
 
 
-# ---------- Claude の鍵プール（keys.json。ADR-0043）
+# ---------- Claude の鍵プール（keys.json。ADR-0044）
 # 読むのは名前・フラグ・末尾 4 文字だけ。token の値は keys_view にも応答にも例外文にも入れない。
 # 書くのは必ず sandbox CLI 経由（core が keys.json を直接書くことはない。state.json と同じ約束）
 KEY_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")

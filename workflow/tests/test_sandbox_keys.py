@@ -1,4 +1,4 @@
-"""制御系の Claude 鍵プール（keys.json。#379 / ADR-0043）:
+"""制御系の Claude 鍵プール（keys.json。#379 / ADR-0044）:
 名前付きの鍵に「fable 許可 / fable 以外許可」のフラグを持たせ、take / reinject が系統ごとに 1 本ずつ選んで VM に渡すこと。
 
 - `sandbox keys add/list/set/rm/token` が動き、keys.json は 600、トークンの全文はどこにも出ない

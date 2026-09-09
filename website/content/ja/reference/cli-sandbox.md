@@ -113,7 +113,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 
 ### keys
 
-制御系の `~/.config/sandbox/keys.json`（600）に名前を付けた Claude の鍵を並べておくと、`take` / `reset` / `reinject` が系統ごとに 1 本ずつ選んで VM に渡します（ADR-0043）。鍵ごとに「fable に使う」「fable 以外（Opus / Sonnet / Haiku）に使う」の 2 つのフラグがあり、Fable 用の契約と Opus 用の契約を分けられます。
+制御系の `~/.config/sandbox/keys.json`（600）に名前を付けた Claude の鍵を並べておくと、`take` / `reset` / `reinject` が系統ごとに 1 本ずつ選んで VM に渡します（ADR-0044）。鍵ごとに「fable に使う」「fable 以外（Opus / Sonnet / Haiku）に使う」の 2 つのフラグがあり、Fable 用の契約と Opus 用の契約を分けられます。
 
 | コマンド | 何をするか |
 |---|---|

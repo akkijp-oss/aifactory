@@ -148,7 +148,7 @@ SANDBOX_CLAUDE_TOKEN=xxx sandbox take kumitate 021      # 一回限りの上書�
 
 優先順位: `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（一回限り） > `pj/<pj>.env` > `env`。`token show <pj>` に出どころが出る。`take` / `reset` は task の PJ を覚えているので、以後の操作で PJ を指定し直す必要はない。
 
-### Claude の鍵プール（制御系にまとめて置く。ADR-0043）
+### Claude の鍵プール（制御系にまとめて置く。ADR-0044）
 
 鍵を PJ に貼り付ける代わりに、制御系の `~/.config/sandbox/keys.json`（600）に名前を付けて並べておくと、`take` が系統ごとに 1 本ずつ選んで VM に渡します。鍵には「fable に使う」「fable 以外（Opus / Sonnet / Haiku）に使う」の 2 つのフラグがあり、Fable 用の契約と Opus 用の契約を分けられます。
 

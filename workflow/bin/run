@@ -20,6 +20,11 @@
               待っている間は state.json の `current` が `wait-vm`（console のジョブ一覧・run 画面・MCP に「VM の空き待ち」と出る）。
               再試行の間隔は AIFACTORY_WAIT_POLL_S 秒（既定 30）。上限を超えたら state.json に `failure: "wait_timeout"` を書いて終わり、kb がチケットを todo に戻す
 
+agent が Claude の鍵の利用枠（5 時間 / 7 日の窓、429）で止まったら、追跡済みの変更を `wip: usage limit` としてコミットして wip ブランチに
+保全し、戻しの回数を消費せず human で終わる（state.json に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は
+その step 自身）。kb はチケットを todo に戻し、制御系の timer（`glue/bin/dispatch --resume-paused`）が解除時刻の後に `kb run --from` で続きを回す。
+鍵そのものが使えない（無効・失効・残高不足）ときは `failure: "key"` で、kb は blocked にする（鍵を直してから `kb run --from`）。チケット 380 / ADR-0043。
+
 チケットの添付（kb attach）は take のときに VM の ~/work/<task>/attachments/ へ置き、各 step の依頼文で場所を案内する（チケット 353）。
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
 step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
@@ -59,6 +64,53 @@ def sh(cmd, check=True, capture=True, input_text=None, env=None):
 AGENT_TIMEOUT_RC = 124
 DEFAULT_TIMEOUT_MIN = 60
 WIP_TIMEOUT_MESSAGE = "wip: step timeout"
+
+# agent が「鍵の利用枠」で止まったとき（チケット 380 / ADR-0043）。時間上限と同じく「その step が失敗した」とは直し方が違う。
+#   quota: 利用枠の上限（5 時間 / 7 日の窓、429、overage の枠、日次の支出上限）。待てば戻る → wip を保全して human 行き、
+#          kb がチケットを todo に戻し、dispatch --resume-paused（制御系の timer）が解除時刻の後に `kb run --from` で続きを回す
+#   key  : 鍵そのものが使えない（無効・失効・未ログイン・残高不足）。待っても戻らない → wip を保全して human 行き、kb は blocked
+# 見分ける材料は stream-json の rate_limit_event（status: rejected）と result（is_error）の文言、それに stderr（2>&1 で同じ流れに乗る）。
+# 文言は claude CLI が出すもの（"You've hit your limit · resets …" / 旧 "Claude AI usage limit reached|<epoch>" / API の error type）
+WIP_QUOTA_MESSAGE = "wip: usage limit"
+WIP_KEY_MESSAGE = "wip: token unusable"
+PAUSE_KINDS = ("quota", "key")
+QUOTA_TEXT = re.compile(r"hit your (?:usage )?limit|usage limit reached|Claude AI usage limit|rate_limit_error|API Error: 429|"
+                        r"\b429\b.{0,40}rate.?limit|overloaded_error|API Error: 529|spend limit reached|billing_error.{0,120}resets", re.I | re.S)
+KEY_TEXT = re.compile(r"credit balance (?:is )?too low|invalid api key|authentication_error|invalid_api_key|OAuth token (?:has )?(?:expired|revoked)|"
+                      r"please run /login|not logged in|401 unauthorized|permission_error|billing_error|Invalid authentication", re.I)
+# 旧形式の文言に入る解除時刻（epoch 秒）。新形式（"resets 3pm (Asia/Tokyo)"）は人向けなので読まず、rate_limit_event の resetsAt を使う
+LIMIT_EPOCH = re.compile(r"usage limit reached\|(\d{9,11})")
+
+
+def classify_agent_stop(rate_limit, result_ev, plain_text):
+    """agent の止まり方が「鍵の利用枠」か「鍵が使えない」か（それ以外は None）。戻り: (kind, info)。
+    info は記録に残す事実だけ: quota_type（five_hour / seven_day / … / unknown）と retry_after（オフセット付き ISO。分からなければ None）。
+    rate_limit は EventRenderer が拾った最後の rejected の rate_limit_info、result_ev は result イベント（無ければ None）、
+    plain_text は JSON でない行（stderr の文言）だけ。tool_result の中身は見ない（agent が読んだコードに "Invalid API key" と
+    書いてあるだけで鍵の失効と誤読しないため）。呼び元は agent が失敗したとき（rc≠0 か result が is_error）だけ呼ぶ"""
+    res_text = str((result_ev or {}).get("result") or "")
+    res_err = bool((result_ev or {}).get("is_error")) or str((result_ev or {}).get("subtype") or "").startswith("error")
+    # 1) CLI が「拒否された」と言った rate_limit_event が一番確か（解除時刻も付いてくる）
+    if rate_limit:
+        reset = rate_limit.get("resetsAt")
+        return "quota", {"quota_type": str(rate_limit.get("rateLimitType") or "unknown"), "retry_after": _iso_from_epoch(reset)}
+    # 2) result（エラー）か素の行の文言。利用枠の文言を鍵の文言より先に見る（"billing_error … resets" は日次の枠）
+    body = res_text if res_err else ""
+    for sample in (body, plain_text):
+        if not sample: continue
+        if QUOTA_TEXT.search(sample):
+            m = LIMIT_EPOCH.search(sample)
+            return "quota", {"quota_type": "unknown", "retry_after": _iso_from_epoch(int(m.group(1))) if m else None}
+        if KEY_TEXT.search(sample):
+            return "key", {"quota_type": None, "retry_after": None}
+    return None, {}
+
+
+def _iso_from_epoch(v):
+    try: n = int(v)
+    except (TypeError, ValueError): return None
+    if n <= 0: return None
+    return datetime.datetime.fromtimestamp(n).astimezone().isoformat(timespec="seconds")
 
 # sandbox take が「プールに空きが無い」と言うときの目印（sandbox/bin/sandbox の die 文言）。ここを変えるなら sandbox 側も一緒に直す
 POOL_BUSY = "に空きなし"
@@ -125,15 +177,30 @@ class EventRenderer:
     """claude -p --output-format stream-json の 1 行（JSON）を、人が読める 1〜数行に起こす。JSON でない行はそのまま通す"""
     def __init__(self, t0):
         self.t0 = t0; self.raw = []; self.last_text = ""
+        self.plain = []            # JSON でない行（stderr の文言。鍵の失効・利用枠の見分けに使う。tool_result の中身は入らない）
+        self.rate_limit = None     # 最後に見た「拒否」の rate_limit_info（利用枠の上限。resetsAt が解除時刻）
+        self.result = None         # result イベント（is_error / subtype / result の文言）
     def stamp(self):
         t = int(time.time() - self.t0); return f"[+{t // 60:02d}:{t % 60:02d}]"
     def __call__(self, line):
         line = line.rstrip("\n")
         if not line.strip(): return None
         try: ev = json.loads(line)
-        except ValueError: return f"{self.stamp()} {line}"
+        except ValueError:
+            self.plain.append(line)
+            return f"{self.stamp()} {line}"
         self.raw.append(line)
         t = ev.get("type"); st = self.stamp()
+        if t == "rate_limit_event":
+            # claude CLI が利用枠の状態を伝えてくる（チケット 380）。拒否だけ覚え、警告は 1 行出すに留める
+            info = ev.get("rate_limit_info") or {}
+            status = str(info.get("status") or "")
+            if status == "rejected":
+                self.rate_limit = info
+                return f"{st} rate limit: rejected ({info.get('rateLimitType') or '?'}; resets {_iso_from_epoch(info.get('resetsAt')) or '?'})"
+            if status == "allowed_warning":
+                return f"{st} rate limit: warning ({info.get('rateLimitType') or '?'}; utilization {info.get('utilization', '?')})"
+            return None
         if t == "system":
             if ev.get("subtype") == "init": return f"{st} init model={ev.get('model', '?')} tools={len(ev.get('tools', []))} cwd={ev.get('cwd', '')}"
             return None
@@ -157,6 +224,7 @@ class EventRenderer:
                 outs.append(("  ↳ ERROR\n" if b.get("is_error") else "  ↳\n") + head if head else ("  ↳ ERROR (空)" if b.get("is_error") else "  ↳ (空)"))
             return "\n".join(outs) if outs else None
         if t == "result":
+            self.result = ev
             cost = ev.get("total_cost_usd"); dur = ev.get("duration_ms") or ev.get("duration_api_ms") or 0
             head = f"{st} result: {ev.get('subtype', '?')} turns={ev.get('num_turns', '?')} duration={int(dur) // 1000}s" + (f" cost=${cost:.2f}" if isinstance(cost, (int, float)) else "")
             body = (ev.get("result") or "").strip()
@@ -249,6 +317,9 @@ class Run:
             # 途中の step から始める。loops は空のまま（review→implement の戻しは、この run で新しく数え直す）
             self.state.update({"next": self.from_step, "from_step": self.from_step, "from_branch": self.from_branch,
                                "resumed_from": self.from_run.name if self.from_run else None})
+            # 前回も利用枠で止まっていたなら、その回数を引き継ぐ（続けて何度も VM を取り直さないための上限に使う。380）
+            if self.from_state.get("failure") == "quota":
+                self.state["quota_hits"] = int(self.from_state.get("quota_hits") or 0)
         (self.run_dir / "ticket.md").write_text(self.ticket, encoding="utf-8")
         if not resume:
             # ticket.md だけの run を残さない。take の途中で落ちても console と kb が読める記録にする（2026-09-08 チケット 238）
@@ -328,7 +399,13 @@ class Run:
         body = rv.read_text(encoding="utf-8", errors="replace").strip() if rv.is_file() else ""
         if body: return f"前回の run {self.from_run.name} のレビュー指摘（直すこと）:\n\n{body}"
         err = ([l.strip() for l in str(self.from_state.get("error") or "").splitlines() if l.strip()] or [""])[-1]
-        return f"前回の run {self.from_run.name} は次の理由で止まった: {err}" if err else ""
+        if not err: return ""
+        note = f"前回の run {self.from_run.name} は次の理由で止まった: {err}"
+        if self.from_state.get("failure") in PAUSE_KINDS or (self.from_state.get("history") or [{}])[-1].get("failure") == "timeout":
+            # 途中で切られた回の続き。作業ブランチには前回の途中までのコミット（wip）が入っている（380）
+            note += ("\n\n前回は途中で中断されたので、作業ブランチには途中までのコミット（`wip:` で始まるもの）が入っている。"
+                     "`git log` と `git diff origin/" + self.base + "...HEAD` で何処まで進んだかを確かめ、やり直さずに続きから進めること。")
+        return note
 
     # ---------- VM helpers
     def sb(self, cmd, input_text=None, check=True):
@@ -548,7 +625,7 @@ class Run:
     @staticmethod
     def key_probe_command(fam):
         """どの鍵で動くかを名前だけ調べるコマンド（VM の中で走る。値は出さない）。
-        take が鍵プール（ADR-0043）から選んでいれば /run/sandbox/env に CLAUDE_KEY_NAME_<系統> があるので `(pool: <名前>)` を添える"""
+        take が鍵プール（ADR-0044）から選んでいれば /run/sandbox/env に CLAUDE_KEY_NAME_<系統> があるので `(pool: <名前>)` を添える"""
         return (f'test -n "${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}" '
                 f'&& echo "CLAUDE_CODE_OAUTH_TOKEN_{fam}${{CLAUDE_KEY_NAME_{fam}:+ (pool: $CLAUDE_KEY_NAME_{fam})}}" '
                 f'|| echo CLAUDE_CODE_OAUTH_TOKEN')
@@ -602,6 +679,20 @@ class Run:
             self.commit_tracked(WIP_TIMEOUT_MESSAGE)
             self.last_fail = {"failure": "timeout", "timeout_min": tmin, "last_output": out[-3000:]}
             return False, f"agent timeout {rc}: 時間上限 {tmin} 分で中断（timeout）\n{out[-3000:]}"
+        res_err = bool((r.result or {}).get("is_error")) or str((r.result or {}).get("subtype") or "").startswith("error")
+        if rc != 0 or res_err:
+            # 鍵の利用枠（quota）か鍵そのもの（key）で止まったなら、時間上限と同じく未コミットの変更を wip に保全して人へ返す。
+            # on_fail の戻し（implement へ）は消費しない（呼び元が human に直行させる）。step 自身からやり直せば続きになる（チケット 380）
+            kind, info = classify_agent_stop(r.rate_limit, r.result, "\n".join(r.plain))
+            if kind:
+                self.log(f"agent {kind}: {step['id']} は{'利用枠の上限' if kind == 'quota' else '鍵が使えず'}で止まった"
+                         + (f"（{info.get('quota_type')}; 解除見込み {info.get('retry_after') or '不明'}）" if kind == "quota" else "")
+                         + "。未コミットの変更を wip として保全する")
+                self.commit_tracked(WIP_QUOTA_MESSAGE if kind == "quota" else WIP_KEY_MESSAGE)
+                why = ([l.strip() for l in scrub(str((r.result or {}).get("result") or "") + "\n" + "\n".join(r.plain)).splitlines() if l.strip()] or [""])[-1][:200]
+                self.last_fail = {"failure": kind, "quota_type": info.get("quota_type"), "retry_after": info.get("retry_after"),
+                                  "reason": why, "last_output": out[-3000:]}
+                return False, f"agent {kind}: {why}\n{out[-3000:]}"
         if rc != 0:
             self.last_fail = {"last_output": out[-3000:]}
             return False, f"agent exited {rc}: {out[-3000:]}"
@@ -823,13 +914,16 @@ class Run:
             self.base_check_broken = False          # 同上（gates.sh が base を見た後にツリーを戻せなかった、の目印）
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)
-            # 作業ツリーが base を見たまま戻っていない VM に agent を入れない。戻す回数を数えず、そのまま人間へ（330）
-            nxt = "human" if self.base_check_broken else self.transition(step, ok)
+            # 作業ツリーが base を見たまま戻っていない VM に agent を入れない。戻す回数を数えず、そのまま人間へ（330）。
+            # 鍵の利用枠 / 鍵の失効で止まった step も同じ（その step が悪いのではないので、戻しの回数を消費しない。380）
+            paused = (self.last_fail or {}).get("failure") in PAUSE_KINDS
+            nxt = "human" if self.base_check_broken or paused else self.transition(step, ok)
             entry = {"step": cur, "ok": ok, "next": nxt, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
             fail = self.last_fail if not ok else {}
             # 「時間上限で切られた」は「その step が失敗した」とは直し方が違う（上限を上げるか、チケットを小さくする）。
             # console と MCP がそれを区別できるよう history に目印を残す（チケット 329）
-            if fail.get("failure"): entry.update({"failure": fail["failure"], "timeout_min": fail.get("timeout_min")})
+            if fail.get("failure") in PAUSE_KINDS: entry.update({"failure": fail["failure"], "quota_type": fail.get("quota_type"), "retry_after": fail.get("retry_after")})
+            elif fail.get("failure"): entry.update({"failure": fail["failure"], "timeout_min": fail.get("timeout_min")})
             self.state["history"].append(entry)
             self.state["next"] = nxt; self.state["current"] = None
             # agent の stdout の末尾は error に混ぜず別フィールドに置く（error の最終行が lint の集計行になって誤読された。チケット 329）
@@ -847,11 +941,24 @@ class Run:
                     self.save()
                     cur = nxt
                     continue
-                # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）
-                self.state["resume_step"] = self.resume_step_for(step)
+                # やり直すならどの step からか、という事実を残す（kb と console がここから再開コマンドを組む。ADR-0036）。
+                # 利用枠 / 鍵で止まった step は「その step 自身」から（戻し先ではない。wip の続きを同じ役割が引き取る。380）
+                self.state["resume_step"] = cur if paused else self.resume_step_for(step)
                 # 人間に渡す理由を記録に残す（kb の note と console がこれを読む。チケット 239）。1 行にする
                 if self.base_check_broken:
                     self.state["error"] = f"{cur}: base で確かめた後に作業ブランチへ戻せなかった。VM の作業ツリーを人が確かめること"
+                elif paused:
+                    # run 全体の目印。kb（todo に戻す / blocked）と dispatch --resume-paused（解除時刻を過ぎたら続きを回す）が読む。
+                    # quota_hits は続けて利用枠で止まった回数（前回の run から引き継ぐ。際限なく VM を取り直さないための上限に使う）
+                    self.state["failure"] = fail["failure"]
+                    self.state["quota_type"] = fail.get("quota_type")
+                    self.state["retry_after"] = fail.get("retry_after")
+                    self.state["quota_hits"] = (self.state.get("quota_hits") or 0) + 1 if fail["failure"] == "quota" else 0
+                    if fail["failure"] == "quota":
+                        self.state["error"] = (f"{cur}: 鍵の利用枠の上限で中断（quota・{fail.get('quota_type') or 'unknown'}。"
+                                               f"解除見込み {fail.get('retry_after') or '不明'}）")
+                    else:
+                        self.state["error"] = f"{cur}: 鍵が使えず中断（key）: {fail.get('reason') or '理由なし'}"
                 elif fail.get("failure") == "timeout":
                     self.state["error"] = f"{cur}: 時間上限 {fail.get('timeout_min')} 分で中断（timeout）"
                 else:

@@ -4,6 +4,7 @@
 #   install.sh --systemd  さらに常駐の timer を systemd に登録する（Linux。制御系 LXC 用。ADR-0017）
 #     aifactory-gh-refresh  GitHub App トークンの更新（45 分ごと）
 #     aifactory-idle-stop   使われていないプール VM の停止（15 分ごと。252）
+#     aifactory-resume      鍵の利用枠切れで一時停止した run の続きを回す（5 分ごと。380）
 #   install.sh --remove   systemd の登録を外す
 #   macOS: シンボリックリンクだと launchd（gh-refresh）の bash が Documents 配下を読めず "Operation not permitted" になる（TCC）ので実体コピー。
 #   launchd の plist は sandbox/templates/launchd/（BUILD.md Step 0b）。リポジトリの sandbox/bin/sandbox を更新したら、もう一度これを実行する
@@ -12,7 +13,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$HOME/.local/bin"
 UNIT_DIR="${SANDBOX_UNIT_DIR:-/etc/systemd/system}"   # テストから差し替える
 # 登録する常駐。1 つにつき .service と .timer が sandbox/templates/systemd/ にある
-UNITS=(aifactory-gh-refresh aifactory-idle-stop)
+UNITS=(aifactory-gh-refresh aifactory-idle-stop aifactory-resume)
+REPO="$(cd "$HERE/../.." && pwd)"                       # @@REPO@@（dispatch など、CLI のコピーではなく checkout を直接呼ぶ常駐用）
 SUDO=""; [[ $EUID -eq 0 ]] || SUDO="sudo"
 
 do_copy() {
@@ -25,13 +27,13 @@ do_systemd() {
   local path="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" u f
   for u in "${UNITS[@]}"; do
     for f in "$u.service" "$u.timer"; do
-      sed -e "s#@@USER@@#$(id -un)#g" -e "s#@@HOME@@#$HOME#g" -e "s#@@PATH@@#$path#g" "$HERE/../templates/systemd/$f" | $SUDO tee "$UNIT_DIR/$f" >/dev/null
+      sed -e "s#@@USER@@#$(id -un)#g" -e "s#@@HOME@@#$HOME#g" -e "s#@@PATH@@#$path#g" -e "s#@@REPO@@#$REPO#g" "$HERE/../templates/systemd/$f" | $SUDO tee "$UNIT_DIR/$f" >/dev/null
     done
   done
   $SUDO systemctl daemon-reload
   for u in "${UNITS[@]}"; do $SUDO systemctl enable --now "$u.timer" >/dev/null; done
-  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）"
-  echo "     ログ: journalctl -u aifactory-gh-refresh -u aifactory-idle-stop"
+  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）/ aifactory-resume.timer（5 分ごと。利用枠切れで止まった run の続き）"
+  echo "     ログ: journalctl -u aifactory-gh-refresh -u aifactory-idle-stop -u aifactory-resume"
 }
 do_remove() {
   local u

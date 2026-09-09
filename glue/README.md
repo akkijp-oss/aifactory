@@ -28,11 +28,13 @@ flowchart LR
 glue/bin/intake memo.txt                     # LLM が PJ / 種別 / 題名 / 完了条件を決めて kb new
 glue/bin/intake memo.txt --pj kumitate --kind bug   # 決まっている分は渡す（LLM は整形だけ）
 printf 'pj: kumitate\nkind: chore\n依頼文…' | glue/bin/intake -   # 先頭行でも指定できる
-glue/bin/intake memo.txt --dry-run           # 起票せず判定 JSON を見る
+glue/bin/intake memo.txt --dry-run           # 起票せず判定 JSON を見る（添付はしない）
+glue/bin/intake memo.txt --attach 画面.png 表.csv   # 起票したチケットに添付する。画像は LLM にも見せる
 
 # 配車（todo → 実行）
 glue/bin/dispatch --once                     # 最も古い todo を 1 件回す
-glue/bin/dispatch --pj kumitate --max 3      # PJ を絞って 3 件まで
+glue/bin/dispatch --pj kumitate --max 3
+glue/bin/dispatch --resume-paused            # 鍵の利用枠切れで一時停止中のチケットだけを、解除時刻を過ぎたものから続き（kb run --from）で回す。制御系の timer が 5 分ごとに呼ぶ      # PJ を絞って 3 件まで
 glue/bin/dispatch --dry-run                  # VM を触らず、依頼文の組み立てだけ（状態は進まない）
 ```
 
@@ -40,15 +42,18 @@ PJ の一覧（intake が LLM に渡す候補、dispatch が見る `project.yml`
 
 ## 設計の約束
 - **intake の出力は提案**。`kb new` が pj / kind の実在を検証し、confidence とモデル名を本文末尾に残す。低ければ人間が `kb set` で直す
-- **dispatch は判断しない**。種別は kanban が持つ。dispatch が見るのは「project.yml があるか」「プール（PJ あたり 3 台）に空きがあるか」だけ
+- `--attach` の画像（png / jpg / gif / webp）は一時ディレクトリの `attachments/` に複製して `--tools Read` で LLM に見せ、読み取れた事実を本文の `## 現状` に書かせる。画像が無いときの呼び方（`--tools ""`）は変わらない
+- 起票はできて添付だけ失敗したときは、id を出したうえで終了コード 2（チケットは在るので `kb attach` でやり直す）
+- **dispatch は判断しない**。種別は kanban が持つ。dispatch が見るのは「project.yml があるか」「プール（PJ あたり 3 台）に空きがあるか」「鍵の利用枠切れで一時停止中なら解除時刻を過ぎたか（`kb resumable`）」だけ。一時停止中のチケットは初めからではなく `kb run --from` で続きから回す（ADR-0043）
 - **直列**。並列にするなら PJ 単位（プールが別）から。ゲートが 15〜60 分かかる観察があるので、並列より先にゲートの差分実行が効く
 - LLM は Mac 側の `claude -p`（cwd を一時ディレクトリにし、ツール無しで呼ぶ）。VM は使わない
 
 ## 未実装
 - 外部の入口（termboard Intent / Notion / 個人タスク台帳）からの取り込み: それぞれ「読んで intake に流す」薄い層になる
-- 配車の並列化と、貸出中プールの空き待ち
-- 失敗した run の自動再試行（VM 起因の失敗は `kb reopen` → 再配車で足りるが、判別は人間）
+- 配車の並列化（貸出中プールの空き待ちは `--wait`。ADR-0031）
+- 失敗した run の自動再試行（VM 起因の失敗は `kb reopen` → 再配車で足りるが、判別は人間。鍵の利用枠切れだけは `--resume-paused` が機械で続きを回す。ADR-0043）
 
 ## 履歴
+- 2026-09-09: `--resume-paused`。鍵の利用枠切れで止まった run（kb が todo に戻したもの）を、解除時刻の後に `kb run --from` で続きから回す。制御系の `aifactory-resume.timer`（5 分ごと）が呼ぶ（チケット 380 / ADR-0043）
 - 2026-09-06（公開化）: `intake.log` / `dispatch.log` を `$AIFACTORY_WORKSPACE/logs/` へ
 - 2026-09-06: v0。intake（LLM 1 回）と dispatch（直列）。ステップ間の状態は runner に任せると決定

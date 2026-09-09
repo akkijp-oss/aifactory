@@ -896,6 +896,33 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.step_timeout", app)
 
+    def test_run_outcome_quota_pause_says_when_it_resumes(self):
+        """鍵の利用枠の上限で止まった工程（チケット 380 / ADR-0043）。「工程が失敗した」ではなく「一時停止・HH:MM 以降に自動再開」と読める。
+        鍵そのものが使えない（key）は別の理由（人が鍵を直す）。MCP run_show も同じ outcome を返す"""
+        hist = [("plan", True), ("implement", False)]
+        state = self._state(hist, workflow="bug", wip_branch="sandbox/380-bug-wip", resume_step="implement",
+                            failure="quota", quota_type="five_hour", retry_after="2026-09-09T15:00:00+09:00", quota_hits=1,
+                            error="implement: 鍵の利用枠の上限で中断（quota・five_hour。解除見込み 2026-09-09T15:00:00+09:00）")
+        state["history"][-1].update({"failure": "quota", "quota_type": "five_hour", "retry_after": "2026-09-09T15:00:00+09:00"})
+        name = self._fixture_run("2026-09-09-kumitate-991", state,
+                                 {"agent-implement-1.log": "[+12:00] rate limit: rejected (five_hour; resets 2026-09-09T15:00:00+09:00)\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "quota_paused"); self.assertEqual(o["stopped_step"], "implement")
+        self.assertEqual(o["quota_type"], "five_hour"); self.assertEqual(o["quota_hits"], 1)
+        self.assertEqual(datetime.datetime.fromisoformat(o["retry_after"]), datetime.datetime.fromisoformat("2026-09-09T15:00:00+09:00"))
+        self.assertEqual(o["resume"], f"kb run {self.seed} --from implement --branch sandbox/380-bug-wip")
+        state = self._state(hist, workflow="bug", wip_branch="sandbox/380-bug-wip", resume_step="implement",
+                            failure="key", quota_type=None, retry_after=None, quota_hits=0,
+                            error="implement: 鍵が使えず中断（key）: Invalid API key · Please run /login")
+        state["history"][-1].update({"failure": "key"})
+        name = self._fixture_run("2026-09-09-kumitate-992", state, {"agent-implement-1.log": "Invalid API key\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["reason"], "key_failed")
+        self.assertIn("Invalid API key", d["outcome"]["error_summary"])
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.quota_paused", app); self.assertIn("T.outcome.key_failed", app)
+
     def test_run_outcome_drives_the_run_view(self):
         """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")

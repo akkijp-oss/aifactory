@@ -46,7 +46,7 @@ journalctl -u aifactory-console -f
 | sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml / トークンファイルの有無、プールの定義 / 実体 / 貸出 / 空き）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
 | 起票 | — | 自由文 → `glue/bin/intake` / 整った本文 → `kb new`（配車はボードへ移した） |
 | ジョブ | このコンソールが起動した CLI の一覧と出力（2 秒ごとに追い読み）。終わると**「次にすること」**（intake → できたチケットを開く / run 停止 → 状態を実行記録に合わせる / 返却 → sandbox） | 止める（ダイアログ。プロセスグループに SIGTERM） |
-| 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0043） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす |
+| 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0044） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
 | 設定 | workflow の流れ・モデルの経路（routes.env）・PJ 定義の置き場・git status | — |
@@ -74,6 +74,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
+| `ticket_attach` / `ticket_detach` | 添付を 1 件足す（`content_base64` か ctl 上の `path`）/ 消す。`read_file` は画像を image で返す（4 MiB まで） |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
@@ -140,7 +141,10 @@ POST /api/tickets/<id>/run         kb run をジョブで {dry_run, workflow, ke
 GET  /api/runs  /api/runs/<name>   実行記録  GET /api/file?path=&tail=|offset=   限られた根の下のファイル
 POST /api/runs/<name>/action       人間の後始末を実行記録に書く（kb run-note）{action: close|note, result, pr, text}
 GET  /api/sandbox                  POST /api/sandbox/ls   POST /api/sandbox/release {task}
+POST /api/tickets/<id>/attach      multipart/form-data（files=…。複数可）   POST /api/tickets/<id>/detach {name}
+GET  /api/tickets/<id>/attachments/<name>    添付を返す（画像は inline、他は必ずダウンロード。常に nosniff）
 POST /api/intake {text, pj, kind, dry_run}   POST /api/dispatch {pj, once, max, dry_run}
+     intake は multipart でも受ける（files=… を <job>/files/ に落として intake の --attach に渡す）
 GET  /api/jobs  /api/jobs/<id>?offset=       POST /api/jobs/<id>/stop
 GET  /api/keys                     POST /api/keys {action: add|set|rm|token, name, token, fable, other, enabled, note, force}
 GET  /api/logs  /api/config

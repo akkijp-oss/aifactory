@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """glue/bin/intake: 自由文の依頼を 1 枚のチケットにして kanban に起票する（ルーターの入口）。
 
-  glue/bin/intake <text-file|-> [--pj P] [--kind K] [--model M] [--dry-run]
+  glue/bin/intake <text-file|-> [--pj P] [--kind K] [--model M] [--attach FILE ...] [--dry-run]
 
 - 入力は自由文（音声書き起こし・チャットの貼り付け・箇条書き、何でも）。先頭 5 行に `pj: x` / `kind: y` があれば
   それを使う（決定的。LLM の判定より優先）。--pj / --kind はさらに優先
 - LLM（judgment クラス = workflow/kit/routes.env の MODEL_judgment）を 1 回だけ呼ぶ:
   決まっていない PJ・種別の判定と、runner が読める形（題名 + 完了条件）への整形。
   既に整った ticket.md を持っているなら intake を通さず `kb new --body` を直接使う
-- 結果は kanban/bin/kb new で起票し、id を出す。--dry-run は起票せず判定結果（JSON）を出すだけ
+- --attach のファイルは起票したチケットに添付する（kb new --attach）。画像（png / jpg / gif / webp）は LLM にも見せ、
+  本文の「## 現状」に画像から読み取れる事実を書かせる。起票はできて添付だけ失敗したときは id を出したうえで rc 2
+- 結果は kanban/bin/kb new で起票し、id を出す。--dry-run は起票せず判定結果（JSON）を出すだけ（添付はしない）
 - 記録は $AIFACTORY_WORKSPACE/logs/intake.log（1 行 1 件: 日時 / id / pj / kind / confidence / model）
 - LLM の出力は提案として扱う。pj / kind は kb new が実在チェックする。confidence が低いときは起票後に人間が kb set で直す
 
 これは動画で言う「ルーター。簡単な LLM 呼び出し 1 回か、決定的なコードで足りる」の実装。分類より先の判断（計画・実装）はしない。
 """
-import argparse, datetime, json, os, pathlib, re, subprocess, sys, tempfile
+import argparse, datetime, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # glue/
 REPO = HERE.parent
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
 KB = REPO / "kanban" / "bin" / "kb"
 LOG = paths.LOGS / "intake.log"
 
@@ -78,7 +80,18 @@ def env_for_model(model, environ=None):
     return env
 
 
-def ask_llm(text, pjs, kds, fixed, model):
+IMAGE_NOTE = """
+## 添付（画像）
+この作業ディレクトリの直下に、依頼者が付けた画像があります。Read で 1 枚ずつ開いてください。
+
+{names}
+
+読み取れた事実だけを body の `## 現状` 節に箇条書きで書いてください（画面に出ている文言・数値・どの画面か）。
+画像から読み取れないことは書かないでください。どうしても補うときは「（推測）」と印を付けてください。
+"""
+
+
+def ask_llm(text, pjs, kds, fixed, model, images=()):
     pj_list = "\n".join(f"- {n}: {d}" for n, d in pjs)
     kind_list = "\n".join(f"- {n}: {d}" for n, d in kds)
     fixed_note = "".join(f"\n- {k} は「{v}」で確定している。変えない" for k, v in fixed.items())
@@ -104,13 +117,19 @@ def ask_llm(text, pjs, kds, fixed, model):
 <<<
 {text}
 >>>
+{IMAGE_NOTE.format(names=chr(10).join("- attachments/" + n for n in images.values())) if images else ""}
 
 ## 出力
 次の JSON だけを ```json フェンスで 1 つ出してください。他の文章は不要です。
 {{"pj": "...", "kind": "...", "title": "50 字以内。先頭に docs:/fix:/feat:/test: などの接頭辞", "body": "...", "confidence": 0.0〜1.0, "reason": "1 行"}}
 """
     with tempfile.TemporaryDirectory() as td:  # cwd をリポジトリから外し、ツールを使わせない
-        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--tools", ""], cwd=td, text=True, capture_output=True, errors="replace",
+        tools = ""
+        if images:   # 画像を見せるときだけ Read を許す。cwd は一時ディレクトリなので読めるのは複製した添付だけ
+            d = pathlib.Path(td) / "attachments"; d.mkdir()
+            for src, name in images.items(): shutil.copyfile(src, d / name)
+            tools = "Read"
+        r = subprocess.run(["claude", "-p", prompt, "--model", model, "--tools", tools], cwd=td, text=True, capture_output=True, errors="replace",
                            env=env_for_model(model))
     if r.returncode != 0: die(f"claude -p が失敗 ({r.returncode}): {r.stderr[-800:]}")
     m = re.search(r"```json\s*(\{.*?\})\s*```", r.stdout, re.S) or re.search(r"(\{.*\})", r.stdout, re.S)
@@ -123,7 +142,11 @@ def main():
     ap = argparse.ArgumentParser(prog="intake", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="自由文のファイル。- で標準入力")
     ap.add_argument("--pj"); ap.add_argument("--kind"); ap.add_argument("--model"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--attach", action="extend", nargs="+", default=[], metavar="FILE",
+                    help="起票したチケットに添付するファイル（複数可）。画像は LLM にも見せる")
     a = ap.parse_args()
+    for f in a.attach:
+        if not pathlib.Path(f).is_file(): die(f"添付が見つからない: {f}")
     raw = sys.stdin.read() if a.source == "-" else pathlib.Path(a.source).read_text(encoding="utf-8")
     if not raw.strip(): die("入力が空")
     header, text = parse_header(raw)
@@ -132,7 +155,15 @@ def main():
     for k, allowed in (("pj", [n for n, _ in pjs]), ("kind", [n for n, _ in kds])):
         if k in fixed and fixed[k] not in allowed: die(f"{k}={fixed[k]} は {allowed} のどれでもない")
     model = a.model or routes().get("MODEL_judgment") or routes()["MODEL_default"]
-    res = ask_llm(text, pjs, kds, fixed, model)   # 整形（title / 完了条件）は常に LLM。pj / kind は fixed が勝つ
+    # 画像だけ LLM に見せる（保存されるのと同じ名前で複製する。名前の判定は lib に 1 か所）
+    images = {}
+    for f in a.attach:
+        n = pathlib.Path(f).name
+        if not attachments.is_image(n): continue
+        stem, k, i = attachments.sanitize(n), attachments.sanitize(n), 2
+        while k in images.values(): k = f"{i}-{stem}"; i += 1   # 別の場所の同じ名前を 2 枚渡されても上書きしない
+        images[f] = k
+    res = ask_llm(text, pjs, kds, fixed, model, images)   # 整形（title / 完了条件）は常に LLM。pj / kind は fixed が勝つ
     res.update(fixed)
     res.setdefault("confidence", None); res.setdefault("reason", "")
     for k in ("pj", "kind", "title", "body"):
@@ -142,13 +173,19 @@ def main():
     body = res["body"].strip() + f"\n\n---\n（intake {datetime.datetime.now().isoformat(timespec='minutes')} / model {model} / confidence {res['confidence']} / {res['reason']}）\n"
     pr = re.match(r"^pr:\s*#?(\d+)", body); cmd = [str(KB), "new", res["pj"], res["kind"], res["title"][:70], "--body", "-"]
     if pr: cmd += ["--pr", pr.group(1)]; body = re.sub(r"^pr:.*\n", "", body, count=1)
+    for f in a.attach: cmd += ["--attach", f]      # kb new --attach は 1 回 1 ファイル（append）
     r = subprocess.run(cmd, input=body, text=True, capture_output=True, errors="replace")
-    if r.returncode != 0: die(f"kb new が失敗: {r.stderr.strip()}")
+    tid = r.stdout.split()[0] if r.stdout.split() and r.stdout.split()[0].isdigit() else None
+    # kb new は「起票はできた・添付だけ失敗」でも id を出して rc≠0 で戻る。id が取れているならチケットは在るので、
+    # 記録も出力も普通どおり残し、添付だけ直せるように rc 2 で終わる（画面はここから id を拾える）
+    if r.returncode != 0 and not tid: die(f"kb new が失敗: {r.stderr.strip()}")
     print(r.stdout.rstrip())
-    tid = r.stdout.split()[0]
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')}\t{tid}\t{res['pj']}\t{res['kind']}\t{res['confidence']}\t{model}\t{res['reason']}\n")
+    if r.returncode != 0:
+        print(f"[intake] 起票はできたが添付できなかった: {r.stderr.strip()}\n[intake] 添付だけやり直す: kb attach {tid} <ファイル>", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

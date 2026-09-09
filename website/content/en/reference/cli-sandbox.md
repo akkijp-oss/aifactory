@@ -113,7 +113,7 @@ Rotate an expired token with a single `sandbox token rotate` on the control plan
 
 ### keys
 
-Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the control plane, one picked per family by `take` / `reset` / `reinject` (ADR-0043). Each key carries two flags — *use for fable* and *use for everything else* (Opus / Sonnet / Haiku) — so a Fable contract and an Opus contract can be separate keys.
+Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the control plane, one picked per family by `take` / `reset` / `reinject` (ADR-0044). Each key carries two flags — *use for fable* and *use for everything else* (Opus / Sonnet / Haiku) — so a Fable contract and an Opus contract can be separate keys.
 
 | Command | What it does |
 |---|---|
