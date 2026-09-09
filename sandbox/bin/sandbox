@@ -651,11 +651,13 @@ reserve_vm() { with_state_lock _reserve_vm_locked "$@"; }
 cmd_take() {
   local pj=${1:?pj} task=${2:?task-id}
   load_pj "$pj"
-  pool_apply_keys "$task"   # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）
-  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj} か sandbox keys add）" >&2
   local pick; pick="$(reserve_vm "$pj" "$task")"   # die はサブシェルを抜けるだけなので、空なら止める
   [[ -n "$pick" ]] || exit 1
   _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
+  # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）。
+  # VM を押さえてから選ぶ: 空きなしで落ちた take が last_used / uses を動かすと、貸し出してもいない回で順番が回ってしまう
+  pool_apply_keys "$task"
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj} か sandbox keys add）" >&2
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
   if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
