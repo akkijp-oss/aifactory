@@ -110,6 +110,6 @@ EOF
 if [[ "$DELETE_BRANCH" == "1" ]]; then
   sb "cd \$SANDBOX_APP_DIR && git push -q origin --delete $BRANCH" || echo "[automerge] origin/$BRANCH を消せなかった（人が消すこと）"
 fi
-sb "cd \$SANDBOX_APP_DIR && gh pr comment $num --body \"aifactory が自動マージした（run ${RUN_NAME:-?} / gates 緑・review $([[ "$HAS_REVIEW" == "1" ]] && echo PASS || echo なし)・checks $checks_n 本 pass・base $BASE・$METHOD）\"" >/dev/null \
+sb "cd \$SANDBOX_APP_DIR && gh pr comment $num --body \"aifactory が自動マージした（run ${RUN_NAME:-?} / gates 緑・review $([[ "$HAS_REVIEW" == "1" ]] && echo PASS || echo なし)・checks $checks_n 本 pass・base ${BASE}・${METHOD}）\"" >/dev/null \
   || echo "[automerge] PR にコメントを付けられなかった（マージ自体は済んでいる）"
 echo "MERGED: $sha $url2"
