@@ -528,6 +528,27 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(o["tz"]["offset"], datetime.datetime.now().astimezone().isoformat()[-6:])
         self.assertTrue(o["tz"]["label"])
 
+    def test_run_outcome_offers_the_resume_command(self):
+        """human で止まり wip が残っている run は、続きから回すコマンドを結果とチケット画面に出す（チケット 333）。
+           チケットの run 一覧（ticket_show）と run 画面で同じ 1 本が読めること"""
+        hist = [("research", True), ("design", True), ("implement", True), ("gates", True),
+                ("review", False), ("implement", True), ("gates", True), ("review", False)]
+        wip = f"sandbox/{self.seed}-feature-wip"
+        name = self._fixture_run(f"2020-01-04-{PJ}-{self.seed}", self._state(
+            hist, loops={"review->implement": 1}, wip_branch=wip, resume_step="implement",
+            error="review で止まった（失敗、または戻せる回数を使い切った）: 指摘 1 件"),
+            {"work/review.md": "# レビュー: FAIL\n", "work/ticket.md": "# x\n"})
+        want = f"kb run {self.seed} --from implement --branch {wip}"
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["resume"], want)
+        self.assertEqual(d["summary"]["resume"], want); self.assertEqual(d["summary"]["resume_step"], "implement")
+        _, td = self.http.get(f"/api/tickets/{self.seed}")
+        self.assertEqual(next(r for r in td["runs"] if r["name"] == name)["resume"], want)
+        # 続きから回せない run（PR まで進んだ・wip の無い run）には出さない
+        other = self._fixture_run(f"2020-01-04-{PJ}-{self.seed}-b", self._state(hist, result="end"), {"work/ticket.md": "# x\n"})
+        _, o = self.http.get(f"/api/runs/{other}")
+        self.assertIsNone(o["outcome"]["resume"]); self.assertIsNone(o["summary"]["resume"])
+
     def test_run_outcome_loop_limit(self):
         """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
         hist = [("research", True), ("design", True), ("implement", True), ("gates", False),

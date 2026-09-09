@@ -369,6 +369,7 @@ function outcomePanel(name, d) {
   const lines = [outcomeLead(o, s)];
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
   if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
+  if (o.resume) lines.push(tt(T.outcome.resume, { cmd: o.resume }));   /* 続きから回す口（チケット 333） */
   if (stopped && !o.detail_file) lines.push(T.outcome.noDetail);
   const rep = report(d);
   const acts = [job ? link(`#/job/${job.id}`, T.btn.openJob, true) : '',

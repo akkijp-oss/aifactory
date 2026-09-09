@@ -3,7 +3,7 @@
 `workflow/bin/run` は、ワークフローの定義に従って各工程を進めるプログラム（runner）です。通常は `kb run` 経由で呼び出します。現在の実装は v1 で、Python 3 と `pyyaml`、`jsonschema` を使用します。
 
 ```
-workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--wait[=秒]]
+workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前] [--wait[=秒]]
 ```
 
 | 引数 | 意味 |
@@ -15,6 +15,8 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--dry-run` | VM を触らず、定義の検証と依頼文の組み立てだけ。`workspace/runs/…-dry/` に出す |
 | `--keep` | 終了後に release しない（中を見たいとき） |
 | `--resume` | 既に貸出中の VM で、`state.json` の次の工程から続ける |
+| `--from[=step]` | 人間待ちで終わった run を、**新しい VM** で指定の工程からやり直す。工程を省くと前回の `resume_step`。前回の run は環境変数 `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡す（ADR-0036） |
+| `--branch=名前` | `--from` のとき続きに使うブランチ。既定は前回の `wip_branch` |
 | `--wait[=秒]` | プールに空きがないとき、空くまで待って `sandbox take` をやり直す（単独なら 3600 秒。再試行の間隔は `AIFACTORY_WAIT_POLL_S` 秒、既定 30） |
 
 ## 終了コード
@@ -31,11 +33,11 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 2. base ブランチを決める（ワークフローの `base_branch: hotfix_base` → project の `hotfix_base`、`workflow_overrides` で上書き）
 3. merge-pr（本文に `pr: N`）なら `gh pr view` で head / base を取り、head を作業ブランチにする。それ以外は `sandbox/<id>-<wf>-<slug>`
 4. `workspace/runs/<日付>-<pj>-<id>/` を作る。既にあり `--resume` でなければ前回を `-attemptN` に退避。`ticket.md` と `state.json` を置く
-5. `sandbox take <pj> <id>`。VM 内で base を fetch し作業ブランチを切る。チケットを `~/work/<id>/ticket.md` に。`--wait` があり「空きなし」で失敗したときは、`current` を `wait-vm` にして空くまで待ち、take をやり直す（ADR-0031）
+5. `sandbox take <pj> <id>`。VM 内で base を fetch し作業ブランチを切る（`--from` のときは base ではなく `origin/<退避ブランチ>` から切り、前回の run の `work/*.md` を VM に置く）。チケットを `~/work/<id>/ticket.md` に。`--wait` があり「空きなし」で失敗したときは、`current` を `wait-vm` にして空くまで待ち、take をやり直す（ADR-0031）
 6. 工程を順に実行（下）。`end` か `human` に着くまで
 7. `human` なら `origin/sandbox/<id>-<wf>-wip` に push して成果を退避
 8. `~/work/<id>/` を `workspace/runs/…/work/` に回収。`--keep` でなければ `sandbox release`
-9. `state.json` に `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s`
+9. `state.json` に `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s`。`human` で止まったときは `resume_step`（次にやり直す工程）も。`--from` で始めた run には `resumed_from` / `from_step` / `from_branch` が入る
 
 `--wait` の上限を超えたときは、`result: failed` に加えて `failure: "wait_timeout"` と `waited_s`（待った秒数）を残して終了コード 2 で終わります。`kb` はこの目印を見て、チケットを `blocked` ではなく `todo` に戻します。
 

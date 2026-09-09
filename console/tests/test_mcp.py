@@ -207,6 +207,16 @@ class McpTest(unittest.TestCase):
         self.assertIn("dry_run", props, "ticket_action のスキーマに dry_run が無い（呼び手が書く方法を見つけられない）")
         self.assertIn("sync", props["dry_run"].get("description", ""))
 
+    def test_12_ticket_run_can_restart_from_a_step(self):
+        """human で止まった run を続きから回す口が MCP から見えること（チケット 333）。
+        説明に「打つべき値がどこに出るか」まで書く（呼び手は step 名を推し測れない）"""
+        props = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}["ticket_run"]["inputSchema"]["properties"]
+        for k in ("from_step", "from_branch"):
+            self.assertIn(k, props, f"ticket_run のスキーマに {k} が無い（呼び手が続きから回せない）")
+            self.assertTrue(props[k].get("description"))
+        self.assertIn("ticket_show", props["from_step"]["description"])
+        self.assertIn("wip", props["from_branch"]["description"])
+
 
 if __name__ == "__main__":
     unittest.main()
