@@ -123,6 +123,8 @@ FAIL strings (~/gates/strings.log)
 
 残りに `FAIL` が無ければゲートは成功として次の工程へ進むので、実装への差し戻しを消費しません。確かめたゲート名は run の記録に残り、`sandbox_status` が `known_red_gates` に手で書いた値と合わせて返します。`project.yml` は書き換えません。
 
+base を確認できなかった回（未コミットの変更を退避できない、`origin/<base_branch>` が無いなど）は `=== base check:` に `BASE-CHECK-SKIP` と理由が出て、格下げは行いません。base を見たあと作業ブランチへ戻し切れなかった場合は、赤が残っていなくても run を止めて人に返します。
+
 具体的な書き方は [プロジェクトを追加する](../guides/add-project.md#gates-sh) を参照してください。
 
 `computer_use: true` は `macos-pull` / `windows-pull` でVM内のcomputer MCPを有効にする。既定は無効。[導入手順](../guides/computer-use.md)。

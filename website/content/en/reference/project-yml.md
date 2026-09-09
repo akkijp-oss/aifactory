@@ -121,6 +121,8 @@ FAIL strings (~/gates/strings.log)
 
 If no `FAIL` is left, the gates step passes and the run moves on, without spending one of its trips back to the implementer. The confirmed gate names are kept in the run record, and `sandbox_status` returns them together with whatever was written by hand in `known_red_gates`. `project.yml` itself is never rewritten.
 
+If base could not be checked (uncommitted changes could not be stashed, `origin/<base_branch>` is missing, and so on), the reason is printed under `=== base check:` as `BASE-CHECK-SKIP` and nothing is downgraded. If the working tree cannot be put back on the working branch after the base check, the run stops and goes to a human even when no gate is left red.
+
 How to write it: [Add a project](../guides/add-project.md#gates-sh).
 
 `computer_use: true` enables the VM-local computer MCP on `macos-pull` / `windows-pull`. It defaults to disabled. See [setup](../guides/computer-use.md).

@@ -44,3 +44,6 @@ runner が赤のゲートのログ末尾を添えて戻す。**ログを読ん�
 `FAIL` として戻ってきた分は **自分の変更が原因** だと思ってよい。runner が赤いゲートを base（`origin/<base>`）でも
 実際に回し直していて、base でも赤かったものは `INFO <名前> red (also red on base; not a gate)` に落としてあるからで、
 その根拠は `gates.txt` の `=== base check:` 以降にある。「これは元から赤いのでは」と推し測って手を止めない。
+
+ただし `=== base check:` に `BASE-CHECK-SKIP` と出ている回は base を見られていない（依頼文にもそう書いてある）。
+そのときだけは、base でも赤いと考える根拠を `report.md` に書いて手を止めてよい。
