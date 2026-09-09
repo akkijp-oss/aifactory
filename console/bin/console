@@ -125,6 +125,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not data: raise ApiError(err, 403)
             return data, 200
         if ep == "sandbox": return sandbox_view(), 200
+        if ep == "keys": return keys_view(), 200
         if ep == "jobs": return {"jobs": JobStore.list()[:200]}, 200
         m = re.match(r"^jobs/([\w.-]+)$", ep)
         if m: return job_view(m.group(1), int(q.get("offset") or 0)), 200
@@ -154,6 +155,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "dispatch": return op_dispatch(b)
         if ep == "sandbox/ls": return op_sandbox_ls()
         if ep == "sandbox/release": return op_sandbox_release(b)
+        if ep == "keys": return keys_apply(b)
         m = re.match(r"^jobs/([\w.-]+)/stop$", ep)
         if m: return op_job_stop(m.group(1))
         raise ApiError("not found", 404)
