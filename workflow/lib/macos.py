@@ -111,7 +111,9 @@ def backend(Run):
         backend_label = "Mac VM"
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"}
+            # auto_merge の無い PJ では runner が automerge 工程を飛ばす（ADR-0042）ので、未対応の判定からも外す
+            skipped = set() if getattr(self, "auto_merge", None) else {"pr-automerge.sh"}
+            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"} - skipped
             if unsupported: raise ValueError("unsupported pull-worker code steps: " + ", ".join(sorted(unsupported)))
             self.work = str(pathlib.PurePosixPath(self.project["app_dir"]).parent / "work" / self.task)
             self.env_file = str(pathlib.PurePosixPath(self.work) / "runtime.env")
