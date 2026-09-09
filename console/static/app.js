@@ -442,11 +442,8 @@ async function viewRun(name) {
 }
 
 /* ---------- sandbox */
-/* 貸出行に出す鍵の名前。プールを使っていない貸出（keys が無い）は空にする */
-function keyNames(k) {
-  if (!k || typeof k !== 'object') return '';
-  return ['fable', 'other'].filter(g => k[g]).map(g => `${esc(g)}: ${esc(k[g])}`).join('<br>');
-}
+/* 貸出行に出す鍵の名前（take が選んだプールの鍵）。プールを使っていない貸出（keys が無い）は空にする */
+const keyNames = k => (k && typeof k === 'object') ? ['fable', 'other'].filter(g => k[g]).map(g => `${esc(g)}: ${esc(k[g])}`).join('<br>') : '';
 async function viewSandbox() {
   const [d, o] = await Promise.all([api('sandbox'), refreshNav()]);
   const lent = Object.entries(d.lent).filter(([k, v]) => v && typeof v === 'object');

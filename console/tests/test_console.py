@@ -1891,6 +1891,24 @@ class BrowserTimeTest(unittest.TestCase):
         # オフセットが無い記録は読む側の時間帯で答えが変わる（この不具合の本体。API はもう naive を返さない）
         self.assertNotEqual(tokyo["naive"], utc["naive"])
 
+    def test_the_lease_row_shows_the_pool_key_names(self):
+        """貸出行に出る鍵の名前（#379）。プールを使っていない貸出（keys が無い）は空にする"""
+        app = (pathlib.Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        src = self.tmp / "keynames.js"
+        src.write_text("\n".join([js_line(app, "esc"), js_line(app, "keyNames"), """console.log(JSON.stringify({
+          both: keyNames({fable: "fable-a", other: "opus-a"}),
+          one: keyNames({other: "opus-a"}),
+          none: keyNames(null),
+          empty: keyNames({}),
+          escaped: keyNames({fable: "<script>"})}));"""]), encoding="utf-8")
+        p = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["both"], "fable: fable-a<br>other: opus-a")
+        self.assertEqual(r["one"], "other: opus-a")
+        self.assertEqual(r["none"], ""); self.assertEqual(r["empty"], "")
+        self.assertEqual(r["escaped"], "fable: &lt;script&gt;")
+
     def test_missing_and_odd_times_say_what_is_going_on(self):
         for r in (self.run_js("Asia/Tokyo"), self.run_js("UTC")):
             self.assertEqual(r["missing"], self.T["time"]["unknown"])
