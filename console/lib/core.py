@@ -1356,7 +1356,10 @@ def keys_view():
         keys.append({"name": name, "allow": {"fable": allow.get("fable") is True, "other": allow.get("other") is True},
                      "enabled": k.get("enabled") is not False, "tail4": tok[-4:], "note": k.get("note") or "",
                      "issued": k.get("issued"), "last_used": ts_aware(k.get("last_used")) if k.get("last_used") else None,
-                     "uses": k.get("uses") or 0, "in_use": in_use(name)})
+                     "uses": k.get("uses") or 0,
+                     # launches = runner が実際にその鍵で claude を起動した回数（uses は take / reinject で割り当てた回数。使用量の目安は launches）
+                     "launches": k.get("launches") or 0,
+                     "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
     return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
             # 系統ごとの候補数。0 の系統は PJ / 全体の env の鍵に落ちる（互換）
             "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")}}

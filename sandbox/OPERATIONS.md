@@ -156,7 +156,7 @@ VM に渡す Claude の鍵は、制御系の `~/.config/sandbox/keys.json`（600
 claude setup-token                                  # 鍵を作る（対話）
 sandbox keys add fable-main --fable --note "Fable 契約"   # 名前を付けて足す（token は対話入力。パイプでも可）
 sandbox keys add opus-a --other                     # Opus / Sonnet / Haiku 用
-sandbox keys list                                   # 名前・用途・有効・末尾 4 文字・登録日・最後に使った日時・使用回数・使用中のチケット
+sandbox keys list                                   # 名前・用途・有効・末尾 4 文字・登録日・割り当て回数（ASSIGNED）・最後に起動した日時・起動回数（LAUNCHES = runner が実際にその鍵で claude を起動した回数）・使用中のチケット
 sandbox keys set opus-a --disable                   # しばらく使わない（貸出中の task が使っていれば reinject の案内が出る）
 sandbox keys set opus-a --fable=on                  # 用途を変える
 sandbox keys token opus-a                           # 値だけ差し替える（名前と統計はそのまま）
