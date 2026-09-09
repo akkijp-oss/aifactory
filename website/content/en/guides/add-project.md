@@ -151,14 +151,18 @@ pnpm --filter @myapp/db db:migrate
 
 The VM rolls back to its template after every run while base moves on; `prepare` closes that gap. If it fails, the runner ends the run without starting any agent (`failure: prepare`).
 
-## 5. Save the tokens 🧑
+## 5. Keys and GH_REPO 🧑
+
+Claude keys are not per project: they live in the control plane's key pool. If the pool already has keys, this project uses them too and nothing needs registering (`sandbox keys list` or the console's *Keys* screen).
 
 ```bash
-claude setup-token
-sandbox token set myapp                  # Claude token
+claude setup-token                                          # only if there is no key yet
+sandbox keys add <name> --fable --other --note "whose plan"  # into the key pool (the Keys screen works too)
 echo 'GH_REPO=owner/myapp' >> ~/.config/sandbox/pj/myapp.env
 sandbox token show myapp
 ```
+
+`sandbox token set myapp`, which puts a key in the per-project file, is deprecated (it still works, but is not used while the pool has a matching key).
 
 ## 6. Install the GitHub App 🧑
 

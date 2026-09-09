@@ -191,6 +191,25 @@ class KeysApiTest(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(v["leases"][0]["keys"], {"fable": "fable-a", "other": "opus-a"})
 
+    def test_sandbox_page_says_where_each_pj_key_comes_from(self):
+        """sandbox 画面の「Claude の鍵」列は、鍵プールがあれば「鍵プール」、無ければ PJ 別（非推奨）/ 全体の設定ファイル / 未設定（ADR-0045）"""
+        pjd = self.home / ".config" / "sandbox" / "pj"; pjd.mkdir(parents=True, exist_ok=True)
+        def source():
+            st, v = self.http.get("/api/sandbox"); self.assertEqual(st, 200)
+            return next(t["key_source"] for t in v["templates"] if t["pj"] == PJ), v["key_pool"]
+        self.assertEqual(source()[0], "none")
+        (pjd / f"{PJ}.env").write_text("GH_REPO=x/y\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test\n", encoding="utf-8")
+        self.assertEqual(source()[0], "pj")
+        self.assertEqual(self.add("opus-a", fable=False, other=True)[0], 200)
+        self.assertEqual(source()[0], "pool_partial")                             # Fable 用が無いので、その分は env に落ちる
+        self.assertEqual(self.add("fable-a", fable=True, other=False)[0], 200)
+        src, pool = source()
+        self.assertEqual(src, "pool"); self.assertEqual(pool, {"fable": 1, "other": 1, "total": 2})
+        (pjd / f"{PJ}.env").unlink()
+        self.assertEqual(source()[0], "pool")
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.sandbox.keySource", app)
+
     def test_post_needs_the_console_header(self):
         st, d = self.http.post("/api/keys", {"action": "add", "name": "x", "token": "y", "other": True}, header=False)
         self.assertEqual(st, 403, d)

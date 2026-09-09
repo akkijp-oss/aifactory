@@ -81,15 +81,17 @@ workflow/bin/run
 
 ## 4. Claude Code のトークンをプロジェクトごとに保存する 🧑
 
-VM の中で Claude Code を動かすには、プロジェクトごとに長期トークンを発行して保存します。
+VM の中で Claude Code を動かすには、長期トークンを発行して**鍵プール**に登録します（プロジェクトごとではなく 1 か所。ADR-0044 / ADR-0045）。
 
 ```bash
-claude setup-token                 # ブラウザで認証 → トークンが表示される
-sandbox token set kumitate         # 対話で貼り付け → ~/.config/sandbox/pj/kumitate.env に保存
-sandbox token show kumitate        # マスク表示で確認
+claude setup-token                              # ブラウザで認証 → トークンが表示される
+sandbox keys add max-akki --fable --other       # 対話で貼り付け → ~/.config/sandbox/keys.json に保存（console の「鍵」画面でも可）
+sandbox keys list                               # 末尾 4 文字だけのマスク表示で確認
 ```
 
-プロジェクト別ファイル（`~/.config/sandbox/pj/<pj>.env`）には、GitHub App がトークンを限定するための `GH_REPO=owner/name` も書きます。
+`--fable` は Fable（計画・設計・レビューの工程）に、`--other` は Opus・Sonnet・Haiku（実装・調査の工程）に使う鍵という印です。1 本の鍵に両方付けてかまいません。`sandbox token set <pj>` でプロジェクト別ファイルに鍵を置く古い方式は非推奨です。
+
+プロジェクト別ファイル（`~/.config/sandbox/pj/<pj>.env`）には、GitHub App がトークンを限定するための `GH_REPO=owner/name` を書きます。
 
 ```bash
 cat ~/.config/sandbox/pj/kumitate.env
@@ -149,7 +151,7 @@ sb-gw に接続できない場合は、[sandbox の構築](build-sandbox.md) の
 1. 2 本を clone する。workspace 側がなければ `mkdir -p projects kanban runs logs docs` の空ディレクトリで始めてよい
 2. 置き場を教える: `echo ~/Documents/GitHub/<you>/aifactory-workspace > ~/.config/aifactory/workspace`（シェルに `export AIFACTORY_WORKSPACE=…` でも可。両方あれば環境変数が優先）
 3. 枠組み側で `pip install pyyaml jsonschema`、`bin/install-hooks.sh`（gitleaks を PATH に）、`console/bin/install.sh --launchd`、`sandbox/bin/install.sh`
-4. 秘密情報は手で入れる: `~/.config/sandbox/env`（`env.example` から）、`~/.config/sandbox/pj/<pj>.env`（`sandbox token set`）、GitHub App の `~/.config/sandbox/gh-app/`、ssh 鍵 `~/.ssh/conf.d/aifactory/`。これらはどのリポジトリにも入れない
+4. 秘密情報は手で入れる: `~/.config/sandbox/env`（`env.example` から）、`~/.config/sandbox/keys.json`（`sandbox keys add`）、`~/.config/sandbox/pj/<pj>.env`（`GH_REPO`）、GitHub App の `~/.config/sandbox/gh-app/`、ssh 鍵 `~/.ssh/conf.d/aifactory/`。これらはどのリポジトリにも入れない
 5. `kanban/bin/kb list` と http://127.0.0.1:8765/ が workspace の中身を出せば完了
 
 workspace を非公開の Git リポジトリとして管理する場合は、チケットや実行記録が増えたら、workspace 側でコミットして push してください。aifactory 本体の `git status` には、workspace 内の変更は表示されません。

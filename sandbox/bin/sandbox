@@ -8,12 +8,16 @@
 #   sandbox ls                       貸出状況
 #   sandbox status [pj]              プールの台数を PJ ごとに（定義 / 実体 / 貸出 / 空き）
 # 運用補助（契約外）:
-#   sandbox token set <pj|global> [claude|gh|claude:fable|claude:opus|claude:sonnet|claude:haiku]
-#                                               トークンを対話入力して保存（既定 claude）。PJ 別ファイルに書く。claude:<系統> はそのモデル系統だけに使う鍵
-#   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）
-#   sandbox token show [pj]                     どのトークンが効いているか（マスク表示・発行からの日数・ホスト種別）
+#   sandbox keys list|add|set|rm|token          Claude の鍵プール（VM に渡す Claude の鍵の正本。ADR-0044 / ADR-0045）。
+#                                               鍵ごとに「Fable に使う（--fable）」「Opus・Sonnet・Haiku に使う（--other）」を持ち、take がモデルごとに 1 本選ぶ。
+#                                               console の「鍵」画面と同じ keys.json を読み書きする
+#   sandbox token set <pj|global> gh            GitHub トークン（GitHub App が無いときのフォールバック）
+#   sandbox token set <pj|global> [claude|claude:<系統>]   【非推奨】Claude の鍵を PJ / 全体の env ファイルに置く（ADR-0006 の方式）。鍵は sandbox keys add へ。
+#                                               互換のため動くが、プールに合う鍵があるときは使われない
+#   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）。
+#                                               claude はプールを触らない（プールの鍵は sandbox keys token <名前>）。ctl.env の鍵（intake 用）を替えるのはこれ
+#   sandbox token show [pj]                     どの鍵が効いているか（マスク表示・発行からの日数・プールの本数）
 #   sandbox token clear <pj|global> [claude|gh|claude:<系統>] トークンを消す
-#   sandbox keys list|add|set|rm|token          Claude の鍵プール（名前 + fable 許可 / fable 以外許可）。take が系統ごとに 1 本選ぶ（ADR-0044）
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 #   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
@@ -424,7 +428,8 @@ keys_json_view() {
 }
 
 _keys_usage() {
-  die "usage: sandbox keys list [--json] / keys add <name> [--fable] [--other] [--note …] / keys set <name> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <name> [--force] / keys token <name>"
+  die "usage: sandbox keys list [--json] / keys add <名前> [--fable] [--other] [--note …] / keys set <名前> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <名前> [--force] / keys token <名前>
+  --fable = Fable に使う（計画・設計・レビューの工程）  --other = Opus・Sonnet・Haiku に使う（実装・調査の工程）。両方でも可。トークンは stdin か対話で入れる（コマンド行に書かない）"
 }
 # 鍵の値は $_keys_token_in に置き、jq へは環境変数で渡す（コマンド行に書くと ps で他人に見える）
 _keys_token_in=""
@@ -464,12 +469,12 @@ cmd_keys() {
       local v; v="$(keys_json_view)"
       if (( as_json )); then printf '%s\n' "$v"; return 0; fi
       if [[ "$(jq -r '.keys | length' <<< "$v")" == 0 ]]; then
-        echo "鍵プールは空です（${KEYS_FILE}）。sandbox keys add <名前> --fable / --other で足す。空の間は PJ / 全体の env の鍵を使います"
+        echo "鍵はまだ登録されていません（${KEYS_FILE}）。sandbox keys add <名前> --fable --other か、console の「鍵」画面で登録します。無い間は env ファイルの鍵（sandbox token set。非推奨）を使います"
         return 0
       fi
-      local fmt='%-20s %-5s %-5s %-4s %-8s %-10s %-25s %-4s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る
+      local fmt='%-20s %-5s %-11s %-7s %-8s %-10s %-25s %-4s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る。FABLE / OPUS/SONNET = その用途に使うか
       # shellcheck disable=SC2059
-      printf "$fmt" NAME FABLE OTHER ON TAIL ISSUED LAST_USED USES IN_USE
+      printf "$fmt" NAME FABLE OPUS/SONNET ENABLED TAIL ISSUED LAST_USED USES IN_USE
       local n f o e t i l u iu
       while IFS=$'\t' read -r n f o e t i l u iu; do
         # shellcheck disable=SC2059
@@ -477,7 +482,7 @@ cmd_keys() {
       done < <(jq -r '.keys[] | [ .name, (if .allow.fable then "yes" else "no" end), (if .allow.other then "yes" else "no" end),
                                   (if .enabled then "yes" else "no" end), ("…" + .tail4), (.issued // "-"), (.last_used // "-"),
                                   (.uses|tostring), (if (.in_use|length) > 0 then (.in_use|join(",")) else "-" end) ] | @tsv' <<< "$v")
-      echo "file: $KEYS_FILE" ;;
+      echo "file: ${KEYS_FILE}（FABLE = Fable に使う / OPUS/SONNET = Opus・Sonnet・Haiku に使う。console の「鍵」画面と同じ）" ;;
     add)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage
@@ -491,11 +496,11 @@ cmd_keys() {
           *) _keys_usage ;;
         esac; shift
       done
-      [[ "$fable" == true || "$other" == true ]] || die "--fable か --other のどちらか（両方でも可）を指定してください"
+      [[ "$fable" == true || "$other" == true ]] || die "--fable（Fable に使う）か --other（Opus・Sonnet・Haiku に使う）の少なくとも片方を指定してください（両方でも可）"
       [[ -z "$(keys_get "$name")" ]] || die "鍵 $name は既にあります（値の差し替えは sandbox keys token ${name}）"
       _keys_ask_token "$name"
       with_state_lock _keys_add_locked "$name" "$fable" "$other" "$note"
-      echo "[ok] 鍵 $name を足しました（fable: $fable / other: ${other}）。次の take から候補に入ります" ;;
+      echo "[ok] 鍵 $name を登録しました（Fable に使う: $fable / Opus・Sonnet に使う: ${other}）。次にチケットを実行するときから選ばれます" ;;
     set)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage
@@ -516,7 +521,7 @@ cmd_keys() {
       if [[ "$e" == false ]]; then
         local used t; used="$(keys_in_use "$name")"
         if [[ -n "$used" ]]; then
-          echo "[hint] この鍵を使っている貸出中の task があります。別の鍵に切り替えるには次を実行してください（動いている claude はそのまま。次の起動から変わります）:"
+          echo "[hint] この鍵を使っている実行中の VM があります。別の鍵に入れ直すには次を実行してください（動いている工程はそのまま終わり、次の工程から変わります）:"
           for t in $used; do echo "         sandbox reinject $t"; done
         fi
       fi ;;
@@ -527,12 +532,12 @@ cmd_keys() {
       [[ -n "$(keys_get "$name")" ]] || die "鍵 $name はありません（sandbox keys list）"
       local used t; used="$(keys_in_use "$name")"
       if [[ -n "$used" ]] && (( ! force )); then
-        die "鍵 $name は貸出中の task ($used) が使っています。消すなら --force（消したあと sandbox reinject <task> で別の鍵に切り替わります）"
+        die "鍵 ${name} は実行中の VM（task ${used}）が使っています。消すなら --force（消したあと sandbox reinject <task> で別の鍵に入れ直します）"
       fi
       with_state_lock _keys_rm_locked "$name"
       echo "[ok] 鍵 $name を消しました"
       if [[ -n "$used" ]]; then
-        echo "[hint] 使っていた task を別の鍵に切り替えるには:"
+        echo "[hint] 使っていた VM に別の鍵を入れ直すには:"
         for t in $used; do echo "         sandbox reinject $t"; done
       fi ;;
     token)
@@ -541,7 +546,7 @@ cmd_keys() {
       [[ -n "$(keys_get "$name")" ]] || die "鍵 $name はありません（sandbox keys list）"
       _keys_ask_token "$name"
       with_state_lock _keys_token_locked "$name"
-      echo "[ok] 鍵 $name の値を差し替えました。貸出中の VM に反映するには sandbox reinject <task>" ;;
+      echo "[ok] 鍵 $name のトークンを入れ替えました。実行中の VM に反映するには sandbox reinject <task>" ;;
     *) _keys_usage ;;
   esac
 }
@@ -657,7 +662,7 @@ cmd_take() {
   # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）。
   # VM を押さえてから選ぶ: 空きなしで落ちた take が last_used / uses を動かすと、貸し出してもいない回で順番が回ってしまう
   pool_apply_keys "$task"
-  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] CLAUDE_CODE_OAUTH_TOKEN が未設定（sandbox token set ${pj} か sandbox keys add）" >&2
+  [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || echo "[warn] Claude の鍵が無い（sandbox keys add <名前> --fable --other か console の「鍵」画面で登録する）" >&2
   local vmid name ip status; read -r vmid name ip status <<< "$pick"
   echo "[take] $name (vmid $vmid, $ip) → task-$task"
   if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
@@ -670,7 +675,7 @@ cmd_take() {
   _reserved_task=""; _reserved_dns=""   # 確定。以降の EXIT で消さない
   state_set "$task" "$rec"
   touch_used "$vmid"
-  [[ -n "$_pool_fable$_pool_other" ]] && echo "[key] プールの鍵: fable=${_pool_fable:--} other=${_pool_other:--}"
+  [[ -n "$_pool_fable$_pool_other" ]] && echo "[key] 鍵: Fable=${_pool_fable:--} / Opus・Sonnet=${_pool_other:--}（鍵プールから）"
   echo "[ok] task-$task.$SB_DOMAIN  ssh: sandbox ssh $task  url: http://task-$task.$SB_DOMAIN:$APP_PORT"
 }
 
@@ -734,8 +739,8 @@ keys_pool_note() {
   local f="${KEYS_FILE:-}"
   [[ -n "$f" && -f "$f" ]] || return 0
   jq -r '[.keys[] | select(.enabled != false)] as $on
-         | "pool: \(.keys | length) 本（有効 \($on | length) / fable 用 \([$on[] | select(.allow.fable == true)] | length) / fable 以外用 \([$on[] | select(.allow.other == true)] | length)）"' "$f" 2>/dev/null || true
-  echo "  ↑ take が系統ごとに 1 本選び、合う鍵が無い系統は上の env の鍵に落ちる（一覧は sandbox keys list）"
+         | "pool: \(.keys | length) 本（有効 \($on | length) / Fable に使える \([$on[] | select(.allow.fable == true)] | length) / Opus・Sonnet に使える \([$on[] | select(.allow.other == true)] | length)）"' "$f" 2>/dev/null || true
+  echo "  ↑ VM に渡す Claude の鍵はここから選ばれる（一覧は sandbox keys list、画面は console の「鍵」）。合う鍵が無いときだけ上の env の鍵を使う"
   return 0
 }
 
@@ -788,6 +793,10 @@ cmd_token() {
     set|clear)
       local scope=${1:?pj または global} kind=${2:-claude} file key
       key="$(token_key "$kind")" || exit 1
+      if [[ "$kind" != gh ]]; then
+        # Claude の鍵を env ファイルに置く方式は非推奨（ADR-0045）。互換のため動くが、鍵プールに合う鍵があるときは使われない
+        echo "[非推奨] sandbox token $sub $scope $kind: Claude の鍵は鍵プールで持ちます。代わりに sandbox keys add <名前> --fable --other（または console の「鍵」画面）を使ってください。この env ファイルの鍵は、プールに合う鍵が無いときだけ使われます" >&2
+      fi
       if [[ "$scope" == global ]]; then file="$ENV_FILE"; else mkdir -p "$PJ_DIR"; file="$PJ_DIR/$scope.env"; [[ -f "$file" ]] || { echo "# sandbox PJ 別設定: ${scope}（~/.config/sandbox/env を上書き）" > "$file"; chmod 600 "$file"; }; fi
       local val=""
       if [[ "$sub" == set ]]; then

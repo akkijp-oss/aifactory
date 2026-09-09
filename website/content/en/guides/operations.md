@@ -14,32 +14,22 @@ If a VM is lent with no run attached (yesterday's `--keep` or an interrupted run
 
 ## Tokens
 
-### Claude Code token (per project)
+### Claude keys (the key pool)
 
-Long-lived tokens from `claude setup-token` expire. When one does, agent steps fail with an authentication error and the ticket becomes `blocked`.
-
-```bash
-claude setup-token
-sandbox token rotate                     # update the global file, every project file holding the key and ctl.env, then restart the console and reinject --all
-sandbox token set <pj>                   # save one project only
-sandbox reinject <id>                    # push it into a VM that is already lent (no rollback)
-sandbox reinject --all
-```
-
-Run `sandbox token rotate` on the control plane (the host that has `~/.config/aifactory/ctl.env`). The day each token was saved is recorded as a comment in the file, so `sandbox token show` can tell you how many days ago that was.
-
-### Claude key pool (kept on the control plane)
-
-When you hold several keys, name them and keep them in `~/.config/sandbox/keys.json` on the control plane instead of handing them out per project. Lending a VM (`take`) then picks one key per model family.
+The Claude keys that agents use inside VMs live in the control plane's **key pool** (ADR-0044 / ADR-0045). The console's *Keys* screen (`#/keys`) and `sandbox keys` are two doors to the same `~/.config/sandbox/keys.json`. Each key says whether it is used for Fable (planning, design and review steps) and/or for Opus, Sonnet and Haiku (implementation and research steps); when a ticket runs, one key per model is picked (the one that has gone longest without being used). Register several keys and the usage windows are spread across them.
 
 ```bash
-sandbox keys add fable-main --fable      # a key from a Fable contract (the value is typed in)
-sandbox keys add opus-a --other          # for Opus / Sonnet / Haiku
-sandbox keys list                        # names, flags, last 4 characters, last use, and the leases holding each key
-sandbox keys set opus-a --disable        # stop using it (switch the leases over with reinject)
+claude setup-token                                   # produces the value (sk-ant-oat01-…)
+sandbox keys add max-akki --fable --other --note "akki's Max plan"   # value typed in without echo, or piped on stdin
+sandbox keys list                                    # registered keys, last use, use count
+sandbox keys set max-akki --disable                  # stop using it (lent VMs get another key reinjected)
+sandbox keys token max-akki                          # replace only the value (when it expires)
+sandbox reinject <id>                                # push the current key into a VM that is already lent
 ```
 
-The key picked is the eligible one that has gone longest without being used. The same ticket keeps its key across `reinject`, and only picks again once that key can no longer be used. A family with no candidate falls back to the per-project keys above, so an empty pool behaves exactly like today. The console's *Keys* screen does the same things. See [the keys section of the sandbox CLI](../reference/cli-sandbox.md) and ADR-0044.
+Long-lived tokens from `claude setup-token` expire. When one does, the step stops with `failure: key` and the ticket becomes `blocked`. The issue date in `sandbox keys list` tells you when that is coming.
+
+**`sandbox token set <pj>` is deprecated.** It is the old way of putting a key in a per-project file; it still works for compatibility but is not used while the pool has a matching key (the command prints a notice). `sandbox token rotate` replaces the key intake uses (`ctl.env`) and the last-resort key in `~/.config/sandbox/env`; it does not touch the pool.
 ### Running out of usage (the usage limit) resumes by itself
 
 When the token's **usage limit** (the 5-hour or 7-day window) is used up, `claude -p` is rejected and the agent step stops. The runner treats this apart from an ordinary failure: it commits whatever was changed so far as `wip: usage limit`, pushes it to the wip branch, and puts the ticket **back to todo** (the note says it is paused and when the limit is expected to reset). The control plane's systemd timer `aifactory-resume.timer` calls `dispatch --resume-paused` every 5 minutes, and once the reset time has passed it **continues** the run with `kb run <id> --from` (the same step, on top of the wip branch). Nobody has to do anything (ADR-0043).
@@ -143,13 +133,13 @@ sandbox release 999
 | `reset` fails | Does `qm listsnapshot 92NN` show `clean`? | If not, destroy and rebuild with `40-pool.sh` |
 | VM has no internet | `iptables -t nat -S \| grep 10.77`, `pve-firewall status` | Reapply SDN with `pvesh set /cluster/sdn`. LAN / other VMs / tailnet are unreachable by design |
 | Mac cannot reach a VM (after enabling the firewall) | `/etc/pve/firewall/<vmid>.fw`, `qm config <vmid> \| grep firewall` | Rerun `50-firewall.sh` |
-| Claude Code authentication error | `env \| grep CLAUDE_CODE_OAUTH_TOKEN` inside the VM; the age shown by `sandbox token show` | `claude setup-token` → `sandbox token rotate` (every project, `ctl.env` and re-injection in one command) |
-| A step stopped at the usage limit (ticket back to todo, note says paused) | `kb resumable`, `journalctl -u aifactory-resume` | Nothing. Once the reset time passes the timer continues the run. In a hurry, `sandbox token set` another token and run `dispatch --resume-paused` |
+| Claude Code authentication error (`failure: key`) | `key=… (pool: <name>)` in the run log says which key; the issue date in `sandbox keys list` | `claude setup-token` → `sandbox keys token <name>` (or the *Keys* screen). Intake's key: `sandbox token rotate`. Continue the stopped run with `kb run <id> --from` |
+| A step stopped at the usage limit (ticket back to todo, note says paused) | `kb resumable`, `journalctl -u aifactory-resume` | Nothing. Once the reset time passes the timer continues the run. In a hurry, add another key on the *Keys* screen and run `dispatch --resume-paused` |
 | The Proxmox host is down | `ssh $PVE_HOST` fails, `pvecm nodes` (from another node if clustered) | Power it on (WoL / IPMI / the physical button). The pool has onboot=0, so `qm start` by hand |
 
 ## Periodic maintenance
 
 - Monthly: OS update of the base template
-- Renew with `claude setup-token` → `sandbox token rotate` as the token's expiry approaches (watch the age in `sandbox token show`)
+- Renew with `claude setup-token` → `sandbox keys token <name>` as a key's expiry approaches (watch the issue date in `sandbox keys list`); intake's key in `ctl.env` with `sandbox token rotate`
 - When `workspace/runs/` grows, delete or archive old runs (`state.json` and `work/` are enough as records)
 - When `done` items pile up in `workspace/kanban/BOARD.md`, look back with `kb list --all` and then stop worrying (the DB is small)

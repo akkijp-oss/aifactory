@@ -10,7 +10,7 @@ sandbox（どこで動くか）の上で、**誰（agent / code）が・何を�
 |---|---|---|
 | **workflow** | チケット種別ごとの手順。step の並びと分岐 | `kit/workflows/<name>.yml` |
 | **step** | 1 回の呼び出し。担い手は **role**（agent）か **code**（スクリプト）のどちらか | workflow の中 |
-| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`。モデル系統ごとに別の鍵を使うなら `sandbox token set <pj> claude:<fable\|opus\|sonnet>`。runner が step のモデル名から `CLAUDE_CODE_OAUTH_TOKEN_<系統>` を選び、無ければ `CLAUDE_CODE_OAUTH_TOKEN`） |
+| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`。鍵は制御系の鍵プール（`sandbox keys add <名前> --fable --other` か console の「鍵」画面）が正本で、take がモデルごとに 1 本選んで `CLAUDE_CODE_OAUTH_TOKEN_<系統>` に入れる。runner は step のモデル名からその変数を選び、無ければ `CLAUDE_CODE_OAUTH_TOKEN`。ADR-0044 / ADR-0045） |
 | **artifact** | step の入出力。**必ずファイル**。VM の `~/work/<task>/` に置き、終了時に `$AIFACTORY_WORKSPACE/runs/<run>/work/` へ回収 | 名前は workflow の `inputs` / `outputs` |
 | **transition** | 結果に応じた次の行き先。ループ回数の上限つき。`human` = 人間に渡して終了 | step の `next` / `on_pass` / `on_fail` |
 
@@ -186,7 +186,7 @@ agent の `claude -p` が Claude の鍵の**利用枠**（5 時間 / 7 日の窓
 | 止まり方 | runner が残すもの | kb | 次 |
 |---|---|---|---|
 | `quota`（利用枠。待てば戻る） | 追跡済みの変更を `wip: usage limit` でコミット → wip ブランチへ。`state.json` に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は**その step 自身** | **todo** に戻す（メモに「一時停止」と `kb run --from`） | 制御系の `aifactory-resume.timer`（5 分ごと）が `dispatch --resume-paused` を呼び、`retry_after` を過ぎたものを `kb run <id> --from` で続きから回す |
-| `key`（鍵が無効・失効・残高不足） | 同じく `wip: token unusable` で保全。`failure: "key"` | **blocked** | 人が `sandbox token set/rotate` で鍵を直して `kb run <id> --from` |
+| `key`（鍵が無効・失効・残高不足） | 同じく `wip: token unusable` で保全。`failure: "key"` | **blocked** | 人が鍵プール（`sandbox keys token <名前>` か「鍵」画面）で鍵を直して `kb run <id> --from` |
 
 どちらも `on_fail` の戻し（gates → implement など）は消費しない。`retry_after` が読めない回（旧形式の文言・stderr だけ）は `finished` から
 `AIFACTORY_RESUME_BACKOFF_MIN` 分（既定 30）で再開を試し、`quota_hits` が `AIFACTORY_RESUME_MAX_HITS`（既定 6）に達したら blocked にして人へ返す。

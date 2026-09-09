@@ -153,14 +153,18 @@ pnpm --filter @myapp/db db:migrate
 
 VM は run が終わるたびにテンプレートへ戻り、base だけが進みます。`prepare` はその差を埋めます。失敗した場合、runner はエージェントを起動せずに終了します（`failure: prepare`）。
 
-## 5. トークンを保存する 🧑
+## 5. 鍵と GH_REPO を用意する 🧑
+
+Claude の鍵は PJ ごとではなく、制御系の鍵プールで持ちます。すでにプールに鍵があれば、この PJ にも自動で使われるので新しく登録する必要はありません（`sandbox keys list` か console の「鍵」画面で確認）。
 
 ```bash
-claude setup-token
-sandbox token set myapp                  # Claude トークン
+claude setup-token                                          # 鍵がまだ無いときだけ
+sandbox keys add <名前> --fable --other --note "誰の契約か"  # 鍵プールに登録（console の「鍵」画面でも可）
 echo 'GH_REPO=owner/myapp' >> ~/.config/sandbox/pj/myapp.env
 sandbox token show myapp
 ```
+
+`sandbox token set myapp` で PJ ファイルに鍵を置く古い方式は非推奨です（互換のため動きますが、プールに合う鍵があれば使われません）。
 
 ## 6. GitHub App をインストールする 🧑
 

@@ -43,7 +43,7 @@ flowchart TD
 
 | Symptom | Look at | Fix |
 |---|---|---|
-| Authentication error | Tail of `agent-<step>-<n>.log`; `env \| grep CLAUDE_CODE_OAUTH_TOKEN` in the VM | On the control plane: `claude setup-token` → `sandbox token rotate` (every project, `ctl.env` and `reinject --all` in one command) |
+| Authentication error (`failure: key`) | Tail of `agent-<step>-<n>.log` and `key=… (pool: <name>)` in the run log | On the control plane: `claude setup-token` → `sandbox keys token <name>` (or the console's *Keys* screen). Intake's key: `sandbox token rotate`. Continue the stopped run with `kb run <id> --from` |
 | Missing `outputs`, step failed | Tail of the same log | The agent overlooked the output location ("Outputs (required)" in the prompt), timeout, or a tool was refused. Raise `timeout_min` or make the ticket smaller |
 | Changes outside the scope | `work/report.md`, `review.md` | State the scope in the ticket. Gates already red on base go in `known_red_gates` |
 | The planner wrote STOP | Top of `work/plan.md` | The request is unclear, contradictory or dangerous. Answer the questions and fix the ticket |

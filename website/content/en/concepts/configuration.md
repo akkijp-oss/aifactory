@@ -69,7 +69,7 @@ flowchart LR
 
 | Goal | File | Scope |
 |---|---|---|
-| Bring a new project into the factory | `workspace/projects/<pj>/{provision.sh, project.yml, gates.sh}` (copy `examples/projects/kumitate/`) + template and pool on Proxmox + `sandbox token set` + GitHub App install | That project |
+| Bring a new project into the factory | `workspace/projects/<pj>/{provision.sh, project.yml, gates.sh}` (copy `examples/projects/kumitate/`) + template and pool on Proxmox + `GH_REPO` (`pj/<pj>.env`) + GitHub App install. Claude keys come from the pool (`sandbox keys` / *Keys* screen) if it has any | That project |
 | Add / remove a gate | `workspace/projects/<pj>/gates.sh`. Already red on base: `known_red_gates` in `project.yml` | That project |
 | A fact the agent must always know (how to run tests, known traps) | `facts` in `project.yml` | Every step of that project |
 | What must not be done in this project / what the reviewer must always check | `forbidden` / `review_points` in `project.yml` | That project |
@@ -80,7 +80,7 @@ flowchart LR
 | intake's classification habits | The prompt text in `glue/bin/intake`, or a `kind:` line at the top of the request | At filing |
 | Pool size (actual) | `sandbox/proxmox/40-pool.sh <pj> <count>` (what you create is the actual size) | That project's parallelism |
 | Pool size (defined) | The `SANDBOX_POOL_PER_PJ` environment variable (default 3), read by `glue/bin/dispatch`, `sandbox status` and the console sandbox screen. A defined size larger than the actual one makes `take` fail with no free VM | Dispatch and display |
-| Claude token renewal | `sandbox token set <pj>` (`sandbox reinject <id>` while lent) | That project |
+| Adding or replacing a Claude key | `sandbox keys add` / `sandbox keys token <name>` (or the console's *Keys* screen; `sandbox reinject <id>` while lent). `sandbox token set <pj>` is deprecated | Every project (keys are shared through the pool) |
 | Proxmox host or address space | `~/.config/sandbox/env` (`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`); on the Proxmox side `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`. The naming rules in `sandbox/README.md` + an ADR | Everything |
 | Where operational data lives | Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` | Everything |
 
@@ -95,6 +95,6 @@ flowchart LR
 |---|---|
 | workflow yml / roles / routes.env / project.yml / gates.sh | **From the next run.** Running runs are unaffected (the runner reads them at start) |
 | `sandbox/bin/sandbox` | After running `sandbox/bin/install.sh` (updates the copy on PATH) |
-| Tokens | From the next take after `sandbox token set`. `reinject` while lent |
+| Claude keys | From the next take after `sandbox keys add` / `set`. `reinject` while lent |
 | `kb` / `intake` / `dispatch` | Immediately (called by repository path) |
 | Proxmox scripts | After rerunning them |
