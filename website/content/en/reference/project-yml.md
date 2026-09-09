@@ -14,6 +14,7 @@
 | `app_dir` | string | ✅ | App directory inside the VM (may differ from the repository root) | Agent cwd, `gates.sh` cwd |
 | `url` | string | | App URL as seen from inside the VM | Screen checks (future) |
 | `gates` | string | ✅ | Gate script, relative to `projects/<pj>/` | Copied to the VM and run by the `gates.sh` code step |
+| `prepare` | string | | Setup script run right after checkout, relative to `projects/<pj>/` | Run once inside the VM with `app_dir` as cwd. If it fails, no agent is started and the run ends with `failure: prepare` |
 | `stack` | string | | One-line technology stack | Top of the prompt |
 | `facts` | array | | Facts told to the agent every time, one per line | The "Project" section of the prompt |
 | `review_points` | array | | Project-specific points the reviewer must always check | Added only to the reviewer's prompt |
@@ -63,6 +64,7 @@ forbidden:
 - The most useful `facts` are "how to run tests", "where generated files go" and "known issues (dated)". If they get long, just point at the relevant part of the README or `CLAUDE.md`
 - Do not write rules that apply to every project (those go in `workflow/kit/roles/_common.md`)
 - `known_red_gates` is temporary. Remove entries once the fixing PR is merged
+- You do not have to fill in `known_red_gates` by hand: the runner records the gates it confirmed red on base in the run record (see below)
 - Changes take effect from the next run
 
 ## Its partner: gates.sh
@@ -80,6 +82,46 @@ INFO audit-gate red (known on base; not a gate)
 | `PASS <name>` | Green |
 | `FAIL <name> (<log>)` | Red, with the log location |
 | `INFO <name> …` | Informational (from `known_red_gates`, or made informational by the script) |
+
+When gate names are passed as arguments, run only those gates (no arguments means all of them). The runner uses this when it checks the base branch.
+
+## Setup right after checkout: prepare
+
+The VM rolls back to its template (the state when `provision.sh` was baked) after every run, while the base branch keeps moving. That gap — new dependencies, new database migrations — shows up as red gates that the agent cannot fix.
+
+With `prepare` set, the runner runs the script once right after it takes the VM and checks out the branch, before the first agent step.
+
+```yaml
+gates: gates.sh
+prepare: prepare.sh
+```
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${SANDBOX_APP_DIR:-$HOME/app}"
+pnpm install --frozen-lockfile
+pnpm --filter @kumitate/db db:migrate
+```
+
+If it fails, the runner ends the run without starting any agent (`result: failed` and `failure: prepare` in `state.json`, an empty step history, output in `code-prepare.log`), and the kanban ticket becomes `blocked`. On the macOS / Windows / Linux workers the existing `provision.sh` already plays the same role on every lease.
+
+## Gates that are red on base too
+
+When a gate is red, the runner runs **only the red gates** against the base branch (`origin/<base_branch>`) as well. Gates that are red on base too are not sent back to the implement step.
+
+```
+INFO strings red (also red on base; not a gate)
+PASS feature
+
+=== base check: origin/develop
+BASE-CHECK origin/develop 675cdbc
+FAIL strings (~/gates/strings.log)
+```
+
+If no `FAIL` is left, the gates step passes and the run moves on, without spending one of its trips back to the implementer. The confirmed gate names are kept in the run record, and `sandbox_status` returns them together with whatever was written by hand in `known_red_gates`. `project.yml` itself is never rewritten.
+
+If base could not be checked (uncommitted changes could not be stashed, `origin/<base_branch>` is missing, and so on), the reason is printed under `=== base check:` as `BASE-CHECK-SKIP` and nothing is downgraded. If the working tree cannot be put back on the working branch after the base check, the run stops and goes to a human even when no gate is left red.
 
 How to write it: [Add a project](../guides/add-project.md#gates-sh).
 

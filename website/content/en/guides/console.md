@@ -130,7 +130,7 @@ claude mcp reset-project-choices   # approve again
 | `job_list` / `job_show` / `job_wait` / `job_stop` | Job list, output, wait (60 s by default, 300 s at most), stop |
 | `logs` / `config` | intake / dispatch logs / workflows, routes, projects, git |
 
-`tools/list` returns `annotations` for every tool (`title` and `readOnlyHint`; `destructiveHint` for release and stop). Without them Claude Code treats a tool as "not safe to call in parallel" and serialises the calls in one turn, so you wait even though the server is asynchronous (ADR-0037).
+`tools/list` returns `annotations` for every tool (`title` and `readOnlyHint`; `destructiveHint` for release and stop). Without them Claude Code treats a tool as "not safe to call in parallel" and serialises the calls in one turn, so you wait even though the server is asynchronous (ADR-0038).
 
 ### How to drive a run
 

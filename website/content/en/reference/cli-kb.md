@@ -132,7 +132,7 @@ When the same ticket is run again (today's run directory already exists, or `--f
 kb run-note 2026-09-06-kumitate-204 --result done --pr 300 --text "wip から PR を作ってマージした"
 ```
 
-Records that a human closed the run out — opened a PR from the wip branch and merged it, or gave up on it. It only adds `human: {at, by, result, pr_url, text}` to `runs/<run>/state.json`; the `result` the runner settled on is left alone (ADR-0038).
+Records that a human closed the run out — opened a PR from the wip branch and merged it, or gave up on it. It only adds `human: {at, by, result, pr_url, text}` to `runs/<run>/state.json`; the `result` the runner settled on is left alone (ADR-0039).
 
 | Option | Meaning |
 |---|---|

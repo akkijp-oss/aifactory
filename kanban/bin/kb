@@ -345,7 +345,7 @@ def human_note(run_dir, result=None, pr=None, text=None, force=False):
     """人間が run の後始末（wip から PR を作ってマージ・打ち切り）をしたことを state.json に追記する（335）。
 
     runner が確定した `result` は上書きせず `human: {at, by, result, pr_url, text}` を別に持つ。
-    「人間が PR#n で仕上げた」という言い方は console が導く（ADR-0025 / ADR-0038）。
+    「人間が PR#n で仕上げた」という言い方は console が導く（ADR-0025 / ADR-0039）。
     実行中（finished が無い）の run は runner が同じファイルを書いているので断る。"""
     st = paths.run_path(run_dir) / "state.json"
     if not st.exists(): raise ValueError(f"実行記録が無い: {st}")
@@ -405,6 +405,11 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             status = "todo"
             note = (f"VM の空き待ちが上限 {int(s.get('waited_s') or 0) // 60} 分を超えて終了。"
                     "空きが出たら kb run --wait / dispatch --wait で再開")
+        elif result == "failed" and s.get("failure") == "prepare":
+            # 貸出直後の準備で落ちた run（330）。VM は取れているので「取得できず」ではない。直す所は prepare.sh か VM の側
+            why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]
+            status = "blocked"
+            note = f"貸出直後の準備（prepare）で止まった: {why}。prepare.sh か VM を直して kb reopen → kb run"
         elif result == "failed":
             # 工程が 1 つも始まる前に落ちた run（VM が取れない等）。todo に戻すと配車がすぐ拾って同じ失敗を繰り返す（238）
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]

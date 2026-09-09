@@ -132,7 +132,7 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 kb run-note 2026-09-06-kumitate-204 --result done --pr 300 --text "wip から PR を作ってマージした"
 ```
 
-人間が run の後始末（wip ブランチから PR を作ってマージした、または打ち切った）をしたことを実行記録に残します。`runs/<run>/state.json` に `human: {at, by, result, pr_url, text}` を足すだけで、runner が確定した `result` は変えません（ADR-0038）。
+人間が run の後始末（wip ブランチから PR を作ってマージした、または打ち切った）をしたことを実行記録に残します。`runs/<run>/state.json` に `human: {at, by, result, pr_url, text}` を足すだけで、runner が確定した `result` は変えません（ADR-0039）。
 
 | 項目 | 内容 |
 |---|---|
