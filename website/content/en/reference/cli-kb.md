@@ -13,6 +13,7 @@ kb append <id> [--section S] [--text T]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [minutes]]
 kb sync <id> [--run DIR]
+kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
 kb history <id>
 kb render
 ```
@@ -122,6 +123,28 @@ With `--from`, a run that ended at `human` is redone **on a new VM**, continuing
 | No `finished`, runner exited non-zero | blocked | Runner exited without a record, rc=N |
 
 `--dry-run` leaves the state unchanged. The exit code is the runner's (0 = end or PR present, 2 = human).
+
+When the same ticket is run again (today's run directory already exists, or `--from` / `--branch` was given), the note is replaced with `再走中（attempt N・workflow W）`. Without that, the "handed to a human (wip: …)" note from the previous stop stays on as the note of a running ticket and the list looks out of date. The previous note remains in `kb history`. A first run leaves the note alone.
+
+### run-note
+
+```bash
+kb run-note 2026-09-06-kumitate-204 --result done --pr 300 --text "wip から PR を作ってマージした"
+```
+
+Records that a human closed the run out — opened a PR from the wip branch and merged it, or gave up on it. It only adds `human: {at, by, result, pr_url, text}` to `runs/<run>/state.json`; the `result` the runner settled on is left alone (ADR-0039).
+
+| Option | Meaning |
+|---|---|
+| `--result` | `done` (a human finished it; the default) or `abandoned` (dropped) |
+| `--pr` | The number of the PR the human merged. It becomes a URL when the project defines `repo`, otherwise `#N` |
+| `--text` | What was done. Shown on the run page of the console |
+| `--force` | Add to a run that already has a human record (omitted fields keep their previous values) |
+| `by` | `AIFACTORY_ACTOR` if set, otherwise `USER` |
+
+Runs without `finished` (the runner is still writing) and runs that already have a `human` record (without `--force`) are refused. The console then leads the run's "outcome" panel with "人間が PR #n で仕上げました（完了）。" and stops offering the command to continue from where it stopped.
+
+`kb set <id> --pr N` and `kb done <id>` transcribe the same thing automatically when the ticket's run is still waiting on a human and has no human record yet (the console ticket page and the MCP `ticket_action` go through the same path). PRs the runner opened itself are not transcribed (`kb sync` does not call it). If transcription fails, the ticket is still updated and the reason is printed as `[kb] warn:`.
 
 ### sync
 
