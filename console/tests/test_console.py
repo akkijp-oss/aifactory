@@ -580,6 +580,30 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(o["gate_fails"], []); self.assertTrue(o["detail_file"].endswith("agent-design-1.log"))
         self.assertFalse(o["loops_hit"])
 
+    def test_run_outcome_step_timeout_is_told_apart_from_a_failed_step(self):
+        """時間上限で切られた工程（チケット 329）。「工程が失敗した」ではなく「時間上限で中断」と読める。
+
+        直し方が違う（上限を上げるかチケットを小さくする）うえ、コミット済みの分は wip ブランチに残っている。
+        agent の stdout の末尾は error ではなく last_output にあるので、理由の 1 行に lint の集計行が混ざらない。
+        """
+        hist = [("plan", True), ("implement", False)]
+        state = self._state(hist, workflow="bug", wip_branch="sandbox/329-bug-wip",
+                            error="implement: 時間上限 60 分で中断（timeout）",
+                            last_output="✖ 1317 problems (0 errors, 1317 warnings)\n")
+        state["history"][-1].update({"failure": "timeout", "timeout_min": 60})
+        name = self._fixture_run("2026-09-07-kumitate-990", state,
+                                 {"agent-implement-1.log": "[+59:00] ▶ Edit: src/nav.tsx\n", "work/plan.md": "# 計画\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "step_timeout"); self.assertEqual(o["stopped_step"], "implement")
+        self.assertEqual(o["timeout_min"], 60)
+        self.assertEqual(o["error_summary"], "implement: 時間上限 60 分で中断（timeout）")
+        self.assertTrue(o["detail_file"].endswith("agent-implement-1.log"))
+        self.assertNotIn("1317", o["error_summary"])                       # stdout の末尾は理由に混ざらない
+        self.assertIn("1317", d["state"]["last_output"])                   # MCP run_show も同じ state を返す
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.step_timeout", app)
+
     def test_run_outcome_drives_the_run_view(self):
         """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")

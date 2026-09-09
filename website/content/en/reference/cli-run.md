@@ -46,6 +46,8 @@ When `--wait` runs out, the record carries `failure: "wait_timeout"` and `waited
 - Runs `cd $SANDBOX_APP_DIR && timeout <timeout_min>m claude -p "$(cat /home/dev/prompt.md)" --model <model> --output-format stream-json --verbose`. The runner reads the events line by line and streams a readable form to `agent-<step>-<n>.log` (timestamps, tool calls ▶, the first 3 lines of each result ↳, the final result with cost). The raw JSON goes to `agent-<step>-<n>.jsonl`
 - While a step runs, `current` in `state.json` holds `{step, kind, log, since}` (`null` once the step ends)
 - Pass if every file in `outputs` (except `git` / `pr_url`) exists in `~/work/<id>/`
+- Past the time limit (the step's `timeout_min`, 60 minutes by default) `timeout` kills the step with exit code 124. The runner keeps this apart from an ordinary failure: it commits the uncommitted tracked changes as `wip: step timeout` (never adding untracked files) and only then fails the step. When the run lands on `human` the preserve branch `origin/sandbox/<id>-<wf>-wip` therefore carries the half-finished work, and the next run can pick it up
+- The "Outputs (required)" section of the prompt states the step's limit in minutes and asks for a `wip:` commit every 30 minutes
 
 ### Code steps
 
@@ -81,6 +83,8 @@ On send-back the previous result is attached to the next prompt as "Previous res
   "current": null,
   "next": "end",
   "result": "end",
+  "error": "",
+  "last_output": "",
   "pr_url": "https://github.com/akkijp/kumitate/pull/300",
   "wip_branch": "",
   "finished": "2026-09-06T12:31:00",
@@ -89,6 +93,8 @@ On send-back the previous result is attached to the next prompt as "Previous res
 ```
 
 `pr_url` ends with ` MERGED` when the merge step of merge-pr succeeded.
+
+A run that stops at `human` records why in `error`, on one line. A step killed by its time limit reads `implement: 時間上限 60 分で中断（timeout）`, and its `history` entry carries `"failure": "timeout"` and `"timeout_min"`. The tail of the agent's standard output is kept out of `error` and stored in `last_output` (up to 3000 characters) — a timed-out step used to end up with a lint summary line as its `error`, which read as "lint failed". The web console and the MCP `run_show` use the marker to say the step was cut off at its time limit.
 
 ## Environment variables
 

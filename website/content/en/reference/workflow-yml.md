@@ -26,7 +26,7 @@
 | `outputs` | array of artifact | Artifacts the step must produce. Agent steps are told "write here". Missing means failure |
 | `next` | transition | Unconditional next step. A step without branching that fails goes to human |
 | `on_pass` / `on_fail` | transition | Branch on pass / fail |
-| `timeout_min` | integer | Agent time limit (default 60) |
+| `timeout_min` | integer | Agent time limit in minutes (default 60). On overrun `timeout` kills the step and the runner commits the uncommitted tracked changes as `wip: step timeout` before failing, so the work survives on the preserve branch |
 
 Exactly one of `role` and `code` (both is a schema error).
 
