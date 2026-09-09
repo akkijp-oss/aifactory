@@ -180,5 +180,17 @@ class MacBackendTest(unittest.TestCase):
         MacRun({'steps':[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'}]})
         with self.assertRaises(ValueError):MacRun({'steps':[{'code':'pr-merge.sh'}]})
 
+    def test_automerge_step_is_skipped_when_project_has_no_auto_merge(self):
+        # ADR-0042 で全 workflow に automerge step が入った。auto_merge の無い PJ では runner が工程ごと飛ばすので、
+        # pull worker の未対応判定でも拒否しない（asura #381 が起動前に落ちた）。auto_merge がある PJ は従来どおり拒否する
+        class Base:
+            def __init__(self,wf,auto_merge=None):
+                self.wf=wf;self.project={'app_dir':'/Users/admin/app','worker':'mac1'}
+                self.task='381';self.resume=False;self.state={};self.auto_merge=auto_merge
+        MacRun=macos.backend(Base)
+        steps=[{'code':'gates.sh'},{'code':'sync-base'},{'code':'pr-create.sh'},{'code':'pr-automerge.sh'}]
+        MacRun(steps and {'steps':steps})
+        with self.assertRaises(ValueError):MacRun({'steps':steps},auto_merge={'method':'merge'})
+
 
 if __name__=='__main__':unittest.main()
