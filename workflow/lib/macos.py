@@ -58,9 +58,7 @@ def backend(Run):
             self.run_lock = None
             self.state["backend"] = "macos-pull"
             self.state["worker"] = self.project["worker"]
-            if self.resume:
-                for field in ("finished", "error", "result"):
-                    self.state.pop(field, None)
+            # `--resume` で前回の終わり方（result / finished / error …）を消すのは Run.__init__ に寄せた（チケット 338）
 
         def main(self):
             try:

@@ -58,3 +58,4 @@
 - [0044: Claude の鍵は PJ ではなく制御系のプールで持ち、take がフラグで選ぶ](0044-claude-key-pool-in-control-plane.md)
 - [0045: VM に渡す Claude の鍵は鍵プールを正本にし、`sandbox token set <pj> claude` は非推奨にする](0045-key-pool-is-the-source-token-set-deprecated.md)
 - [0046: 要る用途の Claude の鍵が鍵プールに無ければ、env の鍵に落ちず一時停止し、鍵が登録されたら機械が回し直す](0046-pause-when-no-key.md)
+- [0047: `--resume` の開始工程は `next` ではなく工程履歴から決め、続きが無い run は VM に触る前に止める](0047-resume-start-step-from-history.md)

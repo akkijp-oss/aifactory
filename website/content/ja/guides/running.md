@@ -94,6 +94,7 @@ sandbox url 204                              # アプリの URL（ブラウザ�
 ## 止める・やり直す
 
 - **止める**: runner のプロセスを Ctrl-C。VM は貸出中のまま残るので、`sandbox release <id>` で返すか、`--resume` で続けます
+- **base が赤くて `gates` で止まった**: 人が base（`develop` / `main`）を直してから、VM が貸出中のままなら `kb run <id> --resume`、返却済みなら `kb run <id> --from gates` で **gates から**続けられます。実装はやり直しません。`--resume` の再開位置は `state.json` の工程履歴から決まり、履歴が空（準備で落ちて 1 工程も終えていない）なら workflow の先頭工程から回ります（ADR-0047）
 - **VM 起因で落ちた**（ssh 切断、トークン失効など）: `kb reopen <id>` → `kb run <id>`。同じ日の再実行は前回の `runs/` を `-attemptN` に退避してから作ります
 - **エージェントの出力が悪くて `human` 行き**: `work/` と `agent-*.log` を読んでチケットを直し、`kb reopen` → `kb run`。成果を残したければ `origin/sandbox/<id>-<wf>-wip` にあります。指摘が軽ければ、最初からやり直さず `kb run <id> --from` で続きから回せます（下）
 - **定義を変えた**（project.yml / ワークフローの YAML / roles）: 実行中の run には効きません。次の run から

@@ -94,6 +94,7 @@ sandbox url 204                              # the app URL (opens in a browser)
 ## Stopping and redoing
 
 - **Stop**: Ctrl-C the runner process. The VM stays lent, so either return it with `sandbox release <id>` or continue with `--resume`
+- **The run stopped at `gates` because base was red**: once someone has fixed base (`develop` / `main`), continue **from gates** with `kb run <id> --resume` while the VM is still lent, or with `kb run <id> --from gates` once it has been returned. The implementation is not redone. Where `--resume` restarts is decided from the step history in `state.json`, so a run whose history is empty (provisioning failed before any step ran) starts from the first step of the workflow (ADR-0047)
 - **Failed for VM reasons** (ssh dropped, token expired, and so on): `kb reopen <id>` → `kb run <id>`. A rerun on the same day moves the previous `runs/` directory to `-attemptN` first
 - **The agent's output was poor and the run went to `human`**: read `work/` and `agent-*.log`, fix the ticket, then `kb reopen` → `kb run`. The work is on `origin/sandbox/<id>-<wf>-wip` if you want to keep it. When the findings are small, continue from where it stopped with `kb run <id> --from` instead of starting over (below)
 - **You changed a definition** (project.yml / workflow yml / roles): it does not affect a running run. It applies from the next run
