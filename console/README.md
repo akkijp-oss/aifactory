@@ -73,9 +73,10 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
-| `ticket_action` | start / review / done / reopen / block / set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
+| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等） |
+| `run_action` | 人間の後始末（wip から PR 化・マージ／打ち切り）を実行記録に書く（`kb run-note`）。`close` は決着と PR 番号を記録し、`note` は説明を書き直す |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task / VM 名 / IP / since / 稼働状態）と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
@@ -136,6 +137,7 @@ POST /api/tickets                  kb new    POST /api/tickets/<id>/action {acti
      sync は既定で書かない（dry_run 既定 true。前後を返すだけ）。書くには dry_run: false を明示する
 POST /api/tickets/<id>/run         kb run をジョブで {dry_run, workflow, keep, resume}
 GET  /api/runs  /api/runs/<name>   実行記録  GET /api/file?path=&tail=|offset=   限られた根の下のファイル
+POST /api/runs/<name>/action       人間の後始末を実行記録に書く（kb run-note）{action: close|note, result, pr, text}
 GET  /api/sandbox                  POST /api/sandbox/ls   POST /api/sandbox/release {task}
 POST /api/intake {text, pj, kind, dry_run}   POST /api/dispatch {pj, once, max, dry_run}
 GET  /api/jobs  /api/jobs/<id>?offset=       POST /api/jobs/<id>/stop
