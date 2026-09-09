@@ -54,7 +54,7 @@ When `--wait` runs out, the record carries `failure: "wait_timeout"` and `waited
 ### Code steps
 
 - Runs `kit/steps/<script>` on the Mac. Output is streamed to `code-<step>-<n>.log` (`current` is set the same way)
-- Env passed: `PJ` `TASK` `RUN_DIR` `PROJECT_DIR` `GATES` `WORK` `APP_DIR` `BASE` `BRANCH` `WORKFLOW` `TITLE` `PR_NUMBER` `KNOWN_RED`
+- Env passed: `PJ` `TASK` `RUN_DIR` `PROJECT_DIR` `GATES` `WORK` `APP_DIR` `BASE` `BRANCH` `WORKFLOW` `TITLE` `PR_NUMBER` `KNOWN_RED` `RUN_NAME` `HAS_REVIEW` `AUTO_MERGE` `AUTO_MERGE_METHOD` `AUTO_MERGE_WAIT_MIN` `AUTO_MERGE_DELETE_BRANCH` `AUTO_MERGE_REQUIRE_CHECKS`
 - Reissues the GitHub App token before running (`sandbox reinject`)
 - Pass on exit code 0
 
@@ -94,6 +94,8 @@ On send-back the previous result is attached to the next prompt as "Previous res
 }
 ```
 
+When the `automerge` step merged the PR, `state.json` carries `merged` (`{at, sha, method, pr_url, base}`). When it did not merge, `merged` is absent and `error` holds one line such as `automerge: <reason>` (the PR is still open, so no `resume_step` is added).
+
 `pr_url` ends with ` MERGED` when the merge step of merge-pr succeeded.
 
 A run that stops at `human` records why in `error`, on one line. A step killed by its time limit reads `implement: 時間上限 60 分で中断（timeout）`, and its `history` entry carries `"failure": "timeout"` and `"timeout_min"`. The tail of the agent's standard output is kept out of `error` and stored in `last_output` (up to 3000 characters) — a timed-out step used to end up with a lint summary line as its `error`, which read as "lint failed". The web console and the MCP `run_show` use the marker to say the step was cut off at its time limit.
@@ -104,6 +106,8 @@ A run that stops at `human` records why in `error`, on one line. A step killed b
 |---|---|
 | `CLAUDE_MODEL` | One-off override of the model for every agent step |
 | `MERGE_METHOD` | Merge method for merge-pr (merge / squash / rebase, default merge) |
+| `AUTOMERGE_POLL_S` | How often `automerge` polls the CI checks, in seconds (default 30) |
+| `AUTOMERGE_ZERO_CHECKS_GRACE_S` | How long to wait while there are zero checks, in seconds (default 180) |
 
 ## Traps encountered
 

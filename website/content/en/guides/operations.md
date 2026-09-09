@@ -72,6 +72,20 @@ To keep VMs running, put `SB_IDLE_STOP_HOURS=0` in `~/.config/sandbox/env` (ever
 
 Check `sandbox ls` for lent VMs before rebuilding.
 
+## Promoting develop to main (by a human)
+
+aifactory's own PRs target `develop`. A PR with green gates, a PASS review and all CI checks passing is merged into `develop` by the runner ([`auto_merge`](../reference/project-yml.md), ADR-0042). **Promotion to `main` is done by a human.**
+
+```bash
+gh pr create --base main --head develop --title "develop -> main" --body "Automatically merged runs: #.. #.."
+gh pr checks <number> --watch
+gh pr merge <number> --merge
+```
+
+- Promote when `develop` is green and you have run one round on real hardware. Once a day is enough unless something is urgent
+- Never promote a red `develop`. Land the fix on `develop` first
+- Deployment to the control plane (`bin/ctl-update`) still follows `origin/main`. Use `bin/ctl-update --ref origin/develop` only to try out `develop`, then go back with `bin/ctl-update`
+
 ## Changing a project definition
 
 The project definitions the runner reads (`project.yml` / `gates.sh` / `provision.sh` under `examples/projects/<pj>/`) are read straight from the working tree of the control plane's checkout. Editing `gates.sh` there takes effect from the next gates run, but the control plane's remote is https, so `git push` fails. Leave it like that and production runs from a checkout that differs from origin.

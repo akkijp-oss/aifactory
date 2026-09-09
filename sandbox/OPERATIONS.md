@@ -51,6 +51,24 @@ cd ~/aifactory && bin/ctl-update
 
 退避先にしか無い変更は、そこから拾って PR にする（この tree には戻さない）。落ち着いたら `rm -rf ~/aifactory.pre-clean-*`。
 
+## develop → main の昇格（人間）
+
+aifactory 自身の PR の宛先は `develop`（`examples/projects/aifactory/project.yml` の `base_branch`）。
+ゲート緑・レビュー PASS・CI 緑の PR は runner が `develop` へ自動マージする（`auto_merge: true`。ADR-0042）。
+**`main` への昇格は機械がしない。** 溜まった `develop` を人が見て、次の 3 コマンドで上げる。
+
+```bash
+gh pr create --base main --head develop --title "develop → main（<日付> 分の昇格）" --body "自動マージ済みの run: #.. #.."
+gh pr checks <番号> --watch          # CI が全部 pass するまで待つ
+gh pr merge <番号> --merge           # --delete-branch は付けない（develop は使い続ける）
+```
+
+- 昇格の頻度は「develop が緑で、実機で 1 周回せたら」。急ぐ理由が無ければ 1 日 1 回で足りる
+- `develop` が赤いまま昇格しない。赤いゲート・赤い CI は先に直す PR を `develop` へ入れる
+- **`bin/ctl-update` は `origin/main` 追随のまま**（制御系は安定版で動かす）。`develop` の中身を制御系で試すなら
+  `bin/ctl-update --ref origin/develop` を一時的に使い、確かめたら `bin/ctl-update` で main へ戻す
+- 自動マージを止めたいときは `project.yml` の `auto_merge` を消す（消した後の run は今までどおり PR で止まる）
+
 ## PJ 定義（`examples/projects/<pj>/`）の変更手順
 
 runner が読む PJ 定義（`project.yml` / `gates.sh` / `provision.sh`）は制御系の checkout（`~/aifactory`）の

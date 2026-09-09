@@ -107,11 +107,15 @@ const T = {
     "sync": "PR を作る直前に base ブランチを取り込みます。衝突や ADR 番号の重複があれば解消の工程に回します。",
     "resolve": "base の取り込みで戻された理由（衝突・ADR 番号の重複）だけを解消します。本来の変更は広げません。",
     "pr": "成果物をまとめて PR を作り、人間のレビューに渡します。",
+    "automerge": "条件（ゲート緑・レビュー PASS・CI 緑・衝突なし）を確かめ、満たせば PR を base へマージします。",
     "merge": "PR ブランチへ push し、base へマージします。",
     "judge": "調査の要点と次の一手を判断して summary.md に書きます。"
   },
   "outcome": {
     "pr_created": "PR ができました。次はレビューです。",
+    "merged": "aifactory が PR #{pr} を {base} へ自動マージしました（完了）。",
+    "merged_nopr": "aifactory がこの run の PR を {base} へ自動マージしました（完了）。",
+    "automerge_skipped": "自動マージはしませんでした: {why}。PR は開いたままです。",
     "loop_limit": "工程 {step} が {n} 回続けて通らず、人間待ちになりました。",
     "step_failed": "工程 {step} で止まりました。",
     "step_timeout": "工程 {step} が時間上限 {n} 分で中断されました。コミット済みの分は wip ブランチに残っています。",
