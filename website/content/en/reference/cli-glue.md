@@ -52,7 +52,7 @@ The output of `kb new` (id and body path). With `--dry-run`, the JSON.
 ## dispatch
 
 ```
-dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [minutes]]
+dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [minutes]] [--resume-paused]
 ```
 
 | Argument | Meaning |
@@ -62,6 +62,7 @@ dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [minutes]]
 | `--max N` | Up to N tickets (default unlimited) |
 | `--dry-run` | `kb run --dry-run`. No VM, no state change |
 | `--wait [minutes]` | Do not skip a project whose pool is full; let `kb run --wait <minutes>` wait for a free VM (minutes; 60 when the value is omitted) |
+| `--resume-paused` | Only tickets paused by the Claude usage limit (`kb resumable`): those whose reset time has passed are continued with `kb run <id> --from`. Other todos are left alone. The control plane's `aifactory-resume.timer` calls this every 5 minutes (ADR-0043) |
 
 ### Behaviour
 
@@ -85,6 +86,7 @@ flowchart TD
 - Pool size is `POOL_PER_PJ = 3` (match the number created with `40-pool.sh`)
 - `--dry-run` skips the pool check
 - `--wait` skips it too. Waiting happens in one place, the runner (`kb run --wait` → `workflow/bin/run --wait`; ADR-0031). A ticket that runs out of time goes back to `todo`, so the next `dispatch` can pick it up again
+- A ticket paused by the Claude usage limit (the runner left `failure: quota`, kb put it back to `todo`) is skipped until its reset time (`retry_after`) has passed, and after that it is **continued** with `kb run <id> --from` (recorded wip branch and step) rather than started over. `--resume-paused` handles only these (ADR-0043)
 
 ### Output
 
@@ -96,6 +98,8 @@ The same lines on standard output and in `workspace/logs/dispatch.log`.
 [run kumitate/204 …]
 [dispatch] end   204 kumitate bug rc=0 status=review 1830s
 [dispatch] 205 myapp bug: no project.yml → blocked
+[dispatch] 206 kumitate: 利用枠切れで一時停止中（2026-09-09T15:00:00+09:00 以降に続きを回す）→ 飛ばす
+[dispatch] start 207 kumitate feature empty-state copy… [続き: implement から origin/sandbox/207-feature-wip・利用枠切れ 1 回目]
 [dispatch] no todo left (or all skipped). exit
 ```
 

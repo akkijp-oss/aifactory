@@ -1,0 +1,10 @@
+[Unit]
+Description=aifactory: look for runs paused by the usage limit every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=aifactory-resume.service
+
+[Install]
+WantedBy=timers.target

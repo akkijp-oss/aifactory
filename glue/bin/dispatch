@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """glue/bin/dispatch: kanban の todo を順に取り出して workflow を回す（配車。ただのコード、エージェント不在）。
 
-  glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]]
+  glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]] [--resume-paused]
 
 - `kb next --json [--pj P]` で最も古い todo を 1 件取り、`kb run <id>` を呼ぶ。終わったら次を取る。todo が無くなれば終了
+- 鍵の利用枠切れで一時停止中のチケット（`kb resumable`。runner が todo に戻したもの）は、解除時刻を過ぎていれば `kb run <id> --from`
+  で**続きから**回し、過ぎていなければ飛ばす（初めからやり直さない。チケット 380 / ADR-0043）
+- `--resume-paused` は一時停止中のチケット**だけ**を対象にする（他の todo には手を付けない）。制御系の systemd timer
+  `aifactory-resume.timer` が 5 分ごとにこれを呼び、解除時刻を過ぎた続きを人手なしで回す。回すものが無ければ何もせず終わる
 - 種別（kind）は kanban が持っているので、ここでの判断は「回せるか」だけ:
     - PJ に `project.yml` が無い（$AIFACTORY_WORKSPACE/projects/<pj>/ にも examples/projects/<pj>/ にも）→ `kb block`（メモに理由）して次へ
     - その PJ のプールが全部貸出中（sandbox の state.json。SANDBOX_POOL_PER_PJ 台、既定 3）→ その PJ は飛ばして次の PJ の todo を探す。全部詰まっていたら終了
@@ -47,6 +51,13 @@ def next_ticket(pj=None, skip=()):
 SANDBOX_STATE = pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.home() / ".config" / "sandbox" / "state.json"))
 
 
+def resumable(pj=None):
+    """利用枠切れで一時停止中のチケット（id → 続きを回すのに要る事実と ready）。正本は kb（台帳 + run の state.json）"""
+    cmd = [str(KB), "resumable", "--json"] + (["--pj", pj] if pj else [])
+    try: return {int(p["id"]): p for p in json.loads(sh(cmd).stdout or "[]")}
+    except (ValueError, KeyError, TypeError): return {}
+
+
 def lent_per_pj():
     """貸出中の台数を PJ ごとに。正本は sandbox CLI の state.json（take / release が書く）。VM 名の接頭辞に依存しない（テナントごとに違う。ADR-0017）"""
     out = {}
@@ -61,13 +72,32 @@ def main():
     ap = argparse.ArgumentParser(prog="dispatch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pj"); ap.add_argument("--once", action="store_true"); ap.add_argument("--max", type=int, default=0); ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--wait", nargs="?", type=float, const=60, help="プールが満杯の PJ を飛ばさず、空くまで待つ上限（分。既定 60）")
+    ap.add_argument("--resume-paused", action="store_true", help="鍵の利用枠切れで一時停止中のチケットだけを、解除時刻を過ぎたものから続きで回す（timer 用）")
     a = ap.parse_args()
     limit = 1 if a.once else (a.max or 10**9)
     done = 0; skip = set(); busy_pj = set()
+    paused = resumable(a.pj)
+    if a.resume_paused:
+        # 解除時刻を過ぎたものだけ（古い順）。回数超過は kb が blocked にしているはずだが、ここでも回さない
+        queue = [p for p in sorted(paused.values(), key=lambda p: p["id"]) if p["ready"] and not p["hits_exceeded"]]
+        if not queue:
+            waiting = [p for p in paused.values() if not p["ready"]]
+            print("[dispatch] 一時停止中で今回せるものは無い" + (f"（待ち {len(waiting)} 件: " + ", ".join(f"{p['id']}→{p['until']}" for p in waiting) + "）" if waiting else ""), flush=True)
+            return 0
     while done < limit:
-        t = next_ticket(a.pj, skip)
-        if not t: log("todo が無い（または全部飛ばした）。終了"); break
+        if a.resume_paused:
+            t = next((p for p in queue if p["id"] not in skip), None)
+            if not t: log("一時停止中で回せるものが無くなった。終了"); break
+        else:
+            t = next_ticket(a.pj, skip)
+            if not t: log("todo が無い（または全部飛ばした）。終了"); break
         tid, pj = t["id"], t["pj"]
+        plan = paused.get(tid)
+        # 利用枠切れで一時停止中のチケットは、解除時刻を過ぎるまで回さない（回しても同じ所で止まり VM を取り直すだけ。380）
+        if plan and not plan["ready"]:
+            log(f"{tid} {pj}: 利用枠切れで一時停止中（{plan['until']} 以降に続きを回す）→ 飛ばす"); skip.add(tid); continue
+        if plan and plan["hits_exceeded"]:
+            log(f"{tid} {pj}: 利用枠切れが {plan['quota_hits']} 回続いている → 自動では回さない"); skip.add(tid); continue
         pd = paths.project_dir(pj)
         if not (pd and (pd / "project.yml").exists()):
             sh([str(KB), "block", str(tid), "--note", f"dispatch: {pj} に project.yml が無く runner を回せない"])
@@ -85,9 +115,11 @@ def main():
         if not a.dry_run and not a.wait and pj in busy_pj: skip.add(tid); continue
         if not a.dry_run and not a.wait and lent_per_pj().get(pj, 0) >= POOL_PER_PJ:
             log(f"{tid} {pj}: プール {POOL_PER_PJ} 台すべて貸出中 → この PJ は飛ばす"); busy_pj.add(pj); skip.add(tid); continue
-        log(f"start {tid} {pj} {t['kind']} {t['title'][:50]}{' (dry-run)' if a.dry_run else ''}")
+        cont = ["--from"] if plan else []           # 続きから（記録の resume_step と wip ブランチ。kb run --from）
+        log(f"start {tid} {pj} {t['kind']} {t['title'][:50]}{' (dry-run)' if a.dry_run else ''}"
+            + (f" [続き: {plan['step']} から origin/{plan['branch']}・利用枠切れ {plan['quota_hits']} 回目]" if plan else ""))
         t0 = time.time()
-        rc = subprocess.run([str(KB), "run", str(tid)] + (["--dry-run"] if a.dry_run else [])
+        rc = subprocess.run([str(KB), "run", str(tid)] + cont + (["--dry-run"] if a.dry_run else [])
                             + (["--wait", str(a.wait)] if a.wait and not a.dry_run else [])).returncode
         status = next((l.split(None, 2)[1] for l in sh([str(KB), "show", str(tid)]).stdout.splitlines() if l.startswith("status")), "?")
         log(f"end   {tid} {pj} {t['kind']} rc={rc} status={status} {int(time.time() - t0)}s")
