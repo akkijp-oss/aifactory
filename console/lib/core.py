@@ -715,6 +715,56 @@ class JobStore:
                 meta.update({"state": "ended", "finished": now(), "note": "終了を pid の消滅で検知（終了コード不明）。kb run なら run の state.json と kb の状態が正"}); cls.save(meta)
 
 
+# ---------- 枠組みの checkout（ctl の ~/aifactory）が origin と食い違っていないか
+REPO_STATUS_TTL = 30            # overview は 5 秒ごとに来る。git は 30 秒に 1 回だけ呼ぶ
+_repo_status_cache = {}
+
+
+def _git_out(path, *args):
+    """git を読むだけで呼ぶ。戻り: (rc, stdout)。git が無い・checkout でない・応答が無いときも例外にしない"""
+    try:
+        r = subprocess.run(["git", *args], cwd=str(path), text=True, capture_output=True, errors="replace", timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return r.returncode, r.stdout.strip()
+
+
+def repo_status(path=None, ttl=REPO_STATUS_TTL):
+    """この checkout（runner と console が動いている枠組みそのもの）が origin と食い違っていないか（チケット 337）。
+
+    runner は PJ 定義（examples/projects/<pj>/ の project.yml / gates.sh / provision.sh）を作業ツリーから
+    直接読むので、ctl で直して push していない変更はそのまま本番の挙動になる。origin と食い違ったまま
+    動いていることに気づけるように、ahead / behind / 汚れ を overview に添える。判定はここ 1 か所（ADR-0015）。
+
+    - 網は触らない（fetch しない）。behind は最後に fetch した時点との差
+    - git が無い・checkout でないときは known=False（分からない。警告も出さない）
+    - 上流が無いとき（detached や追跡なし）は ahead / behind は None。detached=True で分かる
+    """
+    p = pathlib.Path(path or REPO)
+    key = str(p)
+    hit = _repo_status_cache.get(key)
+    if hit and (time.monotonic() - hit[0]) < ttl: return hit[1]
+    d = {"path": key, "known": False, "branch": None, "upstream": None, "detached": False,
+         "ahead": None, "behind": None, "dirty": 0, "diverged": False}
+    rc, top = _git_out(p, "rev-parse", "--show-toplevel")
+    if rc == 0 and top:
+        d["known"] = True
+        _, branch = _git_out(p, "rev-parse", "--abbrev-ref", "HEAD")
+        d["detached"] = branch == "HEAD"
+        d["branch"] = None if d["detached"] else (branch or None)
+        rc, up = _git_out(p, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+        if rc == 0 and up:
+            d["upstream"] = up
+            rc, counts = _git_out(p, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+            n = counts.split()
+            if rc == 0 and len(n) == 2: d["ahead"], d["behind"] = int(n[0]), int(n[1])
+        rc, dirty = _git_out(p, "status", "--porcelain")
+        if rc == 0: d["dirty"] = len([l for l in dirty.splitlines() if l.strip()])
+        d["diverged"] = bool(d["ahead"] or d["behind"] or d["dirty"])
+    _repo_status_cache[key] = (time.monotonic(), d)
+    return d
+
+
 # ---------- overview
 def overview(pj=None, limit=6):
     """概況。pj を渡すと run の一覧だけその PJ に絞る（上限を掛ける前に絞る。7 本以上動いていても選んだ PJ の run が漏れない）。
@@ -737,7 +787,9 @@ def overview(pj=None, limit=6):
             "runs_abandoned": {"n": len(abandoned), "runs": abandoned[:limit]},
             "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
             "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
-            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(), "now": now(), "tz": tz_info()}
+            "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(),
+            "repo": repo_status(),                                                # PJ 定義を読む checkout が origin と食い違っていないか（337）
+            "now": now(), "tz": tz_info()}
 
 
 
