@@ -6,6 +6,10 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 cd "${SANDBOX_APP_DIR:-$HOME/app/apps/kumitate}"
 mkdir -p "$HOME/gates"; rc=0
 gate() { local name=$1; shift; if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi; }
+# ★2026-09-09: VM テンプレートは provision 時点の migration で固定され、各 run はそこへ戻る。
+#   develop に migration が入ると packages/db の実DBテストが列不在で全滅する(#288/#290/#293 で実事故)。
+#   加法 migration を当ててからテストする(冪等・数秒)。
+gate db-migrate pnpm --filter @kumitate/db db:migrate
 gate tokens-check pnpm tokens:check
 gate typecheck pnpm --filter @kumitate/dsl --filter @kumitate/db --filter @kumitate/generate --filter @kumitate/web --filter @kumitate/marketing typecheck
 gate lint-web pnpm --filter @kumitate/web lint
