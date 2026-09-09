@@ -19,7 +19,7 @@ const T = {
     "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
     "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
-    "keyAdd": "鍵を足す", "keyRemove": "削除する", "keyToken": "値を差し替える",
+    "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
@@ -29,7 +29,7 @@ const T = {
     "outcome": "結果", "artifacts": "成果物", "stepLogs": "工程のログ", "otherFiles": "その他のファイル（{n} 件）",
     "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "attachments": "添付", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
-    "keys": "鍵プール", "keyAdd": "鍵を足す",
+    "keys": "登録してある鍵", "keyAdd": "鍵を登録する",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
     "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道", "rawLog": "元のログを見る",
     "byModel": "モデル別", "byStep": "工程別（工程 × モデル）", "byDay": "日別", "byPj": "PJ 別", "topSteps": "費用換算の高い工程（上位 20）", "howToRead": "読み方"
@@ -43,8 +43,8 @@ const T = {
     "poolDefined": "定義", "poolActual": "実体", "free": "空き",
     "model": "モデル", "steps": "工程数", "turns": "ターン", "avgTurns": "平均ターン", "avgMin": "平均分", "input": "入力", "cacheWrite": "キャッシュ書込", "cacheRead": "キャッシュ読出", "output": "出力",
     "cost": "費用換算", "avgCost": "1 工程あたり", "thinking": "thinking", "tools": "ツール呼出", "date": "日付", "minutes": "分", "log": "ログ",
-    "keys": "鍵", "keyFable": "fable", "keyOther": "fable 以外", "keyEnabled": "使う", "keyTail": "末尾",
-    "issued": "発行", "lastUsed": "最終利用", "uses": "回数", "keyInUse": "使っているチケット"
+    "keys": "鍵", "keyFable": "Fable に使う", "keyOther": "Opus・Sonnet に使う", "keyEnabled": "有効", "keyTail": "トークンの末尾",
+    "issued": "登録日", "lastUsed": "最後に使った日時", "uses": "使用回数", "keyInUse": "使用中のチケット"
   },
 
   "label": {
@@ -62,8 +62,10 @@ const T = {
     "runsAll": "dry-run と退避分（-attemptN）も見る", "fetching": "取得中", "vacant": "空き",
     "tid": "チケット番号", "tidPlaceholder": "205 のように", "logSrc": "種類", "allLogSrc": "すべて",
     "period": "期間", "includeDry": "dry-run も含める",
-    "keyName": "名前（英数字と . _ - の 1〜40 文字）", "keyNamePlaceholder": "fable-main のように",
-    "keyToken": "トークン（保存したあとは表示しません）", "keyAllowFable": "fable に使う", "keyAllowOther": "fable 以外に使う"
+    "keyName": "名前（この画面と記録に出る呼び名。英数字と . _ - で 40 文字まで）", "keyNamePlaceholder": "例: max-akki、team-fable",
+    "keyNote": "メモ（誰の契約か、どのプランか、など）", "keyNotePlaceholder": "例: akki の Max プラン",
+    "keyToken": "トークン（claude setup-token で表示される、sk-ant-oat01- で始まる文字列。登録後は表示しません）",
+    "keyAllowFable": "Fable に使う（計画・設計・レビューの工程）", "keyAllowOther": "Opus・Sonnet・Haiku に使う（実装・調査の工程）"
   },
 
   "stats": {
@@ -72,6 +74,8 @@ const T = {
     "thinkingCell": "{n} 回", "thinkingVisible": "本文あり {v} 回 / {c} 字", "visibleChars": "見える文字 {c}", "share": "全体の {p}", "maxOf": "最大 {cost}", "noResult": "result なし {n}", "rateLimited": "利用枠で拒否 {n}",
     "scope": "{sel} 工程（記録は全部で {all}）"
   },
+
+  "keys": { "count": "{n} 本", "never": "まだ使っていません" },
 
   "sub": {
     "stats": "agent の工程ごとに、ターン・トークン・thinking・時間・費用換算を実行記録から集めます。まず、どこで消費しているかを知るための画面です。",
@@ -83,7 +87,7 @@ const T = {
     "jobs": "この画面から押した起票・実行・配車・返却の 1 回ごとの記録です。出力と終了コードをここから読めます。記録は console/jobs/ に残ります。",
     "logs": "起票と配車の記録です。チケット番号や PJ で絞り込めます。番号を押すとチケットへ移れます。原文は下の「元のログを見る」で読めます。",
     "config": "読むだけの画面です。変えるときはファイルを編集してください。",
-    "keys": "Claude の鍵をここに並べておくと、VM を貸し出すときに系統ごとに 1 本ずつ選んで渡します。合う鍵が無い系統は、これまでどおり設定ファイルの鍵を使います。"
+    "keys": "Claude のトークン（claude setup-token で作る長期トークン）を「鍵」として登録しておく場所です。チケットを実行するとき、ここから鍵を 1 本選んで VM に渡します。鍵を何本か登録しておくと、利用枠の消費を分散できます。"
   },
 
   "board": {
@@ -207,7 +211,7 @@ const T = {
     "jobs": "まだありません。起票・実行・配車・返却を押すと、ここに出ます。",
     "jobLog": "まだ出力がありません。数秒お待ちください。",
     "lent": "貸出中の VM はありません。",
-    "keys": "まだ鍵がありません。下の「鍵を足す」で登録すると、次の貸出から使われます。",
+    "keys": "まだ鍵が登録されていません。下の欄で登録すると、次に VM を借りる run から使われます。",
     "ls": "「一覧を取り直す」を押すと、Proxmox の VM 一覧をここに出します。",
     "lsVms": "プールの VM が 1 台もありませんでした。ジョブの記録で出力を確かめてください。",
     "log": "空です。",
@@ -247,11 +251,13 @@ const T = {
     "pjPoolMore": "空きは実体から貸出を引いた数です。snapshot clean の無い VM は一覧からは分からないので、空きに数えたまま貸出で飛ばされることがあります。",
     "pjPoolYml": "project.yml が無い PJ は起票できますが、配車すると人間待ちになります。トークンはファイルの有無だけを見ています（中身は表示しません）。",
     "kindUnknown": "種別 {kind} に合う workflow がありません。使える種別を選んで保存してください。",
-    "keys": "有効でフラグの合う鍵のうち、最後に使ってから最も時間が経ったものを系統ごとに選びます。同じチケットの再注入では同じ鍵を使い続けます。",
-    "keysFallback": "候補が 1 本も無い系統は、これまでどおり PJ と全体の設定ファイルの鍵を使います。",
-    "keysSecret": "トークンの値はどこにも表示しません。ここに出るのは末尾 4 文字だけです。",
-    "keysDisable": "使わないようにすると、その鍵を使っている貸出に再注入のジョブを起こします。動いている claude はそのままで、次の起動から別の鍵になります。",
-    "keysFile": "置き場:",
+    "keysHow": "鍵ごとに、どのモデルに使うかをチェックで決めます。Fable は計画・設計・レビューの工程で、Opus・Sonnet は実装・調査の工程で使うモデルです。両方にチェックを付けた鍵は、どちらにも使われます。",
+    "keys": "チケットを実行するとき、モデルごとに、有効でチェックの合う鍵の中から「最後に使ってから一番時間が経っている鍵」を選びます。使用量が特定の鍵に偏らないようにするためです。",
+    "keysSameTask": "実行中のチケットの鍵が途中で変わることはありません。同じチケットを回し直すときも、前と同じ鍵を優先します。",
+    "keysFallback": "合う鍵がここに 1 本もなければ、これまでどおり設定ファイルの鍵（sandbox token set で保存したもの）を使います。",
+    "keysSecret": "トークンの値はこの画面にも記録にも出しません。見えるのは末尾 4 文字だけです。",
+    "keysDisable": "「有効」を外すか削除すると、その鍵を使っている実行中の VM に別の鍵を入れ直します。動いている工程はそのまま終わり、次の工程から別の鍵に切り替わります。",
+    "keysFile": "保存先:",
     "keysError": "鍵の一覧を読めませんでした。制御系の keys.json を確かめてください。",
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",
@@ -274,10 +280,10 @@ const T = {
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
     "draftRestored": "前回の下書きを復元しました。",
     "draftCleared": "下書きを捨てました。",
-    "keyAdded": "鍵 {name} を足しました。",
+    "keyAdded": "鍵 {name} を登録しました。次に VM を借りる run から使われます。",
     "keySaved": "鍵 {name} を保存しました。",
     "keyRemoved": "鍵 {name} を削除しました。",
-    "keyReinject": "再注入のジョブを {n} 件起こしました。"
+    "keyReinject": "実行中の VM {n} 台に別の鍵を入れ直すジョブを起こしました。"
   },
 
   "err": {
@@ -290,8 +296,8 @@ const T = {
     "emptyRequest": "依頼文が空です。取り込む文章を入れてください。",
     "needTitle": "題名を入れてください。",
     "needKeyName": "鍵の名前を入れてください。",
-    "needKeyToken": "トークンを入れてください。",
-    "needKeyFlag": "「fable に使う」と「fable 以外に使う」のどちらかを選んでください。",
+    "needKeyToken": "トークンを入れてください。claude setup-token で表示される文字列です。",
+    "needKeyFlag": "「Fable に使う」と「Opus・Sonnet・Haiku に使う」の少なくとも片方にチェックを付けてください。",
     "attachFailedAfterNew": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。"
   },
 
@@ -329,18 +335,18 @@ const T = {
     },
     "keyRemove": {
       "title": "鍵 {name} を削除する",
-      "body": "この鍵をプールから消します。トークンの値は元に戻せません。",
-      "inUse": "この鍵はチケット {tasks} が使っています。削除すると、そのチケットに再注入のジョブを起こし、次の起動から別の鍵になります。",
+      "body": "この鍵を一覧から消します。トークンの値は取り出せないので、元に戻せません。",
+      "inUse": "この鍵はチケット {tasks} の VM で使用中です。削除すると、その VM に別の鍵を入れ直します。動いている工程はそのまま終わり、次の工程から別の鍵に切り替わります。",
       "ok": "削除する"
     },
     "keyToken": {
-      "title": "鍵 {name} の値を差し替える",
-      "body": "新しいトークンに入れ替えます。前の値には戻せません。貸出中の VM には、再注入をするまで前の値が残ります。",
-      "ok": "差し替える"
+      "title": "鍵 {name} のトークンを入れ替える",
+      "body": "名前はそのままで、トークンだけを新しいものに入れ替えます。前の値には戻せません。実行中の VM は、次に鍵を入れ直すまで前の値のまま動きます。",
+      "ok": "入れ替える"
     },
     "keyDisable": {
       "title": "鍵 {name} を使わないようにする",
-      "body": "この鍵はチケット {tasks} が使っています。再注入のジョブを起こし、次の起動から別の鍵になります。",
+      "body": "この鍵はチケット {tasks} の VM で使用中です。有効を外すと、その VM に別の鍵を入れ直します。動いている工程はそのまま終わり、次の工程から別の鍵に切り替わります。",
       "ok": "使わないようにする"
     },
     "detach": {

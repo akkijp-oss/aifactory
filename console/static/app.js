@@ -557,19 +557,20 @@ async function viewKeys() {
   const rows = d.keys.map(k => `<tr><td class="mono">${esc(k.name)}${k.note ? `<div class="help">${esc(k.note)}</div>` : ''}</td>
       <td>${flag(k, 'fable')}</td><td>${flag(k, 'other')}</td>
       <td><input type="checkbox" data-act="key-enabled" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}" ${k.enabled ? 'checked' : ''} aria-label="${esc(T.th.keyEnabled)}"></td>
-      <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_used ? `${fmtT(k.last_used)}（${esc(since(k.last_used))}）` : ''}</td><td>${k.uses}</td>
+      <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_used ? `${fmtT(k.last_used)}（${esc(since(k.last_used))}）` : `<span class="help">${esc(T.keys.never)}</span>`}</td><td>${k.uses}</td>
       <td>${k.in_use.map(x => `<a href="#/ticket/${esc(x)}" class="mono">${esc(x)}</a>`).join('、')}</td>
-      <td><button data-act="key-token" data-name="${esc(k.name)}">${esc(T.btn.keyToken)}</button>
+      <td class="nw"><button data-act="key-token" data-name="${esc(k.name)}">${esc(T.btn.keyToken)}</button>
         <button class="danger" data-act="key-rm" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}">${esc(T.btn.keyRemove)}</button></td></tr>`).join('');
   render(head(esc(T.nav.keys), T.sub.keys) + `
-    <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.sandbox.count, { n: d.keys.length }))}</small></h2>
+    <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.keys.count, { n: d.keys.length }))}</small></h2>
       ${d.error ? `<div class="err">${esc(T.help.keysError)}</div>` : ''}
-      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.keyFable)}</th><th>${esc(T.th.keyOther)}</th><th>${esc(T.th.keyEnabled)}</th><th>${esc(T.th.keyTail)}</th><th>${esc(T.th.issued)}</th><th>${esc(T.th.lastUsed)}</th><th>${esc(T.th.uses)}</th><th>${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
-      <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
+      <div class="help">${esc(T.help.keysHow)}</div>
+      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastUsed)}</th><th class="nw">${esc(T.th.uses)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
+      <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysSameTask)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
       <div class="help">${esc(T.help.keysFile)} <span class="mono">${esc(d.keys_file)}</span></div></div>
     <div class="panel"><h2>${esc(T.h.keyAdd)}<small>sandbox keys add</small></h2>
       <div class="row"><label class="field">${esc(T.label.keyName)}<input type="text" id="key-name" autocomplete="off" placeholder="${esc(T.label.keyNamePlaceholder)}"></label>
-        <label class="field">${esc(T.label.note)}<input type="text" id="key-note" autocomplete="off" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+        <label class="field">${esc(T.label.keyNote)}<input type="text" id="key-note" autocomplete="off" placeholder="${esc(T.label.keyNotePlaceholder)}"></label></div>
       <div class="field"><label for="key-token">${esc(T.label.keyToken)}</label><input type="password" id="key-token" autocomplete="new-password"></div>
       <div class="row"><label class="help check"><input type="checkbox" id="key-fable"> ${esc(T.label.keyAllowFable)}</label>
         <label class="help check"><input type="checkbox" id="key-other"> ${esc(T.label.keyAllowOther)}</label></div>
