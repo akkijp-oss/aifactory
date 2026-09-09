@@ -286,6 +286,16 @@ class RunnerAttachmentsTest(unittest.TestCase):
         r.release = lambda: None
         r.refresh_token = lambda: None
         r.scp_to = lambda local, remote: shutil.copy(str(local), str(remote))
+        # 本物の scp と同じ約束で偽装する: 宛先はディレクトリで、名前はローカルの basename がそのまま付く
+        # （宛先に名前を書く実装に戻ると self.scp_dests の assert で落ちる）
+        self.scp_dests = []
+
+        def scp_files_to(locals, remote_dir):
+            self.scp_dests.append(str(remote_dir))
+            for p in locals:
+                shutil.copy(str(p), os.path.join(str(remote_dir), os.path.basename(str(p))))
+
+        r.scp_files_to = scp_files_to
         self.work = work
         return r
 
@@ -303,6 +313,19 @@ class RunnerAttachmentsTest(unittest.TestCase):
         state = json.loads((r.run_dir / "state.json").read_text(encoding="utf-8"))
         self.assertEqual([a["name"] for a in state["attachments"]], ["shot.png", "spec.pdf"])
         self.assertEqual(state["attachments"][0]["type"], "image/png")
+
+    def test_names_with_spaces_and_japanese_arrive_unchanged(self):
+        """scp の宛先に利用者由来の名前を書かないこと（書くと OpenSSH 9 以降の既定＝SFTP で
+        quote した記号がそのまま名前になり、逆に quote しないとレガシーで空白入りが壊れる。353 のレビュー指摘）"""
+        self.fake_take()
+        for n in ("画面 1.png", "a b.png", "plain.png"):
+            self.attach(955, n)
+        r = self.build(955)
+        r.take()
+        self.assertEqual(sorted(p.name for p in (self.work / "attachments").iterdir()),
+                         ["a b.png", "plain.png", "画面 1.png"])
+        self.assertEqual(self.scp_dests, [f"{r.work}/attachments/"])   # 宛先はディレクトリだけ
+        self.assertIn("画面 1.png", self.prompt_of(r))
 
     def test_the_prompt_points_at_the_attachments(self):
         self.fake_take()

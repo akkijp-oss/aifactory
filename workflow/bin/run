@@ -302,8 +302,7 @@ class Run:
         if not self.dry:
             self.sb(f"mkdir -p {self.work}/attachments")
             d = attachments.dir_for(self.task)
-            for it in items:
-                self.scp_to(d / it["name"], f"{self.work}/attachments/{shlex.quote(it['name'])}")
+            self.scp_files_to([d / it["name"] for it in items], f"{self.work}/attachments/")
         self.state["attachments"] = [{"name": it["name"], "size": it["size"], "type": it["type"]} for it in items]
         self.save()
         self.log(f"チケットの添付 {len(items)} 件: " + ", ".join(it["name"] for it in items))
@@ -341,6 +340,15 @@ class Run:
     def scp_to(self, local, remote):
         if self.dry: return
         sh(["scp", *self.scp_opts(), str(local), f"dev@{self.vm_ip()}:{remote}"])
+    def scp_files_to(self, locals, remote_dir):
+        """ファイルを 1 回の scp でディレクトリへ置く。**宛先にファイル名を書かない**（名前は scp の protocol で運ばれる）。
+
+        利用者が付けた名前（日本語・空白入り）を宛先パスに書くと、どちらのモードでも安全にできない:
+        OpenSSH 9 以降の既定（SFTP）は宛先をリモートシェルに通さないので quote した記号がそのまま名前になり、
+        レガシー（`-O` / OpenSSH 8 以前）は逆にシェルを通すので quote しないと空白で切れる。
+        宛先をディレクトリに固定すれば、宛先に利用者由来の文字列が入らずどちらでも名前が保たれる"""
+        if self.dry or not locals: return
+        sh(["scp", *self.scp_opts(), *[str(p) for p in locals], f"dev@{self.vm_ip()}:{remote_dir}"])
 
     def run_remote(self, cmd, log_path, render=None, timeout=3600):
         return stream(["sandbox", "ssh", self.task, cmd], log_path, render=render)
