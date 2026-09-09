@@ -255,8 +255,11 @@ class Store:
         return {"ack": seq}
 
     def complete(self, worker, operation, result):
-        if not isinstance(result, dict) or set(result) != {"status", "exit_code", "events"}:
+        # "truncated" is optional so an older worker's result stays valid.
+        if not isinstance(result, dict) or set(result) - {"truncated"} != {"status", "exit_code", "events"}:
             raise Error("invalid result")
+        if "truncated" in result and type(result["truncated"]) is not bool:
+            raise Error("invalid truncation flag")
         if result["status"] not in ("succeeded", "failed", "uncertain", "cancelled"):
             raise Error("invalid result status")
         if type(result["events"]) is not int or result["events"] < 0:

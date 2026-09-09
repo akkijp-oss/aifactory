@@ -76,6 +76,16 @@ class QueueTest(unittest.TestCase):
         with self.assertRaises(Error): self.store.complete("mac1", op, {**result, "status": "failed"})
         self.assertEqual(self.store.operation(op)["state"], "succeeded")
 
+    def test_truncated_result_is_accepted_and_unknown_keys_are_not(self):
+        op = self.submit()
+        self.store.complete("mac1", op, {"status": "succeeded", "exit_code": 0, "events": 0, "truncated": True})
+        self.assertEqual(self.store.operation(op)["state"], "succeeded")
+        other = self.submit()
+        with self.assertRaises(Error):
+            self.store.complete("mac1", other, {"status": "succeeded", "exit_code": 0, "events": 0, "truncated": "yes"})
+        with self.assertRaises(Error):
+            self.store.complete("mac1", other, {"status": "succeeded", "exit_code": 0, "events": 0, "surprise": 1})
+
     def test_uncertain_reserves_worker_until_operator_resolution(self):
         op = self.submit()
         self.store.complete("mac1", op, {"status": "uncertain", "exit_code": None, "events": 0})

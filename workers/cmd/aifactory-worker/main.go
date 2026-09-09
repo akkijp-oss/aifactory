@@ -27,9 +27,35 @@ import (
 )
 
 const maxLog = 16 * 1024 * 1024
-const version = "0.3.0"
+const maxLogChunk = 16384
+
+// Output without a newline cannot buffer forever; beyond this the line is written as it is.
+const maxPendingLine = 8 * 1024 * 1024
+const truncationNotice = "\n[operation log truncated at 16 MiB; later output was discarded]\n"
+const version = "0.3.1"
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// A screenshot tool_result carries roughly a megabyte of base64 per stream-json line, which
+// alone exhausts the log quota. The image stays on the guest as a file, so the log only needs
+// its size. Matching leaves the line valid JSON, which the runner's renderer relies on.
+// 1000 is the largest repeat count Go's regexp accepts; 750 decoded bytes is already far
+// beyond any ordinary field, and a false positive only costs a payload the guest still has.
+var base64DataRE = regexp.MustCompile(`"data":"[A-Za-z0-9+/]{1000,}={0,2}"`)
+
+func stripBase64Data(text string) string {
+	if !strings.Contains(text, `"type":"base64"`) {
+		return text
+	}
+	return base64DataRE.ReplaceAllStringFunc(text, func(m string) string {
+		encoded := m[len(`"data":"`) : len(m)-1]
+		size := len(encoded) / 4 * 3
+		for i := len(encoded) - 1; i >= 0 && encoded[i] == '='; i-- {
+			size--
+		}
+		return fmt.Sprintf(`"data":"[image %d bytes]"`, size)
+	})
+}
 
 type config struct {
 	Worker           string `json:"worker"`
@@ -59,9 +85,10 @@ type operation struct {
 }
 
 type result struct {
-	Status   string `json:"status"`
-	ExitCode *int   `json:"exit_code"`
-	Events   int    `json:"events"`
+	Status    string `json:"status"`
+	ExitCode  *int   `json:"exit_code"`
+	Events    int    `json:"events"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // Journal files are fsynced before publication. A start marker without a result
@@ -156,61 +183,103 @@ type logWriter struct {
 	id        string
 	seq, size int
 	pending   []byte
+	truncated bool
 }
 
+// Write buffers whole lines so that a stream-json event is rewritten as a unit, then hands
+// them to emit. Reaching the log quota truncates rather than failing: returning an error here
+// breaks the pipe to tart exec, which leaves the guest command running with nowhere to write
+// and forces the operation to uncertain even though its exit code is still obtainable.
 func (w *logWriter) Write(b []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	n := len(b)
+	if w.truncated {
+		return n, nil
+	}
 	w.pending = append(w.pending, b...)
-	for len(w.pending) > 0 {
-		end := min(len(w.pending), 16384)
-		// Walk complete runes, preserving a split suffix for the next write.
-		complete := 0
-		for complete < end {
-			if !utf8.FullRune(w.pending[complete:end]) {
+	// pending never retains a newline, so only the bytes just appended can complete a line.
+	cut := -1
+	if i := bytes.LastIndexByte(b, '\n'); i >= 0 {
+		cut = len(w.pending) - len(b) + i + 1
+	}
+	if cut < 0 {
+		if len(w.pending) < maxPendingLine {
+			return n, nil
+		}
+		cut = len(w.pending)
+		// A forced cut must not split a multi-byte character.
+		for i := 1; i < utf8.UTFMax && i < cut; i++ {
+			if utf8.RuneStart(w.pending[cut-i]) {
+				if !utf8.FullRune(w.pending[cut-i:]) {
+					cut -= i
+				}
 				break
 			}
-			_, size := utf8.DecodeRune(w.pending[complete:end])
+		}
+	}
+	ready := string(w.pending[:cut])
+	w.pending = append(w.pending[:0], w.pending[cut:]...)
+	return n, w.emit(ready)
+}
+
+// emit records text as events of bounded size, never splitting a character across events.
+// Only a persistence failure is an error.
+func (w *logWriter) emit(text string) error {
+	text = strings.ToValidUTF8(stripBase64Data(text), "\uFFFD")
+	for len(text) > 0 {
+		end := min(len(text), maxLogChunk)
+		// Walk complete runes so a chunk ends on a character boundary.
+		complete := 0
+		for complete < end {
+			_, size := utf8.DecodeRuneInString(text[complete:])
+			if complete+size > end {
+				break
+			}
 			complete += size
 		}
-		end = complete
-		if end == 0 {
-			break
+		if complete == 0 {
+			complete = end
 		}
-		text := strings.ToValidUTF8(string(w.pending[:end]), "�")
-		if w.size+len(text) > maxLog {
-			return 0, errors.New("operation log limit reached")
+		chunk := text[:complete]
+		// Leave room for the notice so the recorded log still fits the quota.
+		if w.size+len(chunk) > maxLog-len(truncationNotice) {
+			return w.truncate()
 		}
-		data, _ := json.Marshal(text)
+		data, _ := json.Marshal(chunk)
 		if err := writeAtomic(w.j.event(w.id, w.seq), data); err != nil {
-			return 0, err
+			return err
 		}
 		w.seq++
-		w.size += len(text)
-		w.pending = w.pending[end:]
+		w.size += len(chunk)
+		text = text[complete:]
 	}
-	return n, nil
+	return nil
+}
+
+// truncate records the quota being reached exactly once; later output is discarded.
+func (w *logWriter) truncate() error {
+	w.truncated = true
+	w.pending = nil
+	data, _ := json.Marshal(truncationNotice)
+	if err := writeAtomic(w.j.event(w.id, w.seq), data); err != nil {
+		return err
+	}
+	w.seq++
+	w.size += len(truncationNotice)
+	return nil
 }
 
 func (w *logWriter) flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.pending) == 0 {
+	if w.truncated || len(w.pending) == 0 {
+		w.pending = nil
 		return nil
 	}
-	text := strings.ToValidUTF8(string(w.pending), "�")
-	if w.size+len(text) > maxLog {
-		return errors.New("operation log limit reached")
-	}
-	b, _ := json.Marshal(text)
-	if err := writeAtomic(w.j.event(w.id, w.seq), b); err != nil {
-		return err
-	}
-	w.seq++
-	w.size += len(text)
+	text := string(w.pending)
 	w.pending = nil
-	return nil
+	return w.emit(text)
 }
 
 type worker struct {
@@ -367,9 +436,11 @@ func (w *worker) execute(ctx context.Context, op operation) {
 	r := result{Status: "uncertain"}
 	lw := &logWriter{j: w.j, id: op.ID}
 	defer func() {
+		// flush only fails when the journal cannot be written, which is genuinely uncertain.
 		if err := lw.flush(); err != nil {
 			r = result{Status: "uncertain"}
 		}
+		r.Truncated = lw.truncated
 		if err := w.j.finish(op.ID, r); err != nil {
 			log.Print("cannot persist operation result; manual recovery required")
 		}

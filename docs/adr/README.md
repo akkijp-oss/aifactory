@@ -45,3 +45,4 @@
 - [0031: VM の空き待ちは runner が 1 か所で行う／上限超過は未着手に戻す](0031-wait-for-a-free-vm-in-the-runner.md)
 - [0032: PR を作る直前に base を取り込む／`CHANGELOG` は `changelog.d` に分ける](0032-sync-base-before-pr-and-changelog-d.md)
 - [0033: 使われていないプール VM は止める。起こすのは `take` の役目](0033-stop-idle-pool-vms.md)
+- [0034: ワーカーのログ上限は切り捨てで扱う。画像の base64 は記録前に置き換える](0034-worker-log-limit-truncates-and-strips-images.md)
