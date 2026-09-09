@@ -91,6 +91,18 @@ class AttachHttpTest(unittest.TestCase):
         self.assertTrue(png["path"].endswith("attachments/%s/画面.png" % tid), png["path"])   # read_file に渡せるパス
         self.assertTrue(any(h["field"] == "attachment" and "画面.png" in (h["new"] or "") for h in d["history"]), d["history"])
 
+    def test_names_with_spaces_come_back_whole(self):
+        """入った名前は一覧の差分で取る（kb の出力を空白で割ると `画面 1.png` が `画面` に切れる）"""
+        tid = self.new_ticket()
+        st, d = self.post_form(f"/api/tickets/{tid}/attach", [("files", "画面 1.png", PNG), ("files", "手 順 書.txt", b"x")])
+        self.assertEqual(st, 200, d)
+        self.assertEqual(d["added"], ["画面 1.png", "手 順 書.txt"])
+        st, t = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(sorted(a["name"] for a in t["attachments"]), sorted(d["added"]))
+        st, d = self.http.post(f"/api/tickets/{tid}/detach", {"name": "画面 1.png"})    # 返した名前で消せる
+        self.assertEqual(st, 200, d)
+        self.assertEqual([a["name"] for a in d["attachments"]], ["手 順 書.txt"])
+
     def test_image_is_served_inline_and_other_types_are_downloaded(self):
         tid = self.new_ticket()
         self.post_form(f"/api/tickets/{tid}/attach", [("files", "図.png", PNG), ("files", "note.txt", b"hello")])

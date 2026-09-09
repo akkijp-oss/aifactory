@@ -1014,16 +1014,20 @@ def ticket_attach(tid, files):
     """files=[(名前, バイト列)] をチケットに添付する。一時ファイルに落として kb attach を 1 件ずつ呼ぶ。
        名前の締め（長さ・文字種）も大きさの上限も lib の判定をそのまま使う（数値をここに書かない）"""
     if not files: raise ApiError("添付するファイルがありません")
-    added = []
+    names = lambda: [a["name"] for a in attachments.listing(tid)]
+    added, before = [], names()
     with tempfile.TemporaryDirectory() as td:
         for name, data in files:
             p = pathlib.Path(td) / attachments.free_name(td, name)
             p.write_bytes(data)
             rc, out, err = kb("attach", tid, str(p))
+            # 入った名前は kb の出力を字句解析せず一覧の差分で取る（名前に空白があっても切れない。`-2` の付け替えも拾える）
+            after = names()
+            added += [n for n in after if n not in before]
+            before = after
             if rc != 0:
                 msg = (err or out).strip() or f"kb attach が失敗 rc={rc}"
                 raise ApiError((f"{len(added)} 件（{'、'.join(added)}）は添付できました。" if added else "") + msg)
-            added += [l.split()[1] for l in out.splitlines() if l.startswith("添付 ")]
     return {"id": int(tid), "added": added, "attachments": attachments.listing(tid)}
 
 
