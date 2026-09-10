@@ -46,7 +46,7 @@ command -v claude  >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 #   keg-only のもの（node@24 など）は入れ直さず PATH を足す。
 # 例:
 #   command -v swiftlint >/dev/null || brew install swiftlint
-#   [ -d /opt/homebrew/opt/node@24/bin ] && export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+#   if [ -d /opt/homebrew/opt/node@24/bin ]; then export PATH="/opt/homebrew/opt/node@24/bin:$PATH"; fi
 
 # ---------- 4. 確認（何がどこにあるかをログに残す）
 log "versions"

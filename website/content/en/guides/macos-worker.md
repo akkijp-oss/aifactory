@@ -167,7 +167,9 @@ command -v claude  >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 To make sure a keg-only tool is used, extend PATH instead of reinstalling it.
 
 ```bash
-[ -d /opt/homebrew/opt/node@24/bin ] && export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+if [ -d /opt/homebrew/opt/node@24/bin ]; then
+  export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+fi
 ```
 
 The template is [workers/templates/provision.macos.sh](https://github.com/akkijp-oss/aifactory/blob/main/workers/templates/provision.macos.sh); it contains the network isolation probe and those three tools only. Add project-specific steps below the marked point.
@@ -266,18 +268,11 @@ python3 workers/bin/control --db "$db" show '<operation-id>'
 
 For each worker, `list` prints `online`, `info` (`lifecycle`, `base_ready`, `network_ready`), the one unfinished `operation` if any (`queued`, `running`, or `uncertain`, with its ID), and the held `lease`. That is where the `uncertain` operation ID comes from; match it against `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` to find the run. `show` prints that operation's state, exit code, and logs.
 
-**2. Check whether the guest is alive.** Diagnostics go through the same operation queue. `--lease auto` reads the lease the worker currently holds from the database and puts it in the payload.
+**2. Check whether the guest is alive (from the Mac host).** While one `uncertain` operation remains, no new operation can be submitted to that worker. The control plane allows a worker only one unfinished operation (`queued`, `running`, or `uncertain`); a second submit is refused with HTTP 409 and `worker is busy; operation not queued` (the `one_reserved_worker` unique index in `workers/lib/pull.py`). Diagnostic `guest-exec` goes through the same queue, so it is unavailable at this point.
 
-```bash
-python3 workers/bin/control --db "$db" submit <worker> guest-exec \
-  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
-```
+An administrator checks `tart list` on the Mac host over SSH. A guest listed as `running` is alive; one that is not listed has already stopped. If the run is being wound up, finish with `tart stop <guest>` so the real state is settled.
 
-**Without the lease in the payload the operation is refused.** While a worker holds a lease, the control plane rejects any operation whose payload lease does not match it with HTTP 409 and `operation does not own worker lease` (`workers/lib/pull.py`). `--lease auto` adds nothing when no lease is held, and a lifecycle worker such as the Mac then reports `lifecycle worker requires a lease` instead. A `lease` in a payload file wins over `auto`, and an explicit `--lease <id>` overrides the payload. Payloads are stored in the database, so never put secrets in a diagnostic command.
-
-On the Mac host, an administrator checks `tart list` over SSH. If the guest is not listed, it has already stopped.
-
-**3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 5). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
+**3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 6). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
 
 - An administrator confirmed the guest's real state on the Mac (absent from `tart list`, or stopped with `tart stop`)
 - You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
@@ -289,19 +284,28 @@ python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stop
 
 `--confirmed-stopped` is required. Earlier results and logs are kept.
 
-**4. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`, and a missing or half-built guest with `Mac setup is incomplete or the guest is stopped`). A run whose lease was released in step 5 can no longer be resumed.
+**4. Look inside the guest (after `resolve`, while the lease is still held and the guest is running).** Once the reservation is free, operations can be submitted to that worker again. Diagnostics go through the same operation queue. `--lease auto` reads the lease the worker currently holds from the database and puts it in the payload.
 
-- **The guest is alive and the lease is still held** → do not go on to step 5. Leave the lease in place and continue with `kb run <id> --resume`. Resuming is only possible for a provisioning failure, before credentials, a repository, or step history exist (see "[Recovery](#recovery)").
-- **The guest is gone, or this run is being wound up** → clear the lease in step 5 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. If the board still points at a run in progress the command refuses; put the ticket back with `kb reopen <id>` first.
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-exec \
+  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
+```
 
-**5. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
+**Without the lease in the payload the operation is refused.** While a worker holds a lease, the control plane rejects any operation whose payload lease does not match it with HTTP 409 and `operation does not own worker lease` (`workers/lib/pull.py`). `--lease auto` adds nothing when no lease is held, and a lifecycle worker such as the Mac then reports `lifecycle worker requires a lease` instead. A `lease` in a payload file wins over `auto`, and an explicit `--lease <id>` overrides the payload. Payloads are stored in the database, so never put secrets in a diagnostic command.
+
+**5. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`). A run whose lease was released in step 6 can no longer be resumed.
+
+- **The guest is alive and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. A prepared guest (the clone is done and `work/ticket.md` is not empty) continues from the last step in the step history. Before that point, it can rerun provisioning only when the step history is empty and neither `$SANDBOX_APP_DIR` nor `work/runtime.env` exists yet. A guest that is neither stops the run with `Mac setup is incomplete or the guest is stopped`, so look inside it before deciding (how the step is chosen is under "[Recovery](#recovery)").
+- **The guest is gone, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. If the board still points at a run in progress the command refuses; put the ticket back with `kb reopen <id>` first.
+
+**6. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
 
 ```bash
 python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<the successful guest-release operation ID>'
 ```
 
-`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 4. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
+`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
 ## Hardware verification and limitations
 

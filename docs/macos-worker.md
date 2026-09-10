@@ -167,7 +167,9 @@ command -v claude  >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 keg-onlyのものを確実に使いたいときは、入れ直さずにPATHを足す。
 
 ```bash
-[ -d /opt/homebrew/opt/node@24/bin ] && export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+if [ -d /opt/homebrew/opt/node@24/bin ]; then
+  export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+fi
 ```
 
 雛形は [workers/templates/provision.macos.sh](../workers/templates/provision.macos.sh)。ネットワーク隔離の確認とこの3つだけが入っている。PJ固有の追加は雛形が指す位置から下に足す。
@@ -266,18 +268,11 @@ python3 workers/bin/control --db "$db" show '<operation-id>'
 
 `list` はワーカーごとに `online`、`info`（`lifecycle`・`base_ready`・`network_ready`）、未完了の `operation`（`queued` / `running` / `uncertain` のどれか1件とそのID）、保持中の `lease` を出す。`uncertain` の操作IDはここで分かる。どのrunのものかは `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` と突き合わせる。`show` はその操作の状態・exit code・ログを出す。
 
-**2. ゲストが生きているか確かめる。** 診断も同じ操作キューを通る。`--lease auto` は、そのワーカーが今持っているleaseをDBから引いてpayloadに入れる。
+**2. ゲストが生きているか確かめる（Macホスト側で）。** `uncertain` の操作が1件残っている間は、同じワーカーへ新しい操作を投げられない。制御系はワーカーごとに未完了の操作（`queued` / `running` / `uncertain`）を1件しか持てず、2件目のsubmitは409の `worker is busy; operation not queued` で断られる（`workers/lib/pull.py` の一意索引 `one_reserved_worker`）。診断の `guest-exec` も同じキューを通るので、この段階では使えない。
 
-```bash
-python3 workers/bin/control --db "$db" submit <worker> guest-exec \
-  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
-```
+管理者のSSHでMacホストの `tart list` を見る。ゲストが `running` で並んでいれば動いている。一覧に無ければ既に止まっている。止まっていないものを畳むなら `tart stop <guest>` まで済ませて、実状態を確定させる。
 
-**leaseをpayloadに入れないと断られる。** ワーカーがleaseを保持している間、payloadのleaseがそれと一致しない操作は制御系が409で拒否し、`operation does not own worker lease` を返す（`workers/lib/pull.py`）。`--lease auto` は保持中のleaseが無ければ何も入れないので、その場合はMacのようなlifecycleワーカーでは `lifecycle worker requires a lease` になる。payloadファイルに `lease` があればそちらが優先し、`--lease <id>` の明示指定はpayloadを上書きする。payloadはDBに残るので、診断コマンドに秘密情報を書かない。
-
-Macホスト側では管理者のSSHで `tart list` を見る。ゲストが一覧に無ければ既に止まっている。
-
-**3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは5）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
+**3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは6）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
 
 - 管理者がMac上でそのゲストの実状態を確認した（`tart list` に無い、または `tart stop` した）
 - `cancel` を送っただけで済ませていない。`cancel` は停止要求であって停止確認ではない
@@ -289,19 +284,28 @@ python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stop
 
 `--confirmed-stopped` は必須。以前の結果とログは保存される。
 
-**4. 続けるか、片づけるかを決める。** ここでゲストの実状態によって道が分かれる。`--resume` は、そのrunのleaseをワーカーが**保持したまま**であることと、ゲストが**動いたまま**であることの両方を要求する（`workflow/lib/macos.py`。leaseを欠くと `Mac resume requires this run's retained lease`、ゲストが無いか作りかけだと `Mac setup is incomplete or the guest is stopped` で止まる）。5でleaseを解放したrunは `--resume` できない。
+**4. ゲストの中を見る（`resolve` の後、leaseを保持していてゲストが動いているとき）。** 予約が空くと同じワーカーへ操作を投げられるようになる。診断も同じ操作キューを通る。`--lease auto` は、そのワーカーが今持っているleaseをDBから引いてpayloadに入れる。
 
-- **ゲストが生きていて、leaseも保持している** → 5へ進まない。leaseを解放しないまま `kb run <id> --resume` で続ける。再開できるのは、認証情報・リポジトリ・工程履歴がまだ無いprovision失敗のときに限る（「[失敗時の復旧](#失敗時の復旧)」）。
-- **ゲストが落ちている、またはこのrunを畳む** → 5でleaseを片づけ、`--resume` ではなく新しいrunを投げ直す。新しいVMを取り直して記録のwipブランチと工程から続けるなら `kb run <id> --from`、最初から回すなら `kb run <id>`。台帳が実行中のrunを指したままだと断られるので、その場合は `kb reopen <id>` で板を戻してから投げる。
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-exec \
+  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
+```
 
-**5. leaseを解放する（片づける場合）。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
+**leaseをpayloadに入れないと断られる。** ワーカーがleaseを保持している間、payloadのleaseがそれと一致しない操作は制御系が409で拒否し、`operation does not own worker lease` を返す（`workers/lib/pull.py`）。`--lease auto` は保持中のleaseが無ければ何も入れないので、その場合はMacのようなlifecycleワーカーでは `lifecycle worker requires a lease` になる。payloadファイルに `lease` があればそちらが優先し、`--lease <id>` の明示指定はpayloadを上書きする。payloadはDBに残るので、診断コマンドに秘密情報を書かない。
+
+**5. 続けるか、片づけるかを決める。** ここでゲストの実状態によって道が分かれる。`--resume` は、そのrunのleaseをワーカーが**保持したまま**であることと、ゲストが**動いたまま**であることの両方を要求する（`workflow/lib/macos.py`。leaseを欠くと `Mac resume requires this run's retained lease` で止まる）。6でleaseを解放したrunは `--resume` できない。
+
+- **ゲストが生きていて、leaseも保持している** → 6へ進まない。leaseを解放しないまま `kb run <id> --resume` で続ける。準備済みのゲスト（cloneが済み `work/ticket.md` が空でない）なら、工程履歴の最後に走った工程から続く。準備前なら、工程履歴が空で `$SANDBOX_APP_DIR` と `work/runtime.env` がまだ無いprovision失敗のときだけ再実行できる。どちらにも当てはまらないゲストは `Mac setup is incomplete or the guest is stopped` で止まるので、中を見てから決める（工程の決まり方は「[失敗時の復旧](#失敗時の復旧)」）。
+- **ゲストが落ちている、またはこのrunを畳む** → 6でleaseを片づけ、`--resume` ではなく新しいrunを投げ直す。新しいVMを取り直して記録のwipブランチと工程から続けるなら `kb run <id> --from`、最初から回すなら `kb run <id>`。台帳が実行中のrunを指したままだと断られるので、その場合は `kb reopen <id>` で板を戻してから投げる。
+
+**6. leaseを解放する（片づける場合）。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
 
 ```bash
 python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<成功したguest-releaseの操作ID>'
 ```
 
-`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは4の2つめの道で投げ直す。どの工程から再開するか、再開できない条件は「[失敗時の復旧](#失敗時の復旧)」と [ADR-0047](adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
+`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは5の2つめの道で投げ直す。どの工程から再開するか、再開できない条件は「[失敗時の復旧](#失敗時の復旧)」と [ADR-0047](adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
 
 ## 実機で確認した範囲と制約
 
