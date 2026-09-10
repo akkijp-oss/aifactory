@@ -317,48 +317,68 @@ async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
   const runBusy = d.jobs.find(j => j.state === 'running' && (j.kind === 'kb-run' || j.kind === 'sandbox-release'));
   const stBtn = (act, label, cls) => `<button data-act="status" data-id="${t.id}" data-do="${act}" data-from="${esc(t.status)}" class="${cls || ''}">${esc(label)}</button>`;
-  const moves = { todo: [stBtn('start', T.btn.start, 'primary'), stBtn('block', T.btn.block)],
-    in_progress: [stBtn('review', T.btn.review, 'primary'), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
-    review: [stBtn('done', T.btn.done, 'primary'), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
-    blocked: [stBtn('reopen', T.btn.reopen, 'primary'), stBtn('done', T.btn.done)],
-    done: [stBtn('reopen', T.btn.redo)] }[t.status] || [];
   const canRun = t.status !== 'done';                                                     /* kb run は完了済みを断る。画面でも先に押せなくする */
+  /* 状態を進めるボタンは primary を付けない。操作領域の強いボタンは「実行する」（実行できないときは隣の次の一手）の 1 つだけにして、
+     「実行も始まるのか、状態だけ変わるのか」を色で見分けられるようにする（377）。
+     完了ずみのときの reopen は実行の塊に次の一手として出す約束（UX.md）なので、ここからは落とす（同じ名前のボタンが 2 個並ばない）。
+     ただし実行の塊が警告に差し替わる（project.yml が無い／VM を返却中）ときは、そこに reopen が出ないので状態の塊に残す（戻す手段を消さない）。
+     つまり塊が空になるのは「完了ずみで上に reopen がある」ときだけで、そのときだけ上のボタンを名指しする T.help.moveNone を出す
+     （台帳に想定外の status が入って空になったときに、画面に無いボタンを案内しない） */
+  const runBoxRedo = d.project_yml && !runBusy;                                            /* 完了ずみの reopen を実行の塊が出せるか（出せないなら状態の塊に残す） */
+  const moves = { todo: [stBtn('start', T.btn.start), stBtn('block', T.btn.block)],
+    in_progress: [stBtn('review', T.btn.review), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
+    review: [stBtn('done', T.btn.done), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
+    blocked: [stBtn('reopen', T.btn.reopen), stBtn('done', T.btn.done)],
+    done: runBoxRedo ? [] : [stBtn('reopen', T.btn.redo)] }[t.status] || [];
   const runHint = { in_progress: T.help.runInProgress, review: T.help.runReview, blocked: T.help.runBlocked, done: T.help.runDone }[t.status] || T.help.runDefault;
   const runsEmpty = !d.project_yml ? T.empty.ticketRunsNoProjectYml : runBusy ? T.empty.ticketRunsBusy : canRun ? T.empty.ticketRuns : T.empty.ticketRunsDone;
   kindDesc = d.kind_desc || {};
   const kindKnown = d.kinds.includes(t.kind);                                              /* 台帳に workflow の無い種別が入っていることがある */
   const runBtn = (label, cls, dry, disabled) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''} ${disabled ? `disabled title="${esc(runHint)}"` : ''}>${esc(label)}</button>`;
   const from = prevRoute.startsWith('#/tickets') ? prevRoute : '#/board';                        /* 絞り込んだ一覧から来たなら、その条件のまま戻す */
+  /* 実行状況の 1 行。本文より前に置くのは「今どうなっているか」だけで、判断を迫る操作は下（広い画面では右）の操作領域にまとめる。
+     runs は新しい順なので先頭が最新の attempt。判定はボードの工程行（liveRow）と同じで、current の無い run は「次は」を出す */
+  const live = d.runs[0] && d.runs[0].status === 'running' ? d.runs[0] : null;
+  const liveTxt = live ? ((live.current && live.current.step ? tt(T.board.liveStep, { step: stepName(live.current.step), t: since(live.current.since) })
+                                                            : tt(T.board.liveNext, { step: live.next || '' })) + tt(T.board.liveSince, { t: since(live.started) })) : '';
+  const nowPanel = live ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(liveTxt)} ${runLink(live.name)}</div></div>`
+    : runBusy ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div></div>` : '';
   render(crumb(esc(from), from === '#/board' ? T.nav.board : T.nav.tickets, tt(T.ticket.crumb, { id: t.id })) + `
     <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
     ${t.note ? `<div class="panel note"><b>${esc(T.label.note)}</b> ${esc(t.note)}</div>` : ''}
+    ${nowPanel}
     <div class="grid2">
-      <div>
-        <div class="panel"><h2>${esc(T.h.run)}<small>kb run ${t.id}</small></h2>
-          ${!d.project_yml ? `<div class="warn">${esc(tt(T.help.noProjectYml, { pj: t.pj }))}</div>` :
-          runBusy ? `<div class="warn">${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div>` : `
-          <div class="row"><label class="field">${esc(T.label.workflow)}<select id="run-wf"><option value="">${esc(tt(T.label.workflowAsKind, { kind: t.kind }))}</option>${d.kinds.filter(k => k !== t.kind).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select></label></div>
-          <div class="row checks"><label class="help check"><input type="checkbox" id="run-keep"> ${esc(T.label.keep)}</label>
-            <label class="help check"><input type="checkbox" id="run-resume"> ${esc(T.label.resume)}</label></div>
-          <div class="actions">${runBtn(T.btn.run, 'primary', false, !canRun)}${canRun ? '' : stBtn('reopen', T.btn.redo, 'primary')}<span class="help">${esc(runHint)}</span></div>
-          <div class="aside">${runBtn(T.btn.dryRun, 'ghost', true)}<span class="help">${esc(T.help.dryRun)}</span></div>`}
-        </div>
-        <div class="panel"><h2>${esc(T.h.move)}</h2><div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveUndo)}</div></div>
-        <div class="panel"><h2>${esc(T.h.fix)}<small>kb set</small></h2>
-          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
-            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
-            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
-          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(t.kind)) : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
-          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div></div>
-        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
-        ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
-      </div>
       <div>
         <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>
         <div class="panel"><h2>${esc(T.h.attachments)}</h2>
           ${d.attachments.length ? `<div class="attach-grid">${d.attachments.map(a => attachItem(t.id, a)).join('')}</div>` : `<div class="help">${esc(T.help.attachEmpty)}</div>`}
           ${attachZone('t-attach')}
           <div class="actions"><button class="primary" data-act="attach" data-id="${t.id}" data-zone="t-attach">${esc(T.btn.attach)}</button><span class="help">${esc(T.help.attach)}</span></div></div>
+      </div>
+      <div>
+        <div class="panel ops"><h2>${esc(T.h.ops)}</h2>
+          <h3>${esc(T.h.run)}<small>kb run ${t.id}</small></h3>
+          ${!d.project_yml ? `<div class="warn">${esc(tt(T.help.noProjectYml, { pj: t.pj }))}</div>` :
+          runBusy ? `<div class="warn">${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div>` : `
+          <div class="actions">${runBtn(T.btn.run, 'primary', false, !canRun)}${canRun ? '' : stBtn('reopen', T.btn.redo, 'primary')}<span class="help">${esc(runHint)}</span></div>
+          <details class="runopts"><summary>${esc(T.label.runOptions)}</summary>
+            <div class="row"><label class="field">${esc(T.label.workflow)}<select id="run-wf"><option value="">${esc(tt(T.label.workflowAsKind, { kind: t.kind }))}</option>${d.kinds.filter(k => k !== t.kind).map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select></label></div>
+            <div class="row checks"><label class="help check"><input type="checkbox" id="run-keep"> ${esc(T.label.keep)}</label>
+              <label class="help check"><input type="checkbox" id="run-resume"> ${esc(T.label.resume)}</label></div>
+            <div class="aside">${runBtn(T.btn.dryRun, 'ghost', true)}<span class="help">${esc(T.help.dryRun)}</span></div>
+          </details>`}
+          <h3>${esc(T.h.move)}</h3>
+          ${moves.length ? `<div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveOnly)}</div><div class="help">${esc(T.help.moveUndo)}</div>`
+                         : `<div class="help">${esc(t.status === 'done' ? T.help.moveNone : T.help.moveUndo)}</div>`}
+          <h3>${esc(T.h.fix)}<small>kb set</small></h3>
+          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
+            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
+            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(t.kind)) : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
+          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
+        </div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
         <div class="panel"><h2>${esc(T.h.history)}</h2><table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
           <div class="help top">${esc(tt(T.ticket.stamps, { c: fmtT(t.created), u: fmtT(t.updated) }))}</div></div>
       </div>
