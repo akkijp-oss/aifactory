@@ -410,7 +410,7 @@ async function viewTicket(id, flash) {
           <h3>${esc(T.h.fix)}<small>kb set</small></h3>
           <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(dv('set-kind'))}</option>`}${d.kinds.map(k => `<option ${k === dv('set-kind') ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
             <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(dv('set-pr'))}" class="w100"></label>
-            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(dv('set-note'))}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+            <label class="field grow">${esc(T.label.note)}<textarea id="set-note" class="h80" placeholder="${esc(T.label.notePlaceholder)}">\n${esc(dv('set-note'))}</textarea></label></div>
           <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(dv('set-kind'))) : esc(tt(T.help.kindUnknown, { kind: dv('set-kind') }))}</div>
           ${draft ? `<div class="help" id="set-draft-note">${esc(T.msg.editDraftKept)}</div>` : ''}
           ${moved.map(f => `<div class="warn">${esc(tt(T.help.editDraftServerChanged, { v: T.label[f], now: tkServer[f] }))}</div>`).join('')}
@@ -1002,7 +1002,8 @@ const actions = {
     viewTicket(id, true);
   },
   /* 下書きを捨てるのは api が通った後だけ。失敗すれば例外で抜けるので、直して送り直せる（起票側と同じ並び） */
-  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); tDraftDrop(id); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  /* メモは無変換で送る（trim すると無編集の保存で末尾の改行が消える）。空白だけの入力は従来どおり「メモを空にする」 */
+  'set': async el => { const id = el.dataset.id, note = $('set-note').value; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: note.trim() ? note : '' }); tDraftDrop(id); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
   /* 破棄は明示操作。可逆なので確認せず、トーストの「元に戻す」で書き戻す */
   'set-clear': async el => {
     const id = el.dataset.id, before = tDraftDrop(id);
