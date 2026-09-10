@@ -8,25 +8,26 @@
 #   sandbox ls                       貸出状況
 #   sandbox status [pj]              プールの台数を PJ ごとに（定義 / 実体 / 貸出 / 空き）
 # 運用補助（契約外）:
-#   sandbox keys list|add|set|rm|token          Claude の鍵プール（VM に渡す Claude の鍵の正本。ADR-0044 / ADR-0045）。
+#   sandbox keys list|add|set|rm|token          Claude の鍵プール（VM に渡す Claude の鍵の唯一の出どころ。ADR-0044 / ADR-0060）。
 #                                               鍵ごとに「Fable に使う（--fable）」「Opus・Sonnet・Haiku に使う（--other）」を持ち、take がモデルごとに 1 本選ぶ。
-#                                               console の「鍵」画面と同じ keys.json を読み書きする
-#   sandbox token set <pj|global> gh            GitHub トークン（GitHub App が無いときのフォールバック）
-#   sandbox token set <pj|global> [claude|claude:<系統>]   【非推奨】Claude の鍵を PJ / 全体の env ファイルに置く（ADR-0006 の方式）。鍵は sandbox keys add へ。
-#                                               互換のため動くが、プールに合う鍵があるときは使われない
-#   sandbox token rotate [claude|gh|claude:<系統>] 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）。
-#                                               claude はプールを触らない（プールの鍵は sandbox keys token <名前>）。ctl.env の鍵（intake 用）を替えるのはこれ
-#   sandbox token show [pj]                     どの鍵が効いているか（マスク表示・発行からの日数・プールの本数）
-#   sandbox token clear <pj|global> [claude|gh|claude:<系統>] トークンを消す
+#                                               console の「鍵」画面（#/keys）と同じ keys.json を読み書きする。プールに無い用途は take が「鍵なし:」で止まる
+#   sandbox keys used <名前> / keys pick …      runner が呼ぶ口（起動の報告 / pull backend 向けの鍵の払い出し）。人が打つことはない
+#   sandbox token set|clear <pj|global> gh      GitHub の静的トークン（GitHub App が無いときのフォールバック）。Claude の鍵は置けない（sandbox keys へ）
+#   sandbox token rotate [claude|claude:<系統>|gh]  claude = 制御系の ctl.env の鍵（intake が claude -p を呼ぶのに使う）を差し替えて console を restart。
+#                                               gh = global・全 PJ・ctl.env の GH_TOKEN を差し替えて貸出中 VM に reinject --all。どちらもプールは触らない
+#   sandbox token show [pj]                     GitHub トークンの出どころ・ctl.env の Claude の鍵・鍵プールの本数（値はマスク）
 #   sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 #   sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 #   sandbox idle-stop [--hours N] [--keep K] [--dry-run]   使われていないプール VM を止めて CPU / メモリを空ける（最終利用から N 時間=既定 24 で候補、候補が K 台=既定 10 を超えた分を古い順に停止。timer が 15 分ごとに呼ぶ。次の take が起動し直す）
+# Claude の鍵: 制御系の ~/.config/sandbox/keys.json（鍵プール）だけから選ぶ。~/.config/sandbox/env / pj/<pj>.env / シェルの
+#   CLAUDE_CODE_OAUTH_TOKEN* は読んでも捨てる（残っていても VM には渡らない。ADR-0060 で env ファイル経路を廃止）。
+#   VM には CLAUDE_CODE_OAUTH_TOKEN_FABLE（fable 用）と _OPUS / _SONNET / _HAIKU（other 用。同じ値）+ 無印（other の鍵）を書き、
+#   runner が step のモデルに合わせて系統の鍵を選ぶ。名前は CLAUDE_KEY_NAME_<系統> で添える
 # GitHub トークン: ~/.config/sandbox/gh-app/{app.env,private-key.pem} があれば take / reinject / gh-app refresh のたびに
 #   その PJ のリポジトリ（pj/<pj>.env の GH_REPO）だけに効く 1 時間有効の installation token を払い出して注入する（ADR-0008）。
 #   無ければ pj/<pj>.env か env の GH_TOKEN（静的トークン）を使う。
-# 設定: ~/.config/sandbox/env（全体既定）→ ~/.config/sandbox/pj/<pj>.env（PJ 別上書き）→ SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN（一回限りの上書き）
-#   モデル系統別の鍵: CLAUDE_CODE_OAUTH_TOKEN_FABLE / _OPUS / _SONNET / _HAIKU（任意）。runner が step のモデルに合わせて選び、無ければ CLAUDE_CODE_OAUTH_TOKEN に落ちる
-#   シェルに export された CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は無視する
+# 設定: ~/.config/sandbox/env（全体既定）→ ~/.config/sandbox/pj/<pj>.env（PJ 別上書き）→ SANDBOX_GH_TOKEN（一回限りの上書き）
+#   シェルに export された GH_TOKEN は無視する
 #   テナント（ADR-0017）: SB_TENANT=<t>（既定 main）。名前の既定は規則から導く（SB_PREFIX=sb-<t>、SB_DOMAIN=<t>.sb.internal、SB_POOL=sb-<t>）。
 #   別テナントの設定で動かす（ホスト管理者が複数テナントを手元から見るとき）: SB_TENANT=<t> で ~/.config/sandbox/tenants/<t>.env を読む
 #   か SANDBOX_ENV_FILE=<path>。このとき状態と PJ 別設定は同じ場所の <t>.state.json / <t>.pj/ になる
@@ -50,27 +51,29 @@ PJ_DIR="${SANDBOX_PJ_DIR:-$PJ_DIR}"; STATE="${SANDBOX_STATE:-$STATE}"
 # 制御系（ctl LXC）のプロセス用 env。console の systemd が EnvironmentFile で読む。token rotate だけが触る（ADR-0029）
 CTL_ENV="${SANDBOX_CTL_ENV:-$HOME/.config/aifactory/ctl.env}"
 [[ -f "$ENV_FILE" ]] || { echo "[error] $ENV_FILE がありません（sandbox/templates/env.example をコピー）" >&2; exit 1; }
-# 一回限りの上書きは専用の変数名だけを見る（SANDBOX_CLAUDE_TOKEN / SANDBOX_GH_TOKEN）。
-# シェルに export されている CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
-_ovr_claude="${SANDBOX_CLAUDE_TOKEN:-}"; _ovr_gh="${SANDBOX_GH_TOKEN:-}"
-# モデル系統別の鍵（任意。runner が step のモデル名から系統を選ぶ。無ければ CLAUDE_CODE_OAUTH_TOKEN）
+# 一回限りの上書きは専用の変数名だけを見る（SANDBOX_GH_TOKEN）。
+# シェルに export されている GH_TOKEN は PJ 設定を黙って上書きしてしまうので無視する（2026-09-06 に踏んだ）
+_ovr_gh="${SANDBOX_GH_TOKEN:-}"
+# VM に書く Claude の鍵の変数名（系統別）。値は鍵プールだけが入れる（_pool_assign）
 CLAUDE_TOKEN_FAMILIES="FABLE OPUS SONNET HAIKU"
-unset CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU
+# プロセスと env ファイルに残っている Claude の鍵は捨てる。鍵プール以外の値が VM に渡る経路を残さない（ADR-0060。関数は鍵プールの区画の drop_claude_env）。
+# 古い運用（ADR-0006）で書いた CLAUDE_CODE_OAUTH_TOKEN= の行が env ファイルに残っていても効かない
+unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU GH_TOKEN
 set -a; # shellcheck disable=SC1090
 source "$ENV_FILE"; set +a
-_src_claude="${CLAUDE_CODE_OAUTH_TOKEN:+global(env)}"; _src_gh="${GH_TOKEN:+global(env)}"
-# load_pj <pj>: PJ 別の上書きファイルを重ねる（無ければ何もしない）。pj が分かった時点で1回呼ぶ
+unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU
+_src_gh="${GH_TOKEN:+global(env)}"
+# load_pj <pj>: PJ 別の上書きファイルを重ねる（無ければ何もしない）。pj が分かった時点で1回呼ぶ。Claude の鍵の行は読んでも捨てる
 CUR_PJ=""
 load_pj() {
   local pj=$1; CUR_PJ=$pj
   if [[ -f "$PJ_DIR/$pj.env" ]]; then
-    local _c0="${CLAUDE_CODE_OAUTH_TOKEN:-}" _g0="${GH_TOKEN:-}"
+    local _g0="${GH_TOKEN:-}"
     set -a; # shellcheck disable=SC1090
     source "$PJ_DIR/$pj.env"; set +a
-    [[ "${CLAUDE_CODE_OAUTH_TOKEN:-}" != "$_c0" ]] && _src_claude="pj/$pj.env"
+    drop_claude_env
     [[ "${GH_TOKEN:-}" != "$_g0" ]] && _src_gh="pj/$pj.env"
   fi
-  [[ -n "$_ovr_claude" ]] && { CLAUDE_CODE_OAUTH_TOKEN="$_ovr_claude"; _src_claude="SANDBOX_CLAUDE_TOKEN(一回限り)"; }
   [[ -n "$_ovr_gh" ]] && { GH_TOKEN="$_ovr_gh"; _src_gh="SANDBOX_GH_TOKEN(一回限り)"; }
   return 0
 }
@@ -336,9 +339,13 @@ resolve_gh_token() {
 #   uses / last_used = take / reinject でその鍵を割り当てた回数と時刻（選ぶ順番に使う）。launches / last_launched = runner が実際に
 #   その鍵で claude を起動した回数と時刻（`sandbox keys used <名前>`。使用量の目安はこちら）
 #   選び方: その task が前に使った鍵（まだ enabled でフラグが合えば）→ 無ければ候補のうち last_used が最古（同値は名前順）
-#   合う鍵が 1 本も無い系統は PJ / 全体の env の鍵をそのまま使う（プールが空なら挙動は今までと同じ。互換）
+#   要る用途に合う鍵が 1 本も無ければ「鍵なし:」で止まる（env ファイルの鍵には落ちない。プールが空でも同じ。ADR-0046 / ADR-0060）
 # 鍵の値を触るのはこの区画と inject_env だけ。表示・ログ・console の応答には名前と末尾 4 文字しか出さない。
 KEYS_NAME_RE='^[A-Za-z0-9._-]{1,40}$'
+
+# drop_claude_env: プロセス・env ファイル・pj ファイルから来た Claude の鍵を捨てる（env ファイルを source した直後と、鍵を選ぶ直前に呼ぶ）。
+#   VM に渡る値は、この下でプールから選んで _pool_assign が入れたものだけ（ADR-0060）
+drop_claude_env() { unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU; }
 
 keys_load() { [[ -f "$KEYS_FILE" ]] && cat "$KEYS_FILE" || echo '{"keys":[]}'; }
 
@@ -401,17 +408,8 @@ _pool_need_from_state() { # task → 台帳の keys の用途。無ければ両�
 _pool_apply_locked() { # task
   local task=$1 group cur name tok
   _pool_fable=""; _pool_other=""; _pool_missing=""
-  # プールが空（ファイルが無い / 鍵が 0 本）なら従来どおり env の鍵（非推奨）。1 本でもあればプールが正本で、env の Claude の鍵は使わない
-  if [[ ! -f "$KEYS_FILE" ]] || [[ "$(keys_load | jq '.keys | length')" == 0 ]]; then
-    for group in $_pool_need; do
-      case "$group" in
-        fable) [[ -n "${CLAUDE_CODE_OAUTH_TOKEN_FABLE:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || _pool_missing+="$group " ;;
-        other) [[ -n "${CLAUDE_CODE_OAUTH_TOKEN_OPUS:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || _pool_missing+="$group " ;;
-      esac
-    done
-    return 0
-  fi
-  # 先に、要る用途の鍵が全部そろうかを見る（足りなければ何も選ばない。使用回数も動かさない）
+  drop_claude_env   # 前の task（reinject --all）や呼び手の環境に残った値を持ち越さない。入るのはこの下でプールから選んだ鍵だけ
+  # 先に、要る用途の鍵が全部そろうかを見る（足りなければ何も選ばない。使用回数も動かさない）。プールが空なら要る用途が全部足りない
   for group in $_pool_need; do
     cur="$(_pool_cur_of "$task" "$group")"
     [[ -n "$(keys_pick "$group" "$cur")" ]] || _pool_missing+="$group "
@@ -425,10 +423,8 @@ _pool_apply_locked() { # task
     _pool_assign "$group" "$name" "$tok"
     _pool_mark_used "$name"
   done
-  # プールが正本: env に残っている Claude の鍵（無印・系統別）は VM に渡さない。プールで選ばなかった用途は空のまま
-  [[ -n "$_pool_fable" ]] || unset CLAUDE_CODE_OAUTH_TOKEN_FABLE
-  if [[ -n "$_pool_other" ]]; then CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_OPUS"; _src_claude="pool/$_pool_other"
-  else unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU; fi
+  # 無印の CLAUDE_CODE_OAUTH_TOKEN は other の鍵で埋める（VM に人が入って claude を対話で使うとき用。選ばなかった用途は空のまま）
+  [[ -n "$_pool_other" ]] && CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_OPUS"
   return 0
 }
 # pool_require_keys: 要る用途の鍵が無ければ「鍵なし:」で止める（runner がこの目印を読んで一時停止にする。ADR-0046）
@@ -436,7 +432,8 @@ pool_require_keys() {
   [[ -z "$_pool_missing" ]] && return 0
   local label="" g
   for g in $_pool_missing; do label+="$([[ "$g" == fable ]] && echo "Fable に使う" || echo "Opus・Sonnet・Haiku に使う")、"; done
-  die "鍵なし: ${label%、}鍵が鍵プールに無い（console の「鍵」画面か sandbox keys add で登録すると、止まった run は自動で再開する）"
+  local where="鍵プールに無い"; [[ -f "$KEYS_FILE" ]] || where="鍵プールに無い（${KEYS_FILE} がまだ無い）"
+  die "鍵なし: ${label%、}鍵が${where}（console の「鍵」画面か sandbox keys add で登録すると、止まった run は自動で再開する）"
 }
 # pool_apply_keys <task>: 系統ごとに鍵を選び、CLAUDE_CODE_OAUTH_TOKEN_* を上書きする。
 #   グローバルに返すので $( ) の中で呼ばない。keys.json の更新（last_used / uses）は state.json のロックの中でやる（234 と同じ）
@@ -519,7 +516,7 @@ cmd_keys() {
       local v; v="$(keys_json_view)"
       if (( as_json )); then printf '%s\n' "$v"; return 0; fi
       if [[ "$(jq -r '.keys | length' <<< "$v")" == 0 ]]; then
-        echo "鍵はまだ登録されていません（${KEYS_FILE}）。sandbox keys add <名前> --fable --other か、console の「鍵」画面で登録します。無い間は env ファイルの鍵（sandbox token set。非推奨）を使います"
+        echo "鍵はまだ登録されていません（${KEYS_FILE}）。sandbox keys add <名前> --fable --other か、console の「鍵」画面で登録します。登録するまで run は VM を取らずに「鍵なし」で一時停止します"
         return 0
       fi
       local fmt='%-20s %-5s %-11s %-7s %-8s %-10s %-8s %-25s %-8s %s\n'   # TAIL の … は 3 バイトなので 1 列ぶん広く取る。FABLE / OPUS/SONNET = その用途に使うか
@@ -749,14 +746,14 @@ cmd_take() {
   for a in "$@"; do
     case "$a" in
       --need=*) _pool_need="${a#--need=}"; _pool_need="${_pool_need//,/ }" ;;   # runner が workflow から要る用途を渡す（fable / other）
-      *) die "take: 知らない引数 $a（使えるのは --need=fable,other）" ;;
+      *) die "take: 知らない引数 ${a}（使えるのは --need=fable,other）" ;;
     esac
   done
   load_pj "$pj"
   local pick; pick="$(reserve_vm "$pj" "$task")"   # die はサブシェルを抜けるだけなので、空なら止める
   [[ -n "$pick" ]] || exit 1
   _reserved_task="$task"   # ここから先で落ちたら _on_exit が予約を消す
-  # 鍵プールがあれば系統ごとに 1 本選ぶ（無ければ PJ / 全体の env の鍵のまま）。
+  # 鍵プールから用途ごとに 1 本選ぶ（プール以外の出どころは無い。ADR-0060）。
   # VM を押さえてから選ぶ: 空きなしで落ちた take が last_used / uses を動かすと、貸し出してもいない回で順番が回ってしまう
   pool_apply_keys "$task"
   pool_require_keys     # 要る用途の鍵が無ければここで止まる（予約は _on_exit が消す）。VM も鍵も持たないまま人を待たせず、runner が一時停止にする
@@ -834,10 +831,10 @@ mask() { local t=$1; [[ -z "$t" ]] && { echo "(未設定)"; return; }; echo "${t
 # keys_pool_note: token show の末尾に出す鍵プールの 1 行（本数と系統ごとの候補数。値も名前も出さない）
 keys_pool_note() {
   local f="${KEYS_FILE:-}"
-  [[ -n "$f" && -f "$f" ]] || return 0
+  [[ -n "$f" && -f "$f" ]] || { echo "pool: 0 本（${f:-keys.json} が無い）。登録するまで run は「鍵なし」で一時停止する（sandbox keys add / console の「鍵」画面）"; return 0; }
   jq -r '[.keys[] | select(.enabled != false)] as $on
          | "pool: \(.keys | length) 本（有効 \($on | length) / Fable に使える \([$on[] | select(.allow.fable == true)] | length) / Opus・Sonnet に使える \([$on[] | select(.allow.other == true)] | length)）"' "$f" 2>/dev/null || true
-  echo "  ↑ VM に渡す Claude の鍵はここから選ばれる（一覧は sandbox keys list、画面は console の「鍵」）。合う鍵が無いときだけ上の env の鍵を使う"
+  echo "  ↑ VM に渡す Claude の鍵はここからだけ選ばれる（一覧は sandbox keys list、画面は console の「鍵」）。要る用途の鍵が無い run は「鍵なし」で一時停止する"
   return 0
 }
 
@@ -860,7 +857,7 @@ _issued_days() {
   echo $(( ( $(date +%s) - e ) / 86400 ))
 }
 
-# _issued_note <key> <src>: token show の行末に足す「発行から N 日」。src は _src_claude / _src_gh の値
+# _issued_note <key> <src>: token show の行末に足す「発行から N 日」。src は _src_gh の値（global(env) / pj/<pj>.env）
 _issued_note() {
   local key=$1 src=$2 file="" d n
   case "$src" in
@@ -869,103 +866,138 @@ _issued_note() {
     *) return 0 ;;
   esac
   d="$(_issued "$file" "$key")"
-  [[ -n "$d" ]] || { echo "発行日不明（token set / rotate で保存し直すと記録される）"; return 0; }
+  [[ -n "$d" ]] || { echo "発行日不明（token set / rotate gh で保存し直すと記録される）"; return 0; }
   n="$(_issued_days "$d")"
   [[ -n "$n" ]] && echo "発行から $n 日（issued ${d}）" || echo "issued $d"
 }
 
-# token_key <kind> → env のキー名。claude / gh / claude:<系統>（fable|opus|sonnet|haiku）
+# token_key <kind> → env のキー名。gh / claude / claude:<系統>（fable|opus|sonnet|haiku）
 token_key() {
   case "$1" in
     claude) echo CLAUDE_CODE_OAUTH_TOKEN ;;
     gh) echo GH_TOKEN ;;
     claude:fable|claude:opus|claude:sonnet|claude:haiku) echo "CLAUDE_CODE_OAUTH_TOKEN_$(tr '[:lower:]' '[:upper:]' <<< "${1#claude:}")" ;;
-    *) die "kind は claude か gh か claude:<fable|opus|sonnet|haiku>" ;;
+    *) die "kind は gh か claude か claude:<fable|opus|sonnet|haiku>" ;;
   esac
 }
-# token set <pj|global> [claude|gh|claude:<系統>] : 対話入力（エコー無し）で保存。ファイルは 600
+# _read_secret <prompt>: tty ならエコー無しの対話入力、そうでなければ stdin。改行を落とし、空なら止める。結果は $_secret_in
+_secret_in=""
+_read_secret() {
+  local v
+  if [[ -t 0 ]]; then read -rs -p "$1: " v; echo; else v="$(cat)"; fi
+  v="${v//[$'\r\n']/}"
+  [[ -n "$v" ]] || die "空のトークン"
+  _secret_in="$v"
+}
+# _stale_claude_lines <file> → その env ファイルに残っている Claude の鍵の行（キー名だけ。値は出さない）。ADR-0006 の名残を見つけるため
+_stale_claude_lines() { [[ -f "$1" ]] && sed -n 's/^\(CLAUDE_CODE_OAUTH_TOKEN[A-Z_]*\)=.*/\1/p' "$1" | sort -u | tr '\n' ' ' | sed 's/ *$//' || true; }
+# _stale_claude_note: env / pj ファイルに Claude の鍵の行が残っていれば、使われないことと消し方を 1 行ずつ出す
+_stale_claude_note() {
+  local f k n=0
+  for f in "$ENV_FILE" "$PJ_DIR"/*.env; do
+    [[ -f "$f" ]] || continue
+    k="$(_stale_claude_lines "$f")"; [[ -n "$k" ]] || continue
+    (( n == 0 )) && echo "[stale] env ファイルに Claude の鍵の行が残っている。ADR-0060 で env ファイルの鍵は使われなくなった（VM には渡らない）。消すには: sed -i '/^CLAUDE_CODE_OAUTH_TOKEN/d' <file>"
+    echo "        $f: $k"; n=$(( n + 1 ))
+  done
+  return 0
+}
+# _restart_console: ctl.env を書き換えたあと、systemd に aifactory-console があれば restart する（console は起動時に ctl.env を読む。
+#   aifactory-gh-refresh.timer は oneshot で毎回読み直すので不要）。sudo -n が通らなければ実行せず、打つべきコマンドを出す
+_restart_console() {
+  local sudo=""; [[ $EUID -eq 0 ]] || sudo="sudo"
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files aifactory-console.service 2>/dev/null | grep -q aifactory-console; then
+    if [[ -z "$sudo" ]] || sudo -n true 2>/dev/null; then
+      if $sudo systemctl restart aifactory-console; then echo "[ok] aifactory-console を restart した"
+      else echo "[要手動] restart に失敗。次のコマンドを実行してください: sudo systemctl restart aifactory-console"; fi
+    else
+      echo "[要手動] 次のコマンドを実行してください: sudo systemctl restart aifactory-console"
+    fi
+  else
+    echo "[hint] systemd に aifactory-console が無い。console を動かしているなら手で再起動してください"
+  fi
+}
+_token_usage() {
+  die "usage: sandbox token set|clear <pj|global> gh / sandbox token rotate [claude|claude:<fable|opus|sonnet|haiku>|gh] / sandbox token show [pj]
+  Claude の鍵（VM に渡すもの）は env ファイルには置けない。sandbox keys add <名前> --fable --other か console の「鍵」画面へ（ADR-0060）"
+}
+# token: GitHub の静的トークン（set / clear / rotate gh）と、制御系 ctl.env の Claude の鍵（rotate claude。intake 用）。
+#   VM に渡す Claude の鍵はここでは扱わない（鍵プール。ADR-0060）
 cmd_token() {
   local sub=${1:-}; shift || true
   case "$sub" in
     set|clear)
-      local scope=${1:?pj または global} kind=${2:-claude} file key
-      key="$(token_key "$kind")" || exit 1
-      if [[ "$kind" != gh ]]; then
-        # Claude の鍵を env ファイルに置く方式は非推奨（ADR-0045）。互換のため動くが、鍵プールに合う鍵があるときは使われない
-        echo "[非推奨] sandbox token $sub $scope $kind: Claude の鍵は鍵プールで持ちます。代わりに sandbox keys add <名前> --fable --other（または console の「鍵」画面）を使ってください。この env ファイルの鍵は、プールに合う鍵が無いときだけ使われます" >&2
-      fi
+      local scope=${1:-} kind=${2:-} file key
+      [[ -n "$scope" ]] || _token_usage
+      case "$kind" in
+        gh) key=GH_TOKEN ;;
+        ""|claude|claude:*) die "sandbox token $sub は GitHub トークン専用（sandbox token $sub $scope gh）。Claude の鍵は env ファイルには置けない。VM に渡す鍵は sandbox keys add <名前> --fable --other（または console の「鍵」画面）、intake 用の ctl.env は sandbox token rotate claude（ADR-0060）" ;;
+        *) _token_usage ;;
+      esac
       if [[ "$scope" == global ]]; then file="$ENV_FILE"; else mkdir -p "$PJ_DIR"; file="$PJ_DIR/$scope.env"; [[ -f "$file" ]] || { echo "# sandbox PJ 別設定: ${scope}（~/.config/sandbox/env を上書き）" > "$file"; chmod 600 "$file"; }; fi
       local val=""
-      if [[ "$sub" == set ]]; then
-        if [[ -t 0 ]]; then read -rs -p "$key for $scope: " val; echo; else val="$(cat)"; fi
-        val="${val//[$'\r\n']/}"
-        [[ -n "$val" ]] || die "空のトークン"
-      fi
+      if [[ "$sub" == set ]]; then _read_secret "$key for $scope"; val="$_secret_in"; fi
       _write_key "$file" "$key" "$val"
       echo "[ok] $key を $file に$([[ "$sub" == set ]] && echo 保存 || echo 削除)"
       if [[ "$scope" != global ]]; then
         local lent; lent="$(jq -r --arg p "$scope" 'to_entries[] | select(.value.pj==$p) | .key' "$STATE" | tr '\n' ' ')"
-        [[ -n "$lent" ]] && echo "[hint] 貸出中の task ($lent) に反映するには: sandbox reinject --all（VM 内の claude は再起動が必要）"
+        [[ -n "$lent" ]] && echo "[hint] 貸出中の task ($lent) に反映するには: sandbox reinject --all"
         true
       fi ;;
     rotate)
-      # 1 回の入力で global・鍵を持つ全 PJ・ctl.env を差し替える（ADR-0029）。
-      # 順序は「ファイル更新 → 一覧 → console restart → reinject」。後段が失敗しても、更新できた場所は一覧に残す
       local kind=${1:-claude} key
       key="$(token_key "$kind")" || exit 1
       local is_ctl=0; [[ -f "$CTL_ENV" ]] && is_ctl=1
-      (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
-      local val=""
-      if [[ -t 0 ]]; then read -rs -p "${key}（global・全 PJ・ctl.env をまとめて更新）: " val; echo; else val="$(cat)"; fi
-      val="${val//[$'\r\n']/}"
-      [[ -n "$val" ]] || die "空のトークン"
-      local n=0 skip=0 f
-      _write_key "$ENV_FILE" "$key" "$val"; echo "[updated] $ENV_FILE (global)"; n=$((n+1))
-      for f in "$PJ_DIR"/*.env; do
-        [[ -f "$f" ]] || continue
-        if grep -q "^$key=" "$f"; then _write_key "$f" "$key" "$val"; echo "[updated] $f"; n=$((n+1))
-        else echo "[skip]    ${f}（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
-      done
-      local ctl_done=0
-      if (( is_ctl )); then
-        if grep -q "^$key=" "$CTL_ENV"; then _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV"; n=$((n+1)); ctl_done=1
-        else echo "[skip]    ${CTL_ENV}（$key の行が無い）"; skip=$((skip+1)); fi
-      else
-        echo "[skip]    ${CTL_ENV}（無し）"
-      fi
-      echo "$n 箇所更新 / $skip 箇所 skip   $key = $(mask "$val")"
-      if (( ctl_done )); then
-        # console は起動時に ctl.env を読むので、intake の claude -p に効かせるには restart が要る
-        # （aifactory-gh-refresh.timer は oneshot で毎回読み直すので不要）
-        local sudo=""; [[ $EUID -eq 0 ]] || sudo="sudo"
-        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files aifactory-console.service 2>/dev/null | grep -q aifactory-console; then
-          if [[ -z "$sudo" ]] || sudo -n true 2>/dev/null; then
-            if $sudo systemctl restart aifactory-console; then echo "[ok] aifactory-console を restart した"
-            else echo "[要手動] restart に失敗。次のコマンドを実行してください: sudo systemctl restart aifactory-console"; fi
-          else
-            echo "[要手動] 次のコマンドを実行してください: sudo systemctl restart aifactory-console"
-          fi
+      if [[ "$kind" == gh ]]; then
+        # GitHub の静的トークン: 1 回の入力で global・鍵を持つ全 PJ・ctl.env を差し替える（ADR-0029）。
+        # 順序は「ファイル更新 → 一覧 → console restart → reinject」。後段が失敗しても、更新できた場所は一覧に残す
+        (( is_ctl )) || echo "[warn] このホストは制御系（ctl）ではない（$CTL_ENV が無い）。Mac 運用は停止中なので、制御系 LXC（ssh aifactory@ctl.${SB_DOMAIN}）で実行してください"
+        _read_secret "${key}（global・全 PJ・ctl.env をまとめて更新）"; local val="$_secret_in"
+        local n=0 skip=0 f
+        _write_key "$ENV_FILE" "$key" "$val"; echo "[updated] $ENV_FILE (global)"; n=$((n+1))
+        for f in "$PJ_DIR"/*.env; do
+          [[ -f "$f" ]] || continue
+          if grep -q "^$key=" "$f"; then _write_key "$f" "$key" "$val"; echo "[updated] $f"; n=$((n+1))
+          else echo "[skip]    ${f}（$key が無い。この PJ は上の層を使う）"; skip=$((skip+1)); fi
+        done
+        local ctl_done=0
+        if (( is_ctl )); then
+          if grep -q "^$key=" "$CTL_ENV"; then _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV"; n=$((n+1)); ctl_done=1
+          else echo "[skip]    ${CTL_ENV}（$key の行が無い）"; skip=$((skip+1)); fi
         else
-          echo "[hint] systemd に aifactory-console が無い。console を動かしているなら手で再起動してください"
+          echo "[skip]    ${CTL_ENV}（無し）"
         fi
-      fi
-      # 起動時に読んだ古い値が reinject に混ざらないよう、この実行の中でも新しい値に揃える
-      case "$kind" in claude) CLAUDE_CODE_OAUTH_TOKEN="$val";; gh) GH_TOKEN="$val";; esac
-      local ids; ids="$(jq -r 'keys[]' "$STATE")"
-      if [[ -n "$ids" ]]; then echo "--- 貸出中 VM に再注入"; cmd_reinject --all
-      else echo "貸出中の task なし（reinject 不要）"; fi ;;
+        echo "$n 箇所更新 / $skip 箇所 skip   $key = $(mask "$val")"
+        (( ctl_done )) && _restart_console
+        # 起動時に読んだ古い値が reinject に混ざらないよう、この実行の中でも新しい値に揃える
+        GH_TOKEN="$val"
+        local ids; ids="$(jq -r 'keys[]' "$STATE")"
+        if [[ -n "$ids" ]]; then echo "--- 貸出中 VM に再注入"; cmd_reinject --all
+        else echo "貸出中の task なし（reinject 不要）"; fi
+      else
+        # Claude の鍵: 差し替える先は制御系の ctl.env だけ（intake が claude -p を呼ぶのに使う。ADR-0044 の対象外として残る唯一の env の鍵）。
+        # VM に渡す鍵はプール（sandbox keys token <名前>）なので、env / pj ファイルにも貸出中 VM にも触らない（ADR-0060）
+        (( is_ctl )) || die "sandbox token rotate $kind は制御系（$CTL_ENV があるホスト）で実行する。VM に渡す Claude の鍵を替えるなら sandbox keys token <名前>（または console の「鍵」画面）"
+        _read_secret "${key}（ctl.env = intake 用。VM の鍵はプール）"; local val="$_secret_in"
+        _write_key "$CTL_ENV" "$key" "$val"; echo "[updated] $CTL_ENV   $key = $(mask "$val")"
+        _restart_console
+        echo "[note] VM に渡す Claude の鍵は鍵プールから選ばれる（この変更では変わらない）。プールの鍵の差し替えは sandbox keys token <名前>"
+      fi ;;
     show)
       local pj=${1:-} pjfile=""
       if [[ -n "$pj" ]]; then load_pj "$pj"; pjfile="$PJ_DIR/$pj.env"; [[ -f "$pjfile" ]] || pjfile="$pjfile (無し)"; fi
-      if [[ -f "$CTL_ENV" ]]; then echo "host: 制御系（ctl.env あり）。トークンの差し替えは sandbox token rotate"
-      else echo "host: 手元（ctl.env なし）。Mac 運用は停止中 → 差し替えは制御系 LXC で実行してください"; fi
+      if [[ -f "$CTL_ENV" ]]; then echo "host: 制御系（ctl.env あり）。intake の鍵の差し替えは sandbox token rotate claude"
+      else echo "host: 手元（ctl.env なし）。Mac 運用は停止中 → 鍵の操作は制御系 LXC で実行してください"; fi
       echo "scope: ${pj:-global}   files: $ENV_FILE${pjfile:+ + $pjfile}"
-      echo "CLAUDE_CODE_OAUTH_TOKEN: $(mask "${CLAUDE_CODE_OAUTH_TOKEN:-}")  ← ${_src_claude:-未設定}  $(_issued_note CLAUDE_CODE_OAUTH_TOKEN "${_src_claude:-}")"
-      local _f _n _v _l
-      for _f in ${CLAUDE_TOKEN_FAMILIES:-FABLE OPUS SONNET HAIKU}; do
-        _n="CLAUDE_CODE_OAUTH_TOKEN_$_f"; _v="${!_n:-}"; _l="$(tr '[:upper:]' '[:lower:]' <<< "$_f")"
-        [[ -n "$_v" ]] && echo "  $_n: $(mask "$_v")  ← claude-${_l}-* の step だけに使う（無い系統は CLAUDE_CODE_OAUTH_TOKEN）"
-      done
+      echo "VM に渡す Claude の鍵: 鍵プール（${KEYS_FILE}）から用途ごとに 1 本。env ファイルの鍵は使わない（ADR-0060）"
+      if [[ -f "$CTL_ENV" ]]; then
+        local _k _v _d _n
+        for _k in CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FABLE CLAUDE_CODE_OAUTH_TOKEN_OPUS CLAUDE_CODE_OAUTH_TOKEN_SONNET CLAUDE_CODE_OAUTH_TOKEN_HAIKU; do
+          _v="$(sed -n "s/^$_k=//p" "$CTL_ENV" | tail -1)"; [[ -n "$_v" ]] || continue
+          _d="$(_issued "$CTL_ENV" "$_k")"; _n=""; [[ -n "$_d" ]] && _n="$(_issued_days "$_d")"
+          echo "intake の鍵（ctl.env） $_k: $(mask "$_v")  $([[ -n "$_d" ]] && echo "発行から ${_n:-?} 日（issued ${_d}）" || echo "発行日不明（token rotate claude で保存し直すと記録される）")"
+        done
+      fi
       if ghapp_ready && [[ -n "${GH_REPO:-}" ]]; then
         echo "GH_TOKEN:                GitHub App が take 時に払い出す（${GH_REPO} 限定・1 時間）$([[ -n "${GH_TOKEN:-}" ]] && echo "  ※静的 GH_TOKEN も ${_src_gh} にあるが App が優先")"
       else
@@ -973,8 +1005,9 @@ cmd_token() {
       fi
       echo "APP_PORT: $APP_PORT  SB_JUMP: ${SB_JUMP:-(直結)}  proxmox: $([[ $API_MODE == 1 ]] && echo "API $PVE_API_URL pool=$SB_POOL" || echo "ssh $PVE_HOST")  env: $ENV_FILE"
       [[ -d "$PJ_DIR" ]] && echo "PJ 別ファイル: $(ls "$PJ_DIR" 2>/dev/null | sed 's/\.env$//' | tr '\n' ' ')"
-      keys_pool_note ;;
-    *) die "usage: sandbox token set|clear <pj|global> [claude|gh|claude:<fable|opus|sonnet|haiku>] / sandbox token rotate [claude|gh|claude:<系統>] / sandbox token show [pj]" ;;
+      keys_pool_note
+      _stale_claude_note ;;
+    *) _token_usage ;;
   esac
 }
 

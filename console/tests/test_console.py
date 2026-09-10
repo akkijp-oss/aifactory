@@ -191,24 +191,29 @@ class KeysApiTest(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(v["leases"][0]["keys"], {"fable": "fable-a", "other": "opus-a"})
 
-    def test_sandbox_page_says_where_each_pj_key_comes_from(self):
-        """sandbox 画面の「Claude の鍵」列は、鍵プールがあれば「鍵プール」、無ければ PJ 別（非推奨）/ 全体の設定ファイル / 未設定（ADR-0045）"""
+    def test_sandbox_page_says_whether_the_pool_covers_each_pj(self):
+        """sandbox 画面の「Claude の鍵」列は鍵プールの状態だけを言う。PJ 別 / 全体の設定ファイルの鍵は ADR-0060 で無くなったので、
+        そこに CLAUDE_CODE_OAUTH_TOKEN= の行が残っていても見ない（none のまま）"""
         pjd = self.home / ".config" / "sandbox" / "pj"; pjd.mkdir(parents=True, exist_ok=True)
         def source():
             st, v = self.http.get("/api/sandbox"); self.assertEqual(st, 200)
             return next(t["key_source"] for t in v["templates"] if t["pj"] == PJ), v["key_pool"]
         self.assertEqual(source()[0], "none")
         (pjd / f"{PJ}.env").write_text("GH_REPO=x/y\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test\n", encoding="utf-8")
-        self.assertEqual(source()[0], "pj")
+        (self.home / ".config" / "sandbox" / "env").write_text("SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test\n", encoding="utf-8")
+        self.assertEqual(source()[0], "none")                                     # env ファイルの鍵は出どころにならない
         self.assertEqual(self.add("opus-a", fable=False, other=True)[0], 200)
-        self.assertEqual(source()[0], "pool_partial")                             # Fable 用が無いので、その分は env に落ちる
+        self.assertEqual(source()[0], "pool_other_only")                          # Fable 用が無い（Fable の工程がある run は一時停止）
         self.assertEqual(self.add("fable-a", fable=True, other=False)[0], 200)
         src, pool = source()
         self.assertEqual(src, "pool"); self.assertEqual(pool, {"fable": 1, "other": 1, "total": 2})
-        (pjd / f"{PJ}.env").unlink()
-        self.assertEqual(source()[0], "pool")
+        self.assertEqual(self.http.post("/api/keys", {"action": "set", "name": "opus-a", "enabled": False})[0], 200)
+        self.assertEqual(source()[0], "pool_fable_only")
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.sandbox.keySource", app)
+        strings = (REPO / "console" / "static" / "strings.js").read_text(encoding="utf-8")
+        for k in ("pool", "pool_fable_only", "pool_other_only", "none"): self.assertIn('"%s":' % k, strings)
+        self.assertNotIn("非推奨", strings)                                          # env ファイルの鍵の言い方はもう出ない
 
     def test_post_needs_the_console_header(self):
         st, d = self.http.post("/api/keys", {"action": "add", "name": "x", "token": "y", "other": True}, header=False)

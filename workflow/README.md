@@ -10,7 +10,7 @@ sandbox（どこで動くか）の上で、**誰（agent / code）が・何を�
 |---|---|---|
 | **workflow** | チケット種別ごとの手順。step の並びと分岐 | `kit/workflows/<name>.yml` |
 | **step** | 1 回の呼び出し。担い手は **role**（agent）か **code**（スクリプト）のどちらか | workflow の中 |
-| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`。鍵は制御系の鍵プール（`sandbox keys add <名前> --fable --other` か console の「鍵」画面）が正本で、take がモデルごとに 1 本選んで `CLAUDE_CODE_OAUTH_TOKEN_<系統>` に入れる。runner は step のモデル名からその変数を選び、無ければ `CLAUDE_CODE_OAUTH_TOKEN`。ADR-0044 / ADR-0045） |
+| **role** | agent の人格と権限。モデルのクラス、憲法、出力の型 | `kit/roles/<role>.md`（クラス→モデルは `kit/routes.env`。鍵は制御系の鍵プール（`sandbox keys add <名前> --fable --other` か console の「鍵」画面）だけから来て、take がモデルごとに 1 本選んで `CLAUDE_CODE_OAUTH_TOKEN_<系統>` に入れる。runner は step のモデル名からその変数だけを使い（無印の鍵には落ちない）、VM に無ければ起動せずに `failure: "key"` で止まる。ADR-0044 / ADR-0060） |
 | **artifact** | step の入出力。**必ずファイル**。VM の `~/work/<task>/` に置き、終了時に `$AIFACTORY_WORKSPACE/runs/<run>/work/` へ回収 | 名前は workflow の `inputs` / `outputs` |
 | **transition** | 結果に応じた次の行き先。ループ回数の上限つき。`human` = 人間に渡して終了 | step の `next` / `on_pass` / `on_fail` |
 

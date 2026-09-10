@@ -1,9 +1,9 @@
-"""モデル系統別の鍵（2026-09-09 オーナー要望）: fable / opus / sonnet の step ごとに別の CLAUDE_CODE_OAUTH_TOKEN を使い分けられること。
+"""モデル系統別の鍵（2026-09-09 オーナー要望 → ADR-0060 で出どころは鍵プールだけ）: fable / opus / sonnet の step ごとに別の鍵を使うこと。
 
-- sandbox token set <pj> claude:<系統> が CLAUDE_CODE_OAUTH_TOKEN_<系統> をその PJ のファイルに書く（知らない系統は拒否）
-- take が VM に書く /run/sandbox/env には、設定されている系統の鍵だけが CLAUDE_CODE_OAUTH_TOKEN_<系統>=… で載る
-- runner の agent_command は step のモデル名から系統を選び、VM の中で `CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN_<系統>:-$CLAUDE_CODE_OAUTH_TOKEN}"`
-  を claude の前に置く（系統の鍵が無ければ従来の鍵にそのまま落ちる。runner は鍵の値を持たない）
+- take が VM に書く /run/sandbox/env には、鍵プールが用途ごとに選んだ鍵だけが CLAUDE_CODE_OAUTH_TOKEN_<系統>=… で載る
+- runner の agent_command は step のモデル名から系統を選び、VM の中で `CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_<系統>"`
+  を claude の前に置く（無印の鍵に落ちる経路は無い。runner は鍵の値を持たない）
+- 系統の鍵が VM に無ければ probe が `none` を返し、runner は claude を起動せずに `failure: key` で止める
 """
 import os
 import pathlib
@@ -18,56 +18,6 @@ import importlib.machinery
 import importlib.util
 _spec = importlib.util.spec_from_loader("token_family_run", importlib.machinery.SourceFileLoader("token_family_run", str(ROOT / "workflow/bin/run")))
 run = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(run)
-
-
-@unittest.skipUnless(shutil.which('jq'), 'jq required by sandbox CLI')
-class TokenSetByFamilyTest(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self.env = os.path.join(self.dir, 'env'); self.pj_dir = os.path.join(self.dir, 'pj'); os.mkdir(self.pj_dir)
-        self.state = os.path.join(self.dir, 'state.json'); self.ctl = os.path.join(self.dir, 'ctl.env')
-        pathlib.Path(self.env).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=global-token\n')
-        pathlib.Path(self.state).write_text('{}')
-
-    def script(self, tail):
-        text = SCRIPT.read_text()
-        body = text[text.index('mask() {'):text.index('cmd_gh_app() {')]
-        head = ('set -euo pipefail\nENV_FILE=%s\nPJ_DIR=%s\nSTATE=%s\nCTL_ENV=%s\nSB_DOMAIN=t.sb.internal\nAPP_PORT=3000\nAPI_MODE=0\nPVE_HOST=x\n'
-                '_src_claude="global(env)"\n_src_gh=\ndie() { echo "[error] $*" >&2; exit 1; }\n'
-                'load_pj() { CUR_PJ=$1; }\nghapp_ready() { return 1; }\n' % (self.env, self.pj_dir, self.state, self.ctl))
-        return head + body + tail
-
-    # VM の中で回すと /run/sandbox/env の CLAUDE_CODE_OAUTH_TOKEN_* が bash に引き継がれて期待と食い違うので、鍵の変数は引き継がない
-    ENV = {k: v for k, v in os.environ.items() if not k.startswith('CLAUDE_CODE_OAUTH_TOKEN') and not k.startswith('CLAUDE_KEY_NAME')}
-
-    def run_token(self, *args, stdin=''):
-        return subprocess.run(['bash', '-c', self.script('cmd_token "$@"\n'), 'sandbox', *args], input=stdin, text=True,
-                              env=self.ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    def test_set_claude_family_writes_the_family_key_only(self):
-        r = self.run_token('set', 'alpha', 'claude:fable', stdin='fable-token-1\n')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        body = pathlib.Path(self.pj_dir, 'alpha.env').read_text()
-        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN_FABLE=fable-token-1\n', body)
-        self.assertNotIn('\nCLAUDE_CODE_OAUTH_TOKEN=', body)                       # 従来の鍵には触らない
-        r = self.run_token('clear', 'alpha', 'claude:fable')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN_FABLE', pathlib.Path(self.pj_dir, 'alpha.env').read_text())
-
-    def test_unknown_family_is_refused(self):
-        r = self.run_token('set', 'alpha', 'claude:gemini', stdin='x\n')
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn('fable|opus|sonnet|haiku', r.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.pj_dir, 'alpha.env')))
-
-    def test_show_lists_the_family_keys_that_are_set(self):
-        pathlib.Path(self.pj_dir, 'alpha.env').write_text('CLAUDE_CODE_OAUTH_TOKEN_OPUS=opus-token-aaaabbbbcccc\n')
-        script = self.script('set -a; source "$PJ_DIR/alpha.env"; set +a\ncmd_token show alpha\n')
-        r = subprocess.run(['bash', '-c', script], text=True, env=self.ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN_OPUS: opus-tok', r.stdout)
-        self.assertIn('claude-opus-*', r.stdout)
-        self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN_FABLE', r.stdout)                # 未設定の系統は出さない
 
 
 class InjectEnvFamilyLinesTest(unittest.TestCase):
@@ -108,9 +58,10 @@ class RunnerTokenFamilyTest(unittest.TestCase):
 
     def test_agent_command_selects_the_family_key_inside_the_vm(self):
         cmd = self.fake_run().agent_command('/home/dev/work/1/p.md', 'claude-opus-5', 60)
-        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN_OPUS:-$CLAUDE_CODE_OAUTH_TOKEN}" timeout 60m claude -p', cmd)
+        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_OPUS" timeout 60m claude -p', cmd)
         cmd = self.fake_run().agent_command('/home/dev/work/1/p.md', 'claude-fable-5-1', 60)
-        self.assertIn('${CLAUDE_CODE_OAUTH_TOKEN_FABLE:-$CLAUDE_CODE_OAUTH_TOKEN}', cmd)
+        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_FABLE"', cmd)
+        self.assertNotIn(':-$CLAUDE_CODE_OAUTH_TOKEN', cmd)                        # 無印の鍵に落ちる経路は無い（ADR-0060）
 
     def test_unknown_model_keeps_the_plain_command(self):
         cmd = self.fake_run().agent_command('/home/dev/work/1/p.md', 'gpt-9', 60)
@@ -118,9 +69,10 @@ class RunnerTokenFamilyTest(unittest.TestCase):
         self.assertIn('&& timeout 60m claude -p', cmd)
 
     def test_the_key_in_the_log_names_the_pool_key_when_take_chose_one(self):
-        """ログの key= は名前だけ。take が鍵プール（#379）から選んでいれば `(pool: <名前>)` が付く"""
+        """ログの key= は名前だけ。take が鍵プール（#379）から選んでいれば `(pool: <名前>)` が付く。系統の鍵が無ければ `none`"""
         cmd = run.Run.key_probe_command('OPUS')
-        for env, want in (({'CLAUDE_CODE_OAUTH_TOKEN': 'base'}, 'CLAUDE_CODE_OAUTH_TOKEN'),
+        for env, want in (({'CLAUDE_CODE_OAUTH_TOKEN': 'base'}, 'none'),
+                          ({}, 'none'),
                           ({'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'x'}, 'CLAUDE_CODE_OAUTH_TOKEN_OPUS'),
                           ({'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'x', 'CLAUDE_KEY_NAME_OPUS': 'opus-a'},
                            'CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)')):
@@ -129,15 +81,31 @@ class RunnerTokenFamilyTest(unittest.TestCase):
             self.assertEqual(r.stdout.strip(), want, r.stderr)
             self.assertNotIn('x', r.stdout.replace('CLAUDE_CODE_OAUTH_TOKEN', ''))   # 鍵の値は出さない
 
-    def test_the_prefix_falls_back_in_a_real_shell(self):
-        """VM と同じ bash で展開して、系統の鍵が無ければ従来の鍵、あれば系統の鍵が claude に渡ること"""
+    def test_the_prefix_never_falls_back_in_a_real_shell(self):
+        """VM と同じ bash で展開して、claude に渡るのは系統の鍵だけ（他の系統の鍵にも無印の鍵にも落ちない）"""
         prefix = self.fake_run().token_env_prefix('claude-opus-5')
-        for env, want in (({'CLAUDE_CODE_OAUTH_TOKEN': 'base'}, 'base'),
-                          ({'CLAUDE_CODE_OAUTH_TOKEN': 'base', 'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'opus-only'}, 'opus-only'),
-                          ({'CLAUDE_CODE_OAUTH_TOKEN': 'base', 'CLAUDE_CODE_OAUTH_TOKEN_FABLE': 'fable-only'}, 'base')):
+        for env, want in (({'CLAUDE_CODE_OAUTH_TOKEN': 'base', 'CLAUDE_CODE_OAUTH_TOKEN_OPUS': 'opus-only'}, 'opus-only'),
+                          ({'CLAUDE_CODE_OAUTH_TOKEN': 'base'}, ''),
+                          ({'CLAUDE_CODE_OAUTH_TOKEN': 'base', 'CLAUDE_CODE_OAUTH_TOKEN_FABLE': 'fable-only'}, '')):
             r = subprocess.run(['bash', '-c', prefix + 'printenv CLAUDE_CODE_OAUTH_TOKEN'], text=True, env={'PATH': os.environ['PATH'], **env},
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual(r.stdout.strip(), want, r.stderr)
+
+    def test_a_missing_family_key_stops_before_claude_is_launched(self):
+        """probe が none なら、認証エラーで工程を無駄にせず failure: key（人間待ち。戻しの回数は消費しない）で止める"""
+        r = self.fake_run(); r.dry = False; r.task = '379'; r.logs = []; r.log = lambda m: r.logs.append(m)
+        r.run_dir = pathlib.Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, r.run_dir, ignore_errors=True)
+        r.state = {'history': [], 'attachments': []}; r.wf = {'steps': []}; r.wf_name = 'feature'; r.title = 't'; r.ticket = 'x'
+        r.routes = {'MODEL_default': 'claude-opus-5', 'MODEL_coding': 'claude-opus-5'}; r.branch = 'b'; r.base = 'main'
+        r.project = {'name': 'p', 'repo': 'o/p', 'app_dir': '/home/dev/app', 'gates': 'g'}
+        r.sb = lambda cmd, **kw: 'none\n' if 'CLAUDE_KEY_NAME' in cmd else ''
+        launched = []; r.report_key_launch = lambda k: launched.append(k)
+        ok, info = r.run_agent({'id': 'implement', 'role': 'implementer'})
+        self.assertFalse(ok)
+        self.assertEqual(r.last_fail['failure'], 'key')
+        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN_OPUS', r.last_fail['reason']); self.assertIn('sandbox reinject 379', r.last_fail['reason'])
+        self.assertIn('Opus・Sonnet・Haiku に使う', r.last_fail['reason'])
+        self.assertEqual(launched, [])                                             # 起動していないので使用回数も報告しない
 
 
 if __name__ == '__main__':

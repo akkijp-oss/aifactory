@@ -9,7 +9,7 @@ flowchart LR
   A[1. provision.sh<br>template bake steps] --> B[2. Build template and pool<br>Proxmox]
   B --> C[3. project.yml<br>facts and policy]
   C --> D[4. gates.sh<br>quality gates]
-  D --> E[5. Token<br>claude setup-token]
+  D --> E[5. Key pool<br>sandbox keys add]
   E --> F[6. Install the GitHub App]
   F --> G[dry run → real run]
 ```
@@ -159,10 +159,10 @@ Claude keys are not per project: they live in the control plane's key pool. If t
 claude setup-token                                          # only if there is no key yet
 sandbox keys add <name> --fable --other --note "whose plan"  # into the key pool (the Keys screen works too)
 echo 'GH_REPO=owner/myapp' >> ~/.config/sandbox/pj/myapp.env
-sandbox token show myapp
+sandbox keys list
 ```
 
-`sandbox token set myapp`, which puts a key in the per-project file, is deprecated (it still works, but is not used while the pool has a matching key).
+The per-project file holds only `GH_REPO` (and, without a GitHub App, a fallback `GH_TOKEN`). A Claude key written there is ignored: the pool is the only source of the keys a VM receives, and a run with no matching key in the pool pauses until one is registered (ADR-0060 / ADR-0046).
 
 ## 6. Install the GitHub App 🧑
 
@@ -188,7 +188,7 @@ Read `prompt-implement-0.md` from the dry run and check that nothing is missing 
 | Template / pool | `sandbox ls` shows `sb-myapp-01` to `03` |
 | project.yml | The schema validation in `kb run --dry-run` passes |
 | gates.sh | The equivalent of `sandbox ssh <id> 'bash ~/work/gates.sh'` gives the same result as CI |
-| Tokens | `sandbox token show myapp` |
+| Keys | `sandbox keys list` has a key for Fable and one for Opus, Sonnet and Haiku; `GH_REPO` is in `pj/myapp.env` |
 | App | `sandbox gh-app status` shows `OK` |
 
 A project without `project.yml` can still be filed, but dispatch marks it `blocked`.

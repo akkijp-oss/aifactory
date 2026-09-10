@@ -89,12 +89,12 @@ Example output:
 ## Operational helpers (outside the contract)
 
 ```
-sandbox keys list|add|set|rm|token          the Claude key pool (keys.json on the control plane; the source of the Claude keys handed to VMs). Each key says whether it is used for Fable and/or for Opus, Sonnet and Haiku; take picks one per model
-sandbox token set <pj|global> gh            GitHub token (fallback when there is no GitHub App)
-sandbox token set <pj|global> [claude]      DEPRECATED: put a Claude key in the per-project / global env file. Not used while the pool has a matching key
-sandbox token rotate [claude|gh]            replace the token in the global file, every project file and ctl.env from one prompt
-sandbox token show [pj]                     which token is in effect (masked), how old it is, and whether this host is the control plane
-sandbox token clear <pj|global> [claude|gh] remove a token
+sandbox keys list|add|set|rm|token          the Claude key pool (keys.json on the control plane; the only source of the Claude keys handed to VMs). Each key says whether it is used for Fable and/or for Opus, Sonnet and Haiku; take picks one per model
+sandbox token set <pj|global> gh            GitHub token (fallback when there is no GitHub App). Claude keys are refused here: use sandbox keys add
+sandbox token rotate gh                     replace GH_TOKEN in the global file, every project file that holds it and ctl.env from one prompt
+sandbox token rotate claude[:<family>]      replace intake's key in ~/.config/aifactory/ctl.env (control plane only) and restart the console. Does not touch the pool
+sandbox token show [pj]                     where keys come from: intake's key (masked), the GitHub token source, the pool's key counts, and [stale] Claude lines left in env files
+sandbox token clear <pj|global> gh          remove a GitHub token
 sandbox reinject <task-id>|--all            re-inject the current settings into lent VMs (no rollback; for key rotation)
 sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print an installation token for <pj> / reissue GH_TOKEN to every lent VM
 ```
@@ -113,7 +113,7 @@ Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the contro
 | `keys rm <name> [--force]` | Remove a key. `--force` is required while a lent VM still holds it |
 | `keys pick --pj <pj> --task <id> [--need=…] [--current=…] --json` | Selection hook the runner calls once per step; returns the chosen key names and the per-family variables as JSON. Not meant to be typed by hand |
 
-The pick is "the key this ticket used before (while it is still eligible), otherwise the enabled key with a matching purpose that has gone longest without being used". While the pool holds any key, env keys are never handed to the VM. If a purpose the run needs (the runner passes `--need=fable,other`) has no key, `take` stops with `鍵なし:` without taking a VM and the run pauses until a key is registered (ADR-0046). Only an empty pool falls back to `pj/<pj>.env` and `env` (`token set` below, deprecated). Keys reach the VM through the per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`.
+The pick is "the key this ticket used before (while it is still eligible), otherwise the enabled key with a matching purpose that has gone longest without being used". The pool is the only source: a `CLAUDE_CODE_OAUTH_TOKEN` in `env`, `pj/<pj>.env` or the process environment is never handed to a VM, even when the pool is empty (ADR-0060). If a purpose the run needs (the runner passes `--need=fable,other`) has no key, `take` stops with `鍵なし:` without taking a VM and the run pauses until a key is registered (ADR-0046). Keys reach the VM through the per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`. The runner uses only the family variable; if the VM lacks it (a run started with `--from` on a step of another model, say), the step stops with `failure: key` before `claude` is launched.
 
 The pull backends (Mac / Windows / Linux) have no Proxmox lease ledger, so the runner calls `keys pick` once per step and passes the previously chosen names through `--current`. A run keeps the same key across its steps, and disabling that key moves the next step to another one. The chosen names are kept in the run's `state.json` under `keys`. `ASSIGNED` therefore grows once per step, and `IN_USE` never lists pull-backend runs because the ledger is Proxmox-only.
 
@@ -121,13 +121,14 @@ The pull backends (Mac / Windows / Linux) have no Proxmox lease ledger, so the r
 
 | Command | Writes to |
 |---|---|
-| `token set <pj> gh` | `GH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` (fallback when the App is not configured) |
-| `token set <pj>` / `token set <pj> claude:<family>` | **Deprecated** (ADR-0045). `CLAUDE_CODE_OAUTH_TOKEN` (`_<FAMILY>`) in `pj/<pj>.env`. Still works for compatibility, prints a notice, and is not used while the pool has a key for that purpose. Use `keys add` instead |
-| `token set global` | `~/.config/sandbox/env` (used only while the pool is empty; deprecated as well) |
-| `token rotate [claude\|gh]` | `~/.config/sandbox/env`, every `pj/*.env` that holds the key, and `~/.config/aifactory/ctl.env`. For claude its main job is replacing intake's key in `ctl.env`; it does not touch the pool |
-| `token show [pj]` | Source and masked value of the effective key, days since it was saved, whether this host is the control plane, and the pool's key counts per purpose |
+| `token set <pj\|global> gh` | `GH_TOKEN` in `~/.config/sandbox/pj/<pj>.env` or `~/.config/sandbox/env` (fallback when the App is not configured) |
+| `token set … claude` / `token set … claude:<family>` | **Refused** (exit non-zero, nothing written; ADR-0060). Claude keys go into the pool with `keys add` or the *Keys* screen; intake's key with `token rotate claude` |
+| `token clear <pj\|global> gh` | Remove `GH_TOKEN` from that file |
+| `token rotate gh` | `GH_TOKEN` in `~/.config/sandbox/env`, every `pj/*.env` that holds it, and `~/.config/aifactory/ctl.env`; restarts the console and finishes with `reinject --all` when VMs are lent out (ADR-0029) |
+| `token rotate claude[:<family>]` | Only `CLAUDE_CODE_OAUTH_TOKEN` (`_<FAMILY>`) in `~/.config/aifactory/ctl.env`, the key `intake` uses for its one `claude -p` call on the control plane; restarts the console. Touches neither env / pj files nor lent VMs, and refuses on a host without `ctl.env` |
+| `token show [pj]` | The host kind, one line saying VM keys come from the pool only (env-file keys are not used), intake's key from `ctl.env` (masked, days since issued), the `GH_TOKEN` source, the pool's key counts per purpose (`pool: 0 本` when `keys.json` is absent, with a note that runs pause), and a `[stale]` line for every `CLAUDE_CODE_OAUTH_TOKEN*=` left in `env` / `pj/<pj>.env`, with the `sed -i '/^CLAUDE_CODE_OAUTH_TOKEN/d' <file>` that removes it. Values are never printed |
 
-Rotate an expired token with a single `sandbox token rotate` on the control plane (the host that has `ctl.env`). It lists every file it updated, restarts `aifactory-console` when `ctl.env` changed (printing the command instead if `sudo -n` does not work), and finishes with `reinject --all` when VMs are lent out (ADR-0029). A `claude` process already running inside a VM still has to be restarted there.
+When a key expires: a pool key is replaced with `sandbox keys token <name>` (or the *Keys* screen) and pushed into lent VMs with `reinject`; intake's key with `sandbox token rotate claude` on the control plane (the host that has `ctl.env`; it prints the `systemctl restart` command instead if `sudo -n` does not work). A `claude` process already running inside a VM still has to be restarted there.
 
 ### gh-app
 
@@ -145,12 +146,13 @@ The permissions requested are "those we want that the App actually holds". Add a
 |---|---|
 | `~/.config/sandbox/env` | `SB_TENANT` (default `main`; derives `SB_PREFIX` = `sb-<t>`, `SB_DOMAIN` = `<t>.sb.internal`, `SB_POOL` = `sb-<t>`) / `PVE_HOST` (ssh alias of the Proxmox host; required in ssh mode, no default) or `PVE_API_URL` + `PVE_API_TOKEN` (API mode: a token scoped to the tenant's pool; `PVE_API_CA` or `PVE_API_INSECURE=1`; ADR-0017) / `GW_SSH` (ssh target of the gateway LXC; required, no default) / `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP`  / `SB_POOL_NET` (default `10.77.1`) / `SB_POOL_BASE` (default `9200`) / `SB_IDLE_STOP_HOURS` (hours of disuse before a VM becomes a stop candidate; default 24, `0` disables) / `SB_IDLE_STOP_KEEP` (candidates kept running; default 10). Skeleton `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | Another tenant's settings on the maintainer's machine. `SB_TENANT=<t>` makes `sandbox` and `proxmox/run.sh` read it; state goes to `<t>.state.json`, per-project files to `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, `CLAUDE_CODE_OAUTH_TOKEN`, optionally `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU` (per model family), (fallback `GH_TOKEN`), `SB_IDLE_STOP_HOURS` (override for this project only) |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`, optionally a fallback `GH_TOKEN`, `SB_IDLE_STOP_HOURS` (override for this project only), `APP_PORT`. No Claude keys: a `CLAUDE_CODE_OAUTH_TOKEN*` line here is ignored and reported as `[stale]` by `token show` (ADR-0060) |
+| `~/.config/sandbox/keys.json` | The Claude key pool (mode 600). Edited only through `sandbox keys` and the console's *Keys* screen |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App. Created by `sandbox/bin/gh-app-setup` |
 | `~/.config/sandbox/state.json` | Lending table. `{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | ssh settings for `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*`. Skeleton `ssh_config.example` |
 
-Read order: `env` (global default) → `pj/<pj>.env` (per-project override) → `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN` (one-off override). A `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` exported in the shell is **ignored** (it once silently overrode a project setting).
+Read order for `GH_TOKEN`: `env` (global default) → `pj/<pj>.env` (per-project override) → `SANDBOX_GH_TOKEN` (one-off override). A `GH_TOKEN` exported in the shell is **ignored** (it once silently overrode a project setting). Claude keys are not read from these files or the shell at all; `sandbox` drops any `CLAUDE_CODE_OAUTH_TOKEN*` it finds there and picks from the pool (ADR-0060).
 
 ## What is injected into the VM
 
@@ -160,7 +162,10 @@ Read order: `env` (global default) → `pj/<pj>.env` (per-project override) → 
 TASK_ID=204
 SANDBOX_PJ=kumitate
 SANDBOX_HOST=task-204.sb.internal
-CLAUDE_CODE_OAUTH_TOKEN=…
+CLAUDE_CODE_OAUTH_TOKEN=…                # the Opus / Sonnet / Haiku key, for a human using claude interactively in the VM
+CLAUDE_CODE_OAUTH_TOKEN_FABLE=…          # one per model family, picked from the pool; the runner uses only these
+CLAUDE_CODE_OAUTH_TOKEN_OPUS=…
+CLAUDE_KEY_NAME_FABLE=max-akki           # the pool name, so logs can say which key; the value is never recorded
 GH_TOKEN=ghs_…
 GH_REPO=akkijp/kumitate
 GH_TOKEN_EXPIRES_AT=2026-09-06T03:55:00Z

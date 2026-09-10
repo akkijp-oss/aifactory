@@ -11,7 +11,7 @@ flowchart LR
   A[1. provision.sh<br>テンプレートの作成手順] --> B[2. テンプレとプールを作る<br>Proxmox]
   B --> C[3. project.yml<br>基本情報と作業ルール]
   C --> D[4. gates.sh<br>品質ゲート]
-  D --> E[5. トークン<br>claude setup-token]
+  D --> E[5. 鍵<br>鍵プールに登録]
   E --> F[6. GitHub App を install]
   F --> G[dry-run → 本実行]
 ```
@@ -161,10 +161,10 @@ Claude の鍵は PJ ごとではなく、制御系の鍵プールで持ちます
 claude setup-token                                          # 鍵がまだ無いときだけ
 sandbox keys add <名前> --fable --other --note "誰の契約か"  # 鍵プールに登録（console の「鍵」画面でも可）
 echo 'GH_REPO=owner/myapp' >> ~/.config/sandbox/pj/myapp.env
-sandbox token show myapp
+sandbox keys list                                           # 用途の合う有効な鍵があること
 ```
 
-`sandbox token set myapp` で PJ ファイルに鍵を置く古い方式は非推奨です（互換のため動きますが、プールに合う鍵があれば使われません）。
+VM に渡る Claude の鍵はこのプールからだけ選ばれます。`pj/myapp.env` に `CLAUDE_CODE_OAUTH_TOKEN` を書いても使われません（ADR-0060）。
 
 ## 6. GitHub App をインストールする 🧑
 
@@ -190,7 +190,7 @@ dry-run の `prompt-implement-0.md` を読んで、facts に足りないもの�
 | テンプレ / プール | `sandbox ls` に `sb-myapp-01〜03` が見える |
 | project.yml | `kb run --dry-run` のスキーマ検証が通る |
 | gates.sh | `sandbox ssh <id> 'bash ~/work/gates.sh'` 相当が CI と同じ結果を出す |
-| トークン | `sandbox token show myapp` |
+| 鍵 | `sandbox keys list` に用途の合う有効な鍵がある |
 | App | `sandbox gh-app status` で `OK` |
 
 `project.yml` がないプロジェクトはチケットの作成はできますが、dispatch が `blocked` にします。

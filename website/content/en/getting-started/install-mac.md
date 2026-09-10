@@ -43,7 +43,7 @@ Adjust `~/.config/sandbox/env` to your environment. `PVE_HOST` and `GW_SSH` have
 | `SB_POOL_NET` | The /24 prefix where pool VMs live. Keep it equal to `SB_NET.1` on the Proxmox side | `10.77.1` |
 | `SB_POOL_BASE` | The first VMID of the pool. Keep it equal to `SB_POOL_BASE` on the Proxmox side | `9200` |
 
-Do not put tokens (`CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN`) in this file; they are saved per project in the next section.
+Do not put Claude keys (`CLAUDE_CODE_OAUTH_TOKEN`) in this file: they go into the key pool in the next section, and a line left here is ignored (ADR-0060). The per-project file holds only `GH_REPO`.
 
 ### Where operational data lives (workspace)
 
@@ -79,9 +79,9 @@ glue/bin/dispatch --help
 workflow/bin/run
 ```
 
-## 4. Save a Claude Code token per project 🧑
+## 4. Register a Claude Code token in the key pool 🧑
 
-To run Claude Code inside a VM, issue a long-lived token and register it in the **key pool** (one place, not per project; ADR-0044 / ADR-0045).
+To run Claude Code inside a VM, issue a long-lived token and register it in the **key pool** (one place, not per project; ADR-0044 / ADR-0045). The pool is the only source of the keys a VM receives: `sandbox token set … claude` no longer saves anything, and a `CLAUDE_CODE_OAUTH_TOKEN` line in an env file is ignored (ADR-0060).
 
 ```bash
 claude setup-token                              # authenticate in the browser → the token is printed
@@ -89,17 +89,16 @@ sandbox keys add max-akki --fable --other       # paste it interactively → sav
 sandbox keys list                               # masked confirmation (last 4 characters)
 ```
 
-`--fable` marks a key for Fable (planning, design and review steps), `--other` for Opus, Sonnet and Haiku (implementation and research steps); one key may carry both. `sandbox token set <pj>`, the old per-project file, is deprecated.
+`--fable` marks a key for Fable (planning, design and review steps), `--other` for Opus, Sonnet and Haiku (implementation and research steps); one key may carry both.
 
 The per-project file (`~/.config/sandbox/pj/<pj>.env`) holds `GH_REPO=owner/name`, which the GitHub App uses to scope its token.
 
 ```bash
 cat ~/.config/sandbox/pj/kumitate.env
 # GH_REPO=akkijp/kumitate
-# CLAUDE_CODE_OAUTH_TOKEN=...
 ```
 
-Why per project, and why not bake in OAuth: see [Security and secrets](../concepts/security.md) and ADR-0005 / 0006.
+Why the pool is the only source, and why not bake in OAuth: see [Security and secrets](../concepts/security.md) and ADR-0005 / 0044 / 0060.
 
 ## 5. Create and install the GitHub App 🤖 → 🧑
 
@@ -125,7 +124,7 @@ launchctl list | grep aifactory
 ```bash
 ls -l ~/.ssh/conf.d/aifactory/ ~/.config/sandbox/ ~/.config/sandbox/pj/
 sandbox gh-app status
-sandbox token show
+sandbox keys list
 ```
 
 If the sandbox already exists, also check connectivity.

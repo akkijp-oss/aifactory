@@ -29,13 +29,13 @@ sandbox reinject <id>                                # 実行中の VM に今の
 
 `claude setup-token` の長期トークンには有効期限があります。切れると工程が `failure: key` で止まり、チケットは `blocked` になります。`sandbox keys list` の登録日で期限が近いことに気づけます。
 
-**`sandbox token set <pj>` は非推奨です。** PJ ごとの設定ファイルに鍵を置く古い方式で、互換のため動きますが、プールに鍵が 1 本でもあれば使われません（実行すると注意が出ます）。`sandbox token rotate` は、intake が使う `ctl.env` の鍵を差し替えるためのもので、プールは触りません。
+**`sandbox token set` / `token clear` は GitHub トークン（`gh`）専用です。** `claude` を指定すると何も書かずに止まり、`sandbox keys add` を案内します。`sandbox token rotate claude` は、intake が制御系で使う `ctl.env` の鍵を差し替えるためのもので、プールも env ファイルも触りません（ADR-0060）。
 
 **要る用途の鍵がプールに無いと、run は一時停止します**（ADR-0046）。VM は取らず、チケットは未着手に戻り、メモに「Claude の鍵が無いので一時停止（必要: …）」と出ます。「鍵」画面で鍵を登録すると、5 分ごとの timer が初めから回し直します。鍵を全部「有効」から外せば工場は止まり、戻せば再開する、という使い方ができます。
 
-### Claude の鍵プール（制御系にまとめて置く）
+### 鍵の選ばれ方
 
-鍵が何本もあるときは、プロジェクトごとに配る代わりに、制御系の `~/.config/sandbox/keys.json` に名前を付けて並べておけます。VM を貸し出すとき（`take`）に、系統ごとに 1 本ずつ選んで渡します。
+鍵は制御系の `~/.config/sandbox/keys.json` に名前を付けて並べておき、VM を貸し出すとき（`take`）に系統ごとに 1 本ずつ選んで渡します。VM に渡る Claude の鍵の出どころはこのプールだけで、`~/.config/sandbox/env` や `pj/<pj>.env` に残った `CLAUDE_CODE_OAUTH_TOKEN` は読まれません（`sandbox token show` が `[stale]` で挙げるので消してください。ADR-0060）。
 
 ```bash
 sandbox keys add fable-main --fable      # Fable 用の契約の鍵（値は対話入力）
@@ -44,7 +44,8 @@ sandbox keys list                        # 名前・フラグ・末尾 4 文字�
 sandbox keys set opus-a --disable        # しばらく使わない（使っている貸出には reinject で切り替える）
 ```
 
-選ばれるのは、フラグの合う鍵のうち最後に使ってから最も時間が経ったものです。同じチケットの `reinject` では同じ鍵を使い続け、その鍵が使えなくなったときだけ選び直します。候補が 1 本も無い系統は、上のプロジェクトごとの鍵に落ちます（プールが空なら今までどおりです）。コンソールの「鍵」画面からも同じことができます。詳しくは [sandbox CLI の keys](../reference/cli-sandbox.md) と ADR-0044 を見てください。
+選ばれるのは、フラグの合う鍵のうち最後に使ってから最も時間が経ったものです。同じチケットの `reinject` では同じ鍵を使い続け、その鍵が使えなくなったときだけ選び直します。候補が 1 本も無い系統があれば、`take` は VM を取らずに「鍵なし:」で止まり、run は上のとおり一時停止します（env ファイルの鍵には落ちません）。コンソールの「鍵」画面からも同じことができます。詳しくは [sandbox CLI の keys](../reference/cli-sandbox.md) と ADR-0044 / ADR-0060 を見てください。
+
 ### 利用枠切れ（トークン切れ）は自動で続きから再開する
 
 鍵の**利用枠**（5 時間 / 7 日の窓）を使い切ると、エージェントの工程は `claude -p` が拒否されて止まります。runner はこれを普通の失敗と分けて扱い、途中までの変更を `wip: usage limit` としてコミットして退避ブランチに保全し、チケットを **未着手（todo）に戻します**（メモに「一時停止」と解除見込み時刻）。制御系の systemd timer `aifactory-resume.timer` が 5 分ごとに `dispatch --resume-paused` を呼び、解除時刻を過ぎたものから `kb run <id> --from` で**続き**（同じ工程を退避ブランチの上で）を回します。人が何かする必要はありません（ADR-0043）。
@@ -148,13 +149,13 @@ sandbox release 999
 | `reset` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | なければ破棄して `40-pool.sh` |
 | VM から外に出られない | `iptables -t nat -S \| grep 10.77`、`pve-firewall status` | SDN 再適用 `pvesh set /cluster/sdn`。LAN・他 VM・tailnet 宛ては仕様で不可 |
 | Mac から VM に届かない（ファイアウォール有効化後） | `/etc/pve/firewall/<vmid>.fw`、`qm config <vmid> \| grep firewall` | `50-firewall.sh` を再実行 |
-| Claude Code が認証エラー（`failure: key`） | 実行記録の `key=… (pool: <名前>)` でどの鍵か分かる。`sandbox keys list` の登録日 | `claude setup-token` → `sandbox keys token <名前>`（値の入れ替え）か「鍵」画面。intake の鍵は `sandbox token rotate`。止まった run は `kb run <id> --from` で続きから |
+| Claude Code が認証エラー（`failure: key`） | 実行記録の `key=… (pool: <名前>)` でどの鍵か分かる。`sandbox keys list` の登録日 | `claude setup-token` → `sandbox keys token <名前>`（値の入れ替え）か「鍵」画面。intake の鍵は `sandbox token rotate claude`。止まった run は `kb run <id> --from` で続きから |
 | 工程が「利用枠の上限」で止まった（チケットが未着手に戻り、メモに一時停止） | `kb resumable`、`journalctl -u aifactory-resume` | 何もしない。解除時刻を過ぎると timer が続きを回す。急ぐなら「鍵」画面で別の鍵を足して `dispatch --resume-paused` |
 | Proxmox ホストが落ちた | `ssh $PVE_HOST` 不可、`pvecm nodes`（クラスタなら別ノードから） | 電源を入れる（WoL / IPMI / 物理ボタン）。プールは onboot=0 なので手で `qm start` |
 
 ## 定期メンテナンス
 
 - 月 1: base テンプレートの OS 更新
-- 鍵の期限が近づいたら（`sandbox keys list` の登録日）`claude setup-token` → `sandbox keys token <名前>`（intake 用の `ctl.env` は `sandbox token rotate`）
+- 鍵の期限が近づいたら（`sandbox keys list` の登録日）`claude setup-token` → `sandbox keys token <名前>`（intake 用の `ctl.env` は `sandbox token rotate claude`）
 - `workspace/runs/` が増えたら、古い run を消すか別置きにする（記録としては `state.json` と `work/` があれば十分）
 - 完了したチケットが増えても、通常は削除する必要はありません。履歴は `kb list --all` で確認できます

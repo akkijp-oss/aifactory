@@ -96,7 +96,8 @@ workspace/                           # 既定 <repo>/workspace/。git 追跡外
 | パス | 内容 |
 |---|---|
 | `~/.config/sandbox/env` | CLI の設定（`PVE_HOST` / `GW_SSH` など） |
-| `~/.config/sandbox/pj/<pj>.env` | プロジェクトごとのトークンと `GH_REPO` |
+| `~/.config/sandbox/keys.json` | Claude の鍵プール（VM に渡す鍵の正本） |
+| `~/.config/sandbox/pj/<pj>.env` | プロジェクトごとの `GH_REPO`（任意でフォールバック用 `GH_TOKEN`） |
 | `~/.config/sandbox/gh-app/` | GitHub App の ID と秘密鍵 |
 | `~/.config/sandbox/state.json` | VM の貸出台帳 |
 | `~/.ssh/conf.d/aifactory/` | VM 用の鍵と ssh 設定 |

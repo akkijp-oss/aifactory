@@ -43,7 +43,7 @@ cp sandbox/templates/env.example ~/.config/sandbox/env && chmod 600 ~/.config/sa
 | `SB_POOL_NET` | プール VM が並ぶ /24 のプレフィックス。Proxmox 側の `SB_NET.1` とそろえる | `10.77.1` |
 | `SB_POOL_BASE` | プール VM の VMID の起点。Proxmox 側の `SB_POOL_BASE` とそろえる | `9200` |
 
-トークン（`CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN`）はこのファイルには書かず、次の節でプロジェクトごとに保存します。
+Claude の鍵はこのファイルには書きません（書いても読まれません）。次の節で**鍵プール**に登録します。プロジェクトごとのファイルに書くのは `GH_REPO` だけです。
 
 ### 作業データの置き場（workspace）
 
@@ -79,7 +79,7 @@ glue/bin/dispatch --help
 workflow/bin/run
 ```
 
-## 4. Claude Code のトークンをプロジェクトごとに保存する 🧑
+## 4. Claude Code のトークンを鍵プールに登録する 🧑
 
 VM の中で Claude Code を動かすには、長期トークンを発行して**鍵プール**に登録します（プロジェクトごとではなく 1 か所。ADR-0044 / ADR-0045）。
 
@@ -89,17 +89,16 @@ sandbox keys add max-akki --fable --other       # 対話で貼り付け → ~/.c
 sandbox keys list                               # 末尾 4 文字だけのマスク表示で確認
 ```
 
-`--fable` は Fable（計画・設計・レビューの工程）に、`--other` は Opus・Sonnet・Haiku（実装・調査の工程）に使う鍵という印です。1 本の鍵に両方付けてかまいません。`sandbox token set <pj>` でプロジェクト別ファイルに鍵を置く古い方式は非推奨です。
+`--fable` は Fable（計画・設計・レビューの工程）に、`--other` は Opus・Sonnet・Haiku（実装・調査の工程）に使う鍵という印です。1 本の鍵に両方付けてかまいません。VM に渡る Claude の鍵はこのプールからだけ選ばれ、`~/.config/sandbox/env` や `pj/<pj>.env` に `CLAUDE_CODE_OAUTH_TOKEN` を書いても使われません（ADR-0060）。
 
 プロジェクト別ファイル（`~/.config/sandbox/pj/<pj>.env`）には、GitHub App がトークンを限定するための `GH_REPO=owner/name` を書きます。
 
 ```bash
 cat ~/.config/sandbox/pj/kumitate.env
 # GH_REPO=akkijp/kumitate
-# CLAUDE_CODE_OAUTH_TOKEN=...
 ```
 
-認証情報をプロジェクトごとに分ける理由や、OAuth の認証状態をテンプレートに保存しない理由は、[安全対策と認証情報の管理](../concepts/security.md) と ADR-0005 / 0006 を参照してください。
+Claude の鍵を 1 か所（鍵プール）で持つ理由や、OAuth の認証状態をテンプレートに保存しない理由は、[安全対策と認証情報の管理](../concepts/security.md) と ADR-0005 / 0044 / 0060 を参照してください。
 
 ## 5. GitHub App を作ってインストールする 🤖 → 🧑
 
@@ -125,7 +124,7 @@ launchctl list | grep aifactory
 ```bash
 ls -l ~/.ssh/conf.d/aifactory/ ~/.config/sandbox/ ~/.config/sandbox/pj/
 sandbox gh-app status
-sandbox token show
+sandbox keys list
 ```
 
 sandbox の実機がある場合は、さらに次で疎通を見ます。

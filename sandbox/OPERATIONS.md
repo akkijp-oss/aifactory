@@ -134,23 +134,11 @@ sandbox release 013 --force     # 手で直した VM を巻き戻さずに返す
 
 cmux から使うときは surface で `sandbox take … && sandbox ssh …` を1行で打つ。surface = ssh セッション = 1エージェント。
 
-## トークンの管理（PJ ごと。ADR-0006）
+## 鍵の管理
 
-```bash
-sandbox token rotate                  # 期限切れの差し替えはこれ 1 本（制御系で）。global・鍵を持つ全 PJ・ctl.env を対話入力 1 回で更新し、
-                                      #   更新箇所を一覧、aifactory-console を restart、貸出中 VM に reinject --all まで（ADR-0029）
-sandbox token set kumitate            # 【非推奨・ADR-0045】Claude の鍵を PJ ファイルに置く古い方式。実行すると注意が出る。鍵は下の鍵プールへ
-sandbox token set myapp gh            # GitHub トークン（GitHub App 未設定時のフォールバック）
-sandbox token show myapp              # 今どれが効いているか（マスク表示・発行からの日数・このホストが制御系か）
-sandbox reinject --all                # 貸出中の VM 全部に差し替え後の値を再注入（巻き戻しなし）。VM 内の claude は再起動
-SANDBOX_CLAUDE_TOKEN=xxx sandbox take kumitate 021      # 一回限りの上書き（シェルの CLAUDE_CODE_OAUTH_TOKEN は無視される）
-```
+### Claude の鍵プール（VM に渡す Claude の鍵の唯一の出どころ。ADR-0044 / ADR-0060）
 
-優先順位: `SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（一回限り） > `pj/<pj>.env` > `env`。`token show <pj>` に出どころが出る。`take` / `reset` は task の PJ を覚えているので、以後の操作で PJ を指定し直す必要はない。
-
-### Claude の鍵プール（VM に渡す Claude の鍵の正本。ADR-0044 / ADR-0045）
-
-VM に渡す Claude の鍵は、制御系の `~/.config/sandbox/keys.json`（600）に名前を付けて登録します。`take` がモデルごとに 1 本ずつ選んで VM に渡します。鍵ごとに「Fable に使う」（`--fable`。計画・設計・レビューの工程）「Opus・Sonnet・Haiku に使う」（`--other`。実装・調査の工程）を持ち、契約ごとに分けられます。console の「鍵」画面（`#/keys`）と同じファイルなので、どちらから登録しても同じです。2026-09-10 に main テナントの PJ ファイルの鍵は全部プールへ移しました。
+VM に渡す Claude の鍵は、制御系の `~/.config/sandbox/keys.json`（600）に名前を付けて登録します。`take` がモデルごとに 1 本ずつ選んで VM に渡します。鍵ごとに「Fable に使う」（`--fable`。計画・設計・レビューの工程）「Opus・Sonnet・Haiku に使う」（`--other`。実装・調査の工程）を持ち、契約ごとに分けられます。console の「鍵」画面（`http://ctl.<t>.sb.internal:8765/#/keys`。近道は `g k`）と同じファイルなので、どちらから登録しても同じです。ここ以外に Claude の鍵の置き場はありません（`~/.config/sandbox/env` と `pj/<pj>.env` に鍵を置く ADR-0006 の方式は ADR-0060 で廃止。残っている行は読まれない）。
 
 ```bash
 claude setup-token                                  # 鍵を作る（対話）
@@ -159,16 +147,37 @@ sandbox keys add opus-a --other                     # Opus / Sonnet / Haiku 用
 sandbox keys list                                   # 名前・用途・有効・末尾 4 文字・登録日・割り当て回数（ASSIGNED）・最後に起動した日時・起動回数（LAUNCHES = runner が実際にその鍵で claude を起動した回数）・使用中のチケット
 sandbox keys set opus-a --disable                   # しばらく使わない（貸出中の task が使っていれば reinject の案内が出る）
 sandbox keys set opus-a --fable=on                  # 用途を変える
-sandbox keys token opus-a                           # 値だけ差し替える（名前と統計はそのまま）
+sandbox keys token opus-a                           # 値だけ差し替える（名前と統計はそのまま）。期限切れの差し替えもこれ
 sandbox keys rm opus-a                              # 消す（貸出中の task が使っていれば --force が要る）
 sandbox reinject <task>                             # 無効化・削除・差し替えを貸出中の VM に反映（次の claude -p から効く）
+sandbox token show                                  # 出どころの確認（プールの本数・intake の鍵・GitHub トークン。値はマスク）
 ```
 
 - 選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。使用量が鍵の間で均されます。
-- プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（チケットは todo に戻り、鍵を登録すると timer が回し直す。ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（`sandbox token set`。非推奨）を使います。
+- 要る用途の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（チケットは todo に戻り、鍵を登録すると timer が回し直す。ADR-0046）。プールが空でも env ファイルに鍵が残っていても同じです（env の鍵に落ちる経路は無い。ADR-0060）。
 - 鍵の値はどこにも表示しません。`keys list` も console も MCP も、名前と末尾 4 文字だけを出します。run のログには `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` のように名前だけ残ります。
-- console の「鍵」画面（左のナビ。近道は `g k`）から同じことができます。使わない設定にする / 消すと、その鍵を使っている貸出に `sandbox reinject` のジョブが自動で起きます。
-- `sandbox token rotate` はプールを触りません（`env` と `ctl.env` の鍵だけを差し替えます）。プールの鍵を替えるのは `sandbox keys token <名前>` です。
+- console の「鍵」画面から同じことができます。使わない設定にする / 消すと、その鍵を使っている貸出に `sandbox reinject` のジョブが自動で起きます。
+- `sandbox token show` が `[stale]` を出したら、古い運用で env / pj ファイルに書いた `CLAUDE_CODE_OAUTH_TOKEN*=` の行が残っています。使われませんが、`sed -i '/^CLAUDE_CODE_OAUTH_TOKEN/d' <file>` で消してください。
+
+### intake の鍵（制御系の ctl.env。ADR-0029）
+
+`glue/bin/intake`（自由文 → チケット）は制御系で `claude -p` を 1 回呼びます。その鍵だけは `~/.config/aifactory/ctl.env` にあり（プールの対象外）、差し替えは制御系で次の 1 コマンドです。
+
+```bash
+sandbox token rotate claude           # ctl.env の CLAUDE_CODE_OAUTH_TOKEN を対話入力 1 回で差し替え、aifactory-console を restart（VM の鍵には触らない）
+sandbox token rotate claude:fable     # 系統別に置いているなら（CLAUDE_CODE_OAUTH_TOKEN_FABLE）
+```
+
+### GitHub の静的トークン（GitHub App が無いときだけ。ADR-0006 / ADR-0029）
+
+```bash
+sandbox token set myapp gh            # PJ 別（pj/myapp.env の GH_TOKEN）。global なら sandbox token set global gh
+sandbox token rotate gh               # global・GH_TOKEN を持つ全 PJ・ctl.env を対話入力 1 回で更新し、更新箇所を一覧、console restart、貸出中 VM に reinject --all
+sandbox token show myapp              # 今どれが効いているか（出どころ・発行からの日数・このホストが制御系か）
+SANDBOX_GH_TOKEN=xxx sandbox take kumitate 021      # 一回限りの上書き（シェルの GH_TOKEN は無視される）
+```
+
+優先順位: `SANDBOX_GH_TOKEN`（一回限り） > `pj/<pj>.env` > `env`。GitHub App（下）があればそちらが優先で、静的トークンは使われません。`take` / `reset` は task の PJ を覚えているので、以後の操作で PJ を指定し直す必要はない。
 
 ### GitHub の push / PR 権限（GitHub App。ADR-0008）
 
@@ -234,7 +243,7 @@ sandbox idle-stop --keep 0      # この 1 回だけ足切りなし（候補を�
 | `release` / `reset` が「巻き戻しに失敗」で止まる | `sandbox ls`、`qm config 92NN | grep lock` | 台帳は残っているので少し待って再実行（既定で 3 回・10 秒間隔まで自動再試行。`SB_ROLLBACK_TRIES` / `SB_ROLLBACK_WAIT` で伸ばせる）。ロックが残り続けるなら Proxmox 側で task を確認。手で直したら `sandbox release <task> --force` |
 | VM から外に出られない | `ssh "$PVE_HOST" 'iptables -t nat -S | grep 10.77'`、`pve-firewall status` | SDN を再適用 `pvesh set /cluster/sdn`。firewall で落ちている場合は `/etc/pve/firewall/cluster.fw` の group sandbox を確認（LAN / 他 VM / tailnet 宛ては仕様で不可。ADR-0010） |
 | Mac から VM に届かない（firewall 有効化後） | VM の `/etc/pve/firewall/<vmid>.fw` と `qm config <vmid> | grep firewall` | `sandbox/proxmox/run.sh 50-firewall.sh` を再実行。プールは clean スナップショットに firewall=1 が含まれている必要がある |
-| Claude Code が認証エラー | VM 内 `env | grep CLAUDE_CODE_OAUTH_TOKEN`、`sandbox token show <pj>` の発行日数 | 制御系で `claude setup-token` → `sandbox token rotate`（global・全 PJ・ctl.env の更新、console restart、`reinject --all` まで 1 コマンド。VM 内の claude は再起動） |
+| Claude Code が認証エラー | run のログの `key=…(pool: <名前>)` でどの鍵か、`sandbox keys list` の登録日 | 制御系で `claude setup-token` → `sandbox keys token <名前>`（または console の「鍵」画面）→ 貸出中なら `sandbox reinject <task>`。intake（制御系）の鍵なら `sandbox token rotate claude` |
 | Proxmox ノードが落ちた | `ssh "$PVE_HOST"` 不可、`pvecm nodes` | ノードの電源投入（遠隔でできるかは環境次第。できない環境では人間の物理操作）。プールは onboot=0 なので手で `qm start` |
 
 ## テナントの運用（ADR-0017）
@@ -249,4 +258,4 @@ sandbox idle-stop --keep 0      # この 1 回だけ足切りなし（候補を�
 
 ## 定期メンテ
 - 月1回: base テンプレートの OS 更新（上記「base 層」）。頻繁にやると PJ 層の作り直しが負担なので月1
-- `claude setup-token` のトークンは有効期限がある。切れたら人間待ちに戻る。`sandbox token show` の「発行から N 日」で切れる前に気づき、制御系で `sandbox token rotate`
+- `claude setup-token` のトークンは有効期限がある。切れたら人間待ちに戻る。`sandbox keys list` の ISSUED（登録日）で切れる前に気づき、制御系で `sandbox keys token <名前>`（intake の鍵は `sandbox token rotate claude`）

@@ -21,7 +21,7 @@ BRANCH = "sandbox/358-feature-auto-merge"
 
 FAKE_SANDBOX = r"""#!/usr/bin/env bash
 case "$1" in
-  ssh) shift 2; exec bash -c "$1" ;;
+  ssh) shift 2; CLAUDE_CODE_OAUTH_TOKEN_FABLE=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_OPUS=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_SONNET=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_HAIKU=fake-token-pool exec bash -c "$1" ;;
 esac
 exit 0
 """
