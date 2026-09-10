@@ -126,6 +126,8 @@ app_dir: /Users/admin/app
 
 制御系は `AIFACTORY_WORKER_DB`（既定 `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`）を使用する。`sandbox` のPJ別設定にGitHubリポジトリとClaude OAuthトークンを用意する。GitHub Appのトークンは対象リポジトリだけに払い出し、認証情報はHTTPSで運ぶ一時stdinファイルに格納する。操作DBと `show` に値を保存せず、受領完了後に一時ファイルを削除する。操作IDと入力のハッシュは記録に残る。コマンド自身で認証情報を出力しないこと。
 
+鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使い、どちらにも鍵が無ければ**runnerのプロセスに残っている値には落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
+
 `kb run <id> --dry-run` はVMを使わず、Macの作業パスを含む依頼文を確認する。本実行は `kb run <id>`。MCPの `ticket_run` も同じrunnerを呼ぶ。`dispatch` はMacがoffline、予約中、基準イメージ未準備、またはlifecycle非対応の場合にそのチケットを飛ばし、他のチケットへ進む。MCPから直接開始したrunは、onlineのMacの基準イメージ取得を最大6時間待機できる（`AIFACTORY_MAC_PREPARE_WAIT_S` で秒数を指定）。待機中はleaseもVMも割り当てず、`prepare.log` とジョブログに記録する。
 
 ゲストは4 CPU・8 GiBで起動し、ホストディレクトリ・クリップボード・音声を共有しない。SoftnetでプライベートIPv4、リンクローカル、tailnet宛てを遮断し、ゲストDNSは公開DNSに設定する。基準VMのネットワークサービス名は `Ethernet` が前提。異なる構成はprepareが失敗するので、実機で検証してから使用する。

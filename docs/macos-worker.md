@@ -88,6 +88,8 @@ gates: gates.sh
 
 制御系にはsandboxのPJ別GitHub App設定とClaude OAuthトークンを用意する。GitHub Appの対象リポジトリへのインストールとPR作成に必要な権限を確認する。値をPJ定義・チケット・ログへ書かない。
 
+鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使い、どちらにも鍵が無ければ**runnerのプロセスに残っている値には落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
+
 ## 依頼と進捗確認
 
 以下は制御系のリポジトリルートから実行する。`AIFACTORY_WORKSPACE` はその環境の運用ディレクトリに設定しておく。

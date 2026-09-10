@@ -31,6 +31,7 @@ def backend(Run):
         def take(self):
             if self.dry:
                 return
+            self.record_needed_keys()
             import aifactory_paths as paths
             # --wait で take を呼び直せるよう、lock と lease id と Client は 1 回だけ作る（チケット 373）
             if self.run_lock is None:

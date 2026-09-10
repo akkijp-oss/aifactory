@@ -66,6 +66,8 @@ gates: gates.ps1
 
 `app_dir` must be `<work_root>/app`; the runner translates it to `<work_root>/<lease>/app`. Artifacts go into `<work_root>/<lease>/work/<task>`. Configure project-scoped GitHub App and Claude credentials on the control plane.
 
+Where keys come from: **the control-plane key pool (`~/.config/sandbox/keys.json`) is the source of truth for Claude keys**. The runner calls `sandbox keys pick` once per step and writes the per-family keys it chose into the guest's `runtime.env` (ADR-0044 / ADR-0046). Disabling a key moves the next step to another one. Only an empty pool falls back to `pj/<pj>.env` and `env` for compatibility; if neither holds a key the run **never falls back to whatever is left in the runner's process** and pauses with `鍵なし` until a key is registered. Jobs started from the console and MCP take their keys from `~/.config/aifactory/ctl.env`, re-read for every job.
+
 Optional `provision.ps1` runs as the ordinary task account before credentials and cloning. Preinstall tools that require Administrator privileges. Use a `.ps1` gate and propagate external command failures explicitly with `exit $LASTEXITCODE`. The shared workflow step identifier remains `gates.sh`; the Windows backend invokes the project's PowerShell gate. PR creation uses native Git and gh. Automatic PR merge is unsupported. The pre-PR base merge (`sync-base`) assumes a POSIX shell and is skipped on Windows, so the PR is opened without merging the base, as before.
 
 Create and run a ticket through MCP or `kb run <id>`. Dispatch skips offline or occupied workers. Each worker owns one run lease at a time.

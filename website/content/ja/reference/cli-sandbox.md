@@ -101,7 +101,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 
 ### keys（Claude の鍵の正本）
 
-制御系の `~/.config/sandbox/keys.json`（600）に名前を付けた Claude の鍵を登録しておくと、`take` / `reset` / `reinject` がモデルごとに 1 本ずつ選んで VM に渡します（ADR-0044 / ADR-0045）。鍵ごとに「Fable に使う」（`--fable`。計画・設計・レビューの工程）と「Opus・Sonnet・Haiku に使う」（`--other`。実装・調査の工程）を持ち、契約ごとに分けられます。console の「鍵」画面と同じファイルです。
+制御系の `~/.config/sandbox/keys.json`（600）に名前を付けた Claude の鍵を登録しておくと、`take` / `reset` / `reinject`（Proxmox）と `keys pick`（Mac / Windows / Linux の pull backend）がモデルごとに 1 本ずつ選んで VM・ゲストに渡します（ADR-0044 / ADR-0045）。鍵ごとに「Fable に使う」（`--fable`。計画・設計・レビューの工程）と「Opus・Sonnet・Haiku に使う」（`--other`。実装・調査の工程）を持ち、契約ごとに分けられます。console の「鍵」画面と同じファイルです。
 
 | コマンド | 何をするか |
 |---|---|
@@ -111,8 +111,11 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | `keys token <名前>` | トークンだけ入れ替える（名前・用途・回数はそのまま）。実行中の VM には `reinject` で反映する |
 | `keys used <名前>` | runner が agent を起動するたびに呼ぶ報告口（起動回数と最後に起動した日時を進める）。人が打つことはない |
 | `keys rm <名前> [--force]` | 消す。実行中の VM が使っていれば `--force` が要る |
+| `keys pick --pj <pj> --task <id> [--need=…] [--current=…] --json` | runner が工程ごとに呼ぶ選択口（選んだ鍵の名前と系統別の変数を JSON で返す）。人が打つことはない |
 
 選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途（runner が `--need=fable,other` で渡す）の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（下の `token set`。非推奨）を使います。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
+
+pull backend（Mac / Windows / Linux）は Proxmox の貸出台帳を持たないので、runner が工程ごとに `keys pick` を呼び、前の工程で選ばれた名前を `--current` で渡します。同じ run は同じ鍵を使い続け、その鍵を無効化すると次の工程から別の鍵に変わります。選んだ名前は run の `state.json` の `keys` に残ります。`ASSIGNED` は工程ごとに増え、`IN_USE` には pull backend の run は出ません（貸出台帳が Proxmox 専用のため）。
 
 ### token
 
