@@ -92,9 +92,10 @@ def tz_of(tz=None):
     if isinstance(tz, str) and tz.strip():
         s = tz.strip()
         m = TZ_OFFSET.match(s)
-        if m:
+        if m and int(m.group(3)) < 60:   # 分は 60 未満（+09:99 を UTC+10:39 と読み替えない）
             d = datetime.timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
-            return datetime.timezone(-d if m.group(1) == "-" else d)
+            try: return datetime.timezone(-d if m.group(1) == "-" else d)
+            except ValueError: pass      # ±24 時間を超えるオフセット。zoneinfo の失敗と同じくサーバーの時間帯に落とす
         try: return zoneinfo.ZoneInfo(s)
         except Exception: pass
     return datetime.datetime.now().astimezone().tzinfo

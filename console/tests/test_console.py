@@ -1134,6 +1134,11 @@ class ApiTest(unittest.TestCase):
             # 読めない tz はサーバーの時間帯に落とし、実際に使った時間帯を返す（統計は読むだけなので 400 にしない）
             _, bad = self.http.get(f"/api/stats?pj={pj}&tz=Mars%2FOlympus")
             self.assertEqual(bad["tz"]["offset"], datetime.datetime.now().astimezone().isoformat()[-6:])
+            here = datetime.datetime.now().astimezone().isoformat()[-6:]
+            for q, why in (("%2B24%3A00", "24 時以上のオフセット"), ("%2B09%3A99", "60 分以上の分")):
+                st, out = self.http.get(f"/api/stats?pj={pj}&tz={q}")
+                self.assertEqual(st, 200, f"{why}で 500 になっている")
+                self.assertEqual(out["tz"]["offset"], here, f"{why}をサーバーの時間帯に落としていない")
             # 画面はブラウザーの時間帯を渡し、日別の表に基準を書く
             app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
             body = app[app.index("async function viewStats("):]
