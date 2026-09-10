@@ -343,7 +343,7 @@ python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operatio
 
 `auto_merge` を書いていないPJではrunnerがautomerge工程そのものを飛ばす（`Run.SKIPPABLE_CODE_STEPS`）ので、`unsupported` のbackendでも起動は拒否されない。`auto_merge` を書いたWindowsのPJは起動前に拒否される（`auto_merge` を外すか、macOS / Linuxのワーカーを使う）。
 
-pull workerには制御系からVMに入る `sandbox ssh` が無いので、`run` のcode stepはbackendが `kit/steps/<名前>.sh` をゲストの `$WORK` に置き、guest-exec 1本でゲストの中の `bash` に渡す。script側は `SB_LOCAL=1` でゲスト内実行に切り替える（[ADR-0058](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0058-pull-backend-code-steps-run-in-the-guest.md)）。automergeはCI待ちのポーリングもゲストの中で回るので、guest-execは `auto_merge.wait_min` 分 + 15分だけ張る。上限は3600秒で、`wait_min` が45分を超える設定では上限で切られ、そのときはマージせずPRを開いたまま人へ渡る。
+pull workerには制御系からVMに入る `sandbox ssh` が無いので、`run` のcode stepはbackendが `kit/steps/<名前>.sh` をゲストの `$WORK` に置き、guest-exec 1本でゲストの中の `bash` に渡す。script側は `SB_LOCAL=1` でゲスト内実行に切り替える（[ADR-0059](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0059-pull-backend-code-steps-run-in-the-guest.md)）。automergeはCI待ちのポーリングもゲストの中で回るので、guest-execは `auto_merge.wait_min` 分 + 15分だけ張る。上限は3600秒で、`wait_min` が45分を超える設定では上限で切られ、そのときはマージせずPRを開いたまま人へ渡る。
 
 ### code stepを足すときの手順
 

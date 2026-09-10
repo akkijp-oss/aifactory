@@ -1,4 +1,4 @@
-# ADR 0058: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する
+# ADR 0059: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する
 
 - 状態: Accepted
 - 日付: 2026-09-11

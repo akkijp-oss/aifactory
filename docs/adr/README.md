@@ -69,4 +69,5 @@
 - [0055: 統計の日別は工程の時刻を「見る側の時間帯」に直した日付で切る（run 名の日付は変えない）](0055-stats-by-day-in-the-viewers-timezone.md)
 - [0056: チケット詳細は「読む → 状況 → 操作 → 記録」の順に DOM を並べ、操作領域の強いボタンは 1 つにする](0056-ticket-detail-reading-order.md)
 - [0057: ゲストの表示解像度は PJ 定義 > worker 設定 > 基準 VM のまま、の順で決める（scale は未対応）](0057-guest-display-resolution.md)
-- [0058: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する](0058-pull-backend-code-steps-run-in-the-guest.md)
+- [0058: チケット詳細の項目編集は、チケット単位の下書き（sessionStorage）で守る](0058-ticket-edit-draft-per-ticket.md)
+- [0059: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する](0059-pull-backend-code-steps-run-in-the-guest.md)
