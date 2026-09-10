@@ -276,6 +276,7 @@ const T = {
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",
     "draftLost": "下書きの {v} は今は選べません。既定に戻しました。",
+    "editDraftServerChanged": "{v} は記録の側が変わりました。今の記録は「{now}」です。",
     "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
     "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
     "attachEmpty": "まだ添付はありません。"
@@ -294,6 +295,7 @@ const T = {
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
     "draftRestored": "前回の下書きを復元しました。",
     "draftCleared": "下書きを捨てました。",
+    "editDraftKept": "未保存の変更を覚えています。保存するまで記録には入りません。",
     "keyAdded": "鍵 {name} を登録しました。次に VM を借りる run から使われます。",
     "keySaved": "鍵 {name} を保存しました。",
     "keyRemoved": "鍵 {name} を削除しました。",

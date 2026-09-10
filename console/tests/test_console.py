@@ -592,6 +592,63 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+
+    def test_ticket_edit_keeps_draft_per_ticket(self):
+        """チケット詳細の「項目を直す」（種別・PR・メモ）の未保存値が、画面往復・戻る・再読み込み・自動更新で消えない。
+
+        `route()` は hash が変わるたび `viewTicket()` を呼び、`render()` が main を作り直す。さらに `viewTicket` 自身が
+        5 秒ごとに自分を呼び直す（`schedule`）。入力を DOM の外に持たないと、
+        (A) パンくず「ボード」→ 戻る / 再読み込み と (B) 欄からフォーカスを外して 5 秒待つ、のどちらでもサーバー値に戻る。
+        下書きはチケット単位（鍵に ID を含める）にして、別 ID のフォームへ混ざらないようにする。
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、起票側と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(id")
+        view = app[i:app.index("\n}", i)]
+        ops = view[view.index("T.h.fix"):]                                    # 「項目を直す」の塊だけ見る
+
+        def action(name):
+            j = app.index(f"  '{name}': ")
+            m = re.compile(r"\n  '[\w-]+': ").search(app, j + 1)
+            return app[j:m.start() if m else len(app)]
+
+        # 保存先は起票側と同じ sessionStorage。離脱の警告は出さない（保持で守る。UX.md）
+        self.assertIn("TDRAFT_KEY", app, "チケット詳細の下書きの入れ物が無い")
+        self.assertTrue(re.search(r"TDRAFT_KEY[\s\S]{0,400}sessionStorage", app), "チケットの下書きが sessionStorage に載っていない")
+        self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
+
+        # 3 欄すべてが対応表にあり、下書きはチケット ID ごとに分かれている（別 ID のフォームへ混ざらない）
+        for eid, key in (("set-kind", "kind"), ("set-pr", "pr"), ("set-note", "note")):
+            self.assertIn(f'id="{eid}"', ops, f"{eid} が「項目を直す」に無い")
+            self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} がチケットの下書きの対応表に無い（保存されない）")
+        for fn in ("tDraftGet", "tDraftDrop", "tDraftSave"):
+            self.assertIn(fn, app, f"{fn} が無い")
+        self.assertTrue(re.search(r"function tDraftGet\(\s*id\s*\)", app), "下書きの読み出しがチケット ID を取っていない（別 ID と混ざる）")
+        self.assertTrue(re.search(r"function tDraftDrop\(\s*id\s*\)", app), "下書きの破棄がチケット ID を取っていない")
+
+        # 描画は「下書きがあれば下書き、無ければサーバー値」。サーバー値の直書きが残っていると自動更新で上書きされる
+        self.assertNotIn('value="${esc(t.note', ops, "メモがサーバー値の直書きのまま（5 秒の自動更新で未保存の入力が消える）")
+        self.assertNotIn('value="${esc(t.pr', ops, "PR がサーバー値の直書きのまま（5 秒の自動更新で未保存の入力が消える）")
+        self.assertTrue(re.search(r"dv\('set-note'\)", ops), "メモを下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"dv\('set-pr'\)", ops), "PR を下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"dv\('set-kind'\)", ops), "種別を下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"tDraftGet\([\s\S]{0,300}(?:const|let)\s+dv\s*=", view), "下書き優先の値を作る dv が保存済みの下書きを読んでいない")
+
+        # 破棄の規則: 保存が成功したときだけ捨てる（失敗したら入力が残り、直して送り直せる）
+        b = action("set")
+        self.assertIn("tDraftDrop", b, "actions['set'] が保存の成功後に下書きを消していない")
+        self.assertGreater(b.index("tDraftDrop"), b.index("await api("), "actions['set'] が保存の前に下書きを消している（失敗すると入力が消える）")
+
+        # 明示的な破棄（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
+        self.assertIn("set-clear", ops, "「下書きを捨てる」のボタンが「項目を直す」に無い")
+        self.assertIn("'set-clear':", app, "actions に set-clear が無い")
+        self.assertIn("T.btn.undo", action("set-clear"), "下書きの破棄に「元に戻す」が無い")
+
+        # 自動更新・サーバー側の同時更新で無断上書きしない: 下書きを焼き付けた時点の値と今の記録を比べて知らせる
+        self.assertIn("T.help.editDraftServerChanged", view, "記録の側が変わったことを知らせる経路が無い（無断で上書きしたことになる）")
+        self.assertTrue(re.search(r"base\[[^\]]+\]\s*!==", view), "下書きを作った時点の値と今の記録を比べていない")
+        self.assertIn("T.msg.editDraftKept", view, "未保存の変更を覚えていることを画面で言っていない")
+
     def test_intake_shows_project_yml_readiness(self):
         """起票画面が、PJ を選んだ時点で「配車すると人間待ちになるか」を出せる。
 

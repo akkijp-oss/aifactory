@@ -315,6 +315,13 @@ async function viewTickets(q) {
 /* ---------- チケット */
 async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
+  /* この回のサーバー値を控え、「項目を直す」の 3 欄は下書きがあればそれを優先して描く（自動更新に未保存の入力を消させない） */
+  tkServerId = String(t.id);
+  tkServer = { kind: t.kind, pr: String(t.pr ?? ''), note: t.note || '' };
+  const draft = tDraftGet(tkServerId);
+  const dv = eid => (draft && TDRAFT[eid] in draft.v) ? draft.v[TDRAFT[eid]] : tkServer[TDRAFT[eid]];
+  /* 下書きを作った時点の記録から動いた欄。保存すればこちらが消えるので、黙って上書きせず先に言う */
+  const moved = draft ? Object.keys(draft.v).filter(f => draft.base && draft.base[f] !== tkServer[f]) : [];
   const runBusy = d.jobs.find(j => j.state === 'running' && (j.kind === 'kb-run' || j.kind === 'sandbox-release'));
   const stBtn = (act, label, cls) => `<button data-act="status" data-id="${t.id}" data-do="${act}" data-from="${esc(t.status)}" class="${cls || ''}">${esc(label)}</button>`;
   const canRun = t.status !== 'done';                                                     /* kb run は完了済みを断る。画面でも先に押せなくする */
@@ -333,7 +340,7 @@ async function viewTicket(id, flash) {
   const runHint = { in_progress: T.help.runInProgress, review: T.help.runReview, blocked: T.help.runBlocked, done: T.help.runDone }[t.status] || T.help.runDefault;
   const runsEmpty = !d.project_yml ? T.empty.ticketRunsNoProjectYml : runBusy ? T.empty.ticketRunsBusy : canRun ? T.empty.ticketRuns : T.empty.ticketRunsDone;
   kindDesc = d.kind_desc || {};
-  const kindKnown = d.kinds.includes(t.kind);                                              /* 台帳に workflow の無い種別が入っていることがある */
+  const kindKnown = d.kinds.includes(dv('set-kind'));                                      /* 台帳に workflow の無い種別が入っていることがある */
   const runBtn = (label, cls, dry, disabled) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''} ${disabled ? `disabled title="${esc(runHint)}"` : ''}>${esc(label)}</button>`;
   const from = prevRoute.startsWith('#/tickets') ? prevRoute : '#/board';                        /* 絞り込んだ一覧から来たなら、その条件のまま戻す */
   /* 実行状況の 1 行。本文より前に置くのは「今どうなっているか」だけで、判断を迫る操作は下（広い画面では右）の操作領域にまとめる。
@@ -371,11 +378,13 @@ async function viewTicket(id, flash) {
           ${moves.length ? `<div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveOnly)}</div><div class="help">${esc(T.help.moveUndo)}</div>`
                          : `<div class="help">${esc(t.status === 'done' ? T.help.moveNone : T.help.moveUndo)}</div>`}
           <h3>${esc(T.h.fix)}<small>kb set</small></h3>
-          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
-            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
-            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
-          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(t.kind)) : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
-          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
+          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(dv('set-kind'))}</option>`}${d.kinds.map(k => `<option ${k === dv('set-kind') ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
+            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(dv('set-pr'))}" class="w100"></label>
+            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(dv('set-note'))}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(dv('set-kind'))) : esc(tt(T.help.kindUnknown, { kind: dv('set-kind') }))}</div>
+          ${draft ? `<div class="help" id="set-draft-note">${esc(T.msg.editDraftKept)}</div>` : ''}
+          ${moved.map(f => `<div class="warn">${esc(tt(T.help.editDraftServerChanged, { v: T.label[f], now: tkServer[f] }))}</div>`).join('')}
+          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${draft ? `<button data-act="set-clear" data-id="${t.id}">${esc(T.btn.draftClear)}</button>` : ''}${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
         </div>
         <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
@@ -647,8 +656,49 @@ async function draftClear(ids) {
   await viewIntake();
   toast(esc(T.msg.draftCleared), { action: { label: T.btn.undo, run: async () => { draftPut(before); await viewIntake(); } } });
 }
+/* ---------- チケット詳細の「項目を直す」（kb set）の下書き
+   詳細画面も hash が変わるたび作り直され、そのうえ 5 秒ごとに自分を描き直す（viewTicket 末尾の schedule）。
+   入力を DOM の外に持たないと、ボードへ寄り道して戻る・再読み込み・ブラウザーの戻るで消えるうえ、
+   同じ画面に居ても「欄からフォーカスを外して 5 秒」でサーバー値に戻る（editing() はフォーカス中しか守らない）。
+   入れ物はチケット ID ごとに分けて、別のチケットのフォームへ混ざらないようにする。保存先は起票と同じ sessionStorage。
+   持つのは「サーバー値と違う欄」だけで、下書きを作った時点の記録（base）も一緒に焼き付ける。
+   base があると、後から記録の側が動いたとき（自動更新・sync・runner）に、それを黙って上書きせず画面で言える。 */
+const TDRAFT_KEY = 'ticket-draft';
+const TDRAFT = { 'set-kind': 'kind', 'set-pr': 'pr', 'set-note': 'note' };
+const TDRAFT_MAX = 20;                                                    /* 古い順にうち止め。同じタブで何十件開いても膨らませない */
+let tkServerId = '', tkServer = { kind: '', pr: '', note: '' };           /* 今描いているチケットと、その回のサーバー値 */
+const tkId = () => (location.hash.startsWith('#/ticket/') ? location.hash.slice(9) : '');
+function tDraftRead() { try { return JSON.parse(sessionStorage.getItem(TDRAFT_KEY)) || {}; } catch (e) { return {}; } }
+function tDraftWrite(d) { try { sessionStorage.setItem(TDRAFT_KEY, JSON.stringify(d)); } catch (e) { /* 保存できなくても保存操作は動く */ } }
+function tDraftGet(id) { const e = tDraftRead()[id]; return (e && e.v) ? e : null; }
+function tDraftDrop(id) { const d = tDraftRead(), before = d[id]; delete d[id]; tDraftWrite(d); return before; }
+function tDraftPut(id, e) { const d = tDraftRead(); if (e) d[id] = e; else delete d[id]; tDraftWrite(d); }
+/* 3 欄の今の値を集め、サーバー値と違う欄だけ残す。全部そろって同じなら項目ごと消す（打ち消しても下書きが残らない） */
+function tDraftSave(id) {
+  if (!id || id !== tkServerId) return;                                   /* 画面に出ているチケット以外には書かない */
+  const d = tDraftRead(), v = {};
+  for (const eid in TDRAFT) {
+    const el = $(eid); if (!el) return;                                    /* 3 欄そろっていないなら描き替えの途中。触らない */
+    if (el.value !== tkServer[TDRAFT[eid]]) v[TDRAFT[eid]] = el.value;
+  }
+  if (!Object.keys(v).length) { delete d[id]; tDraftWrite(d); return; }
+  const base = (d[id] && d[id].base) || { ...tkServer };                   /* 焼き付けは新規に作るときだけ */
+  d[id] = { v, base, at: Date.now() };
+  const ids = Object.keys(d);
+  if (ids.length > TDRAFT_MAX) {
+    ids.sort((a, b) => (d[a].at || 0) - (d[b].at || 0)).slice(0, ids.length - TDRAFT_MAX).forEach(k => delete d[k]);
+    tDraftWrite(d);
+    return;
+  }
+  tDraftWrite(d);
+}
+
 /* 入力のたびに保存する。離脱の hook に頼らないので、サイドバーでの移動・g i の近道・再読み込み・戻るのどれでも残る */
-const draftWatch = e => { if (e.target.id && e.target.id in DRAFT) draftSave(); };
+const draftWatch = e => {
+  const id = e.target.id; if (!id) return;
+  if (id in DRAFT) draftSave();
+  else if (id in TDRAFT) tDraftSave(tkId());
+};
 main.addEventListener('input', draftWatch);
 main.addEventListener('change', draftWatch);
 
@@ -920,7 +970,14 @@ const actions = {
     } } });
     viewTicket(id, true);
   },
-  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  /* 下書きを捨てるのは api が通った後だけ。失敗すれば例外で抜けるので、直して送り直せる（起票側と同じ並び） */
+  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); tDraftDrop(id); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  /* 破棄は明示操作。可逆なので確認せず、トーストの「元に戻す」で書き戻す */
+  'set-clear': async el => {
+    const id = el.dataset.id, before = tDraftDrop(id);
+    await viewTicket(id);
+    toast(esc(T.msg.draftCleared), { action: { label: T.btn.undo, run: async () => { tDraftPut(id, before); await viewTicket(id); } } });
+  },
   /* 状態を合わせるのは半可逆・影響大（状態とメモを上書きする）: 下見（kb sync --dry-run）で前後を見せてから */
   'sync': async el => {
     const id = el.dataset.id, run = el.dataset.run || '';
