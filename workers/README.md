@@ -74,7 +74,7 @@ HTTPSには接続先名をSANに持つ証明書を用意し、対応する信頼
 }
 ```
 
-`guest_vm` 未指定ならprobeだけを受け付ける。`base_vm` は必要なツールを入れて停止した、認証情報を含まないローカル基準VM。`guest_vm` には未使用の名前を指定する。基準VMにはTart Guest AgentとPython 3が必要。プロジェクトの `provision.sh` があれば、専用ゲスト内で認証情報を注入する前に実行する。gh、Claude CLI、GNU timeoutなどの導入はここで行える。Mac用のprovisionはツール導入に限定し、リポジトリのcloneはrunnerに任せる。既存のLinux用provisionをそのまま流用しない。イメージ取得は管理者が行う。個人利用のVMを指定しない。キャンセルやタイムアウトでは遠隔プロセスを残さないためゲスト全体を停止する。
+`guest_vm` 未指定ならprobeだけを受け付ける。`base_vm` は必要なツールを入れて停止した、認証情報を含まないローカル基準VM。`guest_vm` には未使用の名前を指定する。基準VMにはTart Guest AgentとPython 3が必要。プロジェクトの `provision.sh` があれば、専用ゲスト内で認証情報を注入する前に実行する。gh、Claude CLI、GNU timeoutなどの導入はここで行える。Mac用のprovisionはツール導入に限定し、リポジトリのcloneはrunnerに任せる。既存のLinux用provisionをそのまま流用せず、雛形 [templates/provision.macos.sh](templates/provision.macos.sh) から書き始める。基準イメージに既に入っているものは [docs/macos-worker.md の「基準イメージの中身」](../docs/macos-worker.md#基準イメージの中身)にある。イメージ取得は管理者が行う。個人利用のVMを指定しない。キャンセルやタイムアウトでは遠隔プロセスを残さないためゲスト全体を停止する。
 
 `display` を足すと、prepareが停止中のクローンへ `tart set <guest_vm> --display <幅>x<高さ>` を実行してから起動する。PJ定義（`project.yml`）の `display` があればそちらが優先で、どちらも無ければ基準VMの解像度のまま（1024×768）。幅800〜2560・高さ600〜2560の範囲外を書いたワーカーは起動を拒む。解像度を変えてもゲストの割当は4 CPU・8 GiB固定のまま（ADR-0057）。
 
@@ -100,6 +100,8 @@ sudo chmod u+s "$softnet_binary"
 ```
 
 ## 操作と復旧
+
+以下は引数のリファレンス。`uncertain` になった操作を戻す手順（状態の見方 → ゲストの生存確認 → `resolve` → lease解放 → 再開）は [docs/macos-worker.md の「uncertainからの復旧」](../docs/macos-worker.md#uncertainからの復旧)にまとめてある。
 
 ```bash
 python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" list
