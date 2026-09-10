@@ -657,6 +657,55 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(re.search(r"base\[[^\]]+\]\s*!==", view), "下書きを作った時点の値と今の記録を比べていない")
         self.assertIn("T.msg.editDraftKept", view, "未保存の変更を覚えていることを画面で言っていない")
 
+    def test_ticket_note_field_is_multiline(self):
+        """「項目を直す」のメモは複数行欄。読み込み・編集・保存のどこでも改行を落とさない。
+
+        `<input type=text>` は HTML の value sanitization algorithm で CR/LF を捨てるので、改行入りの note を
+        持つチケットを開くと編集欄が 1 行に潰れ、**何も編集せず「保存する」を押しただけで記録側の改行が消える**。
+        記録側（core.py / kb）は改行を素通しするので、直すのは画面（textarea 化 + 送信で trim しない）だけ。
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、下書きの試験と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(id")
+        view = app[i:app.index("\n}", i)]
+        ops = view[view.index("T.h.fix"):]                                    # 「項目を直す」の塊だけ見る
+
+        # 欄そのものが複数行（textarea）で、1 行入力が残っていない
+        self.assertTrue(re.search(r"<textarea[^>]*\bid=\"set-note\"", ops), "メモが textarea になっていない（input type=text は改行を捨てる）")
+        self.assertFalse(re.search(r"<input[^>]*\bid=\"set-note\"", ops), "メモが 1 行の input のまま残っている")
+        self.assertTrue(re.search(r"dv\('set-note'\)", ops), "メモを下書き優先の値で描いていない")
+
+        # textarea の開始タグ直後の改行 1 個は HTML パーサーが捨てる。改行で始まる note が 1 文字削れないよう相殺する
+        self.assertTrue(re.search(r"<textarea[^>]*\bid=\"set-note\"[^>]*>(?:\\n|[\r\n])", ops),
+                        "textarea の開始タグ直後に改行が無い（改行で始まるメモが 1 文字消える）")
+
+        # 送信は無変換。trim すると「無編集で保存 → 元と完全一致」が末尾の改行で崩れる
+        j = app.index("  'set': ")
+        m = re.compile(r"\n  '[\w-]+': ").search(app, j + 1)
+        body = app[j:m.start() if m else len(app)]
+        self.assertNotIn("$('set-note').value.trim()", body, "メモを trim して送っている（前後の改行・空白が保存で消える）")
+        self.assertIn("$('set-note').value", body, "actions['set'] がメモの値を送っていない")
+
+        # 読み取り専用のメモ枠も改行を見せる（同じ画面で「読みにくい」が残らないように）
+        self.assertIn("panel note", view, "メモの読み枠が無い")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertTrue(re.search(r"\.panel\.note\b[^}]*white-space:\s*pre-wrap", css), ".panel.note が改行を見せていない（複数行メモが 1 行に見える）")
+
+    def test_set_note_keeps_newlines(self):
+        """改行入りの note は往復で 1 バイトも変わらない。他の項目だけ保存しても触らない（記録側の契約を釘付けにする）"""
+        note = "自動実行結果\nPM 申し送り\n追加条件"
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "research", "title": "調査: 複数行メモ", "body": "x\n\n## 完了条件\n- y"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "note": note})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["note"], note)
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["note"], note)    # 種別だけ直してもメモは無変換
+        again = note + "\n追記"
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "note": again})[0], 200)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(v["ticket"]["note"], again)
+        self.assertTrue(any(h["field"] == "note" and h["old"] == note and h["new"] == again for h in v["history"]))
+
     def test_intake_shows_project_yml_readiness(self):
         """起票画面が、PJ を選んだ時点で「配車すると人間待ちになるか」を出せる。
 

@@ -162,6 +162,7 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .w100 { width: 100px; }
 .w220 { width: 220px; }
 .h140 { min-height: 140px; }
+.h80 { min-height: 80px; }   /* 操作パネルのメモ欄。textarea の既定 200px は縦が伸びすぎる */
 .grow { flex: 1; min-width: 220px; }
 .check { display: inline-flex; align-items: center; gap: 6px; }
 .row.checks { margin: 2px 0 10px; gap: 16px; }
@@ -169,7 +170,7 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .row.filters .field { margin-bottom: 6px; }
 #tk-list > .help { margin-bottom: 8px; }
 #tk-list .empty { color: var(--muted); font-size: 12.5px; }
-.panel.note { padding: 8px 14px; }
+.panel.note { padding: 8px 14px; white-space: pre-wrap; }   /* 複数行のメモを改行のまま読ませる */
 .panel.next { border-left: 3px solid var(--accent); }
 .panel.next p { margin: 0 0 10px; }
 .panel.next .line { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
