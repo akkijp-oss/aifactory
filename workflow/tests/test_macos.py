@@ -673,6 +673,10 @@ class PullBackendAutomergeTest(unittest.TestCase):
         self.assertNotIn('pr merge', self.gh_calls())
         self.assertNotIn('merged', run.state)
 
-    def test_a_project_without_auto_merge_never_reaches_the_guest(self):
-        """runner が工程ごと飛ばす（bin/run）。飛ばす step 名は backend とテストが同じ定数を読む"""
+    def test_the_skippable_step_name_is_shared_between_runner_and_backend(self):
+        """auto_merge の無い PJ で automerge を飛ばす判断は runner の SKIPPABLE_CODE_STEPS 1 か所だけにある。
+        pull backend の起動時検証（macos.py __init__）も同じ定数を読むので、名前が食い違うと
+        「runner は飛ばすのに backend は未対応で拒否する」に戻る。
+        飛ばす挙動そのもの（bin/run の分岐で automerge が run_code に来ない）は
+        test_resume_start.py の test_resume_after_gates_exhausted_continues_from_gates が通している"""
         self.assertIn('pr-automerge.sh', run_mod.Run.SKIPPABLE_CODE_STEPS)

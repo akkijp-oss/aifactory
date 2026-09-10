@@ -24,7 +24,10 @@ def backend(Run):
         # pr-automerge.sh は Git Bash 経由で理屈の上では動かせるが、実機で確かめられないまま
         # `gh pr merge`（取り消しにくい外向きの操作）の経路を増やさない判断で unsupported にしてある。
         # Windows の PJ で auto_merge を書いた run は、途中まで進んでから黙って終わるのではなく起動前に拒否される
-        CODE_STEPS = {**Pull.CODE_STEPS, 'sync-base': 'noop', 'pr-automerge.sh': 'unsupported'}
+        # macos の表は spread しない。取り込むと macos に足した step が分類ごとここへ流れ込み、
+        # 「表の更新忘れ」を test_code_steps.py が拾えなくなる（run を使い切った最後の工程で落ちる）
+        CODE_STEPS = {'gates.sh': 'run', 'pr-create.sh': 'run', 'sync-base': 'noop',
+                      'pr-automerge.sh': 'unsupported', 'pr-merge.sh': 'unsupported'}
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)

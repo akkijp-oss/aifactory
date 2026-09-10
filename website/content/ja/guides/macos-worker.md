@@ -351,7 +351,7 @@ pull workerには制御系からVMに入る `sandbox ssh` が無いので、`run
 
 1. `workflow/kit/steps/<名前>.sh` を置く。ゲストへの1手（`sb()`）は `SB_LOCAL=1` でゲスト内実行に切り替えられる形にする。判定ロジックをbackendごとに分岐させない。
 2. `kit/workflows/*.yml` に工程を足す。
-3. `workflow/lib/macos.py` と `workflow/lib/windows.py` の `CODE_STEPS` に分類を足す。`run` にするなら `run_code` に経路を足す。LinuxはmacOSの表と実装をそのまま継承するので、`workflow/lib/linux.py` では上書きしない。
+3. `workflow/lib/macos.py` と `workflow/lib/windows.py` の `CODE_STEPS` に分類を足す。`run` にするなら `run_code` に経路を足す。LinuxはmacOSの表と実装をそのまま継承するので、`workflow/lib/linux.py` では上書きしない。Windowsの表はmacOSの表を取り込まず自分で宣言しているので、2つのファイルの両方に足すこと（取り込む形にすると、macOSに足した分類がWindowsへ黙って流れ込み、更新忘れを4のテストが拾えなくなる）。
 4. `python3 -m unittest discover -s workflow/tests -p 'test_code_steps.py'` が緑になるまで直す。このテストは「workflowのcode stepが3つのbackendすべてで分類済みか」を見る（実装の有無ではなく分類の有無）。
 5. この節の対応表を更新する。
 

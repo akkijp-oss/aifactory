@@ -33,7 +33,9 @@ PJ の 1 つでもある。
    分岐させない（Proxmox と pull で「同じ条件で同じ結論」になることを 1 つの script で担保する）。
 3. **各 backend は code step の対応表（`CODE_STEPS`）を持ち、分類は `run` / `noop` / `unsupported` の 3 つにする。**
    表に無い名前は `unsupported` と同じに扱う（足した人が表を更新していない、を「起動前に拒否」へ倒す）。
-   Linux は macOS の表と実装をそのまま継承する（POSIX の guest なので分ける理由が無い）。
+   Linux は macOS の表と実装をそのまま継承する（POSIX の guest なので分ける理由が無い）。Windows は
+   逆に自分の表を全部書く（macOS の表を取り込むと、macOS に足した分類が Windows へ黙って流れ込み、
+   5 のテストが Windows の更新忘れを拾えなくなる）。
 4. **runner が飛ばす step 名は `Run.SKIPPABLE_CODE_STEPS` の 1 か所に置く。** 「条件を満たさない PJ では工程ごと
    飛ばす」（今は `auto_merge` を書いていない PJ の automerge）という判断と、pull backend の起動時検証が
    同じ定数を読む。

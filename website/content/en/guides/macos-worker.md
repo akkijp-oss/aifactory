@@ -351,7 +351,7 @@ Anyone adding a new code step to a workflow should work in this order. Forgettin
 
 1. Add `workflow/kit/steps/<name>.sh`. Make the single move into the guest (`sb()`) switchable to in-guest execution with `SB_LOCAL=1`. Do not branch the decision logic per backend.
 2. Add the step to `kit/workflows/*.yml`.
-3. Add its classification to `CODE_STEPS` in `workflow/lib/macos.py` and `workflow/lib/windows.py`. If it is `run`, add the path in `run_code`. Linux inherits the macOS table and implementation, so do not override it in `workflow/lib/linux.py`.
+3. Add its classification to `CODE_STEPS` in `workflow/lib/macos.py` and `workflow/lib/windows.py`. If it is `run`, add the path in `run_code`. Linux inherits the macOS table and implementation, so do not override it in `workflow/lib/linux.py`. The Windows table declares every entry itself instead of importing the macOS one, so add the step to both files (importing it would let a macOS classification flow silently into Windows, and the test in step 4 could no longer catch the missing update).
 4. Fix until `python3 -m unittest discover -s workflow/tests -p 'test_code_steps.py'` is green. That test checks whether every workflow code step is classified by all three backends (classification, not implementation).
 5. Update the table in this section.
 

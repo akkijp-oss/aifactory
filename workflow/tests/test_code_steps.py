@@ -74,6 +74,26 @@ class CodeStepTableTest(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError): Run({'steps': [{'code': step}]})
 
+    def test_windows_declares_its_own_table_instead_of_inheriting_macos(self):
+        """windows.py の表は macos の表を取り込まない（自分で宣言する）。
+        取り込むと macos に足した step が分類ごと Windows へ流れ込み、Windows のゲスト（PowerShell）で
+        動く保証が無いまま「分類済み」になる。上の「表の更新忘れ」の検出もそこだけ素通りして、
+        run を使い切った最後の工程で落ちる（ADR-0058 が採らなかった案そのもの。チケット 386）"""
+        real = windows.pull_backend
+
+        def macos_with_a_new_step(Run):
+            Pull = real(Run)
+            Pull.CODE_STEPS = {**Pull.CODE_STEPS, 'brand-new.sh': 'run'}
+            return Pull
+
+        windows.pull_backend = macos_with_a_new_step
+        try:
+            got = windows.backend(object).CODE_STEPS
+        finally:
+            windows.pull_backend = real
+        self.assertNotIn('brand-new.sh', got,
+                         'windows.py の CODE_STEPS は macos の表を spread せず、自分で書くこと')
+
     def test_a_new_code_step_nobody_classified_is_refused(self):
         for name in BACKENDS:
             with self.subTest(backend=name):
