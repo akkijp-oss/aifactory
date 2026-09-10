@@ -145,7 +145,7 @@
   <tr><td>どこで動く</td><td>Mac（一時ディレクトリ、ツールなし）</td><td>sandbox VM の中（<code>$SANDBOX_APP_DIR</code> が cwd、ツールあり）</td><td>Mac</td></tr>
   <tr><td>何回</td><td>チケット 1 枚につき 1 回</td><td>エージェントが担当する工程ごとに 1 回。差し戻しがあればその回数だけ増える</td><td>工場の外。工場を作る・直す側</td></tr>
   <tr><td>モデル</td><td>routes.env の judgment（Fable）</td><td>role の既定クラス → routes.env（planner / reviewer = Fable、researcher = Sonnet、implementer = Opus）</td><td>Fable</td></tr>
-  <tr><td>認証</td><td>Mac の Claude Code のログイン</td><td>プロジェクトごとの <code>setup-token</code> を take 時に VM へ注入</td><td>Mac のログイン</td></tr>
+  <tr><td>認証</td><td>Mac の Claude Code のログイン</td><td>制御系の鍵プール（<code>keys.json</code>）から用途ごとに選んだ <code>setup-token</code> を take 時に VM へ注入</td><td>Mac のログイン</td></tr>
   <tr><td>入力</td><td>自由文 + プロジェクト / 種別の一覧</td><td>8 層の依頼文（第 6 節）</td><td>対話</td></tr>
   <tr><td>出力</td><td>JSON（pj / kind / title / body）→ <code>kb new</code></td><td>成果物（plan.md 等）と git コミット</td><td>リポジトリの変更</td></tr>
 </table>
@@ -275,7 +275,8 @@
   <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code></td><td>kit/steps/gates.sh（VM 内で）</td><td>プロジェクトの品質ゲート。CI と同じ組。PASS / FAIL を 1 行ずつ</td><td>中</td></tr>
   <tr><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code></td><td>Proxmox 側 32-pj-template.sh</td><td>テンプレート VM の事前設定（依存・DB・seed）</td><td>低。テンプレ更新時</td></tr>
   <tr><td><code>examples/projects/&lt;pj&gt;/</code></td><td>上と同じ（workspace に同名のプロジェクトがないときだけ）</td><td>同梱のサンプルプロジェクト定義（<code>kumitate</code>）。写して自分のプロジェクトを作る雛形</td><td>低</td></tr>
-  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>sandbox CLI（take / reinject）</td><td>プロジェクトごとの <code>CLAUDE_CODE_OAUTH_TOKEN</code> と <code>GH_REPO</code>。<b>リポジトリ外</b></td><td>トークン更新時</td></tr>
+  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>sandbox CLI（take / reinject）</td><td>プロジェクトごとの <code>GH_REPO</code>（Claude の鍵は置かない）。<b>リポジトリ外</b></td><td>プロジェクト追加時</td></tr>
+  <tr><td><code>~/.config/sandbox/keys.json</code></td><td>sandbox CLI（take / reinject）・console の「鍵」画面</td><td>Claude の鍵プール。VM に渡す鍵の唯一の出どころ（ADR-0044 / ADR-0060）。<b>リポジトリ外</b></td><td>鍵の追加・入れ替え時</td></tr>
   <tr><td><code>~/.config/sandbox/gh-app/</code></td><td>sandbox CLI</td><td>GitHub App の ID と秘密鍵。<b>リポジトリ外</b></td><td>ほぼなし</td></tr>
   <tr><td><code>~/.config/sandbox/state.json</code></td><td>sandbox CLI、runner、dispatch、他セッション</td><td>どの VM を誰に貸しているか。<b>リポジトリ外</b></td><td>take / release のたび</td></tr>
   <tr><td><code>$AIFACTORY_WORKSPACE/kanban/kanban.db</code> + <code>tickets/</code></td><td>kb、intake、dispatch、runner（本文）</td><td>チケットの状態と本文</td><td>高。日常運用</td></tr>
@@ -290,7 +291,7 @@
   <rect x="20" y="30" width="200" height="240" rx="8" fill="#fff" stroke="#d9d9d2"/><text x="120" y="52" text-anchor="middle" font-weight="600">Mac</text>
   <text x="30" y="80" font-size="12">sandbox CLI</text>
   <text x="30" y="100" font-size="12">~/.config/sandbox/</text>
-  <text x="40" y="118" font-size="12">pj/&lt;pj&gt;.env（Claude トークン）</text>
+  <text x="40" y="118" font-size="12">keys.json（Claude の鍵プール）</text>
   <text x="40" y="136" font-size="12">gh-app/（App 鍵）</text>
   <text x="40" y="154" font-size="12">state.json（貸出台帳）</text>
   <text x="30" y="185" font-size="12">workflow/bin/run</text>
@@ -330,7 +331,7 @@
 <h2 id="s8">8. 秘密情報の流れ</h2>
 <table>
   <tr><th>秘密</th><th>置き場（正本）</th><th>VM への渡し方</th><th>寿命</th></tr>
-  <tr><td>Claude Code の長期トークン（<code>claude setup-token</code>）</td><td>Mac <code>~/.config/sandbox/pj/&lt;pj&gt;.env</code>。プロジェクトごと（ADR-0006）</td><td>take のたびに tmpfs へ注入。<code>sandbox reinject</code> で貸出中にも差し替え可</td><td>巻き戻しで消える</td></tr>
+  <tr><td>Claude Code の長期トークン（<code>claude setup-token</code>）</td><td>制御系 <code>~/.config/sandbox/keys.json</code>（鍵プール）。プロジェクトではなく契約ごと（ADR-0044 / ADR-0060）</td><td>take のたびに用途ごとに 1 本選んで tmpfs へ注入。<code>sandbox reinject</code> で貸出中にも差し替え可</td><td>巻き戻しで消える</td></tr>
   <tr><td>GitHub の push / PR 権限</td><td>GitHub App <code>aifactory-sandbox</code> の秘密鍵（Mac <code>~/.config/sandbox/gh-app/</code>、ADR-0008）</td><td>take のたびに、そのリポジトリだけに効く installation token を払い出して注入。権限は App が持つもの（contents / pull_requests write、metadata / actions read）</td><td>1 時間。launchd が 45 分ごとに更新、runner もスクリプトの実行前に更新</td></tr>
   <tr><td>SSH 鍵（Mac → VM）</td><td>Mac <code>~/.ssh/conf.d/aifactory/sb_ed25519</code></td><td>テンプレートに公開鍵を事前設定</td><td>テンプレ更新まで</td></tr>
 </table>
@@ -355,7 +356,7 @@
 <h2 id="s10">10. 変更したい内容と編集するファイル</h2>
 <table>
   <tr><th>やりたいこと</th><th>触るファイル</th><th>効く範囲</th></tr>
-  <tr><td>新しいプロジェクトを工場に入れる</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code>（事前設定。雛形は <code>examples/projects/kumitate/</code>）→ Proxmox でテンプレとプール → <code>project.yml</code> + <code>gates.sh</code> → <code>sandbox token set &lt;pj&gt;</code> → GitHub App を install</td><td>そのプロジェクト</td></tr>
+  <tr><td>新しいプロジェクトを工場に入れる</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/provision.sh</code>（事前設定。雛形は <code>examples/projects/kumitate/</code>）→ Proxmox でテンプレとプール → <code>project.yml</code> + <code>gates.sh</code> → <code>pj/&lt;pj&gt;.env</code> に <code>GH_REPO</code> → GitHub App を install（Claude の鍵は鍵プールに登録済みならそのまま使われる）</td><td>そのプロジェクト</td></tr>
   <tr><td>ゲートを足す / 外す</td><td><code>$AIFACTORY_WORKSPACE/projects/&lt;pj&gt;/gates.sh</code>。変更前のブランチでも失敗している項目は <code>project.yml</code> の <code>known_red_gates</code></td><td>そのプロジェクト</td></tr>
   <tr><td>agent に毎回伝える事実（テストの走らせ方、既知の罠）</td><td><code>project.yml</code> の <code>facts</code></td><td>そのプロジェクトの全 step</td></tr>
   <tr><td>このプロジェクトでやってはいけないこと / reviewer が必ず見ること</td><td><code>project.yml</code> の <code>forbidden</code> / <code>review_points</code></td><td>そのプロジェクト</td></tr>
@@ -365,7 +366,7 @@
   <tr><td>PR の宛先ブランチ</td><td><code>project.yml</code> の <code>base_branch</code> / <code>hotfix_base</code>、workflow 別なら <code>workflow_overrides</code></td><td>そのプロジェクト</td></tr>
   <tr><td>チケットの分類基準（intake がいつも bug にしてしまう等）</td><td><code>glue/bin/intake</code> の プロンプト、または依頼文の先頭に <code>kind:</code> 行を書いて明示的に指定する</td><td>チケットの作成時</td></tr>
   <tr><td>プール台数</td><td>Proxmox 側 <code>sandbox/proxmox/40-pool.sh</code>、<code>glue/bin/dispatch</code> の <code>POOL_PER_PJ</code></td><td>そのプロジェクトの並列数</td></tr>
-  <tr><td>Claude トークンの更新</td><td><code>sandbox token set &lt;pj&gt;</code>（貸出中は <code>sandbox reinject &lt;id&gt;</code>）</td><td>そのプロジェクト</td></tr>
+  <tr><td>Claude トークンの更新</td><td><code>sandbox keys token &lt;名前&gt;</code> か console の「鍵」画面（貸出中は <code>sandbox reinject &lt;id&gt;</code>）</td><td>そのプロジェクト</td></tr>
   <tr><td>ブラウザで見たい・ボタンで動かしたい</td><td><code>console/bin/console --open</code>（Mac ローカル。中で kb / intake / dispatch / sandbox を呼ぶだけ）</td><td>表示と操作。状態の正本は変わらない</td></tr>
 </table>
 

@@ -78,7 +78,7 @@ gates: gates.ps1
 
 `app_dir` はワーカーの `work_root` に `/app` を付けた値。実行時は `work_root/<lease>/app` に置き換える。成果物は同じlease内の `work/<task>` に保存する。プロジェクト用のGitHub AppとClaude認証設定も制御系に用意する。
 
-鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使い、どちらにも鍵が無ければ**runnerのプロセスに残っている値には落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
+鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールに合う鍵が無ければ、`pj/<pj>.env` や `env` の鍵にも**runnerのプロセスに残っている値にも落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ（ADR-0060）。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
 
 任意の `provision.ps1` は認証注入・clone前に一般ユーザーで実行する。管理者権限が必要なツールは事前にVMへ導入する。`gates.ps1` はPowerShellスクリプトとして用意し、外部コマンド失敗時は `exit $LASTEXITCODE` などで非ゼロを返す。workflowのstep名 `gates.sh` は共通の識別子として残り、WindowsではPJの `.ps1` を呼び出す。`pr-create.sh` もWindows用Git/gh処理へ対応する。`merge-pr` は未対応。PR直前のbase取り込み（`sync-base`）はPOSIXシェル前提のためWindowsでは飛ばす（従来どおりbaseを取り込まずPRを作る）。自動マージ（`pr-automerge.sh`）も未対応で、`auto_merge` を書いたPJは起動前に拒否される（`auto_merge` を外すか、macOS / Linuxのワーカーを使う）。code stepの対応表と、新しいcode stepを足すときの手順は[Macワーカーの導入と運用](macos-worker.md#workflowcode-step)にある。
 

@@ -4,7 +4,7 @@
 - `sandbox keys add/list/set/rm/token` が動き、keys.json は 600、トークンの全文はどこにも出ない
 - take はフラグの合う鍵のうち last_used が最古のものを選び、選んだ名前を state.json の貸出項目に残す
 - 同じ task の reinject は同じ鍵を使い続け、その鍵を使わない設定にしたときだけ選び直す
-- 候補が無い系統は PJ / 全体の env の鍵がそのまま残る（互換）。プールが空なら注入される env は今までと同じ
+- 要る用途の鍵が無ければ「鍵なし:」で止まる。env ファイルやプロセスに残った鍵には落ちない（プールが空でも同じ。ADR-0060）
 
 Proxmox / ssh / DNS を叩く関数は偽装し、sandbox/bin/sandbox から区画を切り出して bash で走らせる（test_sandbox_take.py と同じ型）。
 """
@@ -147,10 +147,11 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertNotIn('token', j['keys'][0])
         self.assertEqual(j['keys'][0]['tail4'], '1234')
 
-    def test_list_on_an_empty_pool_says_the_env_key_is_used(self):
+    def test_list_on_an_empty_pool_says_runs_pause_until_a_key_is_registered(self):
         r = self.keys_cmd('list')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('env', r.stdout)
+        self.assertIn('鍵なし', r.stdout); self.assertIn('sandbox keys add', r.stdout)
+        self.assertNotIn('token set', r.stdout)                                   # env ファイルの鍵の案内はもう無い（ADR-0060）
         self.assertFalse(os.path.exists(self.keys))
 
     def test_a_duplicate_name_and_a_bad_name_are_refused(self):
@@ -240,8 +241,8 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertEqual(self.vm_env()['CLAUDE_KEY_NAME_FABLE'], again)
 
     def test_a_purpose_without_a_key_stops_the_take_instead_of_using_the_env_key(self):
-        """プールに 1 本でも鍵があれば env の鍵には落ちない。要る用途の鍵が無ければ「鍵なし:」で止まり、VM も予約も残らない（ADR-0046）"""
-        pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\n')
+        """要る用途の鍵が無ければ「鍵なし:」で止まり、VM も予約も残らない（ADR-0046）。env ファイルとプロセスに残った鍵は無いものとして扱う（ADR-0060）"""
+        pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN_FABLE=envfile-fable\n')
         self.add('opus-a', '--other', token='fake-token-other-bbbb')
         r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain\nCLAUDE_CODE_OAUTH_TOKEN_FABLE=env-fable\ncmd_take "$@"\n', 'pj', '379')
         self.assertNotEqual(r.returncode, 0)
@@ -259,19 +260,21 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertEqual(self.state_json()['379']['keys'], {'other': 'opus-a'})
 
     def test_no_key_anywhere_stops_the_take_too(self):
-        """プールが空で env にも鍵が無ければ、[warn] で通さず「鍵なし:」で止める（鍵が無い run は一時停止にする）"""
+        """プールが空（ファイルも無い）なら「鍵なし:」で止める。keys.json がまだ無いことも言う（鍵が無い run は一時停止にする）"""
         r = self.run_sh('cmd_take "$@"\n', 'pj', '379')
-        self.assertNotEqual(r.returncode, 0); self.assertIn('鍵なし:', r.stderr)
+        self.assertNotEqual(r.returncode, 0); self.assertIn('鍵なし:', r.stderr); self.assertIn('がまだ無い', r.stderr)
         self.assertNotIn('379', self.state_json())
 
-    def test_an_empty_pool_writes_exactly_what_it_used_to(self):
-        r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain\ncmd_take "$@"\n', 'pj', '379')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        body = pathlib.Path(self.dir, 'env.10.77.1.1').read_text()
-        self.assertNotIn('CLAUDE_KEY_NAME', body)
-        self.assertNotIn('CLAUDE_CODE_OAUTH_TOKEN_', body)
-        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN=env-plain\n', body)
-        self.assertNotIn('keys', self.state_json()['379'])
+    def test_an_empty_pool_never_falls_back_to_the_env_file_key(self):
+        """本件の芯（ADR-0060）: プールが空でも env ファイル・プロセスの鍵で take を通さない。鍵の値はどこにも出ない"""
+        pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=envfile-plain-0001\n')
+        r = self.run_sh('CLAUDE_CODE_OAUTH_TOKEN=env-plain-0002\ncmd_take "$@"\n', 'pj', '379',
+                        env_extra={'CLAUDE_CODE_OAUTH_TOKEN': 'process-plain-0003'})
+        self.assertNotEqual(r.returncode, 0); self.assertIn('鍵なし:', r.stderr)
+        self.assertIn('Fable に使う', r.stderr); self.assertIn('Opus・Sonnet・Haiku に使う', r.stderr)
+        self.assertNotIn('0001', r.stdout + r.stderr); self.assertNotIn('0002', r.stdout + r.stderr); self.assertNotIn('0003', r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'env.10.77.1.1')))   # VM には何も書いていない
+        self.assertNotIn('379', self.state_json())
 
     # ---------- keys pick（pull backend の runner が呼ぶ。チケット 391）
     def test_pick_returns_only_json_with_the_family_variables(self):
@@ -322,14 +325,14 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), '')
         self.assertEqual(self.keys_json()['keys'][0]['uses'], 0)          # 止まった回は使用回数を動かさない
 
-    def test_pick_on_an_empty_pool_falls_back_to_the_env_file_key(self):
-        """プールが空なら env ファイルの鍵（互換。ADR-0045 で非推奨だが規則は take と同じ）"""
+    def test_pick_on_an_empty_pool_stops_instead_of_using_the_env_file_key(self):
+        """プールが空でも env ファイルの鍵は返さない（take と同じ規則。ADR-0060）。stdout は空のまま"""
         pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=fake-token-envfile\n')
-        r = self.pick('391')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        out = json.loads(r.stdout)
-        self.assertEqual(out['keys'], {})
-        self.assertEqual(out['env'], {'CLAUDE_CODE_OAUTH_TOKEN': 'fake-token-envfile'})
+        r = self.pick('391', stale_env={'CLAUDE_CODE_OAUTH_TOKEN': 'fake-token-leaked-n5'})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('鍵なし:', r.stderr)
+        self.assertEqual(r.stdout.strip(), '')
+        self.assertNotIn('envfile', r.stderr); self.assertNotIn('leaked', r.stderr)
 
     def test_pick_needs_json_and_a_task(self):
         r = self.run_sh('cmd_keys "$@"\n', 'pick', '--pj', 'pj', '--task', '391')
@@ -354,15 +357,29 @@ class SandboxKeysTest(unittest.TestCase):
         self.assertIn('OPUS/SONNET', r.stdout); self.assertIn('ENABLED', r.stdout)
         self.assertIn('Fable に使う', r.stdout)                                      # 末尾の凡例
 
-    def test_token_set_for_claude_is_deprecated_but_still_works(self):
-        """Claude の鍵を env ファイルに置く方式は非推奨（ADR-0045）。注意を stderr に出すが保存はする。gh には出さない"""
-        r = self.run_sh('cmd_token set "$@"\n', 'pj', 'claude', stdin='tokDEPR', token_part=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('[非推奨]', r.stderr); self.assertIn('sandbox keys add', r.stderr)
-        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN=tokDEPR', pathlib.Path(self.dir, 'pj', 'pj.env').read_text())
+    def test_token_set_for_claude_is_refused(self):
+        """Claude の鍵を env ファイルに置く経路は無い（ADR-0060）。止まって鍵プールを案内し、何も書かない。gh はそのまま"""
+        r = self.run_sh('cmd_token set "$@"\n', 'pj', 'claude', stdin='tokREFUSED', token_part=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('sandbox keys add', r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'pj', 'pj.env')))
         r = self.run_sh('cmd_token set "$@"\n', 'pj', 'gh', stdin='ghtok', token_part=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn('[非推奨]', r.stderr)
+        self.assertIn('GH_TOKEN=ghtok', pathlib.Path(self.dir, 'pj', 'pj.env').read_text())
+
+    def test_a_stale_key_line_in_the_env_file_is_ignored_and_reported(self):
+        """env ファイルに CLAUDE_CODE_OAUTH_TOKEN= の行が残っていても VM には渡らず、token show が [stale] で場所を言う（値は出さない）"""
+        pathlib.Path(self.env_file).write_text('SB_DOMAIN=t.sb.internal\nCLAUDE_CODE_OAUTH_TOKEN=stale-0001\n')
+        self.add('opus-a', '--other', token='fake-token-other-bbbb')
+        r = self.take('379', need='other')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        env = self.vm_env()
+        self.assertEqual(env['CLAUDE_CODE_OAUTH_TOKEN'], 'fake-token-other-bbbb')
+        self.assertNotIn('stale', pathlib.Path(self.dir, 'env.10.77.1.1').read_text())
+        r = self.run_sh('cmd_token show\n', token_part=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('[stale]', r.stdout); self.assertIn(self.env_file + ': CLAUDE_CODE_OAUTH_TOKEN', r.stdout)
+        self.assertNotIn('stale-0001', r.stdout)
 
 
 if __name__ == '__main__':

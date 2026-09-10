@@ -29,7 +29,7 @@ sandbox reinject <id>                                # push the current key into
 
 Long-lived tokens from `claude setup-token` expire. When one does, the step stops with `failure: key` and the ticket becomes `blocked`. The issue date in `sandbox keys list` tells you when that is coming.
 
-**`sandbox token set <pj>` is deprecated.** It is the old way of putting a key in a per-project file; it still works for compatibility but is not used at all while the pool holds any key (the command prints a notice). `sandbox token rotate` replaces the key intake uses (`ctl.env`); it does not touch the pool.
+**The pool is the only source of the keys a VM receives** (ADR-0060). `sandbox token set … claude` refuses and saves nothing, a `CLAUDE_CODE_OAUTH_TOKEN` line left in `~/.config/sandbox/env` or `pj/<pj>.env` is ignored (`sandbox token show` lists it as `[stale]` with the `sed` line that removes it), and there is no fallback to those files when the pool is empty. `sandbox token rotate claude` replaces only the key intake uses (`ctl.env`) and restarts the console; it does not touch the pool. Pool keys are replaced with `sandbox keys token <name>`.
 
 **When the pool has no key for a purpose the run needs, the run pauses** (ADR-0046). No VM is taken, the ticket goes back to todo and its note says it is paused for lack of a key. Register a key on the *Keys* screen and the 5-minute timer starts the run over. Disabling every key stops the factory; enabling one resumes it.
 ### Running out of usage (the usage limit) resumes by itself
@@ -135,13 +135,13 @@ sandbox release 999
 | `reset` fails | Does `qm listsnapshot 92NN` show `clean`? | If not, destroy and rebuild with `40-pool.sh` |
 | VM has no internet | `iptables -t nat -S \| grep 10.77`, `pve-firewall status` | Reapply SDN with `pvesh set /cluster/sdn`. LAN / other VMs / tailnet are unreachable by design |
 | Mac cannot reach a VM (after enabling the firewall) | `/etc/pve/firewall/<vmid>.fw`, `qm config <vmid> \| grep firewall` | Rerun `50-firewall.sh` |
-| Claude Code authentication error (`failure: key`) | `key=… (pool: <name>)` in the run log says which key; the issue date in `sandbox keys list` | `claude setup-token` → `sandbox keys token <name>` (or the *Keys* screen). Intake's key: `sandbox token rotate`. Continue the stopped run with `kb run <id> --from` |
+| Claude Code authentication error (`failure: key`) | `key=… (pool: <name>)` in the run log says which key; the issue date in `sandbox keys list` | `claude setup-token` → `sandbox keys token <name>` (or the *Keys* screen). Intake's key: `sandbox token rotate claude`. Continue the stopped run with `kb run <id> --from` |
 | A step stopped at the usage limit (ticket back to todo, note says paused) | `kb resumable`, `journalctl -u aifactory-resume` | Nothing. Once the reset time passes the timer continues the run. In a hurry, add another key on the *Keys* screen and run `dispatch --resume-paused` |
 | The Proxmox host is down | `ssh $PVE_HOST` fails, `pvecm nodes` (from another node if clustered) | Power it on (WoL / IPMI / the physical button). The pool has onboot=0, so `qm start` by hand |
 
 ## Periodic maintenance
 
 - Monthly: OS update of the base template
-- Renew with `claude setup-token` → `sandbox keys token <name>` as a key's expiry approaches (watch the issue date in `sandbox keys list`); intake's key in `ctl.env` with `sandbox token rotate`
+- Renew with `claude setup-token` → `sandbox keys token <name>` as a key's expiry approaches (watch the issue date in `sandbox keys list`); intake's key in `ctl.env` with `sandbox token rotate claude`
 - When `workspace/runs/` grows, delete or archive old runs (`state.json` and `work/` are enough as records)
 - When `done` items pile up in `workspace/kanban/BOARD.md`, look back with `kb list --all` and then stop worrying (the DB is small)

@@ -20,7 +20,8 @@ flowchart LR
   end
   subgraph home["~/.config/sandbox/ (secrets, outside the repository)"]
     ENV[env]
-    PJE[pj/pj.env]
+    PJE[pj/pj.env<br>GH_REPO]
+    KEYS[keys.json<br>Claude key pool]
     APP[gh-app/]
     STJ[state.json]
   end
@@ -29,7 +30,7 @@ flowchart LR
     TK[tickets/]
   end
   RN[runner] --> WF & RO & RT & ST & SC & PY & GS & TK
-  SB[sandbox CLI] --> ENV & PJE & APP & STJ
+  SB[sandbox CLI] --> ENV & PJE & KEYS & APP & STJ
   IN[intake] --> RT & PY
   DP[dispatch] --> PY & STJ & DB
 ```
@@ -49,7 +50,8 @@ flowchart LR
 | `workspace/projects/<pj>/provision.sh` | proxmox/32-pj-template.sh | Template baking | Low, on template updates |
 | Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` (one line, a path) | kb, intake, dispatch, runner, the console | Where the workspace is (default `<repo>/workspace/`). The variable wins, then the file. The file also works for processes that do not go through a shell (an MCP server started by a GUI-launched Claude Code, launchd). `KB_ROOT` / `CONSOLE_JOBS` relocate only the ledger and the job records | Almost never |
 | `~/.config/sandbox/env` | sandbox CLI, proxmox/run.sh | Proxmox host (`PVE_HOST`), gateway (`GW_SSH`), key, domain, ProxyJump, pool IPs / VMIDs (`SB_POOL_NET` / `SB_POOL_BASE`). **Outside the repository** | Almost never |
-| `~/.config/sandbox/pj/<pj>.env` | sandbox CLI (take / reinject) | Per-project `CLAUDE_CODE_OAUTH_TOKEN` and `GH_REPO`. **Outside the repository** | On token renewal |
+| `~/.config/sandbox/pj/<pj>.env` | sandbox CLI (take / reinject) | `GH_REPO` only (optionally a fallback `GH_TOKEN`, `SB_IDLE_STOP_HOURS`). Claude keys do not go here (ADR-0060). **Outside the repository** | Almost never |
+| `~/.config/sandbox/keys.json` | sandbox CLI (take / reset / reinject / `keys pick`), the console's *Keys* screen | The Claude key pool: the only source of the keys a VM receives, with each key's purpose (for Fable / for Opus, Sonnet and Haiku). **Outside the repository** | On key renewal |
 | `~/.config/sandbox/gh-app/` | sandbox CLI | GitHub App id and private key. **Outside the repository** | Almost never |
 | `~/.config/sandbox/state.json` | sandbox CLI, runner, dispatch, other sessions | Which VM is lent to whom. **Outside the repository** | Every take / release |
 | `workspace/kanban/kanban.db` + `tickets/` | kb, intake, dispatch, runner (bodies) | Ticket state and bodies | High |
@@ -61,7 +63,7 @@ flowchart LR
 |---|---|
 | Model | Role default class → the step's `model_class` → environment variable `CLAUDE_MODEL` (one-off) |
 | PR target | `base_branch` in `project.yml` → `base_branch: hotfix_base` in the workflow → `workflow_overrides.<wf>.base_branch` in `project.yml` |
-| Claude token | `~/.config/sandbox/env` (global default) → `pj/<pj>.env` (per project) → `SANDBOX_CLAUDE_TOKEN` (one-off). A `CLAUDE_CODE_OAUTH_TOKEN` exported in the shell is **ignored** |
+| Claude key | The key pool (`~/.config/sandbox/keys.json`) only: per purpose, the key this ticket used before, otherwise the enabled one that has gone longest without use. A `CLAUDE_CODE_OAUTH_TOKEN` in `env`, `pj/<pj>.env` or the shell is **ignored**; no key in the pool means the run pauses (ADR-0060 / ADR-0046) |
 | GitHub token | Static `GH_TOKEN` (fallback) → GitHub App installation token → `SANDBOX_GH_TOKEN` (one-off) |
 | intake pj / kind | The LLM's decision → `pj:` / `kind:` lines at the top of the text → `--pj` / `--kind` |
 
@@ -80,7 +82,7 @@ flowchart LR
 | intake's classification habits | The prompt text in `glue/bin/intake`, or a `kind:` line at the top of the request | At filing |
 | Pool size (actual) | `sandbox/proxmox/40-pool.sh <pj> <count>` (what you create is the actual size) | That project's parallelism |
 | Pool size (defined) | The `SANDBOX_POOL_PER_PJ` environment variable (default 3), read by `glue/bin/dispatch`, `sandbox status` and the console sandbox screen. A defined size larger than the actual one makes `take` fail with no free VM | Dispatch and display |
-| Adding or replacing a Claude key | `sandbox keys add` / `sandbox keys token <name>` (or the console's *Keys* screen; `sandbox reinject <id>` while lent). `sandbox token set <pj>` is deprecated | Every project (keys are shared through the pool) |
+| Adding or replacing a Claude key | `sandbox keys add` / `sandbox keys token <name>` (or the console's *Keys* screen; `sandbox reinject <id>` while lent). Intake's key in `ctl.env`: `sandbox token rotate claude` | Every project (keys are shared through the pool) |
 | Proxmox host or address space | `~/.config/sandbox/env` (`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`); on the Proxmox side `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`. The naming rules in `sandbox/README.md` + an ADR | Everything |
 | Where operational data lives | Environment variable `AIFACTORY_WORKSPACE` or `~/.config/aifactory/workspace` | Everything |
 

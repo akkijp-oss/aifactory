@@ -44,7 +44,7 @@ flowchart LR
 |---|---|---|
 | Tailscale | tailnet 1 つ。管理コンソールで subnet route を承認できる権限。ACL を編集する場合は API キー | Mac から VM に届く経路。ゲートウェイ LXC だけを tailnet に入れ、`10.77.0.0/16` を広告する |
 | GitHub | 対象リポジトリへの管理権限（GitHub App をインストールできること） | VM から push / PR / マージするための 1 時間トークンを GitHub App が払い出す |
-| Anthropic | Claude Code が使えるプラン。プロジェクトごとに `claude setup-token` で長期トークンを発行 | VM の中で `claude -p` を動かす認証 |
+| Anthropic | Claude Code が使えるプラン。`claude setup-token` で長期トークンを発行し、鍵プールに登録する（1 本で全プロジェクトに使える。複数登録すれば利用枠を分散できる） | VM の中で `claude -p` を動かす認証 |
 
 ## ソフトウェア（Mac 側）
 

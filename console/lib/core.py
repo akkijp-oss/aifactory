@@ -674,25 +674,20 @@ def read_file(relpath, tail=None, offset=None):
 
 
 # ---------- sandbox
-def env_has_claude_key(path):
-    """env ファイルに無印の Claude の鍵（CLAUDE_CODE_OAUTH_TOKEN=…）が入っているか。有無だけを見て値は持たない"""
-    try: return any(re.match(r"^CLAUDE_CODE_OAUTH_TOKEN=\S", l.strip()) for l in pathlib.Path(path).read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError: return False
-
-
 def key_pool_counts():
-    """鍵プールのうち有効な鍵の数（用途ごと）。sandbox 画面が「この PJ の鍵はどこから来るか」を言うのに使う（ADR-0045）"""
+    """鍵プールのうち有効な鍵の数（用途ごと）。sandbox 画面が「この PJ の run に鍵が渡るか」を言うのに使う（ADR-0045 / ADR-0060）"""
     ks = [k for k in keys_view().get("keys") or [] if k.get("enabled")]
     return {"fable": sum(1 for k in ks if k["allow"].get("fable")), "other": sum(1 for k in ks if k["allow"].get("other")), "total": len(ks)}
 
 
 def key_source_for(pj, pool):
-    """この PJ の VM に渡る Claude の鍵の出どころ。pool（両用途ともプール）/ pool_partial（片方だけプール、残りは env）/
-    pj（PJ 別 env。非推奨）/ global（全体の env）/ none。値は見ない（有無だけ）"""
+    """この PJ の VM に渡る Claude の鍵の状態。出どころは鍵プールだけ（env ファイルの鍵は ADR-0060 で廃止。PJ で違いは無い）。
+    pool（両用途ともある）/ pool_fable_only / pool_other_only（片方の用途だけ。無い用途の step がある run は「鍵なし」で一時停止）/
+    none（プールが空。run は VM を取らずに一時停止）。値は見ない（有無だけ）"""
     if pool["fable"] and pool["other"]: return "pool"
-    fallback = "pj" if env_has_claude_key(SANDBOX_PJ_DIR / f"{pj}.env") else "global" if env_has_claude_key(SANDBOX_STATE.parent / "env") else "none"
-    if pool["fable"] or pool["other"]: return "pool_partial" if fallback != "none" else "pool_partial_nofallback"
-    return fallback
+    if pool["fable"]: return "pool_fable_only"
+    if pool["other"]: return "pool_other_only"
+    return "none"
 
 
 def sandbox_env():
@@ -841,7 +836,7 @@ def sandbox_view():
         red_gates = red_manual + [g["name"] for g in red_auto if g["name"] not in red_manual]
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
-                    "key_source": key_source_for(pj, pool),   # VM に渡る Claude の鍵の出どころ（ADR-0045）
+                    "key_source": key_source_for(pj, pool),   # VM に渡る Claude の鍵がプールにそろっているか（ADR-0045 / ADR-0060）
                     "lent": n_lent, "leases": len(mine),   # 使用数は台数。件数は共有のときだけ画面に添える
                     "pool_defined": POOL_PER_PJ, "pool_actual": n_actual, "free": free, "unbuilt": unbuilt,
                     "hint": f"未構築 {unbuilt} 台。proxmox/40-pool.sh {pj} {unbuilt} で足せます" if unbuilt else None,
@@ -1597,7 +1592,7 @@ def keys_view():
                      "launches": k.get("launches") or 0,
                      "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
     return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
-            # 系統ごとの候補数。0 の系統は PJ / 全体の env の鍵に落ちる（互換）
+            # 用途ごとの候補数。0 の用途を要る run は「鍵なし」で一時停止する（env ファイルの鍵には落ちない。ADR-0060）
             "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")}}
 
 

@@ -44,7 +44,7 @@ flowchart LR
 |---|---|---|
 | Tailscale | One tailnet, permission to approve subnet routes in the admin console, and an API key if you need to edit the ACL | The path from the Mac to the VMs. Only the gateway LXC joins the tailnet and advertises `10.77.0.0/16` |
 | GitHub | Admin rights on the target repositories (to install a GitHub App) | The GitHub App issues one-hour tokens that let VMs push, open PRs and merge |
-| Anthropic | A plan that includes Claude Code. One long-lived token per project via `claude setup-token` | Authentication for `claude -p` inside the VM |
+| Anthropic | A plan that includes Claude Code. Long-lived tokens from `claude setup-token`, registered in the key pool (one token can serve every project) | Authentication for `claude -p` inside the VM |
 
 ## Software (Mac side)
 

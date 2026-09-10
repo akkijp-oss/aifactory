@@ -90,11 +90,10 @@ sandbox idle-stop [--hours N] [--keep K] [--dry-run]
 
 ```
 sandbox keys list|add|set|rm|token          Claude の鍵プール（制御系の keys.json。VM に渡す Claude の鍵の正本）。鍵ごとに「Fable に使う」「Opus・Sonnet・Haiku に使う」を持ち、take がモデルごとに 1 本選ぶ
-sandbox token set <pj|global> gh            GitHub トークン（GitHub App が無いときのフォールバック）
-sandbox token set <pj|global> [claude]      【非推奨】Claude の鍵を PJ / 全体の設定ファイルに置く。プールに合う鍵があるときは使われない
-sandbox token rotate [claude|gh]            1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）。プールは触らない
-sandbox token show [pj]                     どの鍵が効いているか（マスク表示・発行からの日数・プールの本数）
-sandbox token clear <pj|global> [claude|gh] トークンを消す
+sandbox token set <pj|global> gh            GitHub トークン（GitHub App が無いときのフォールバック）。claude は受け付けない（keys add へ）
+sandbox token rotate gh|claude[:<系統>]      gh: 1 回の入力で global・全 PJ・ctl.env を差し替え（console restart と reinject --all まで）。claude: intake 用の ctl.env だけ差し替えて console restart
+sandbox token show [pj]                     鍵の出どころ（VM へは鍵プールから）・intake の鍵（マスク）・GH_TOKEN の出どころ・プールの本数・env に残った古い鍵（[stale]）
+sandbox token clear <pj|global> gh          GitHub トークンを消す
 sandbox reinject <task-id>|--all            貸出中の VM に現在の設定を再注入（巻き戻しなし。鍵の差し替え用）
 sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の installation token を表示 / 貸出中 VM の GH_TOKEN を全部払い出し直す
 ```
@@ -113,7 +112,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: 設定確認 / <pj> の 
 | `keys rm <名前> [--force]` | 消す。実行中の VM が使っていれば `--force` が要る |
 | `keys pick --pj <pj> --task <id> [--need=…] [--current=…] --json` | runner が工程ごとに呼ぶ選択口（選んだ鍵の名前と系統別の変数を JSON で返す）。人が打つことはない |
 
-選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。プールに 1 本でも鍵があれば env の鍵は VM に渡しません。要る用途（runner が `--need=fable,other` で渡す）の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（ADR-0046）。プールが空のときだけ `pj/<pj>.env` と `env` の鍵（下の `token set`。非推奨）を使います。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
+選び方は「そのチケットが前に使った鍵（まだ使える設定なら）→ 無ければ、用途の合う有効な鍵のうち最後に使ってから最も時間が経ったもの」です。VM に渡る Claude の鍵はこのプールからだけ選ばれ、`~/.config/sandbox/env` や `pj/<pj>.env` に残った `CLAUDE_CODE_OAUTH_TOKEN` は読まれません（ADR-0060）。要る用途（runner が `--need=fable,other` で渡す）の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（ADR-0046）。プールが空でも、env ファイルに鍵が残っていても同じです。VM には系統別の変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`）で渡り、名前だけが `CLAUDE_KEY_NAME_<系統>` と貸出台帳に残るので、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になります。
 
 pull backend（Mac / Windows / Linux）は Proxmox の貸出台帳を持たないので、runner が工程ごとに `keys pick` を呼び、前の工程で選ばれた名前を `--current` で渡します。同じ run は同じ鍵を使い続け、その鍵を無効化すると次の工程から別の鍵に変わります。選んだ名前は run の `state.json` の `keys` に残ります。`ASSIGNED` は工程ごとに増え、`IN_USE` には pull backend の run は出ません（貸出台帳が Proxmox 専用のため）。
 
@@ -121,13 +120,13 @@ pull backend（Mac / Windows / Linux）は Proxmox の貸出台帳を持たな�
 
 | コマンド | 書き先 |
 |---|---|
-| `token set <pj> gh` | `~/.config/sandbox/pj/<pj>.env` の `GH_TOKEN`（GitHub App 未設定時のフォールバック） |
-| `token set <pj>` / `token set <pj> claude:<系統>` | **非推奨**（ADR-0045）。`pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN`（`_<系統>`）。互換のため動くが、実行すると注意が出て、プールに用途の合う鍵があるときは使われない。代わりに `keys add` |
-| `token set global` | `~/.config/sandbox/env`（プールが空のときだけ使われる。同じく非推奨） |
-| `token rotate [claude\|gh]` | `~/.config/sandbox/env` と、その鍵を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env`。claude では intake 用の `ctl.env` を替えるのが主な用途。プールは触らない |
-| `token show [pj]` | 効いている鍵の出どころとマスク表示、保存からの日数、実行ホストが制御系かどうか、プールの本数と用途ごとの数 |
+| `token set <pj\|global> gh` | `~/.config/sandbox/pj/<pj>.env` または `~/.config/sandbox/env` の `GH_TOKEN`（GitHub App 未設定時のフォールバック）。`claude` / `claude:<系統>` を指定すると何も書かずに止まり、`keys add`（intake 用なら `token rotate claude`）を案内する（ADR-0060） |
+| `token clear <pj\|global> gh` | 同じファイルの `GH_TOKEN` を消す |
+| `token rotate gh` | `~/.config/sandbox/env` と、`GH_TOKEN` を持つ `pj/*.env` 全部と、`~/.config/aifactory/ctl.env`。console を restart し、貸出中の VM があれば `reinject --all`（ADR-0029） |
+| `token rotate claude[:<系統>]` | `~/.config/aifactory/ctl.env`（intake が制御系で `claude -p` を呼ぶのに使う鍵）だけ。console を restart する。env / pj ファイルと貸出中の VM は触らず、`ctl.env` の無いホストでは止まる。プールの鍵は `keys token <名前>` で入れ替える |
+| `token show [pj]` | 実行ホストが制御系かどうか、VM に渡す Claude の鍵は鍵プールから用途ごとに 1 本であること（env ファイルの鍵は使わない）、`ctl.env` の intake 用の鍵（マスク・発行からの日数）、`GH_TOKEN` の出どころ、プールの本数と用途ごとの数（`keys.json` が無ければ `pool: 0 本`）。env / pj ファイルに `CLAUDE_CODE_OAUTH_TOKEN*=` の行が残っていれば `[stale]` でファイルと変数名を挙げ、消し方（`sed -i '/^CLAUDE_CODE_OAUTH_TOKEN/d' <file>`）を添える。値は出さない |
 
-期限切れの差し替えは制御系（`ctl.env` のあるホスト）で `sandbox token rotate` を 1 回。更新した場所を一覧で出したあと、`ctl.env` を更新したときは `aifactory-console` を再起動し（`sudo -n` が通らなければコマンドを表示）、貸出中の VM があれば `reinject --all` まで行います（ADR-0029）。VM の中で動いている `claude` は、従来どおり VM 内で再起動が要ります。
+期限切れの差し替えは、プールの鍵なら `sandbox keys token <名前>`（console の「鍵」画面でも可）で値を入れ替え、貸出中の VM があれば `sandbox reinject <id>`。intake 用の鍵は制御系（`ctl.env` のあるホスト）で `sandbox token rotate claude` を 1 回。`ctl.env` を更新したあと `aifactory-console` を再起動します（`sudo -n` が通らなければコマンドを表示）。GitHub の静的トークンは `sandbox token rotate gh` で、更新した場所を一覧で出したあと console を再起動し、貸出中の VM があれば `reinject --all` まで行います（ADR-0029）。VM の中で動いている `claude` は、従来どおり VM 内で再起動が要ります。
 
 ### gh-app
 
@@ -145,14 +144,15 @@ CLI は、必要な権限のうち GitHub App に許可されているものを�
 |---|---|
 | `~/.config/sandbox/env` | `SB_TENANT`（既定 `main`。`SB_PREFIX` = `sb-<t>`、`SB_DOMAIN` = `<t>.sb.internal`、`SB_POOL` = `sb-<t>` を導く）/ `PVE_HOST`（Proxmox ホストの ssh エイリアス。ssh モードで必須、既定なし）または `PVE_API_URL` + `PVE_API_TOKEN`（API モード。テナントのプール限定のトークン。`PVE_API_CA` か `PVE_API_INSECURE=1`。ADR-0017）/ `GW_SSH`（ゲートウェイ LXC への ssh 先。必須、既定なし）/ `SB_KEY` / `SB_DOMAIN` / `APP_PORT` / `SB_JUMP` / `SB_POOL_NET`（既定 `10.77.1`）/ `SB_POOL_BASE`（既定 `9200`）/ `SB_IDLE_STOP_HOURS`（使われていない VM を停止候補にするまでの時間。既定 24、`0` で無効）/ `SB_IDLE_STOP_KEEP`（候補のうち起動したまま残す台数。既定 10）。ひな形 `sandbox/templates/env.example` |
 | `~/.config/sandbox/tenants/<t>.env` | 別テナントの設定（メンテナの手元）。`SB_TENANT=<t>` で `sandbox` と `proxmox/run.sh` が読む。状態は `<t>.state.json`、PJ 別設定は `<t>.pj/` |
-| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、`CLAUDE_CODE_OAUTH_TOKEN`、任意で `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`（モデル系統別の鍵）、（フォールバック用 `GH_TOKEN`）、`SB_IDLE_STOP_HOURS`（この PJ だけ上書き） |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO=owner/name`、任意でフォールバック用 `GH_TOKEN`、`SB_IDLE_STOP_HOURS`（この PJ だけ上書き）、`APP_PORT`。`CLAUDE_CODE_OAUTH_TOKEN*` を書いても読まれない（`token show` が `[stale]` で挙げる） |
+| `~/.config/sandbox/keys.json` | Claude の鍵プール（600）。`sandbox keys` と console の「鍵」画面が読み書きし、VM に渡す Claude の鍵はここからだけ選ばれる（ADR-0044 / ADR-0060） |
 | `~/.config/sandbox/gh-app/app.env` + `private-key.pem` | GitHub App。`sandbox/bin/gh-app-setup` が作る |
 | `~/.config/sandbox/state.json` | 貸出台帳。`{ "<task-id>": {"vmid", "name", "ip", "pj", "since"} }` |
 | `~/.ssh/conf.d/aifactory/config` | `gw.*.sb.internal` / `ctl.*.sb.internal` / `*.sb.internal` / `10.77.*` の ssh 設定。ひな形 `ssh_config.example` |
 
-設定は `env`（全体の既定値）、`pj/<pj>.env`（プロジェクト別）、`SANDBOX_CLAUDE_TOKEN` / `SANDBOX_GH_TOKEN`（今回だけの指定）の順に読み込み、後の値で上書きします。
+設定は `env`（全体の既定値）、`pj/<pj>.env`（プロジェクト別）、`SANDBOX_GH_TOKEN`（今回だけの指定）の順に読み込み、後の値で上書きします。
 
-シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` は使いません。過去に、これらの値が意図せずプロジェクト設定を上書きしたためです。
+シェルに export された `GH_TOKEN` は使いません。過去に、この値が意図せずプロジェクト設定を上書きしたためです。Claude の鍵は env ファイルからもシェルからも読まず、鍵プールだけから選びます（ADR-0060）。
 
 ## VM に注入されるもの
 

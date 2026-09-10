@@ -97,7 +97,8 @@ class AgentTimeoutTest(unittest.TestCase):
         app = str(self.app)
         work = self.ws / "work"; work.mkdir(exist_ok=True)
         r.work = str(work)
-        env = {"SANDBOX_APP_DIR": app, "PATH": self.fake_claude(claude_body) + os.pathsep + os.environ["PATH"]}
+        env = {"SANDBOX_APP_DIR": app, "PATH": self.fake_claude(claude_body) + os.pathsep + os.environ["PATH"],
+               "CLAUDE_CODE_OAUTH_TOKEN_FABLE": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_SONNET": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_HAIKU": "fake-token-pool"}   # take が鍵プールから VM に書く系統別の鍵（無いと runner は起動前に failure: key で止まる。ADR-0060）
 
         def sb(cmd, input_text=None, check=True):
             p = subprocess.run(["bash", "-c", cmd], text=True, capture_output=True, input=input_text,

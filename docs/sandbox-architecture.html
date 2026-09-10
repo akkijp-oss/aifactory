@@ -130,7 +130,8 @@
 <table class="kv">
   <tr><td><code>~/.local/bin/sandbox</code></td><td>CLI 本体（リポジトリ <code>sandbox/bin/sandbox</code> への symlink）。中身は ssh 越しの <code>qm</code> 操作と dnsmasq の hosts 編集</td></tr>
   <tr><td><code>~/.config/sandbox/env</code></td><td>全体既定（接続先、鍵、<code>SB_JUMP</code> など）</td></tr>
-  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>プロジェクト別上書き。<code>CLAUDE_CODE_OAUTH_TOKEN</code>、<code>GH_REPO</code> など（600）</td></tr>
+  <tr><td><code>~/.config/sandbox/pj/&lt;pj&gt;.env</code></td><td>プロジェクト別上書き。<code>GH_REPO</code> など（600）。Claude の鍵は置かない</td></tr>
+  <tr><td><code>~/.config/sandbox/keys.json</code></td><td>Claude の鍵プール（600）。VM に渡す Claude の鍵の唯一の出どころ。<code>sandbox keys</code> と console の「鍵」画面が読み書きする（ADR-0044 / ADR-0060）</td></tr>
   <tr><td><code>~/.config/sandbox/gh-app/</code></td><td>GitHub App <code>aifactory-sandbox</code> の App ID と秘密鍵（600）</td></tr>
   <tr><td><code>~/.config/sandbox/state.json</code></td><td>貸出台帳（task-id → vmid / name / ip / pj / since）。<b>正本は Mac 側のこのファイルだけ</b></td></tr>
   <tr><td><code>~/.ssh/conf.d/aifactory/sb_ed25519</code></td><td>VM / LXC 用 SSH 鍵。公開鍵は cloud-init でテンプレートにあらかじめ設定してある</td></tr>
@@ -323,20 +324,21 @@
   <tr><td><code>release &lt;task-id&gt;</code></td><td>rollback → DNS の task 行削除 → state.json 削除</td><td>次の take に回せる</td></tr>
   <tr><td><code>ls</code></td><td><code>qm list</code> と state.json を突き合わせ</td><td>貸出状況</td></tr>
 </table>
-<p>基本操作のほかに、認証情報を管理する <code>token set/show/clear</code>、<code>reinject</code>、<code>gh-app status/token/refresh</code> があります。Proxmox の操作を CLI にまとめ、エージェントが直接操作する必要をなくすのが設計の基本です（sandbox/README.md「目的」4）。</p>
+<p>基本操作のほかに、認証情報を管理する <code>keys list/add/set/rm/token</code>（Claude の鍵プール）、<code>token set/show/rotate</code>（GitHub の静的トークンと intake 用の <code>ctl.env</code>）、<code>reinject</code>、<code>gh-app status/token/refresh</code> があります。Proxmox の操作を CLI にまとめ、エージェントが直接操作する必要をなくすのが設計の基本です（sandbox/README.md「目的」4）。</p>
 
 <!-- ============================================================ -->
 <h2 id="s5">5. データの流れ</h2>
 
 <h3>5.1 take のとき: 設定とトークンが VM に届くまで</h3>
 <ol class="steps">
-  <li><b>設定の 3 層を重ねる</b>（後勝ち）: <code>~/.config/sandbox/env</code> → <code>pj/&lt;pj&gt;.env</code> → 実行時の <code>SANDBOX_CLAUDE_TOKEN</code> / <code>SANDBOX_GH_TOKEN</code>。シェルに export された <code>CLAUDE_CODE_OAUTH_TOKEN</code> / <code>GH_TOKEN</code> は <b>無視</b>する（プロジェクト設定を黙って上書きした事故があった。ADR-0006）</li>
+  <li><b>設定の 3 層を重ねる</b>（後勝ち。GitHub の静的トークンと接続設定）: <code>~/.config/sandbox/env</code> → <code>pj/&lt;pj&gt;.env</code> → 実行時の <code>SANDBOX_GH_TOKEN</code>。シェルに export された <code>GH_TOKEN</code> は <b>無視</b>する（プロジェクト設定を黙って上書きした事故があった。ADR-0006）</li>
+  <li><b>Claude の鍵は鍵プールから選ぶ</b>: <code>~/.config/sandbox/keys.json</code> の鍵から、用途（Fable 用 / Opus・Sonnet・Haiku 用）ごとに「そのチケットが前に使った鍵 → 無ければ最後に使ってから最も時間が経った鍵」を 1 本。env / pj ファイルやシェルの <code>CLAUDE_CODE_OAUTH_TOKEN</code> は読んでも捨てる。要る用途の鍵が無ければ VM を取らずに「鍵なし:」で止まる（ADR-0044 / ADR-0046 / ADR-0060）</li>
   <li><b>GitHub トークンを払い出す</b>（ADR-0008）: Mac の秘密鍵で JWT（RS256、10 分）を作る → <code>GET /repos/{GH_REPO}/installation</code> で installation id → <code>POST /app/installations/{id}/access_tokens</code>（対象リポジトリ 1 つ、contents / pull_requests write、metadata read）→ 1 時間有効の <code>ghs_…</code>。App 未設定なら静的 <code>GH_TOKEN</code> にフォールバック</li>
-  <li><b>VM の tmpfs に書く</b>: ssh で <code>/run/sandbox/env</code>（umask 077）に <code>TASK_ID / SANDBOX_PJ / SANDBOX_HOST / CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN / GH_REPO / GH_TOKEN_EXPIRES_AT</code></li>
+  <li><b>VM の tmpfs に書く</b>: ssh で <code>/run/sandbox/env</code>（umask 077）に <code>TASK_ID / SANDBOX_PJ / SANDBOX_HOST / CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN_FABLE / _OPUS / _SONNET / _HAIKU / CLAUDE_KEY_NAME_* / GH_TOKEN / GH_REPO / GH_TOKEN_EXPIRES_AT</code></li>
   <li><b>login shell が読む</b>: <code>/etc/profile.d/sandbox.sh</code> が <code>/run/sandbox/env</code> を export。<code>/etc/profile.d/sandbox-app.sh</code> が <code>/etc/sandbox/app.env</code>（テンプレート由来の非秘密設定）を export。<code>sandbox ssh</code> は常に <code>bash -l</code> で入るので両方が効く</li>
   <li><b>DNS と台帳</b>: sb-gw の hosts に <code>10.77.1.NN task-&lt;id&gt;</code> を足して reload。Mac の state.json に記録</li>
 </ol>
-<div class="note">Claude のトークンは <code>claude setup-token</code> の長期トークン（リフレッシュ回転がないので複数 VM で同時に使っても衝突しない。ADR-0005）。GitHub のトークンは 1 時間で切れるので、Mac の launchd が 45 分ごとに <code>gh-app refresh</code> で貸出中 VM 全部を書き直す。差し替えは <code>token set</code> → <code>reinject</code>（巻き戻しなしで tmpfs だけ書き直す。起動中の claude プロセスは再起動が要る）。</div>
+<div class="note">Claude のトークンは <code>claude setup-token</code> の長期トークン（リフレッシュ回転がないので複数 VM で同時に使っても衝突しない。ADR-0005）。GitHub のトークンは 1 時間で切れるので、Mac の launchd が 45 分ごとに <code>gh-app refresh</code> で貸出中 VM 全部を書き直す。差し替えは <code>sandbox keys token &lt;名前&gt;</code>（または console の「鍵」画面）→ <code>reinject</code>（巻き戻しなしで tmpfs だけ書き直す。起動中の claude プロセスは再起動が要る）。</div>
 
 <h3>5.2 作業中: VM の中と外で流れるもの</h3>
 <table>
@@ -375,7 +377,7 @@
 <h3>6.1 秘密情報がどこに、どれだけの時間あるか</h3>
 <table>
   <tr><th>情報</th><th>置き場</th><th>VM に渡る形</th><th>寿命</th><th>漏れたときの影響範囲</th></tr>
-  <tr><td>Claude 長期トークン</td><td>Mac <code>pj/&lt;pj&gt;.env</code>（600）</td><td>tmpfs の環境変数</td><td>take から release / reset / 再起動まで</td><td>そのプロジェクトの Claude アカウント（Max プラン）で API を叩かれる。失効は <code>claude setup-token</code> の再発行</td></tr>
+  <tr><td>Claude 長期トークン</td><td>制御系 <code>~/.config/sandbox/keys.json</code>（鍵プール、600）</td><td>tmpfs の環境変数</td><td>take から release / reset / 再起動まで</td><td>その鍵の Claude アカウント（Max プラン）で API を叩かれる。失効は <code>claude setup-token</code> の再発行 → <code>sandbox keys token &lt;名前&gt;</code></td></tr>
   <tr><td>GitHub App 秘密鍵</td><td>Mac <code>gh-app/private-key.pem</code>（600）</td><td><b>渡らない</b></td><td>App を作り直すまで</td><td>install 先の全リポジトリに contents / PR write のトークンを作れる</td></tr>
   <tr><td>GitHub installation token</td><td>生成のみ（Mac に保存しない）</td><td>tmpfs の環境変数</td><td>1 時間（45 分ごとに更新）</td><td>その 1 リポジトリだけ、1 時間だけ。Metadata read / Contents write / Pull requests write</td></tr>
   <tr><td>Mac の <code>gh auth token</code>（scope repo）</td><td>Mac の gh</td><td>テンプレート事前設定時だけ環境変数で。テンプレートとして保存する前に logout</td><td>事前設定中のみ</td><td>全リポジトリ読み書き。テンプレートには残っていないことを検証 clone で確認する手順</td></tr>
