@@ -82,6 +82,16 @@ app_dir: /Users/admin/app
 gates: gates.sh
 ```
 
+Add `display` for a project that needs a wider guest screen, such as checking a 1400-pixel layout.
+
+```yaml
+display:
+  width: 1600
+  height: 1000
+```
+
+For such a project, prepare runs `tart set <guest_vm> --display 1600x1000` on the stopped clone before starting it. The `display` key in the worker's `config.json` is the default for every project on that worker; precedence is project definition, then worker configuration, then nothing (the base image's 1024x768). Allowed sizes are 800-2560 wide and 600-2560 high, and both `width` and `height` are required. `scale` is unsupported ([ADR-0057](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0057-guest-display-resolution.md)). The guest keeps its fixed 4 CPUs and 8 GiB regardless of resolution. Receiving screenshots at the real resolution also requires replacing the guest's `desktop-native` with the 2560-pixel build and rebuilding the base VM (see [Mac and Windows computer use](computer-use.md)).
+
 Match `worker` to an enrolled ID and `app_dir` to the guest account. Add project-specific `gates.sh` and, if needed, `provision.sh` in the same directory. Gates must run checks appropriate to the product and change, returning nonzero on failure.
 
 The guest needs runner tools including `gh`, the Claude CLI, and GNU `timeout`. Provisioning runs before credential injection and prepares tools; the runner clones the repository. Make provisioning repeatable, including avoiding unnecessary downloads of tools already installed. Do not reuse Linux paths or package commands unchanged. Read "[What the base image already contains](#what-the-base-image-already-contains)" first to see what is already installed, and start from the template [workers/templates/provision.macos.sh](https://github.com/akkijp-oss/aifactory/blob/main/workers/templates/provision.macos.sh).
@@ -330,6 +340,6 @@ A documentation task was run on 2026-09-07 using an M1 Mac mini with 16 GB RAM, 
 
 The guest does not share host directories, clipboard, or audio. Softnet blocks private IPv4, link-local, and tailnet destinations. The worker configures public DNS on the guest's `Ethernet` service and disables IPv6. That service name and working guest sudo access are prerequisites.
 
-Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation and anything beyond that is truncated (the operation still runs to completion and its exit code decides the result); image base64 is recorded as `[image N bytes]`. Total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
+Setting the guest resolution with `display` (see [Mac and Windows computer use](computer-use.md)) has not been verified on real Tart hardware yet. Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation and anything beyond that is truncated (the operation still runs to completion and its exit code decides the result); image base64 is recorded as `[image N bytes]`. Total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
 
 See [Mac and Windows computer use](computer-use.md) to add desktop interaction.

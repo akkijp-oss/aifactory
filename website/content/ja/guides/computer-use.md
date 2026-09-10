@@ -36,7 +36,7 @@ AIFactory MCPを再接続すると次の3ツールが使える。既存のstdio�
 {"session":"desktop-...","action":"scroll","amount":-3}
 ```
 
-画像はPNG、最大幅1024ピクセル。座標は返された画像の左上が原点で、実画面への倍率変換はツールが行う。Windowsは仮想画面全体、Macはメイン画面を対象とする。`move` も `x` / `y` を使う。クリックの `button` は `left` / `right`、`count` は1 / 2。`type` はUTF-8で8192バイトまで。Macはクリップボードへ文字列を書いて貼り付けるため、ゲストのクリップボードを置き換える。貼り付けを禁止する入力欄には使えない。`key` は最大4キーで、キー名は3 OS共通・大文字小文字を区別しない。スクロールは正が上、負が下、範囲は-20〜20（0を除く）。
+画像はPNG。最大幅はWindows・Linuxが1024ピクセル、Macは2560ピクセル。ゲストの画面がその幅以下なら縮小せず実解像度で返る。座標は返された画像の左上が原点で、実画面への倍率変換はツールが行う。Windowsは仮想画面全体、Macはメイン画面を対象とする。`move` も `x` / `y` を使う。クリックの `button` は `left` / `right`、`count` は1 / 2。`type` はUTF-8で8192バイトまで。Macはクリップボードへ文字列を書いて貼り付けるため、ゲストのクリップボードを置き換える。貼り付けを禁止する入力欄には使えない。`key` は最大4キーで、キー名は3 OS共通・大文字小文字を区別しない。スクロールは正が上、負が下、範囲は-20〜20（0を除く）。
 
 直接操作の画像は制御系の `$AIFACTORY_WORKSPACE/computer/<session>/` に保存し、画像応答と保存先・ハッシュを返す。`actions.jsonl` は操作IDと種類を記録する。入力文字は監査行へ書かないが、操作結果や画像に現れる内容まで隠す機能ではない。保存容量の自動整理は行わない。
 
@@ -82,6 +82,36 @@ workers/bin/computer close desktop-...
 3. 文字を入れたいだけなら `type` を使う。`type` はUnicodeをそのまま入れるので、記号やIMEの配列に影響されない。
 4. アプリ側のショートカット設定を、使える組み合わせに変える。
 5. 一覧に無いキー（`INSERT`、テンキー、メディアキー、`F13` 以降など）は送れない。上の1〜4で代替するか、そのキーが要らない手順に変える。
+
+## 1400px幅を確認したいときの設定
+
+Macの専用ゲストは基準VMの1024×768で起動するため、既定では1400px幅の画面を撮れない。PJ定義かワーカー設定に `display` を書くと、`guest-prepare` が停止中のクローンへ `tart set <ゲスト名> --display <幅>x<高さ>` を実行してから起動する。
+
+```yaml
+# $AIFACTORY_WORKSPACE/projects/<pj>/project.yml
+backend: macos-pull
+worker: mac-worker-01
+display:
+  width: 1600
+  height: 1000
+```
+
+```json
+{
+  "display": {"width": 1600, "height": 1000}
+}
+```
+
+上のJSONはワーカー設定 `~/.config/aifactory-worker/config.json` に足す既定で、そのワーカーを使う全PJに効く。
+
+- 優先順位はPJ定義 > ワーカー設定 > 指定なし。`display` を書かないPJは従来どおり1024×768で動く。
+- 指定できる範囲は幅800〜2560、高さ600〜2560で、`width` と `height` の両方が要る。範囲外はPJ定義の検証で落ち、ワーカー設定に書いた場合はワーカーが起動しない。
+- `scale` は未対応。`tart set` の該当オプションを実機で確認してから別チケットで扱う（[ADR-0057](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0057-guest-display-resolution.md)）。
+- CPUとメモリは4 CPU・8 GiB固定のまま。解像度を変えても割当は変えない。
+- ゲストの `desktop-native` を2560px対応版へ入れ替えて基準VMを作り直すまで、画面を広げてもscreenshotは1024px幅に縮小されたまま返る。本書「Macへの導入」のビルドと再確認をやり直す。
+- 画像が大きくなっても工程ログは膨らまない。stream-jsonに載る画像のbase64は記録前に `[image N bytes]` へ置き換えるため、1操作16 MiBのログ上限には解像度に関係なく当たりにくい。MCPの `computer_action` は画像をファイルとして保存し、`actions.jsonl` にはハッシュだけを書く。
+- MCP から直接開くセッション（`computer_open`）はワーカー設定の `display` に従う。PJ ごとの指定はチケット経由のrunだけに効く。
+- Windows・Linuxのワーカーにこの設定はない。両者のscreenshotは最大幅1024ピクセルのまま。
 
 ## Windowsへの導入
 

@@ -190,5 +190,32 @@ class QueueTest(unittest.TestCase):
         self.store.heartbeat("mac1", {"mode":"guest", "lifecycle":True, "base_ready":True, "network_ready":True})
         self.store.acquire("mac1", "run-one")
 
+    def test_guest_prepare_carries_only_a_complete_in_range_display(self):
+        self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
+        self.store.acquire("mac1", "run-one")
+        for payload in ({"lease": "run-one", "width": 1600},
+                        {"lease": "run-one", "height": 1000},
+                        {"lease": "run-one", "width": 1600, "height": 1000, "scale": 2},
+                        {"lease": "run-one", "width": 640, "height": 1000},
+                        {"lease": "run-one", "width": 2600, "height": 1000},
+                        {"lease": "run-one", "width": 1600, "height": 400},
+                        {"lease": "run-one", "width": 1600, "height": 3000},
+                        {"lease": "run-one", "width": "1600", "height": "1000"},
+                        {"lease": "run-one", "width": 1600.0, "height": 1000},
+                        {"lease": "run-one", "width": True, "height": 1000}):
+            with self.assertRaises(Error): self.store.submit("mac1", "guest-prepare", payload)
+        # \u89e3\u653e\u306f\u5f93\u6765\u3069\u304a\u308a lease \u3060\u3051\u3002\u89e3\u50cf\u5ea6\u3092\u4e57\u305b\u308b\u5834\u9762\u304c\u7121\u3044
+        with self.assertRaises(Error):
+            self.store.submit("mac1", "guest-release", {"lease": "run-one", "width": 1600, "height": 1000})
+        op = self.store.submit("mac1", "guest-prepare", {"lease": "run-one", "width": 1600, "height": 1000})
+        self.assertEqual(self.store.operation(op)["payload"],
+                         {"lease": "run-one", "width": 1600, "height": 1000})
+
+    def test_guest_prepare_without_a_display_keeps_the_lease_only_payload(self):
+        self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
+        self.store.acquire("mac1", "run-one")
+        op = self.store.submit("mac1", "guest-prepare", {"lease": "run-one"})
+        self.assertEqual(self.store.operation(op)["payload"], {"lease": "run-one"})
+
 
 if __name__ == "__main__": unittest.main()

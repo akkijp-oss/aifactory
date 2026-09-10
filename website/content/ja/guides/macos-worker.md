@@ -82,6 +82,16 @@ app_dir: /Users/admin/app
 gates: gates.sh
 ```
 
+1400px幅のようにゲストの画面を広げたいPJは `display` を足す。
+
+```yaml
+display:
+  width: 1600
+  height: 1000
+```
+
+`display` を書いたPJは、prepareが停止中のクローンへ `tart set <guest_vm> --display 1600x1000` を実行してから起動する。ワーカー設定 `config.json` の `display` は同じワーカーを使う全PJの既定で、優先順位はPJ定義 > ワーカー設定 > 指定なし（基準VMの1024×768）。指定できる範囲は幅800〜2560・高さ600〜2560で、`width` と `height` の両方が要る。`scale` は未対応（[ADR-0057](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0057-guest-display-resolution.md)）。ゲストの割当は解像度に関係なく4 CPU・8 GiB固定のまま。screenshotを実解像度で受け取るには、ゲストの `desktop-native` を2560px対応版へ入れ替えて基準VMを作り直す必要がある（[Mac・Windowsの画面操作](computer-use.md)）。
+
 `worker` は登録済みIDと一致させ、`app_dir` はゲストのアカウントに合わせる。同じディレクトリにPJ用の `gates.sh` と、必要なら `provision.sh` を置く。ゲートは製品と変更内容に合う検証を行い、失敗時は非ゼロで終了する。
 
 ゲストにはrunner用の `gh`、Claude CLI、GNU `timeout` などが必要。provisionは認証注入前に動き、ツールを準備する。cloneはrunnerが行う。既存ツールの再ダウンロードを避けるなど、provisionは再実行可能にしておく。Linux用のパスやパッケージ管理コマンドをそのまま流用しない。何が既に入っているかはこの下の「基準イメージの中身」の節を先に読む。雛形は [workers/templates/provision.macos.sh](https://github.com/akkijp-oss/aifactory/blob/main/workers/templates/provision.macos.sh)。
@@ -330,6 +340,6 @@ python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operatio
 
 ゲストはホストのディレクトリ・クリップボード・音声を共有しない。Softnetでprivate IPv4・リンクローカル・tailnet宛てを遮断し、ゲストの `Ethernet` に公開DNSを設定してIPv6を無効にする。このサービス名と、設定に使えるゲストのsudo環境が前提である。
 
-現在のcode step対応は `gates.sh`、`pr-create.sh`、`sync-base`（PR直前のbase取り込み。runner内蔵でPOSIXのgitだけを使う）。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、超えた分は切り捨てる（操作は完走し、結果はexit codeで決まる）。画像のbase64は `[image N bytes]` に置き換えて記録する。記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
+`display` によるゲスト解像度の指定（[Mac・Windowsの画面操作](computer-use.md)）は実機のTartでまだ確認していない。現在のcode step対応は `gates.sh`、`pr-create.sh`、`sync-base`（PR直前のbase取り込み。runner内蔵でPOSIXのgitだけを使う）。`merge-pr`、工程ごとのOS切替、画面の動画配信、自動リソース調整は未対応。1操作のログ上限は16 MiBで、超えた分は切り捨てる（操作は完走し、結果はexit codeで決まる）。画像のbase64は `[image N bytes]` に置き換えて記録する。記録全体の容量を自動管理する仕組みはない。初回イメージ取得時間とCLI導入時間はrunの処理時間と分けて測る。
 
 画面操作の追加手順は[Mac・Windowsの画面操作](computer-use.md)を参照。

@@ -158,8 +158,17 @@ class Store:
             payload = {"timeout": 300, **payload}
             if type(payload["timeout"]) is not int or not 1 <= payload["timeout"] <= 3600:
                 raise Error("timeout must be between 1 and 3600 seconds")
-        if kind in ("guest-prepare", "guest-release") and (set(payload) != {"lease"} or not NAME.fullmatch(str(payload["lease"]))):
-            raise Error("lifecycle requires a lease ID")
+        if kind in ("guest-prepare", "guest-release"):
+            allowed = {"lease", "width", "height"} if kind == "guest-prepare" else {"lease"}
+            if set(payload) - allowed or "lease" not in payload or not NAME.fullmatch(str(payload["lease"])):
+                raise Error("lifecycle requires a lease ID")
+            # \u89e3\u50cf\u5ea6\u306f guest-prepare \u306e\u3068\u304d\u3060\u3051\u3001width/height \u63c3\u3044\u3067 project.schema.json \u3068\u540c\u3058\u5024\u57df\u306e\u3068\u304d\u3060\u3051\u901a\u3059\uff08343\uff09
+            size = {"width", "height"} & set(payload)
+            if size and size != {"width", "height"}:
+                raise Error("display requires both width and height")
+            if size and (type(payload["width"]) is not int or not 800 <= payload["width"] <= 2560
+                         or type(payload["height"]) is not int or not 600 <= payload["height"] <= 2560):
+                raise Error("display width must be 800-2560 and height 600-2560")
         if stdin is not None:
             if kind != "guest-exec" or not isinstance(stdin, str) or len(stdin.encode()) > 512 * 1024:
                 raise Error("invalid operation input")
