@@ -105,7 +105,7 @@ def tz_info(tz=None):
     d = datetime.datetime.now(tz_of(tz))
     off = d.isoformat()[-6:]
     name = d.tzname() or ""
-    plain = not name or name.upper() in ("UTC", "GMT") or name[0] in "+-"
+    plain = not name or name.upper().startswith(("UTC", "GMT")) or name[0] in "+-"   # オフセット指定の時間帯は tzname() が "UTC+09:00" になる（二重に言わない）
     return {"name": name, "offset": off, "label": f"UTC{off}" if plain else f"{name} UTC{off}"}
 
 

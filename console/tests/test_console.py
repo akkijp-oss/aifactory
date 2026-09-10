@@ -1119,7 +1119,7 @@ class ApiTest(unittest.TestCase):
             at("2026-09-09T23:30:00+00:00")   # UTC の 09-09 23:30 に終わった工程は、+09:00 では翌日の 08:30
             _, d = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00")
             self.assertEqual([a["date"] for a in d["by_day"]], ["2026-09-10"], "日別が工程の時刻を tz に直していない")
-            self.assertEqual(d["tz"]["offset"], "+09:00")
+            self.assertEqual((d["tz"]["offset"], d["tz"]["label"]), ("+09:00", "UTC+09:00"))
             self.assertEqual([r["run"] for r in d["top"]], [run], "run 名の日付を変えてしまっている")
             _, z = self.http.get(f"/api/stats?pj={pj}&tz=%2B00%3A00")
             self.assertEqual([a["date"] for a in z["by_day"]], ["2026-09-09"])
