@@ -4,7 +4,7 @@
 - 動かす: kb / intake / dispatch / sandbox を子プロセスで。長いものは JobStore（console/jobs/）。判定（二重起動・入力検査）はここに 1 つ
 - 置き場は lib/aifactory_paths.py（AIFACTORY_WORKSPACE。KB_ROOT / CONSOLE_JOBS で個別に差し替え可）
 """
-import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time
+import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time, zoneinfo
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
@@ -82,9 +82,27 @@ def ts_keys(d, *keys):
     return {**d, **{k: ts_aware(d[k]) for k in keys if k in d}}
 
 
-def tz_info():
-    """このサーバーの時間帯。画面がブラウザーとの違いを言うために使う"""
-    d = datetime.datetime.now().astimezone()
+TZ_OFFSET = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
+
+
+def tz_of(tz=None):
+    """集計や日付の基準にする時間帯。'+09:00' のようなオフセットか IANA 名（'Asia/Tokyo'）を受ける。
+       空・読めない値はこのサーバーの時間帯に落とす（読むだけの画面なので、400 で画面を白くするより安全）"""
+    if isinstance(tz, datetime.tzinfo): return tz
+    if isinstance(tz, str) and tz.strip():
+        s = tz.strip()
+        m = TZ_OFFSET.match(s)
+        if m:
+            d = datetime.timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
+            return datetime.timezone(-d if m.group(1) == "-" else d)
+        try: return zoneinfo.ZoneInfo(s)
+        except Exception: pass
+    return datetime.datetime.now().astimezone().tzinfo
+
+
+def tz_info(tz=None):
+    """時間帯を画面に出せる形にする（既定はこのサーバーの時間帯。画面がブラウザーとの違いを言うために使う）"""
+    d = datetime.datetime.now(tz_of(tz))
     off = d.isoformat()[-6:]
     name = d.tzname() or ""
     plain = not name or name.upper() in ("UTC", "GMT") or name[0] in "+-"
@@ -1823,12 +1841,22 @@ def _agg_new(**keys):
             "max_cost": 0.0, "max_run": None, "max_step_log": None}
 
 
-def stats_view(days=None, pj=None, include_dry=False):
+def _step_day(r, zone):
+    """工程が載る日付。run 名の日付（kb run を起動した制御系の今日。制御系は UTC）ではなく、
+    工程の時刻 at を見る側の時間帯に直した日付を使う（チケット 393。at が読めない古い記録だけ run 名に落とす）"""
+    try: return ts_dt(r["at"]).astimezone(zone).date().isoformat()
+    except (KeyError, TypeError, ValueError): return r["date"]
+
+
+def stats_view(days=None, pj=None, include_dry=False, tz=None):
     """工程ごとの消費統計。期間（今日からさかのぼる日数。None なら全部）と PJ で絞り、モデル別・工程別・日別・PJ 別・高い工程の上位にまとめる。
+    日別と「直近 N 日」の起点は tz の時間帯（'+09:00' か IANA 名。省略でこのサーバーの時間帯）で切る。
     費用は claude CLI の total_cost_usd（API 料金の換算値）の合計。利用枠（5 時間 / 7 日）の重みとは違うので、画面は「換算」と言う"""
     rows = agent_step_rows()
-    since = (datetime.date.today() - datetime.timedelta(days=int(days) - 1)).isoformat() if days else None
-    sel = [r for r in rows if (not since or r["date"] >= since) and (not pj or r["pj"] == pj) and (include_dry or not r["dry"])]
+    zone = tz_of(tz)
+    for r in rows: r["day"] = _step_day(r, zone)
+    since = (datetime.datetime.now(zone).date() - datetime.timedelta(days=int(days) - 1)).isoformat() if days else None
+    sel = [r for r in rows if (not since or r["day"] >= since) and (not pj or r["pj"] == pj) and (include_dry or not r["dry"])]
     by_model, by_step, by_day, by_pj = {}, {}, {}, {}
     total = _agg_new()
     for r in sel:
@@ -1836,12 +1864,12 @@ def stats_view(days=None, pj=None, include_dry=False):
         _agg_into(total, r)
         _agg_into(by_model.setdefault(model, _agg_new(model=model)), r)
         _agg_into(by_step.setdefault((r["step"], model), _agg_new(step=r["step"], model=model)), r)
-        _agg_into(by_day.setdefault((r["date"], model), _agg_new(date=r["date"], model=model)), r)
+        _agg_into(by_day.setdefault((r["day"], model), _agg_new(date=r["day"], model=model)), r)
         _agg_into(by_pj.setdefault(r["pj"], _agg_new(pj=r["pj"])), r)
     top = sorted(sel, key=lambda r: r["cost"], reverse=True)[:20]
     for r in top:
         r["log"] = f"agent-{r['step']}-{r['index']}.log"; r["log_path"] = rel(RUNS / r["run"] / r["log"]); r.pop("tools", None)
-    return {"since": since, "days": days, "pj": pj, "pjs": sorted({r["pj"] for r in rows if r["pj"]}),
+    return {"since": since, "days": days, "pj": pj, "tz": tz_info(zone), "pjs": sorted({r["pj"] for r in rows if r["pj"]}),
             "total": total,
             "by_model": sorted(by_model.values(), key=lambda a: -a["cost"]),
             "by_step": sorted(by_step.values(), key=lambda a: -a["cost"]),
