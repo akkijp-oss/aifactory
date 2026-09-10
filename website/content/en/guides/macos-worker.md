@@ -329,6 +329,32 @@ python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operatio
 
 `guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
+## Workflow code step support
+
+How each `code:` step in `kit/workflows/*.yml` is handled by the pull backends (macOS / Windows / Linux) is decided by a support table whose source of truth is `CODE_STEPS` in `workflow/lib/macos.py`. There are three classifications: `run` (implemented by this backend), `noop` (not supported but passed through as a success), and `unsupported` (refused before the run starts). A name missing from the table is treated as `unsupported`.
+
+| code step | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `gates.sh` | `run` | `run` | `run` (calls the project's `.ps1`) |
+| `sync-base` | `run` | `run` | `noop` (skipped; it assumes a POSIX shell) |
+| `pr-create.sh` | `run` | `run` | `run` |
+| `pr-automerge.sh` | `run` | `run` | `unsupported` |
+| `pr-merge.sh` (`merge-pr` workflow) | `unsupported` | `unsupported` | `unsupported` |
+
+For a project without `auto_merge` the runner skips the automerge step entirely (`Run.SKIPPABLE_CODE_STEPS`), so a backend that marks it `unsupported` still starts. A Windows project that does set `auto_merge` is refused before the run starts (drop `auto_merge`, or use a macOS / Linux worker).
+
+A pull worker has no `sandbox ssh` from the control plane into the VM, so for a `run` code step the backend copies `kit/steps/<name>.sh` into the guest's `$WORK` and hands it to `bash` inside the guest in a single guest-exec. The script switches to in-guest execution with `SB_LOCAL=1` ([ADR-0059](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0059-pull-backend-code-steps-run-in-the-guest.md)). Automerge polls CI from inside the guest as well, so the guest-exec is held for `auto_merge.wait_min` minutes plus 15 minutes. The cap is 3600 seconds; with `wait_min` above 45 minutes the call is cut at the cap, and the PR is then left open for a human instead of being merged.
+
+### Adding a code step
+
+Anyone adding a new code step to a workflow should work in this order. Forgetting step 3 leaves that backend's projects **unable to start any run at all** (when ADR-0042 added the automerge step, `macos-pull` projects failed before starting with `ValueError: unsupported pull-worker code steps: …`).
+
+1. Add `workflow/kit/steps/<name>.sh`. Make the single move into the guest (`sb()`) switchable to in-guest execution with `SB_LOCAL=1`. Do not branch the decision logic per backend.
+2. Add the step to `kit/workflows/*.yml`.
+3. Add its classification to `CODE_STEPS` in `workflow/lib/macos.py` and `workflow/lib/windows.py`. If it is `run`, add the path in `run_code`. Linux inherits the macOS table and implementation, so do not override it in `workflow/lib/linux.py`. The Windows table declares every entry itself instead of importing the macOS one, so add the step to both files (importing it would let a macOS classification flow silently into Windows, and the test in step 4 could no longer catch the missing update).
+4. Fix until `python3 -m unittest discover -s workflow/tests -p 'test_code_steps.py'` is green. That test checks whether every workflow code step is classified by all three backends (classification, not implementation).
+5. Update the table in this section.
+
 ## Hardware verification and limitations
 
 A documentation task was run on 2026-09-07 using an M1 Mac mini with 16 GB RAM, host macOS 26.5.2, Tart 2.32.1, Softnet 0.19.0, and guest macOS 26.6.2 (25G83). This is an observed configuration, not a minimum requirement or a guarantee for every version.
@@ -340,6 +366,6 @@ A documentation task was run on 2026-09-07 using an M1 Mac mini with 16 GB RAM, 
 
 The guest does not share host directories, clipboard, or audio. Softnet blocks private IPv4, link-local, and tailnet destinations. The worker configures public DNS on the guest's `Ethernet` service and disables IPv6. That service name and working guest sudo access are prerequisites.
 
-Setting the guest resolution with `display` (see [Mac and Windows computer use](computer-use.md)) has not been verified on real Tart hardware yet. Supported code steps are currently `gates.sh`, `pr-create.sh` and `sync-base` (merging the latest base right before the PR; built into the runner and using POSIX git only). `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation and anything beyond that is truncated (the operation still runs to completion and its exit code decides the result); image base64 is recorded as `[image N bytes]`. Total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
+Setting the guest resolution with `display` (see [Mac and Windows computer use](computer-use.md)) has not been verified on real Tart hardware yet. The code step support table and the procedure for adding a new code step are under "[Workflow code step support](#workflow-code-step-support)". `merge-pr`, switching OS between steps, GUI streaming, and automatic resource adjustment are unsupported. Logs are limited to 16 MiB per operation and anything beyond that is truncated (the operation still runs to completion and its exit code decides the result); image base64 is recorded as `[image N bytes]`. Total record storage has no automatic capacity management. Measure initial image download and CLI installation separately from workflow processing time.
 
 See [Mac and Windows computer use](computer-use.md) to add desktop interaction.

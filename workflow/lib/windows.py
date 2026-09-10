@@ -15,8 +15,19 @@ def quote(value):
 
 
 def backend(Run):
-    class WindowsRun(pull_backend(Run)):
+    Pull = pull_backend(Run)
+
+    class WindowsRun(Pull):
         backend_label = 'Windows workspace'
+        # code step の対応表（分類の意味は macos.py の CODE_STEPS を見ること。チケット 386）。
+        # ゲストは PowerShell で kit/steps/*.sh は bash 前提。sync-base は従来どおり素通り（noop）。
+        # pr-automerge.sh は Git Bash 経由で理屈の上では動かせるが、実機で確かめられないまま
+        # `gh pr merge`（取り消しにくい外向きの操作）の経路を増やさない判断で unsupported にしてある。
+        # Windows の PJ で auto_merge を書いた run は、途中まで進んでから黙って終わるのではなく起動前に拒否される
+        # macos の表は spread しない。取り込むと macos に足した step が分類ごとここへ流れ込み、
+        # 「表の更新忘れ」を test_code_steps.py が拾えなくなる（run を使い切った最後の工程で落ちる）
+        CODE_STEPS = {'gates.sh': 'run', 'pr-create.sh': 'run', 'sync-base': 'noop',
+                      'pr-automerge.sh': 'unsupported', 'pr-merge.sh': 'unsupported'}
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -170,7 +181,10 @@ def backend(Run):
                 rc, out = self.run_remote(f"Set-Location $env:SANDBOX_APP_DIR; $env:BASE={quote(self.base)}; & {quote(remote)}; exit $LASTEXITCODE", log_path)
                 self.write_remote(self.work + '/gates.txt', out)
                 return rc == 0 and not re.search(r'^FAIL(?:\s|$)', out, re.M), out[-4000:]
-            if name != 'pr-create.sh': return False, f'unsupported Windows code step: {name}'
+            if name != 'pr-create.sh':
+                # 起動時検証（CODE_STEPS）を通り抜けた step。ここに来るのは対応表と実装がずれたときだけ
+                return False, (f'unsupported Windows code step: {name}'
+                               '（PJ の auto_merge を外すか、macos / linux の worker を使うこと）')
             self.refresh_token()
             if not self.has_changes(): return False, 'no commits to publish'
             parts = ['aifactoryのWindows VMで実装・検証した変更です。', '']
