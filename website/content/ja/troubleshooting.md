@@ -43,7 +43,7 @@ flowchart TD
 
 | 症状 | 見るところ | 対処 |
 |---|---|---|
-| 認証エラー（`failure: key`） | `agent-<step>-<n>.log` の末尾と、run のログの `key=… (pool: <名前>)` | 制御系で `claude setup-token` → `sandbox keys token <名前>`（console の「鍵」画面でも可）。intake の鍵は `sandbox token rotate`。止まった run は `kb run <id> --from` で続きから |
+| 認証エラー（`failure: key`） | `agent-<step>-<n>.log` の末尾と、run のログの `key=… (pool: <名前>)` | 制御系で `claude setup-token` → `sandbox keys token <名前>`（console の「鍵」画面でも可）。intake の鍵は `sandbox token rotate claude`。止まった run は `kb run <id> --from` で続きから |
 | `outputs` がなくて工程失敗 | 同ログの末尾 | エージェントが出力先を見落とした（依頼文の「出力（必須）」）、timeout、途中でツール拒否。`timeout_min` を増やすか、チケットを小さくする |
 | 範囲外の変更をした | `work/report.md`、`review.md` | チケットに範囲を明記。base で既に失敗するゲートは `known_red_gates` |
 | planner が STOP | `work/plan.md` の先頭 | 依頼が不明確・矛盾・危険。人間への質問に答えてチケットを直す |

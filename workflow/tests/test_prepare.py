@@ -34,7 +34,8 @@ echo "$@" >> "$CALLS"
 case "$1" in
   take) echo "take: sb-t-$2-01 10.77.1.1" ;;
   ssh)  shift 2; cmd="${1//\/home\/dev/$VMROOT}"
-        SANDBOX_APP_DIR="$VMROOT/app" HOME="$VMROOT" exec bash -c "$cmd" ;;
+        # 系統別の鍵は take が鍵プールから /run/sandbox/env に書く（無いと runner は起動前に failure: key で止まる。ADR-0060）
+        SANDBOX_APP_DIR="$VMROOT/app" HOME="$VMROOT" CLAUDE_CODE_OAUTH_TOKEN_FABLE=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_OPUS=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_SONNET=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_HAIKU=fake-token-pool exec bash -c "$cmd" ;;
 esac
 exit 0
 """

@@ -70,7 +70,7 @@ flowchart LR
 | 枠組み（CLI・Proxmox スクリプト・base 層・雛形） | このリポジトリ `sandbox/` | 公開物。環境固有の値を書かない |
 | PJ 定義 `project.yml` / `provision.sh` / `gates.sh` | `$AIFACTORY_WORKSPACE/projects/<pj>/` | 私有。無ければ `examples/projects/<pj>/`（同梱サンプル。`kumitate` = akkijp/kumitate）を探す。探索順は workspace → examples |
 | 実機の状態（VMID・IP・構築日・所見） | `$AIFACTORY_WORKSPACE/docs/STATUS.md` | `STATUS.md` を写して埋める |
-| 制御側の設定 | `~/.config/sandbox/env`（`templates/env.example`）、`~/.config/sandbox/pj/<pj>.env`、`~/.config/sandbox/gh-app/`。制御系 LXC ではさらに `~/.config/aifactory/ctl.env`（コンソールの合言葉・intake 用トークン。`console/bin/mcp` も起動時にここを読む） | 秘密情報はここだけ。Mac でも制御系 LXC でも同じ置き場 |
+| 制御側の設定 | `~/.config/sandbox/env`（`templates/env.example`）、`~/.config/sandbox/pj/<pj>.env`（`GH_REPO` など。Claude の鍵は置かない）、`~/.config/sandbox/keys.json`（Claude の鍵プール。ADR-0044 / ADR-0060）、`~/.config/sandbox/gh-app/`。制御系 LXC ではさらに `~/.config/aifactory/ctl.env`（コンソールの合言葉・intake 用トークン。`console/bin/mcp` も起動時にここを読む） | 秘密情報はここだけ。Mac でも制御系 LXC でも同じ置き場 |
 | 別テナントの設定（メンテナの手元） | `~/.config/sandbox/tenants/<tenant>.env`（`SB_TENANT=<tenant>` で `run.sh` と `sandbox` が読む。状態は `<tenant>.state.json`） | 構築はメンテナ、日常運用はそのテナントの制御系 LXC |
 
 `AIFACTORY_WORKSPACE` の既定はリポジトリ直下の `workspace/`（`.gitignore` 済み）。
@@ -92,7 +92,7 @@ flowchart LR
 | Proxmox への権限 | 制御系は **API トークン（リソースプール限定）** で一覧・起動・巻き戻しだけ。ホストの root は渡さない | 貸出先の制御系が乗っ取られても他テナントに及ばない。ADR-0017 |
 | 名前解決 | `sb-gw` の dnsmasq が `*.sb.internal` を返す。Tailscale split DNS | task-id がそのままホスト名になる |
 | エージェント配置 | **VM 内で Claude Code を動かす** | Mac から遠隔操作すると編集のたびに往復して遅い。cmux の surface は ssh になるだけ |
-| 認証 | `claude setup-token` の長期トークンを **take 時に tmpfs へ注入** | 巻き戻しで消える。通常 OAuth の焼き込みはリフレッシュトークンの取り合いが起きる。ADR-0005 |
+| 認証 | `claude setup-token` の長期トークンを制御系の**鍵プール**に置き、**take 時に用途ごとに 1 本選んで tmpfs へ注入** | 巻き戻しで消える。通常 OAuth の焼き込みはリフレッシュトークンの取り合いが起きる。鍵の出どころはプールだけ。ADR-0005 / ADR-0044 / ADR-0060 |
 | スナップショット | **RAM 込み**（`--vmstate 1`）でアプリ起動済み状態を保存 | 巻き戻し直後から使える。品質優先 |
 | 置き場 | 枠組みと運用データを分け、運用データは `AIFACTORY_WORKSPACE` の下 | 公開リポジトリに環境固有の値と私有 PJ を入れない。ADR-0016 |
 
@@ -140,9 +140,8 @@ task-id は kanban 区画が採番する。手で使うときは `001` のよう
 
 | 情報 | 置き場 | VM への渡し方 |
 |---|---|---|
-| Claude Code 長期トークン（`claude setup-token` の出力）。**非推奨の置き場**（ADR-0045。正本は下の鍵プール） | `~/.config/sandbox/pj/<pj>.env` の `CLAUDE_CODE_OAUTH_TOKEN`（全体既定は `~/.config/sandbox/env`。`sandbox token set <pj>` で保存。ADR-0006）。プールに用途の合う鍵があるときは使われない | `take` 時に `/run/sandbox/env`（tmpfs）へ書く。巻き戻しで消える。差し替えは制御系で `sandbox token rotate`（global・全 PJ・`ctl.env` + `reinject` + console restart。ADR-0029） |
-| モデル系統別の鍵（任意） | 同じファイルの `CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`（`sandbox token set <pj\|global> claude:<系統>`） | `take` が設定済みの系統だけ `/run/sandbox/env` に書き、runner が step のモデル名（`routes.env`）から系統を選んで `CLAUDE_CODE_OAUTH_TOKEN` に差し替えて `claude -p` を起動する。無い系統は従来の鍵。run のログに `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS` のように名前だけ残る。`ctl.env` に置けば intake（judgment=fable）にも効く |
-| **Claude の鍵プール（正本）** | 制御系の `~/.config/sandbox/keys.json`（600。`sandbox keys add <名前> --fable --other` か console の「鍵」画面で保存。ADR-0044 / ADR-0045） | `take` / `reset` / `reinject` が系統ごとに、`enabled` でフラグの合う鍵のうち最後に使ってから最も時間が経ったものを 1 本選び、上の行と同じ変数（`CLAUDE_CODE_OAUTH_TOKEN_FABLE` と `_OPUS` / `_SONNET` / `_HAIKU`）で `/run/sandbox/env` に書く。名前は `CLAUDE_KEY_NAME_<系統>` と `state.json` の貸出項目に残り、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になる。候補が無い系統は上の 2 行（PJ / 全体の env）に落ちる |
+| **Claude Code 長期トークン（`claude setup-token` の出力）= 鍵プール** | 制御系の `~/.config/sandbox/keys.json`（600。`sandbox keys add <名前> --fable --other` か console の「鍵」画面 `#/keys` で保存。ADR-0044 / ADR-0060）。鍵ごとに「Fable に使う」「Opus・Sonnet・Haiku に使う」を持つ。**これ以外の置き場は無い**（`~/.config/sandbox/env` / `pj/<pj>.env` に書いても読まれない） | `take` / `reset` / `reinject` が用途ごとに、`enabled` でフラグの合う鍵のうち最後に使ってから最も時間が経ったものを 1 本選び、`/run/sandbox/env`（tmpfs）に `CLAUDE_CODE_OAUTH_TOKEN_FABLE`（Fable 用）と `_OPUS` / `_SONNET` / `_HAIKU`（Opus・Sonnet・Haiku 用。同じ値）+ 無印（Opus・Sonnet 用の鍵）で書く。runner が step のモデル名（`routes.env`）から系統を選んで `claude -p` を起動する。名前は `CLAUDE_KEY_NAME_<系統>` と `state.json` の貸出項目に残り、run のログは `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` になる。要る用途の鍵が無ければ `take` は「鍵なし:」で止まり run は一時停止（ADR-0046）。差し替えは `sandbox keys token <名前>` → 貸出中なら `sandbox reinject <task>` |
+| intake の鍵（制御系で `claude -p` を 1 回） | `~/.config/aifactory/ctl.env` の `CLAUDE_CODE_OAUTH_TOKEN`（系統別なら `_FABLE` など）。プールの対象外 | VM には渡らない。差し替えは制御系で `sandbox token rotate claude`（`ctl.env` の更新 + console restart。ADR-0029 / ADR-0060） |
 | GitHub の push / PR 権限 | **GitHub App**（例: `aifactory-sandbox`）の App ID と秘密鍵を Mac `~/.config/sandbox/gh-app/`（`sandbox/bin/gh-app-setup` が作る。ADR-0008） | `take` / `reinject` のたびに、その PJ のリポジトリ（`pj/<pj>.env` の `GH_REPO`）だけに効く 1 時間有効の installation token を払い出して `/run/sandbox/env` の `GH_TOKEN` に注入。launchd が 45 分ごとに更新。App 未設定なら静的 `GH_TOKEN`（`sandbox token set <pj> gh`）にフォールバック |
 | GitHub トークン（テンプレート焼き込み時の clone） | Mac の `gh auth token`（既存の OAuth トークン） | 焼き込み時だけ環境変数で渡し、テンプレートには残さない |
 | VM 用 SSH 鍵 | Mac `~/.ssh/conf.d/aifactory/sb_ed25519` | 公開鍵を cloud-init でテンプレートに入れる |

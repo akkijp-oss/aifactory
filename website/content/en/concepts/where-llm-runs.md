@@ -38,7 +38,7 @@ Yellow marks where the LLM lives.
 | Where | The Mac. cwd is a temporary directory, no tools (`--tools ""`) | Inside the VM. cwd is `$SANDBOX_APP_DIR`, tools available (file I/O, running tests) |
 | How often | Once per ticket | Once per agent step; more on send-backs |
 | Model | judgment in `routes.env` (Fable) | The role's default class → `routes.env` |
-| Auth | The Mac's Claude Code login | The per-project `setup-token` injected into the VM on take |
+| Auth | The Mac's Claude Code login | A `setup-token` picked per purpose from the key pool and injected into the VM on take |
 | Input | Free text plus the list of projects and kinds | The 8-layer prompt |
 | Output | JSON (pj / kind / title / body / confidence) | Artifacts (plan.md etc.) and git commits |
 | On failure | No JSON, error; nothing is filed | Missing outputs, step fails → transition |

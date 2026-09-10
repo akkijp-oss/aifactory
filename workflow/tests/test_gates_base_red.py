@@ -37,7 +37,7 @@ TICKET = "# 機能: base でも赤いゲートの切り分け\n\n偽の VM で g
 
 FAKE_SANDBOX = r"""#!/usr/bin/env bash
 case "$1" in
-  ssh) shift 2; SANDBOX_APP_DIR="$APP" exec bash -c "$1" ;;
+  ssh) shift 2; SANDBOX_APP_DIR="$APP" CLAUDE_CODE_OAUTH_TOKEN_FABLE=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_OPUS=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_SONNET=fake-token-pool CLAUDE_CODE_OAUTH_TOKEN_HAIKU=fake-token-pool exec bash -c "$1" ;;
 esac
 exit 0
 """
@@ -160,7 +160,7 @@ class GatesBaseRedTest(unittest.TestCase):
 
         def sb(cmd, input_text=None, check=True):
             p = subprocess.run(["bash", "-c", cmd], text=True, capture_output=True, input=input_text,
-                               env={**os.environ, "SANDBOX_APP_DIR": str(app)})
+                               env={**os.environ, "SANDBOX_APP_DIR": str(app), "CLAUDE_CODE_OAUTH_TOKEN_FABLE": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_SONNET": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_HAIKU": "fake-token-pool"})   # take が鍵プールから VM に書く系統別の鍵（無いと runner は起動前に failure: key で止まる。ADR-0060）
             if check and p.returncode:
                 raise RuntimeError(f"command failed ({p.returncode}): {cmd}\n{p.stderr[-500:]}")
             return p.stdout

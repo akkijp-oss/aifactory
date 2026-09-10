@@ -43,14 +43,14 @@ VM の中ではエージェントが任意のコードを実行します（テ�
 
 | 秘密 | 置き場（正本） | VM への渡し方 | 寿命 |
 |---|---|---|---|
-| Claude Code の長期トークン（`claude setup-token`） | Mac `~/.config/sandbox/pj/<pj>.env`。プロジェクトごと（ADR-0006） | take のたびに `/run/sandbox/env`（tmpfs）へ。`reinject` で貸出中にも差し替え可 | 巻き戻しで消える。トークン自体の期限は Anthropic 側 |
+| Claude Code の長期トークン（`claude setup-token`） | 制御系 `~/.config/sandbox/keys.json`（600）の鍵プール。1 か所で全プロジェクト共通（ADR-0044 / ADR-0060） | take のたびに用途ごとに 1 本選んで `/run/sandbox/env`（tmpfs）へ。`reinject` で貸出中にも差し替え可 | 巻き戻しで消える。トークン自体の期限は Anthropic 側 |
 | GitHub の push / PR 権限 | GitHub App `aifactory-sandbox` の秘密鍵（Mac `~/.config/sandbox/gh-app/`、ADR-0008） | take のたびに、そのリポジトリだけの installation token を払い出して注入。権限は App が持つもの（contents / pull_requests write、metadata / actions read） | 1 時間。launchd が 45 分ごと、runner がスクリプトの実行前に更新 |
 | テンプレート作成時の clone 用トークン | Mac の `gh auth token` | テンプレート作成時だけ環境変数で渡す | テンプレートには残さない |
 | SSH 鍵（Mac → VM / sb-gw） | Mac `~/.ssh/conf.d/aifactory/sb_ed25519` | 公開鍵を cloud-init でテンプレートに | テンプレート更新まで |
 | Proxmox root への SSH | Mac の ssh 設定（`PVE_HOST` のエイリアスと鍵） | CLI が使う | |
 | Tailscale の API キー | Mac（ACL / split DNS を API で変えるときだけ） | 使わない | |
 
-リポジトリには**一切書きません**。`.gitignore` が `*.env` / `*.token` / `.env*` を弾きます。`sandbox token show` はマスク表示です。
+リポジトリには**一切書きません**。`.gitignore` が `*.env` / `*.token` / `.env*` を弾きます。`sandbox keys list` はトークンの末尾 4 文字だけを出し、値はどこにも表示しません。
 
 ## なぜそうしたか
 

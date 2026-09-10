@@ -20,7 +20,8 @@ flowchart LR
   end
   subgraph home["~/.config/sandbox/（秘密・リポジトリ外）"]
     ENV[env]
-    PJE[pj/pj.env]
+    PJE[pj/pj.env<br>GH_REPO]
+    KEYS[keys.json<br>Claude の鍵プール]
     APP[gh-app/]
     STJ[state.json]
   end
@@ -29,7 +30,7 @@ flowchart LR
     TK[tickets/]
   end
   RN[runner] --> WF & RO & RT & ST & SC & PY & GS & TK
-  SB[sandbox CLI] --> ENV & PJE & APP & STJ
+  SB[sandbox CLI] --> ENV & PJE & KEYS & APP & STJ
   IN[intake] --> RT & PY
   DP[dispatch] --> PY & STJ & DB
 ```
@@ -49,7 +50,8 @@ flowchart LR
 | `workspace/projects/<pj>/provision.sh` | proxmox/32-pj-template.sh | テンプレートの作成 | 低。テンプレート更新時 |
 | 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace`（1 行のパス） | kb、intake、dispatch、runner、コンソール | workspace の場所（既定 `<repo>/workspace/`）。環境変数が優先、次に設定ファイル。設定ファイルはシェルを経由しない起動（GUI から開いた Claude Code の MCP、launchd）でも効く。`KB_ROOT` / `CONSOLE_JOBS` で台帳とジョブ記録だけ別に置ける | ほぼなし |
 | `~/.config/sandbox/env` | sandbox CLI、proxmox/run.sh | Proxmox ホスト（`PVE_HOST`）、ゲートウェイ（`GW_SSH`）、鍵、ドメイン、ProxyJump、プールの IP / VMID（`SB_POOL_NET` / `SB_POOL_BASE`）。**リポジトリ外** | ほぼなし |
-| `~/.config/sandbox/pj/<pj>.env` | sandbox CLI（take / reinject） | プロジェクトごとの `CLAUDE_CODE_OAUTH_TOKEN` と `GH_REPO`。**リポジトリ外** | トークン更新時 |
+| `~/.config/sandbox/pj/<pj>.env` | sandbox CLI（take / reinject） | プロジェクトごとの `GH_REPO`（任意でフォールバック用 `GH_TOKEN`、`SB_IDLE_STOP_HOURS`）。Claude の鍵は書かない（書いても読まれない）。**リポジトリ外** | ほぼなし |
+| `~/.config/sandbox/keys.json` | sandbox CLI（take / reset / reinject / keys pick）、コンソールの「鍵」画面 | VM に渡す Claude の鍵プール（名前・用途・有効・値）。**リポジトリ外** | 鍵の追加・入れ替え時 |
 | `~/.config/sandbox/gh-app/` | sandbox CLI | GitHub App の ID と秘密鍵。**リポジトリ外** | ほぼなし |
 | `~/.config/sandbox/state.json` | sandbox CLI、runner、dispatch、他セッション | どの VM を誰に貸しているか。**リポジトリ外** | take / release のたび |
 | `workspace/kanban/kanban.db` + `tickets/` | kb、intake、dispatch、runner（本文） | チケットの状態と本文 | 高 |
@@ -61,7 +63,7 @@ flowchart LR
 |---|---|
 | モデル | 役割の既定クラス → 工程の `model_class` → 環境変数 `CLAUDE_MODEL`（1 回限り） |
 | PR の宛先 | `project.yml` の `base_branch` → ワークフローの `base_branch: hotfix_base` → `project.yml` の `workflow_overrides.<wf>.base_branch` |
-| Claude トークン | `~/.config/sandbox/env`（全体既定）→ `pj/<pj>.env`（プロジェクト別）→ `SANDBOX_CLAUDE_TOKEN`（1 回限り）。シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` は**無視** |
+| Claude トークン（VM に渡すもの） | 鍵プール（`keys.json`）のみ。`~/.config/sandbox/env` / `pj/<pj>.env` / シェルに export された `CLAUDE_CODE_OAUTH_TOKEN` は**無視**（ADR-0060） |
 | GitHub トークン | 静的 `GH_TOKEN`（フォールバック）→ GitHub App の installation token → `SANDBOX_GH_TOKEN`（1 回限り） |
 | intake の pj / kind | LLM の判定 → 本文先頭の `pj:` / `kind:` 行 → `--pj` / `--kind` |
 
@@ -80,7 +82,7 @@ flowchart LR
 | チケットの分類基準 | `glue/bin/intake` のプロンプト、または依頼文の先頭に `kind:` 行 | チケット作成時 |
 | プール台数（実体） | `sandbox/proxmox/40-pool.sh <pj> <台数>`（作った台数がそのまま実体） | そのプロジェクトの並列数 |
 | プール台数（定義） | 環境変数 `SANDBOX_POOL_PER_PJ`（既定 3）。`glue/bin/dispatch`、`sandbox status`、コンソールの sandbox 画面が同じ値を読む。実体より多いと `take` が空きなしで落ちる | 配車と表示 |
-| Claude の鍵の追加・入れ替え | `sandbox keys add` / `sandbox keys token <名前>`（console の「鍵」画面でも可。貸出中は `sandbox reinject <id>`）。`sandbox token set <pj>` は非推奨 | 全プロジェクト（鍵はプールで共有） |
+| Claude の鍵の追加・入れ替え | `sandbox keys add` / `sandbox keys token <名前>`（console の「鍵」画面でも可。貸出中は `sandbox reinject <id>`） | 全プロジェクト（鍵はプールで共有） |
 | Proxmox ホストや IP 空間 | `~/.config/sandbox/env`（`PVE_HOST` / `GW_SSH` / `SB_POOL_NET` / `SB_POOL_BASE`）、Proxmox 側は `SB_NODE` / `SB_NET` / `SB_GW_CT` / `SB_BASE_VMID` / `SB_POOL_BASE`。`sandbox/README.md` の命名規則 + ADR | 全体 |
 | 作業データの置き場 | 環境変数 `AIFACTORY_WORKSPACE` か `~/.config/aifactory/workspace` | 全体 |
 

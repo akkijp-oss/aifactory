@@ -40,7 +40,7 @@ flowchart LR
 | どこで動く | Mac。一時ディレクトリを作業ディレクトリにし、ツールなし（`--tools ""`） | VM の中。作業ディレクトリは `$SANDBOX_APP_DIR`、ツールあり（ファイル読み書き、テスト実行） |
 | 何回 | チケット 1 枚につき 1 回 | エージェントが担当する工程ごとに 1 回。差し戻しがあればその分増える |
 | モデル | `routes.env` の judgment（Fable） | 役割の既定クラス → `routes.env` |
-| 認証 | Mac の Claude Code ログイン | プロジェクトごとの `setup-token` を take 時に VM へ注入 |
+| 認証 | Mac の Claude Code ログイン | 鍵プールから用途ごとに選んだ `setup-token` の鍵を take 時に VM へ注入 |
 | 入力 | 自由文 + プロジェクト / 種別の一覧 | 8 層の依頼文 |
 | 出力 | JSON（pj / kind / title / body / confidence） | 成果物（plan.md 等）と git コミット |
 | 失敗したら | JSON が取れずエラー。チケットが作成されない | 指定された出力がなければ工程は失敗。定義された分岐に従って次へ進む |

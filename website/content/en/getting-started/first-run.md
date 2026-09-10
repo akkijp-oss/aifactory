@@ -7,7 +7,7 @@ What this page tells you: creating one ticket, checking the definitions with a d
 ```bash
 sandbox ls                         # VMs are visible. A "-" in the TASK column means free
 sandbox gh-app status              # the target project is OK
-sandbox token show <pj>            # a Claude token is set
+sandbox keys list                  # the key pool has a key for Fable and one for Opus, Sonnet and Haiku
 kanban/bin/kb list                 # the board can be read (empty is fine)
 ```
 

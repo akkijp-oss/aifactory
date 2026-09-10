@@ -24,6 +24,7 @@ import tempfile
 import unittest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[2] / 'sandbox/bin/sandbox'
+POOL_KEY = '{"keys":[{"name":"k","token":"fake-token-k","allow":{"fable":true,"other":true},"enabled":true}]}'   # take が鍵プールから選ぶ 1 本（ADR-0060。env の鍵は無い）
 
 # プールは 2 台 + 対象外の 4 台（LXC の ctl / gw、テンプレート、別テナント）。
 # pve_uptime は UPTIME（空なら「不明」）、止める API は $CALLS に記録して SHUTDOWN_RC を返す
@@ -445,7 +446,7 @@ class SandboxLastUsedTest(unittest.TestCase):
     """take / reset / release / reinject が最終利用を記録すること（記録が無ければ idle-stop は uptime 頼みになる）"""
 
     FAKES = '''
-load_pj() { CUR_PJ=$1; CLAUDE_CODE_OAUTH_TOKEN=dummy; }
+load_pj() { CUR_PJ=$1; }
 pool_list() { echo "9201 sb-t-pj-01 10.77.1.1 running"; }
 pve_has_clean() { return 0; }
 rollback() { return 0; }
@@ -461,6 +462,7 @@ dns_del() { return 0; }
         self.state = os.path.join(self.dir, 'state.json')
         self.last_used = os.path.join(self.dir, 'last-used.json')
         pathlib.Path(self.state).write_text('{}')
+        pathlib.Path(self.dir, 'keys.json').write_text(POOL_KEY)
 
     def run_cmd(self, cmd, *args):
         text = SCRIPT.read_text()

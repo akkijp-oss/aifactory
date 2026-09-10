@@ -134,16 +134,15 @@ def backend(Run):
             鍵プールの起動が LAUNCHES に 1 件も数えられなかった（391 / #75）"""
             return (f"if ($env:CLAUDE_CODE_OAUTH_TOKEN_{fam}) {{ if ($env:CLAUDE_KEY_NAME_{fam}) "
                     f"{{ 'CLAUDE_CODE_OAUTH_TOKEN_{fam} (pool: ' + $env:CLAUDE_KEY_NAME_{fam} + ')' }} "
-                    f"else {{ 'CLAUDE_CODE_OAUTH_TOKEN_{fam}' }} }} else {{ 'CLAUDE_CODE_OAUTH_TOKEN' }}")
+                    f"else {{ 'CLAUDE_CODE_OAUTH_TOKEN_{fam}' }} }} else {{ '{Run.NO_KEY_IN_VM}' }}")
 
         def token_env_prefix(self, model):
-            """agent の前に置く鍵の割り当て（PowerShell 版）。系統別の鍵があればそれを使う。
-            これが無いと、probe が系統の鍵の名前を報告しながら claude は CLAUDE_CODE_OAUTH_TOKEN（other の鍵）で
-            動き、起動の数が別の鍵に付く。値は guest の中でだけ展開されるので runner は鍵を持たない"""
+            """agent の前に置く鍵の割り当て（PowerShell 版）。鍵プールが系統ごとに選んだ鍵（runtime.env の
+            CLAUDE_CODE_OAUTH_TOKEN_<系統>）をそのまま使う。無印の CLAUDE_CODE_OAUTH_TOKEN に戻る経路は無い（ADR-0060。
+            無ければ run_agent が probe の `none` を見て起動前に止める）。値は guest の中でだけ展開されるので runner は鍵を持たない"""
             fam = self.token_family(model)
             if not fam: return ''
-            return (f"if ($env:CLAUDE_CODE_OAUTH_TOKEN_{fam}) "
-                    f"{{ $env:CLAUDE_CODE_OAUTH_TOKEN=$env:CLAUDE_CODE_OAUTH_TOKEN_{fam} }}; ")
+            return f"$env:CLAUDE_CODE_OAUTH_TOKEN=$env:CLAUDE_CODE_OAUTH_TOKEN_{fam}; "
 
         def agent_command(self, prompt_path, model, timeout_min):
             computer = (" --strict-mcp-config --mcp-config " + quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''

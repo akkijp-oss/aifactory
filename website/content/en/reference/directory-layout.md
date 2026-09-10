@@ -96,7 +96,8 @@ Project definitions are looked up in the order `workspace/projects/<pj>/` → `e
 | Path | Contents |
 |---|---|
 | `~/.config/sandbox/env` | CLI settings (`PVE_HOST` / `GW_SSH` and so on) |
-| `~/.config/sandbox/pj/<pj>.env` | Per-project tokens and `GH_REPO` |
+| `~/.config/sandbox/pj/<pj>.env` | `GH_REPO` (and an optional fallback `GH_TOKEN`) per project. No Claude keys |
+| `~/.config/sandbox/keys.json` | The Claude key pool: the only source of the keys handed to VMs (`sandbox keys`, the console's *Keys* screen) |
 | `~/.config/sandbox/gh-app/` | GitHub App id and private key |
 | `~/.config/sandbox/state.json` | VM lending table |
 | `~/.ssh/conf.d/aifactory/` | Key and ssh settings for the VMs |

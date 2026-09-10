@@ -12,11 +12,12 @@ import tempfile
 import unittest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[2] / 'sandbox/bin/sandbox'
+POOL_KEY = '{"keys":[{"name":"k","token":"fake-token-k","allow":{"fable":true,"other":true},"enabled":true}]}'   # take が鍵プールから選ぶ 1 本（ADR-0060。env の鍵は無い）
 
 # Proxmox / ssh / DNS を叩く関数を空にし、プールは 2 台に固定する。
 # pve_has_clean の sleep で「選定 → 予約」の窓を広げ、ロックが無ければ必ず衝突するようにする
 FAKES = '''
-load_pj() { CUR_PJ=$1; CLAUDE_CODE_OAUTH_TOKEN=dummy; }
+load_pj() { CUR_PJ=$1; }
 pool_list() { echo "9201 sb-t-pj-01 10.77.1.1 stopped"; echo "9202 sb-t-pj-02 10.77.1.2 stopped"; }
 pve_has_clean() { sleep 0.5; return 0; }
 rollback() { return 0; }
@@ -33,6 +34,7 @@ class SandboxTakeTest(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.state = os.path.join(self.dir, 'state.json')
         pathlib.Path(self.state).write_text('{}')
+        pathlib.Path(self.dir, 'keys.json').write_text(POOL_KEY)
 
     def script(self, fakes=FAKES, tail=''):
         text = SCRIPT.read_text()
@@ -208,6 +210,7 @@ class SandboxRollbackFailureTest(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.state = os.path.join(self.dir, 'state.json')
         pathlib.Path(self.state).write_text(LENT)
+        pathlib.Path(self.dir, 'keys.json').write_text(POOL_KEY)
         self.calls = os.path.join(self.dir, 'calls')
 
     script = SandboxTakeTest.script

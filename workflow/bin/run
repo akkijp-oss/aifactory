@@ -710,24 +710,28 @@ class Run:
     @staticmethod
     def token_family(model):
         """モデル名 → 鍵の系統（FABLE / OPUS / SONNET / HAIKU）。分からなければ空。
-        系統ごとに別の鍵（CLAUDE_CODE_OAUTH_TOKEN_<系統>。sandbox token set <pj> claude:<系統>）を使い分けるため"""
+        take が鍵プールから用途ごとに選んだ鍵は VM の /run/sandbox/env に CLAUDE_CODE_OAUTH_TOKEN_<系統> で入っている（ADR-0044 / ADR-0060）"""
         m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
         return m.group(1).upper() if m else ""
 
+    NO_KEY_IN_VM = "none"   # key_probe_command が「その系統の鍵が VM に無い」と言うときの 1 語
+
     def token_env_prefix(self, model):
-        """agent の前に置く env の割り当て。VM の /run/sandbox/env（take が書く）に系統別の鍵があればそれを、無ければ従来の
-        CLAUDE_CODE_OAUTH_TOKEN をそのまま使う。値は VM の中で展開されるので、runner は鍵を持たないし、ログにも出ない"""
+        """agent の前に置く env の割り当て。VM の /run/sandbox/env（take が鍵プールから書く）の系統別の鍵をそのまま使う。
+        env ファイルの鍵に落ちる経路は無い（ADR-0060）ので、無印の CLAUDE_CODE_OAUTH_TOKEN には戻らない。
+        値は VM の中で展開されるので、runner は鍵を持たないし、ログにも出ない"""
         fam = self.token_family(model)
         if not fam: return ""
-        return f'CLAUDE_CODE_OAUTH_TOKEN="${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-$CLAUDE_CODE_OAUTH_TOKEN}}" '
+        return f'CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_{fam}" '
 
-    @staticmethod
-    def key_probe_command(fam):
+    @classmethod
+    def key_probe_command(cls, fam):
         """どの鍵で動くかを名前だけ調べるコマンド（VM の中で走る。値は出さない）。
-        take が鍵プール（ADR-0044）から選んでいれば /run/sandbox/env に CLAUDE_KEY_NAME_<系統> があるので `(pool: <名前>)` を添える"""
+        /run/sandbox/env には take が鍵プールから選んだ鍵の名前が CLAUDE_KEY_NAME_<系統> で入っているので `(pool: <名前>)` を添える。
+        その系統の鍵が無ければ `none`（呼び手が起動前に止める。認証エラーまで進ませない）"""
         return (f'test -n "${{CLAUDE_CODE_OAUTH_TOKEN_{fam}:-}}" '
                 f'&& echo "CLAUDE_CODE_OAUTH_TOKEN_{fam}${{CLAUDE_KEY_NAME_{fam}:+ (pool: $CLAUDE_KEY_NAME_{fam})}}" '
-                f'|| echo CLAUDE_CODE_OAUTH_TOKEN')
+                f'|| echo {cls.NO_KEY_IN_VM}')
 
     POOL_KEY_RE = re.compile(r"\(pool: ([A-Za-z0-9._-]+)\)")
 
@@ -772,6 +776,15 @@ class Run:
         fam = self.token_family(model)
         key = self.sb(self.key_probe_command(fam), check=False).strip() if fam and not self.dry else "CLAUDE_CODE_OAUTH_TOKEN"
         self.log(f"agent {step['id']} ({step['role']} / {cls} → {model}; key={key or 'CLAUDE_CODE_OAUTH_TOKEN'})")
+        if key == self.NO_KEY_IN_VM:
+            # take は要る用途を鍵プールから選んで VM に書く（ADR-0046）ので、通常ここには来ない。来るのは、貸出後に用途が増えた
+            # （--from で別のモデルの step から回した等）か、reinject が別の用途で書き直したとき。認証エラーで工程を無駄にせず、
+            # 鍵の失効と同じ扱い（failure: key → 人間待ち。戻しの回数は消費しない。ADR-0043）で止める
+            group = "fable" if fam == "FABLE" else "other"
+            why = f"VM に {model} 用の Claude の鍵（CLAUDE_CODE_OAUTH_TOKEN_{fam}）が無い。鍵プールに「{'Fable に使う' if group == 'fable' else 'Opus・Sonnet・Haiku に使う'}」鍵を登録して sandbox reinject {self.task} を実行してから、続きを回す"
+            self.log(f"agent key: {step['id']} を起動しない（{why}）")
+            self.last_fail = {"failure": "key", "reason": why, "last_output": ""}
+            return False, f"agent key: {why}"
         self.report_key_launch(key)
         if self.dry: return True, "(dry-run)"
         prompt_path = f"{self.work}/prompt.md"

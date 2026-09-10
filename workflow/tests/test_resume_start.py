@@ -145,7 +145,8 @@ class ResumeStartRunTest(unittest.TestCase):
         r.work = str(work)
         bin_dir = self.ws / "bin"; bin_dir.mkdir(exist_ok=True)
         claude = bin_dir / "claude"; claude.write_text(FAKE_CLAUDE, encoding="utf-8"); claude.chmod(0o755)
-        env = {"SANDBOX_APP_DIR": str(self.app), "WORK": str(work),
+        env = {"SANDBOX_APP_DIR": str(self.app), "WORK": str(work),   # take が鍵プールから VM に書く系統別の鍵（無いと runner は起動前に failure: key で止まる。ADR-0060）
+               "CLAUDE_CODE_OAUTH_TOKEN_FABLE": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_OPUS": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_SONNET": "fake-token-pool", "CLAUDE_CODE_OAUTH_TOKEN_HAIKU": "fake-token-pool",
                "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
 
         def sb(cmd, input_text=None, check=True):

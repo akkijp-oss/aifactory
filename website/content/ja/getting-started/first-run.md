@@ -7,7 +7,7 @@
 ```bash
 sandbox ls                         # VM が見えること。TASK 列が "-" なら空き
 sandbox gh-app status              # 対象 PJ が OK
-sandbox token show <pj>            # Claude トークンが入っている
+sandbox keys list                  # 鍵プールに用途の合う Claude の鍵がある
 kanban/bin/kb list                 # 台帳が読める（空でもよい）
 ```
 

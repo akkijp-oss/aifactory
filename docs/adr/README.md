@@ -71,3 +71,4 @@
 - [0057: ゲストの表示解像度は PJ 定義 > worker 設定 > 基準 VM のまま、の順で決める（scale は未対応）](0057-guest-display-resolution.md)
 - [0058: チケット詳細の項目編集は、チケット単位の下書き（sessionStorage）で守る](0058-ticket-edit-draft-per-ticket.md)
 - [0059: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する](0059-pull-backend-code-steps-run-in-the-guest.md)
+- [0060: VM に渡す Claude の鍵の出どころは鍵プールだけにし、`sandbox` の env ファイル経路（`token set claude` と空プール時のフォールバック）を廃止する](0060-claude-keys-come-only-from-the-pool.md)

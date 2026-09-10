@@ -120,7 +120,8 @@ SB_JUMP=
 SB_POOL_NET=$SB_NET.1
 SB_POOL_BASE=$SB_POOL_BASE
 SB_NET=$SB_NET
-CLAUDE_CODE_OAUTH_TOKEN=
+# Claude の鍵はここには置かない（鍵プール keys.json。sandbox keys add / console の「鍵」画面。ADR-0060）
+# GH_TOKEN は GitHub App（sandbox gh-app）が無いときだけ（sandbox token set global gh）
 GH_TOKEN=
 EOT
 fi
@@ -144,7 +145,7 @@ if [[ ! -f "$CTLENV" ]]; then
 CONSOLE_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
 CONSOLE_HOST=$IP
 CONSOLE_PORT=8765
-# intake（自由文 → チケット）が claude -p を制御系で 1 回呼ぶ。VM 内の agent 用トークンとは別に、ここにも長期トークンを置く（claude setup-token）
+# intake（自由文 → チケット）が claude -p を制御系で 1 回呼ぶ。VM 内の agent 用の鍵（鍵プール）とは別に、ここにも長期トークンを置く（claude setup-token → sandbox token rotate claude）
 CLAUDE_CODE_OAUTH_TOKEN=
 # runner が制御系で gh pr view / gh を使うときのトークン。GitHub App（sandbox gh-app）が設定済みなら空でよい（runner が sandbox gh-app token <pj> で払い出す。ADR-0030）。App が無いときだけ fine-grained PAT を入れる
 GH_TOKEN=
@@ -182,5 +183,5 @@ echo
 echo "[ok] $NAME ($VMID, $IP) 制御系の入口（tailnet から。gw の route 承認後）:"
 echo "  console: http://ctl.$SB_DOMAIN:8765/?token=<ctl の ~/.config/aifactory/ctl.env の CONSOLE_TOKEN>   docs: http://ctl.$SB_DOMAIN:8765/docs/"
 echo "  ssh:     ssh -i <鍵> aifactory@ctl.$SB_DOMAIN   （$IP）"
-echo "[next] 貸出先が入れる secrets（ctl の中で）: sandbox keys add <名前> --fable --other（Claude の鍵。console の「鍵」画面でも可） / sandbox/bin/gh-app-setup / ~/.config/aifactory/ctl.env の CLAUDE_CODE_OAUTH_TOKEN（intake 用）"
+echo "[next] 貸出先が入れる secrets（ctl の中で）: sandbox keys add <名前> --fable --other（Claude の鍵。console の「鍵」画面でも可） / sandbox/bin/gh-app-setup / sandbox token rotate claude（intake 用。~/.config/aifactory/ctl.env の CLAUDE_CODE_OAUTH_TOKEN）"
 echo "[next] base テンプレート以降は制御系の鍵込みで焼く: 30-base-template.sh create（既存テンプレートには鍵が無いので作り直す）"
