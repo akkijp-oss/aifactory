@@ -27,7 +27,7 @@ const T = {
 
   "h": {
     "outcome": "結果", "artifacts": "成果物", "stepLogs": "工程のログ", "otherFiles": "その他のファイル（{n} 件）",
-    "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "attachments": "添付", "history": "履歴",
+    "now": "実行状況", "ops": "操作", "run": "runner で回す", "move": "状態を進める", "fix": "項目を直す", "runs": "実行記録", "jobs": "このコンソールのジョブ", "body": "本文", "attachments": "添付", "history": "履歴",
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "keys": "登録してある鍵", "keyAdd": "鍵を登録する",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
@@ -50,7 +50,7 @@ const T = {
   "label": {
     "q": "番号・題名", "qPlaceholder": "204 や 起票 のように", "status": "状態", "allStatus": "すべて",
     "pj": "PJ", "allPj": "すべて", "pjIfKnown": "PJ（分かっていれば）", "letLlm": "LLM に決めさせる", "kind": "種別", "workflow": "workflow", "option": "オプション",
-    "workflowAsKind": "{kind}（種別のまま）", "keep": "終了後も VM を返却しない（中を見る）", "resume": "貸出中の VM で続きから（--resume）",
+    "workflowAsKind": "{kind}（種別のまま）", "runOptions": "実行の詳細設定", "keep": "終了後も VM を返却しない（中を見る）", "resume": "貸出中の VM で続きから（--resume）",
     "pr": "PR 番号", "prForMerge": "PR 番号（merge-pr のとき）", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
     "blockNote": "何を待っていますか", "blockPlaceholder": "例: 本番 DB の権限を管理者に依頼中",
     "count": "件数", "count1": "1 件だけ", "count3": "3 件まで", "count10": "10 件まで", "countAll": "未着手が尽きるまで",
@@ -150,6 +150,8 @@ const T = {
     "quota_exceeded": "工程 {step} が Claude の鍵の利用枠の上限で {n} 回続けて中断されました。自動再開は止めています。鍵の枠を確かめてください。",
     "key_failed": "工程 {step} で Claude の鍵が使えず中断されました: {summary}。鍵を直してから続きを回してください。",
     "gateFails": "赤いゲート: {gates}。",
+    "baseRedConfirmed": "base でも赤いゲート（直さなくてよいゲートです）: {gates}。",
+    "baseRedKnown": "project.yml で赤と分かっているゲート: {gates}。",
     "ended": "すべての工程が終わりました。",
     "waiting": "工程は終わり、人間の判断を待っています。",
     "human_done": "人間が PR #{pr} で仕上げました（完了）。",
@@ -183,7 +185,10 @@ const T = {
     "keySource": { "pool": "鍵プール", "pool_partial": "鍵プール（片方の用途だけ）", "pool_partial_nofallback": "鍵プール（片方の用途だけ）", "pj": "PJ 別の設定ファイル（非推奨）", "global": "全体の設定ファイル", "none": "未設定" },
     "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした",
     "actualAt": "実体は {t} 取得", "actualStale": "実体は {t} 取得（{n} 分前）", "actualNever": "実体はまだ取っていません",
-    "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。"
+    "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。",
+    "knownRedAuto": "base でも赤いゲート（runner が確かめた分）: {gates}",
+    "knownRedManual": "base でも赤いゲート（project.yml に書いた分）: {gates}",
+    "knownRedItem": "{name}（{run} / {at}）"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
   "config": { "roles": "役割:" },
@@ -242,7 +247,9 @@ const T = {
     "runReview": "レビュー待ちです。もう一度回すなら、内容を確かめてから実行してください。",
     "runBlocked": "人間待ちです。メモに書いた原因を直してから実行してください。",
     "dryRun": "VM を触らず、依頼文と手順を組むだけです。状態は変わりません。",
+    "moveOnly": "runner は動かしません。記録の状態だけを変えます。",
     "moveUndo": "押すとすぐ変わります。トーストの「元に戻す」で前の状態に戻せます。",
+    "moveNone": "この状態から手で進める先はありません。上の「未着手に戻す（やり直す）」でやり直せます。",
     "syncTitle": "runs/<run>/state.json を読み直して、チケットの状態を合わせます。",
     "intake": "LLM が PJ・種別・題名・完了条件を整えてから起票します。20 秒ほどかかり、結果はジョブに出ます。",
     "newTicket": "LLM を使わず、この内容のまますぐに起票します。できたチケットの画面へ移ります。",
