@@ -52,6 +52,10 @@ print(json.dumps({'files':out,'skipped':skipped}))'''
 # offline / lifecycle 無しは設定・稼働の問題で待っても直らないので、従来どおり即失敗のまま。
 LEASE_BUSY = ("leased to another run", "worker busy")
 
+# `sandbox keys pick` が「要る用途の Claude の鍵が鍵プールに無い」と言うときの目印（sandbox/bin/sandbox の die 文言。
+# workflow/bin/run の NO_KEY と同じ。ADR-0046）。これを見た工程は失敗ではなく一時停止にする
+NO_KEY = "鍵なし:"
+
 
 def _since(created):
     """lease を取った時刻（epoch）を ISO に。読めなければ None"""
@@ -90,6 +94,12 @@ def pool_busy(run, reason):
     """待てる失敗として上げる例外を作る（例外の種類は runner が Run.PoolBusy で渡してくる）"""
     cls = getattr(run, "PoolBusy", None)
     return cls(reason, reason=reason) if cls else RuntimeError(reason)
+
+
+def no_key(run, reason):
+    """鍵プールから鍵が取れなかったときに上げる例外（種類は runner が Run.NoKey で渡してくる）"""
+    cls = getattr(run, "NoKey", None)
+    return cls(reason) if cls else RuntimeError(reason)
 
 
 def acquire_lease(run, worker, lease):
@@ -136,7 +146,16 @@ def backend(Run):
                 return 2
 
         def run_agent(self, step, retry_note=""):
-            self.refresh_token()
+            cls = getattr(self, "NoKey", ())
+            try:
+                self.refresh_token()
+            except cls as e:
+                # 要る用途の鍵が鍵プールから取れない。その step が悪いわけではないので、戻しの回数を消費せず
+                # 未コミットの変更を wip に保全して人へ返す（利用枠切れと同じ扱い。PAUSE_KINDS。チケット 391 / 380）
+                self.log(f"agent key: {step['id']} は鍵が使えずで止まった。未コミットの変更を wip として保全する")
+                self.commit_tracked(getattr(self, "WIP_KEY_MESSAGE", "wip: token unusable"))
+                self.last_fail = {"failure": "key", "reason": str(e)}
+                return False, f"agent key: {e}"
             self.configure_computer()
             return super().run_agent(step, retry_note)
 
@@ -176,8 +195,14 @@ def backend(Run):
                 if pending: emit("\n")
             return r.returncode, "".join(out)
 
+        def record_needed_keys(self):
+            """鍵待ちで止まったときに「どの用途の鍵を待っているか」を kb が読む（ADR-0046）。prepare より前に残す。
+            windows / linux の take() は これを継承せず丸ごと上書きしているので、3 つの take() から呼ぶ（391）"""
+            self.state["needed_keys"] = self.needed_keys(); self.save()
+
         def take(self):
             if self.dry: return
+            self.record_needed_keys()
             import aifactory_paths as paths
             # --wait のとき take は呼び直される（373）。lock と lease id と Client は最初の 1 回だけ作る
             # （呼ぶたびに同じファイルを開き直すと、同じプロセスの別 fd への flock で必ず落ちる）
@@ -273,15 +298,34 @@ def backend(Run):
             token = r.stdout.strip()
             if r.returncode or not token.startswith("ghs_") or "\n" in token:
                 raise RuntimeError("cannot mint project-scoped GitHub token")
-            cfg = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or pathlib.Path.home() / ".config") / "sandbox"
-            # These are existing, administrator-owned sandbox credential files.
-            files = [cfg / "env", cfg / "pj" / (self.pj + ".env")]
-            script = "set -a\n" + "\n".join(f"test ! -f {shlex.quote(str(p))} || source {shlex.quote(str(p))}" for p in files)
-            script += "\nprintf '%s' \"${CLAUDE_CODE_OAUTH_TOKEN:-}\""
-            r = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
-            oauth = r.stdout.strip()
-            if r.returncode or not oauth: raise RuntimeError("Claude OAuth token not configured for project")
-            return {"GH_TOKEN": token, "CLAUDE_CODE_OAUTH_TOKEN": oauth}
+            return {"GH_TOKEN": token, **self.claude_credentials()}
+
+        def claude_credentials(self):
+            """Claude の鍵は制御系の鍵プール（keys.json）が正本。Proxmox の take と同じ規則で系統ごとに選ぶ（ADR-0044 / ADR-0046）。
+
+            以前はここで `~/.config/sandbox/env` と `pj/<pj>.env` を source して `${CLAUDE_CODE_OAUTH_TOKEN}` を読んでいたので、
+            プール運用でファイルから鍵を消してあると **runner のプロセス環境に残っていた古い鍵**に落ちていた
+            （無効化した鍵が全工程・全モデルで使われ続けた。2026-09-10）。選び方は sandbox の `keys pick` 1 か所に置く。
+            stdout は鍵の値そのものなので、ログにも例外文にも state にも入れない（残すのは選ばれた鍵の名前だけ）"""
+            cur = ",".join(f"{g}={n}" for g, n in sorted((self.state.get("keys") or {}).items()) if n)
+            cmd = [str(ROOT / "sandbox" / "bin" / "sandbox"), "keys", "pick", "--pj", self.pj, "--task", str(self.task),
+                   "--need=" + ",".join(self.needed_keys()), "--json"]
+            if cur: cmd.append("--current=" + cur)
+            r = subprocess.run(cmd, text=True, capture_output=True)
+            if r.returncode:
+                why = (r.stderr or "").strip().splitlines()
+                if any(NO_KEY in l for l in why):
+                    raise no_key(self, ([l.strip() for l in why if NO_KEY in l])[-1][:300])
+                raise RuntimeError(f"cannot pick a Claude key from the pool ({r.returncode}): {(why or [''])[-1][:300]}")
+            try:
+                picked = json.loads(r.stdout)
+                values = {str(k): str(v) for k, v in (picked["env"] or {}).items()}
+            except (KeyError, TypeError, ValueError):
+                raise RuntimeError("sandbox keys pick did not return the expected JSON") from None   # stdout は鍵なので出さない
+            if not values: raise RuntimeError("sandbox keys pick returned no Claude key")
+            self.state["keys"] = picked.get("keys") or {}   # 次の工程の --current（同じ鍵を使い続ける）と、人が読む記録。名前だけ
+            self.save()
+            return values
 
         def refresh_token(self):
             if self.dry: return

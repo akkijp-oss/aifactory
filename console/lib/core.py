@@ -125,8 +125,17 @@ def load_yaml(p):
         return {"_error": str(e)}
 
 
+# ジョブ（kb run → workflow/bin/run）に渡さない環境変数。Claude の鍵は ctl.env が正本で、
+# 親プロセスに残っている値は「古い鍵」でしかない（チケット 391）。bin/mcp は起動時に 1 回だけ ctl.env を
+# 読んで環境に持つので、鍵を入れ替えても長生きした MCP サーバーは起動時点の鍵を子に渡し続けていた
+# （無効化した鍵で implementer / reviewer が全部動いた。2026-09-10）。毎回 ctl.env を読み直して入れ直す
+def is_key_var(name):
+    return name == "CLAUDE_CODE_OAUTH_TOKEN" or name.startswith(("CLAUDE_CODE_OAUTH_TOKEN_", "CLAUDE_KEY_NAME_"))
+
+
 def child_env():
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if not is_key_var(k)}
+    env.update({k: v for k, v in read_ctl_env().items() if is_key_var(k)})
     # sandbox は ~/.local/bin の symlink。無いときの保険として末尾に足す（先頭に足すと python3 が別物になり、runner の yaml が見つからなくなる。2026-09-06 に踏んだ）
     extra = [str(pathlib.Path.home() / ".local" / "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
     env["PATH"] = ":".join([env.get("PATH", "")] + [d for d in extra if d not in env.get("PATH", "").split(":")])
@@ -137,20 +146,30 @@ def child_env():
 CTL_ENV = pathlib.Path(os.environ.get("AIFACTORY_CTL_ENV") or (pathlib.Path.home() / ".config" / "aifactory" / "ctl.env"))
 
 
-def load_ctl_env(path=None):
-    """制御系の secrets（~/.config/aifactory/ctl.env）を環境に補う。systemd の console は EnvironmentFile で読むが、
-    ssh 越しに起動する bin/mcp は誰も読まないので同じ結果にならなかった（チケット 249）。
-    既に非空の環境変数は上書きしない（手動起動・テストでの指定を殺さないため）。値は出力しない。戻り: 補った key の名前"""
+def read_ctl_env(path=None):
+    """制御系の secrets（~/.config/aifactory/ctl.env）を読んで dict にするだけ。os.environ は触らない。
+    値は出力しない。無いファイル・コメント・空値は黙って飛ばす"""
     p = pathlib.Path(path) if path else CTL_ENV
-    if not p.exists(): return []
-    added = []
+    if not p.exists(): return {}
+    out = {}
     for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line: continue
         k, v = line.split("=", 1)
         k, v = k.strip(), v.strip()
         if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2: v = v[1:-1]
-        if not k or not v or os.environ.get(k): continue
+        if not k or not v: continue
+        out[k] = v
+    return out
+
+
+def load_ctl_env(path=None):
+    """ctl.env の値を環境に補う。systemd の console は EnvironmentFile で読むが、
+    ssh 越しに起動する bin/mcp は誰も読まないので同じ結果にならなかった（チケット 249）。
+    既に非空の環境変数は上書きしない（手動起動・テストでの指定を殺さないため）。戻り: 補った key の名前"""
+    added = []
+    for k, v in read_ctl_env(path).items():
+        if os.environ.get(k): continue
         os.environ[k] = v; added.append(k)
     global SANDBOX_STATE, SANDBOX_KEYS
     SANDBOX_STATE = sandbox_state_path()   # ctl.env に SANDBOX_STATE があれば、それを読んでから台帳の場所を決め直す

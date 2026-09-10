@@ -36,7 +36,11 @@ def backend(Run):
                     "$env:CLAUDE_CODE_GIT_BASH_PATH='C:/Program Files/Git/bin/bash.exe'; "
                     f"if (Test-Path -LiteralPath {quote(self.env_file)}) {{ "
                     f"$credentials=([IO.File]::ReadAllText({quote(self.env_file)}) | ConvertFrom-Json); "
-                    "$env:GH_TOKEN=$credentials.GH_TOKEN; $env:CLAUDE_CODE_OAUTH_TOKEN=$credentials.CLAUDE_CODE_OAUTH_TOKEN }; " + cmd)
+                    # runtime.env の中身は credentials() が決める（GH_TOKEN と系統別の Claude の鍵と CLAUDE_KEY_NAME_*）。
+                    # 2 つ決め打ちで写していたので鍵プールの系統別の鍵が guest に届かず、全モデルが同じ 1 本で動いていた（391）。
+                    # 名前は credentials() が作る固定名だけだが、環境変数として妥当な名前に限ってから入れる
+                    "$credentials.PSObject.Properties | ForEach-Object { "
+                    "if ($_.Name -match '^[A-Za-z_][A-Za-z0-9_]*$') { Set-Item -Path ('env:' + $_.Name) -Value $_.Value } } }; " + cmd)
 
         def write_remote(self, remote, data):
             if self.dry: return
@@ -57,6 +61,7 @@ def backend(Run):
 
         def take(self):
             if self.dry: return
+            self.record_needed_keys()
             import aifactory_paths as paths
             # --wait で take を呼び直せるよう、lock と lease id と Client は 1 回だけ作る（チケット 373）
             if self.run_lock is None:
@@ -110,9 +115,28 @@ def backend(Run):
         def diff_summary(self):
             return self.sb(f"Set-Location $env:SANDBOX_APP_DIR; git diff --stat {quote('origin/'+self.base+'...HEAD')}; git log --oneline {quote('origin/'+self.base+'..HEAD')}")
 
+        @staticmethod
+        def key_probe_command(fam):
+            """どの鍵で動くかを名前だけ調べる（PowerShell 版。出す形は Run.key_probe_command と同じ）。
+            guest は PowerShell 5.1 固定（workers/cmd/aifactory-worker/platform_windows.go）で `&&` / `||` を
+            解釈できないため、POSIX 版をそのまま渡すと構文エラーで stdout が空になり、
+            鍵プールの起動が LAUNCHES に 1 件も数えられなかった（391 / #75）"""
+            return (f"if ($env:CLAUDE_CODE_OAUTH_TOKEN_{fam}) {{ if ($env:CLAUDE_KEY_NAME_{fam}) "
+                    f"{{ 'CLAUDE_CODE_OAUTH_TOKEN_{fam} (pool: ' + $env:CLAUDE_KEY_NAME_{fam} + ')' }} "
+                    f"else {{ 'CLAUDE_CODE_OAUTH_TOKEN_{fam}' }} }} else {{ 'CLAUDE_CODE_OAUTH_TOKEN' }}")
+
+        def token_env_prefix(self, model):
+            """agent の前に置く鍵の割り当て（PowerShell 版）。系統別の鍵があればそれを使う。
+            これが無いと、probe が系統の鍵の名前を報告しながら claude は CLAUDE_CODE_OAUTH_TOKEN（other の鍵）で
+            動き、起動の数が別の鍵に付く。値は guest の中でだけ展開されるので runner は鍵を持たない"""
+            fam = self.token_family(model)
+            if not fam: return ''
+            return (f"if ($env:CLAUDE_CODE_OAUTH_TOKEN_{fam}) "
+                    f"{{ $env:CLAUDE_CODE_OAUTH_TOKEN=$env:CLAUDE_CODE_OAUTH_TOKEN_{fam} }}; ")
+
         def agent_command(self, prompt_path, model, timeout_min):
             computer = (" --strict-mcp-config --mcp-config " + quote(self.work + '/computer-mcp.json')) if self.project.get('computer_use') else ''
-            return (f"Set-Location $env:SANDBOX_APP_DIR; [IO.File]::ReadAllText({quote(prompt_path)}) | "
+            return (f"Set-Location $env:SANDBOX_APP_DIR; {self.token_env_prefix(model)}[IO.File]::ReadAllText({quote(prompt_path)}) | "
                     f"& claude -p --model {quote(model)} --dangerously-skip-permissions --output-format stream-json --verbose" + computer + "; exit $LASTEXITCODE")
 
         def save_agent_changes(self):

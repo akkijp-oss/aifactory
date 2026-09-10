@@ -2,6 +2,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import types
 import unittest
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'lib'))
 import linux
@@ -12,6 +13,8 @@ class LinuxBackendTest(unittest.TestCase):
         r.project={'app_dir':'/var/lib/aifactory-worker/work/app','computer_use':True}
         r.root='/var/lib/aifactory-worker/work';r.task='301';r.state={'backend':'linux-pull'};r.dry=False
         r.paths('lease-1')
+        r.state['history']=[];r.save=lambda:None;r.log=lambda *a:None
+        r.needed_keys=lambda:['other']
         return r
     def test_paths_and_commands_are_local_linux(self):
         r=self.make_run()
@@ -27,5 +30,14 @@ class LinuxBackendTest(unittest.TestCase):
             config=json.loads(sent[0][0].read_text())['mcpServers']['computer']
             self.assertEqual(config['command'],'/usr/local/lib/aifactory-computer/aifactory-computer')
             self.assertEqual(config['args'][-1],r.work)
+
+    # ---------- 再開判定（ADR-0046。チケット 391）
+    def test_take_records_the_needed_purposes_before_preparing(self):
+        """linux-pull の take() は MacRun.take() を継承せず丸ごと上書きしているので、
+        needed_keys を自分で残さないと kb が「両方の鍵待ち」に丸め、要る用途の鍵を足しても再開しない"""
+        r=self.make_run();r.resume=False;r.run_lock=object();r.lease_id='lease-1'
+        r.client=types.SimpleNamespace(store=types.SimpleNamespace(workers=lambda:[]))
+        with self.assertRaises(Exception):r.take()
+        self.assertEqual(r.state.get('needed_keys'),['other'])
 
 if __name__=='__main__':unittest.main()

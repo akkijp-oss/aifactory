@@ -88,6 +88,8 @@ computer_use: true
 
 `app_dir` は `<worker work_root>/app` を指定する。実行時に `<work_root>/<lease>/app`、成果物は `<work_root>/<lease>/work/<ticket>` へ分離する。チケットは既存の `ticket_run` / `kb run` で実行できる。GUIを使わないプロジェクトでは `computer_use` を省略する。
 
+鍵の出どころ: **Claude の鍵は制御系の鍵プール（`~/.config/sandbox/keys.json`）が正本**で、runnerが工程ごとに`sandbox keys pick` を呼び、モデル系統ごとに選んだ鍵をゲストの `runtime.env` に渡す（ADR-0044 / ADR-0046）。鍵を無効化すると次の工程から別の鍵に変わる。プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使い、どちらにも鍵が無ければ**runnerのプロセスに残っている値には落ちず**、runを「鍵なし」で一時停止して鍵の登録を待つ。consoleとMCPが起動するジョブの鍵も `~/.config/aifactory/ctl.env` が正本で、ジョブごとに読み直す。
+
 AIFactory MCPからの直接操作も共通の `computer_open`、`computer_action`、`computer_close` を使う。`computer_open` の `worker` にLinuxワーカー名を渡す。[操作の引数と画像の回収](computer-use.md)を参照。
 
 画面は最大幅1024ピクセルで返し、クリック座標を実画面へ換算する。Linuxの `type` はクリップボードへUTF-8文字列を書き、Ctrl+Vで貼り付ける。貼り付け禁止欄や、異なる貼り付けキーを使うアプリにはそのまま使えない。改行・日本語を含む入力も、画面を取得して確認する。

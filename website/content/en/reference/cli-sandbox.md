@@ -101,7 +101,7 @@ sandbox gh-app status|token <pj>|refresh    GitHub App: check settings / print a
 
 ### keys (the source of Claude keys)
 
-Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the control plane, one picked per model by `take` / `reset` / `reinject` (ADR-0044 / ADR-0045). Each key says whether it is used for Fable (`--fable`; planning, design and review steps) and/or for Opus, Sonnet and Haiku (`--other`; implementation and research steps), so contracts can be kept apart. The console's *Keys* screen edits the same file.
+Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the control plane, one picked per model by `take` / `reset` / `reinject` (Proxmox) and by `keys pick` (the Mac / Windows / Linux pull backends) (ADR-0044 / ADR-0045). Each key says whether it is used for Fable (`--fable`; planning, design and review steps) and/or for Opus, Sonnet and Haiku (`--other`; implementation and research steps), so contracts can be kept apart. The console's *Keys* screen edits the same file.
 
 | Command | What it does |
 |---|---|
@@ -111,8 +111,11 @@ Named Claude keys kept in `~/.config/sandbox/keys.json` (mode 600) on the contro
 | `keys set <name> [--fable=on\|off] [--other=on\|off] [--enable\|--disable] [--note …]` | Change the purposes, enabled, or the note. Disabling prints the `reinject` commands for the VMs that hold it |
 | `keys token <name>` | Replace only the value (name, purposes and counters stay). Apply it to lent VMs with `reinject` |
 | `keys rm <name> [--force]` | Remove a key. `--force` is required while a lent VM still holds it |
+| `keys pick --pj <pj> --task <id> [--need=…] [--current=…] --json` | Selection hook the runner calls once per step; returns the chosen key names and the per-family variables as JSON. Not meant to be typed by hand |
 
 The pick is "the key this ticket used before (while it is still eligible), otherwise the enabled key with a matching purpose that has gone longest without being used". While the pool holds any key, env keys are never handed to the VM. If a purpose the run needs (the runner passes `--need=fable,other`) has no key, `take` stops with `鍵なし:` without taking a VM and the run pauses until a key is registered (ADR-0046). Only an empty pool falls back to `pj/<pj>.env` and `env` (`token set` below, deprecated). Keys reach the VM through the per-family variables (`CLAUDE_CODE_OAUTH_TOKEN_FABLE` / `_OPUS` / `_SONNET` / `_HAIKU`); only the name is recorded, in `CLAUDE_KEY_NAME_<FAMILY>` and in the lease ledger, so the run log reads `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)`.
+
+The pull backends (Mac / Windows / Linux) have no Proxmox lease ledger, so the runner calls `keys pick` once per step and passes the previously chosen names through `--current`. A run keeps the same key across its steps, and disabling that key moves the next step to another one. The chosen names are kept in the run's `state.json` under `keys`. `ASSIGNED` therefore grows once per step, and `IN_USE` never lists pull-backend runs because the ledger is Proxmox-only.
 
 ### token
 

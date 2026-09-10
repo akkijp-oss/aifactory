@@ -2241,6 +2241,46 @@ class LoadCtlEnvTest(unittest.TestCase):
         self.assertEqual(self.core.sandbox_view()["state_file"], str(ledger))
 
 
+class ChildEnvKeysTest(unittest.TestCase):
+    """ジョブに渡す環境から、親プロセスに残った Claude の鍵を落とす（チケット 391）。
+
+    bin/mcp は起動時に 1 回だけ ctl.env を読んで環境に持つので、長生きした MCP サーバーは
+    起動時点の CLAUDE_CODE_OAUTH_TOKEN を持ち続けた。無効化した鍵がそのまま runner → guest まで
+    流れて使われ続けたので、child_env() は毎回 ctl.env を読み直して鍵を入れ直す"""
+
+    KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_OPUS", "CLAUDE_CODE_OAUTH_TOKEN_FABLE",
+            "CLAUDE_KEY_NAME_OPUS", "CLAUDE_KEY_NAME_FABLE")
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-childenv-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.core = load_module(self.tmp / "jobs").core
+        self.envf = self.tmp / "ctl.env"
+        self.envf.write_text("CLAUDE_CODE_OAUTH_TOKEN=fake-token-new\n", encoding="utf-8")
+        self.core.CTL_ENV = self.envf
+        for k in self.KEYS:
+            os.environ.pop(k, None)
+            self.addCleanup(os.environ.pop, k, None)
+
+    def test_a_stale_key_in_the_parent_is_replaced_by_the_current_ctl_env(self):
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "fake-token-old-n5"
+        self.assertEqual(self.core.child_env()["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-new")
+        self.assertEqual(os.environ["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-old-n5")   # 親の環境は触らない
+
+    def test_keys_absent_from_ctl_env_are_dropped_entirely(self):
+        for k in self.KEYS: os.environ[k] = "fake-token-old-n5"
+        env = self.core.child_env()
+        self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-new")   # ctl.env にある key だけ入れ直す
+        for k in self.KEYS[1:]: self.assertNotIn(k, env)
+        self.assertIn("PATH", env)                                           # 鍵以外はそのまま
+
+    def test_read_ctl_env_parses_without_touching_the_process(self):
+        self.envf.write_text('# コメント\nA=1\nQ="q v"\nEMPTY=\n', encoding="utf-8")
+        self.assertEqual(self.core.read_ctl_env(self.envf), {"A": "1", "Q": "q v"})
+        self.assertNotIn("A", os.environ)
+        self.assertEqual(self.core.read_ctl_env(self.tmp / "no-such.env"), {})
+
+
 class RepoStatusTest(unittest.TestCase):
     """PJ 定義を読む checkout が origin と食い違っていないか（チケット 337）。
 

@@ -83,6 +83,8 @@ computer_use: true
 
 Set `app_dir` to `<worker work_root>/app`. The runner creates `<work_root>/<lease>/app` and collects artifacts from `<work_root>/<lease>/work/<ticket>`. Use the existing `ticket_run` / `kb run` interface. Omit `computer_use` for CLI-only projects.
 
+Where keys come from: **the control-plane key pool (`~/.config/sandbox/keys.json`) is the source of truth for Claude keys**. The runner calls `sandbox keys pick` once per step and writes the per-family keys it chose into the guest's `runtime.env` (ADR-0044 / ADR-0046). Disabling a key moves the next step to another one. Only an empty pool falls back to `pj/<pj>.env` and `env` for compatibility; if neither holds a key the run **never falls back to whatever is left in the runner's process** and pauses with `鍵なし` until a key is registered. Jobs started from the console and MCP take their keys from `~/.config/aifactory/ctl.env`, re-read for every job.
+
 Direct AIFactory MCP sessions use the same `computer_open`, `computer_action`, and `computer_close` tools. Pass the Linux worker name to `computer_open`. See [computer action arguments and artifacts](computer-use.md).
 
 Screenshots are at most 1024 pixels wide; coordinates map to the physical desktop. Linux typing replaces the clipboard with UTF-8 text and sends Ctrl+V. Fields that prohibit pasting, or applications that use another paste shortcut, need different handling. Inspect a screenshot to verify the result.
