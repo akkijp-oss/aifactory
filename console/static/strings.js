@@ -112,7 +112,7 @@ const T = {
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
-    "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
+    "nextStep": "次は {step}（開始待ち）", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
     "notStarted": "開始前（記録なし）", "error": "失敗の理由", "runnerGone": "runner は終了",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。",
@@ -160,6 +160,7 @@ const T = {
     "humanNote": "{by} が {at} に記録: {text}",
     "resume": "同じチケットを続きから回すには {cmd} を実行します。",
     "running": "工程 {step} を実行中です。",
+    "runningWait": "工程 {step} の開始を待っています。",
     "unknown": "止まった理由は記録にありません。工程のログを確かめてください。",
     "runner_gone": "runner は {end} に終わっています。待っても進みません。",
     "runnerJob": "ジョブ {label} は{state}で、終了コードは {rc} です。",
