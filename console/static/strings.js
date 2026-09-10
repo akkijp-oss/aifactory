@@ -22,7 +22,7 @@ const T = {
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
-    "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
+    "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く", "openDefinition": "定義の原文を読む"
   },
 
   "h": {
@@ -193,7 +193,17 @@ const T = {
     "knownRedItem": "{name}（{run} / {at}）"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
-  "config": { "roles": "役割:" },
+  "config": {
+    "roles": "役割:", "flowMain": "うまくいったときの流れ", "flowCond": "うまくいかなかったときだけ回る工程",
+    "who": "担い手", "roleIs": "役割 {role}", "machineIs": "機械 {code}",
+    "limit": "時間の上限", "limitMin": "{n} 分", "limitDefaultNote": "定義に無いので既定",
+    "branch": "分岐", "pass": "うまくいったとき", "fail": "うまくいかなかったとき",
+    "model": "モデル", "modelClass": "クラス", "modelRoute": "経路",
+    "classFromRole": "役割 {role} の既定", "classFromStep": "この工程の model_class",
+    "human": "人間待ち", "end": "正常終了", "none": "未指定",
+    "start": "ブランチの作り方", "baseBranch": "PR の宛先", "inputs": "workflow の入力", "definition": "定義",
+    "unknownKeys": "読めない項目", "schemaErrors": "schema との食い違い", "seeStats": "実際に使ったモデルを統計で見る"
+  },
   "kind": {
     "bug": "動きが期待と違うときに選びます。再現するテストを先に書いてから直し、PR まで進みます。",
     "chore": "判断のいらない小さな作業に選びます。計画を省いて、実装から始めます。",
@@ -232,6 +242,24 @@ const T = {
   },
 
   "help": {
+    "configDetail": "workflow の名前と工程は本物のリンクで、Tab で届き Enter で開きます。",
+    "configMainPath": "この並びは、すべての工程がうまくいったときに通る道です。",
+    "configCondSteps": "ここに並ぶ工程は、ほかの工程がうまくいかなかったときだけ回ります。",
+    "configNoModel": "この工程は機械が実行します。モデルは使いません。",
+    "configEnvOverride": "run を起こすときに環境変数 CLAUDE_MODEL で上書きできるので、実際に使ったモデルは設定からは分かりません。",
+    "configModelUnknown": "この役割に既定のクラスがありません。定義を確かめてください。",
+    "configModelNoRoute": "経路表にこのクラスの行も既定の行もないので、モデルが決まりません。",
+    "configModelFallback": "このクラスの行が経路表に無いので、既定の行を使います。",
+    "configSeverity": "レビューの指摘が軽微なときは、戻せる回数が 1 回だけ増えることがあります（ADR-0053）。",
+    "configUnknownKeys": "schema にないキーです。定義の書き間違いか、schema の更新漏れかもしれません。",
+    "configParseError": "この workflow の定義を読めませんでした: {why}。",
+    "configSchemaErrors": "定義が schema と食い違っているので、runner はこの workflow を実行できません。",
+    "configGoStep": "{step} へ進みます。",
+    "configGoBack": "{step} に戻します。最大 {n} 回で、超えたら {to} になります。",
+    "configGoHuman": "人間待ちになって終わります。",
+    "configGoEnd": "正常に終わります。",
+    "configPassDefault": "次の行き先が定義に無いので、ここで正常に終わります。",
+    "configFailDefault": "うまくいかなかったときの行き先が定義に無いので、人間待ちになります。",
     "statsSource": "数字の出どころは各工程の agent-<工程>-<n>.jsonl です。result の usage（入力・キャッシュ書込・キャッシュ読出・出力）と num_turns、system の init に書かれたモデル名を読みます。",
     "statsCache": "ターンごとに、それまでの文脈をキャッシュから読み直します。キャッシュ読出はターン数と文脈の長さの積で増えます。入力はキャッシュに乗らなかった分だけです。",
     "statsCost": "費用換算は claude CLI が API 料金で計算した total_cost_usd の合計です。サブスクの利用枠（5 時間・7 日）がどの重みで数えるかは、ここからは分かりません。",
