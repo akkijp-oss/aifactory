@@ -60,7 +60,7 @@ def t_ticket_run(a): return core.ticket_run(arg_int(a, "id"), a)
 def t_run_action(a): return core.run_action(a.get("name") or "", a)
 def t_intake(a): return core.op_intake(a)
 def t_dispatch(a): return core.op_dispatch(a)
-def t_stats(a): return core.stats_view(days=int(a["days"]) if a.get("days") else None, pj=a.get("pj") or None, include_dry=bool(a.get("dry")))
+def t_stats(a): return core.stats_view(days=int(a["days"]) if a.get("days") else None, pj=a.get("pj") or None, include_dry=bool(a.get("dry")), tz=a.get("tz") or None)
 def t_run_list(a):
     runs = core.list_runs()
     if not a.get("all"): runs = [r for r in runs if not r.get("dry") and not r.get("attempt")]
@@ -188,8 +188,8 @@ TOOLS = [
     ("dispatch", "todo を古い順に kb run する（glue/bin/dispatch。直列）。ジョブを返す", schema({"pj": STR, "once": {**BOOL, "description": "1 件だけ"}, "max": INT, "dry_run": BOOL,
              "wait": {**INT, "description": "VM に空きが無いとき最大 n 分待つ（満杯の PJ を飛ばさない）"}}), t_dispatch),
     ("run_list", "実行記録の一覧（$AIFACTORY_WORKSPACE/runs/）。既定は dry-run と退避分を除く", schema({"all": BOOL, "limit": INT}), t_run_list),
-    ("stats", "工程ごとの消費統計（agent step の agent-*.jsonl から）。モデル別 / 工程別 / 日別 / PJ 別に、工程数・ターン・所要秒・トークン（input / cache_write / cache_read / output）・thinking のブロック数と文字数・費用換算（claude CLI の total_cost_usd。利用枠の重みではない）と、費用の高い工程の上位 20。days で今日からさかのぼる日数（省略で全部）、pj で絞る",
-     schema({"days": {**INT, "description": "今日からさかのぼる日数。1 なら今日だけ。省略で全部"}, "pj": STR, "dry": {**BOOL, "description": "dry-run の記録も含める"}}), t_stats),
+    ("stats", "工程ごとの消費統計（agent step の agent-*.jsonl から）。モデル別 / 工程別 / 日別 / PJ 別に、工程数・ターン・所要秒・トークン（input / cache_write / cache_read / output）・thinking のブロック数と文字数・費用換算（claude CLI の total_cost_usd。利用枠の重みではない）と、費用の高い工程の上位 20。days で今日からさかのぼる日数（省略で全部）、pj で絞る。日別と days の起点は tz の時間帯で切る（run 名の日付＝制御系の UTC ではない）",
+     schema({"days": {**INT, "description": "今日からさかのぼる日数。1 なら今日だけ。省略で全部"}, "pj": STR, "dry": {**BOOL, "description": "dry-run の記録も含める"}, "tz": {**STR, "description": "集計の時間帯。+09:00 のようなオフセットか IANA 名（Asia/Tokyo）。省略でサーバーの時間帯"}}), t_stats),
     ("run_show", "run 1 件: state.json（history / loops / current）、ファイル一覧、workflow 定義、対応チケット、outcome（止まった理由）、"
      "progress（記録から導いた進み具合。elapsed_s = run 全体の経過秒 / current = 今の工程 {step, kind, since, elapsed_s} / history[].elapsed_s = 工程ごとの経過秒 / "
      "gates = work/gates.txt の PASS・FAIL・INFO 一覧。ゲートのログを読まなくても赤が分かる）。"

@@ -1065,6 +1065,8 @@ class ApiTest(unittest.TestCase):
             "code-gates-3.log": "PASS x\n"})
         self._fixture_run(f"{today}-{PJ}-{tid}-dry", {**self._state([("plan", True)], workflow="bug"), "task": tid}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 1, u(0, 1, 1, 1), 9.0)})
         self._fixture_run("2019-01-01-otherpj-1", {**self._state([("plan", True)], workflow="bug"), "pj": "otherpj", "task": "1"}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 3, u(0, 10, 10, 10), 0.5)})
+        old = self.ws / "runs" / "2019-01-01-otherpj-1" / "agent-plan-0.jsonl"   # 期間は工程の時刻で切る（チケット 393）ので、古い run の工程の時刻も揃えておく
+        ots = datetime.datetime.fromisoformat("2019-01-01T09:00:00+00:00").timestamp(); os.utime(old, (ots, ots))
         st, d = self.http.get("/api/stats?days=1")
         self.assertEqual(st, 200)
         self.assertGreaterEqual(d["files"], 5)
@@ -1097,6 +1099,54 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(round(sum(r["cost"] for r in d5["top"] if r["task"] == tid), 2), 6.7)
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("async function viewStats", app); self.assertIn("'stats'", app)
+
+    def test_stats_by_day_uses_the_given_timezone(self):
+        """日別（by_day）と「直近 N 日」は、run 名の日付（kb run を起動した制御系＝UTC の今日）ではなく、
+        工程の時刻 at を tz の時間帯に直した日付で切る（チケット 393）。run 名の日付は変えない"""
+        def jsonl(cost):
+            lines = [{"type": "system", "subtype": "init", "model": "claude-opus-5", "tools": [], "cwd": "/app"},
+                     {"type": "result", "subtype": "success", "is_error": False, "num_turns": 3, "duration_ms": 60000,
+                      "usage": {"input_tokens": 10, "cache_creation_input_tokens": 10, "cache_read_input_tokens": 10, "output_tokens": 10},
+                      "total_cost_usd": cost, "result": "ok"}]
+            return "\n".join(json.dumps(l) for l in lines) + "\n"
+        pj, tid = "tzpj", "7778"   # 他のテストの run と混ざらない PJ 名で絞って見る
+        run = f"2026-09-09-{pj}-{tid}"
+        self._fixture_run(run, {**self._state([("plan", True)], workflow="bug"), "pj": pj, "task": tid}, {"agent-plan-0.jsonl": jsonl(3.0)})
+        f = self.ws / "runs" / run / "agent-plan-0.jsonl"
+        def at(iso):
+            t = datetime.datetime.fromisoformat(iso).timestamp(); os.utime(f, (t, t))
+        try:
+            at("2026-09-09T23:30:00+00:00")   # UTC の 09-09 23:30 に終わった工程は、+09:00 では翌日の 08:30
+            _, d = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00")
+            self.assertEqual([a["date"] for a in d["by_day"]], ["2026-09-10"], "日別が工程の時刻を tz に直していない")
+            self.assertEqual((d["tz"]["offset"], d["tz"]["label"]), ("+09:00", "UTC+09:00"))
+            self.assertEqual([r["run"] for r in d["top"]], [run], "run 名の日付を変えてしまっている")
+            _, z = self.http.get(f"/api/stats?pj={pj}&tz=%2B00%3A00")
+            self.assertEqual([a["date"] for a in z["by_day"]], ["2026-09-09"])
+            # 「直近 N 日」の起点も同じ時間帯の今日から数える（その時間帯の今日 00:00 の 1 分前は今日に入らない）
+            zone = datetime.timezone(datetime.timedelta(hours=9))
+            today = datetime.datetime.now(zone).date()
+            at((datetime.datetime.combine(today, datetime.time(0, 0), zone) - datetime.timedelta(minutes=1)).isoformat())
+            _, d1 = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00&days=1")
+            self.assertEqual((d1["selected"], d1["since"]), (0, today.isoformat()))
+            _, d2 = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00&days=2")
+            self.assertEqual((d2["selected"], d2["since"]), (1, (today - datetime.timedelta(days=1)).isoformat()))
+            # 読めない tz はサーバーの時間帯に落とし、実際に使った時間帯を返す（統計は読むだけなので 400 にしない）
+            _, bad = self.http.get(f"/api/stats?pj={pj}&tz=Mars%2FOlympus")
+            self.assertEqual(bad["tz"]["offset"], datetime.datetime.now().astimezone().isoformat()[-6:])
+            here = datetime.datetime.now().astimezone().isoformat()[-6:]
+            for q, why in (("%2B24%3A00", "24 時以上のオフセット"), ("%2B09%3A99", "60 分以上の分")):
+                st, out = self.http.get(f"/api/stats?pj={pj}&tz={q}")
+                self.assertEqual(st, 200, f"{why}で 500 になっている")
+                self.assertEqual(out["tz"]["offset"], here, f"{why}をサーバーの時間帯に落としていない")
+            # 画面はブラウザーの時間帯を渡し、日別の表に基準を書く
+            app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+            body = app[app.index("async function viewStats("):]
+            body = body[:body.index("\n}")]
+            self.assertIn("tzOffset()", body, "画面がブラウザーの時間帯を渡していない")
+            self.assertIn("T.stats.dayTz", body); self.assertIn("T.help.statsDay", body)
+        finally:
+            shutil.rmtree(self.ws / "runs" / run, ignore_errors=True)
 
     def test_run_outcome_drives_the_run_view(self):
         """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
