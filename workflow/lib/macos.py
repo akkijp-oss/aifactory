@@ -195,11 +195,15 @@ def backend(Run):
                 if pending: emit("\n")
             return r.returncode, "".join(out)
 
+        def record_needed_keys(self):
+            """鍵待ちで止まったときに「どの用途の鍵を待っているか」を kb が読む（ADR-0046）。prepare より前に残す。
+            windows / linux の take() は これを継承せず丸ごと上書きしているので、3 つの take() から呼ぶ（391）"""
+            self.state["needed_keys"] = self.needed_keys(); self.save()
+
         def take(self):
             if self.dry: return
+            self.record_needed_keys()
             import aifactory_paths as paths
-            # 鍵待ちで止まったときに「どの用途の鍵を待っているか」を kb が読む（ADR-0046）。prepare より前に残す
-            self.state["needed_keys"] = self.needed_keys(); self.save()
             # --wait のとき take は呼び直される（373）。lock と lease id と Client は最初の 1 回だけ作る
             # （呼ぶたびに同じファイルを開き直すと、同じプロセスの別 fd への flock で必ず落ちる）
             if self.run_lock is None:
