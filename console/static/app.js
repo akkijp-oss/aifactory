@@ -12,7 +12,15 @@ let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
 const stepName = id => (T.step && T.step[id]) || id;   // 工程の id は英単語のまま読める。表示名を決めた特別な工程（VM の空き待ち）だけ言い換える
-const nowStep = st => (T.step && st.current && T.step[st.current.step]) || st.next;   // 実行中の帯に出す工程。表示名を決めた工程のときだけ current を優先する
+/* 動いている run の「今」を 1 か所で決める（チケット 384）。runner は工程を走らせている間 next を書き換えないので、
+   実行中は current.step == next になる。next だけを見ると走っている工程を「次は」と説明してしまう。
+   current があれば phase='step'（その工程を実行中）、無ければ phase='wait'（次の工程の開始待ち。開始前・工程の切れ目）。
+   ボードの runs_live は current を平たくした形（r.step / r.since）なので、そちらも同じ関数で拾う */
+const stepNow = r => {
+  const c = (r && r.current) || null, step = (c && c.step) || (r && r.step) || '';
+  return step ? { phase: 'step', step, since: (c && c.since) || (r && r.since) || null } : { phase: 'wait', step: (r && r.next) || '' };
+};
+const stepText = r => { const c = stepNow(r); return c.phase === 'step' ? tt(T.board.liveStep, { step: stepName(c.step), t: since(c.since) }) : tt(T.board.liveNext, { step: stepName(c.step) }); };
 let pjReady = {};    // PJ → project.yml があるか（起票画面が、配車で人間待ちになる PJ を先に知らせる）
 
 /* ---------- 通信・通知 */
@@ -213,8 +221,7 @@ async function viewBoard() {
      読み上げ名は見えている文字（工程と経過時間）で始める。aria-label は中身を上書きするので、
      行き先だけを入れると主役の工程が読み上げから消え、音声操作で見えている文字を言っても押せない（ticketLink と同じ約束） */
   const liveRow = r => {
-    const txt = (r.step ? tt(T.board.liveStep, { step: stepName(r.step), t: since(r.since) }) : tt(T.board.liveNext, { step: r.next }))
-      + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
+    const txt = stepText(r) + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
     return `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { text: txt, run: r.name }))}"><span class="dot pulse"></span>${esc(txt)}</a>`;
   };
   /* カードの外枠は div。チケット詳細（題名）と実行記録（工程行）を兄弟の <a> にする（<a> の入れ子は無効な HTML。376）。
@@ -346,8 +353,7 @@ async function viewTicket(id, flash) {
   /* 実行状況の 1 行。本文より前に置くのは「今どうなっているか」だけで、判断を迫る操作は下（広い画面では右）の操作領域にまとめる。
      runs は新しい順なので先頭が最新の attempt。判定はボードの工程行（liveRow）と同じで、current の無い run は「次は」を出す */
   const live = d.runs[0] && d.runs[0].status === 'running' ? d.runs[0] : null;
-  const liveTxt = live ? ((live.current && live.current.step ? tt(T.board.liveStep, { step: stepName(live.current.step), t: since(live.current.since) })
-                                                            : tt(T.board.liveNext, { step: live.next || '' })) + tt(T.board.liveSince, { t: since(live.started) })) : '';
+  const liveTxt = live ? stepText(live) + tt(T.board.liveSince, { t: since(live.started) }) : '';
   const nowPanel = live ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(liveTxt)} ${runLink(live.name)}</div></div>`
     : runBusy ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div></div>` : '';
   render(crumb(esc(from), from === '#/board' ? T.nav.board : T.nav.tickets, tt(T.ticket.crumb, { id: t.id })) + `
@@ -386,7 +392,7 @@ async function viewTicket(id, flash) {
           ${moved.map(f => `<div class="warn">${esc(tt(T.help.editDraftServerChanged, { v: T.label[f], now: tkServer[f] }))}</div>`).join('')}
           <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${draft ? `<button data-act="set-clear" data-id="${t.id}">${esc(T.btn.draftClear)}</button>` : ''}${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
         </div>
-        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(stepNow(r).phase === 'step' ? stepText(r) : tt(T.run.nextStep, { step: stepName(stepNow(r).step) }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
         <div class="panel"><h2>${esc(T.h.history)}</h2><table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
           <div class="help top">${esc(tt(T.ticket.stamps, { c: fmtT(t.created), u: fmtT(t.updated) }))}</div></div>
@@ -417,7 +423,7 @@ function track(state, wf, gone) {
     parts.push(`<div class="step ${e.ok ? 'ok' : 'ng'}"><div class="nm">${esc(e.step)}</div><div class="ds">${fmtDur(d)}</div></div>`);
   });
   if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
-  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(nowStep(state))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
+  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(stepName(stepNow(state).step))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
   return `<div class="track">${parts.join('')}</div>${planBlock(wf)}`;
 }
 
@@ -448,7 +454,8 @@ const prNumber = u => ((/(?:\/pull\/|#)(\d+)/.exec(u || '')) || [])[1] || '';
 function outcomeLead(o, s) {
   if (o.reason === 'not_started') return s.state_error ? T.run.stateBroken : s.kind === 'v0' ? T.run.v0 : T.run.noState;
   if (o.reason === 'v0') return T.run.v0;
-  if (o.reason === 'running') return tt(T.outcome.running, { step: o.stopped_step || s.next || '' });
+  /* 実行中は state.next（= run_outcome の stopped_step）ではなく current を先に見る。工程の切れ目だけ「開始を待っています」（チケット 384） */
+  if (o.reason === 'running') { const c = stepNow(s); return tt(c.phase === 'step' ? T.outcome.running : T.outcome.runningWait, { step: stepName(c.step) }); }
   if (o.reason === 'runner_gone') return tt(T.outcome.runner_gone, { end: fmtT((o.job || {}).finished || s.mtime) });
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });

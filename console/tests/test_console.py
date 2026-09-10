@@ -406,13 +406,16 @@ class ApiTest(unittest.TestCase):
         self.assertRegex(board, r'<a class="t" href="#/ticket/', "題名がチケットへのリンクになっていない（Tab で届かない）")
         self.assertRegex(board, r'<a class="live" href="#/run/', "カードから実行記録へ移るリンクが無い")
         self.assertIn("T.board.liveOpen", board, "実行記録リンクの読み上げ名（aria-label）が無い")
-        for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, board, f"{key} をカードで使っていない")
-        self.assertRegex(board, r"r\.step \?", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
+        self.assertIn("stepText(r)", board, "カードが共用の工程判定（stepText）を使っていない")
+        helper = app[app.index("const stepNow = "):app.index("let pjReady")]        # 判定は 1 か所（384。ボード・チケット・run 詳細で同じ説明にする）
+        for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, helper, f"{key} を工程の文言に使っていない")
+        self.assertRegex(helper, r"r\.step", "ボードの runs_live（平たい step / since）を拾っていない")
+        self.assertRegex(helper, r"phase: 'wait'", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
         # aria-label は中身を上書きする。見えている工程と経過時間を読み上げ名に含める（label in name。ticketLink と同じ約束）
         i = board.index("const liveRow")
         row = board[i:board.index("\n  };", i)]
         self.assertIn("text: txt", row, "工程行の読み上げ名に見えている文字（工程・経過時間）が入っていない")
-        for key in ("T.board.liveStep", "T.board.liveNext", "T.board.liveSince"):
+        for key in ("stepText(r)", "T.board.liveSince"):
             self.assertLess(row.index(key), row.index("aria-label"), f"{key} を組む前に aria-label を書いている（見えている文字を含められない）")
         T = load_strings()
         self.assertIn("{text}", T["board"]["liveOpen"], "読み上げ名の文言に見えている文字の差し込み口が無い")
@@ -520,8 +523,8 @@ class ApiTest(unittest.TestCase):
         self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
         # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
         self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
-        for key in ("T.board.liveStep", "T.board.liveNext"):
-            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない）")
+        for key in ("stepText(live)", "T.board.liveSince"):
+            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない。384 で共用関数に出した）")
         self.assertRegex(body, r"nowPanel[^\n]*runLink\(live\.name\)", "実行状況から実行記録へ移る入口が無い")
         # 実行・状態変更・項目編集は 1 枚の操作領域にまとまり、既存の操作は全部残る
         ops = body[at("T.h.ops"):at("T.h.runs")]
@@ -982,6 +985,63 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 400); self.assertIn("説明", e2["error"])
         st, e3 = self.http.post("/api/runs/2020-01-06-nosuch-run/action", {"action": "close"})
         self.assertEqual(st, 404)
+
+    def test_ticket_runs_table_tells_a_running_step_from_a_waiting_one(self):
+        """チケット詳細の実行記録表は「今その工程を走っている」と「次の工程の開始待ち」を分ける（チケット 384）。
+
+        runner は工程を走らせている間 `next` を書き換えない（workflow/bin/run。工程が終わった時にだけ `next` を進めて
+        `current` を null にする）ので、実行中の run は `current.step == next` になる。
+        結果セルが `current` を見ずに「次は {step}」だけを出すと、走っている工程を開始待ちと読ませてしまう。
+        JS を動かす基盤が無いので、材料が API から出ていることを fixture で、表示はソース検査で固定する（test_board_* と同じ流儀）。
+        """
+        base = dict(finished=None, elapsed_s=None, result=None)
+        hist = [("plan", True)]
+        # (a) 実行中（#362 の再現。current.step と next が同じ）
+        running = self._fixture_run(f"2026-09-11-{PJ}-{self.seed}", self._state(
+            hist, next="implement", current={"step": "implement", "kind": "agent", "log": "agent-implement-1.log",
+                                             "since": "2026-09-11T09:05:00"}, **base), {"work/ticket.md": "# x\n"})
+        # (b) 工程の切れ目（current が無く、次の工程の開始待ち）
+        waiting = self._fixture_run(f"2026-09-11-{PJ}-{self.seed}-attempt2", self._state(
+            hist, next="gates", current=None, **base), {"work/ticket.md": "# x\n"})
+        # (c) 終了 / (d) 記録なし
+        done = self._fixture_run(f"2026-09-12-{PJ}-{self.seed}", self._state(hist, result="end"), {"work/ticket.md": "# x\n"})
+        bare = self._fixture_run(f"2026-09-12-{PJ}-{self.seed}-attempt2", None, {"ticket.md": "# x\n"})
+        try:
+            _, td = self.http.get(f"/api/tickets/{self.seed}")
+            by = {r["name"]: r for r in td["runs"]}
+            for n in (running, waiting, done, bare): self.assertIn(n, by, "チケットの実行記録に fixture が出ていない")
+            a = by[running]
+            self.assertEqual(a["status"], "running"); self.assertEqual(a["current"]["step"], "implement")
+            self.assertEqual(a["next"], "implement", "実行中の run は current.step と next が同じ（この票の前提）")
+            self.assertIsNone(a["result"]); self.assertIsNotNone(a["current"]["since"])
+            b = by[waiting]
+            self.assertEqual(b["status"], "running"); self.assertIsNone(b["current"]); self.assertEqual(b["next"], "gates")
+            self.assertEqual(by[done]["status"], "finished"); self.assertEqual(by[done]["result"], "end")
+            self.assertEqual(by[bare]["status"], "not_started")
+        finally:
+            for n in (running, waiting, done, bare): shutil.rmtree(self.ws / "runs" / n, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(")
+        body = app[i:app.index("\n}", i)]
+        panel = body[body.index("T.h.runs"):body.index("T.h.jobs")]
+        self.assertIn("stepNow", panel, "実行記録表の結果セルが共用の判定（stepNow）を通っていない")
+        self.assertIn("stepText(r)", panel, "実行中の run に「{step} を実行中」を出していない（表と run 詳細で説明が食い違う）")
+        helper = app[app.index("const stepNow = "):app.index("let pjReady")]
+        self.assertIn("T.board.liveStep", helper, "共用の判定が「{step} を実行中」を組んでいない")
+        self.assertLess(panel.index("stepNow"), panel.index("T.run.nextStep"),
+                        "running の結果セルが current を見ずに「次は」を出している（チケット 384 の不具合）")
+        for key in ("T.run.notStarted", "'abandoned'"): self.assertIn(key, panel, f"結果セルに {key} の枝が無い")
+        self.assertIn("schedule(() => viewTicket(id), 5000)", body, "チケット画面が自動で描き直さない（工程の切替が反映されない）")
+        # run 詳細の 1 文も同じ判定を使う（state.next 由来のままだと工程の切れ目で表と逆向きに誤る）
+        j = app.index("function outcomeLead(")
+        lead = app[j:app.index("\n}", j)]
+        self.assertIn("stepNow", lead, "run 詳細の「結果」が共用の判定を使っていない")
+        self.assertIn("T.outcome.runningWait", lead, "工程の開始待ちを言う文言が無い")
+        self.assertNotRegex(lead, r"'running'[^\n]*stopped_step",
+                            "running の 1 文が state.next 由来の stopped_step を読んでいる")
+        T = load_strings()
+        self.assertIn("開始待ち", T["run"]["nextStep"], "表の「次は」が開始待ちだと分かる文言になっていない")
 
     def test_run_outcome_loop_limit(self):
         """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
