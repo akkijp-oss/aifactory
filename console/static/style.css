@@ -195,6 +195,10 @@ textarea { width: 100%; min-height: 200px; font-family: var(--font); resize: ver
 .md code { background: var(--ground); padding: 0 4px; border-radius: 3px; }
 .md pre code { background: none; padding: 0; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.md .scroll { margin: 8px 0; }                                      /* 表は狭い幅では横に流す（囲いは .scroll。チケット 385） */
+.md table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12.5px; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md thead th { background: var(--ground); font-weight: 600; white-space: nowrap; }
 .md p { margin: 6px 0; }
 pre.log { background: #182028; color: #dce3ea; padding: 12px 14px; border-radius: var(--r); overflow: auto; max-height: 70vh; font-family: var(--mono); font-size: 12px; line-height: 1.5; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 pre.log.small { max-height: 40vh; }
