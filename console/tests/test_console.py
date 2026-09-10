@@ -676,8 +676,8 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(re.search(r"dv\('set-note'\)", ops), "メモを下書き優先の値で描いていない")
 
         # textarea の開始タグ直後の改行 1 個は HTML パーサーが捨てる。改行で始まる note が 1 文字削れないよう相殺する
-        m = re.search(r"<textarea[^>]*\bid=\"set-note\"[^>]*>(.)", ops)
-        self.assertTrue(m and m.group(1) == "\n", "textarea の開始タグ直後に改行が無い（改行で始まるメモが 1 文字消える）")
+        self.assertTrue(re.search(r"<textarea[^>]*\bid=\"set-note\"[^>]*>(?:\\n|[\r\n])", ops),
+                        "textarea の開始タグ直後に改行が無い（改行で始まるメモが 1 文字消える）")
 
         # 送信は無変換。trim すると「無編集で保存 → 元と完全一致」が末尾の改行で崩れる
         j = app.index("  'set': ")
