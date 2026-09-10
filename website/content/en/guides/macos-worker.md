@@ -108,7 +108,7 @@ There are two image lines. Check on hardware which one is in use.
 
 | Line | Image | Notes |
 |---|---|---|
-| Plain macOS | `ghcr.io/cirruslabs/macos-sequoia-base` | The installer default; override with `MAC_IMAGE` |
+| Plain macOS | `ghcr.io/cirruslabs/macos-sequoia-base` | The installer default; override with `AIFACTORY_MAC_IMAGE` |
 | With Xcode | `ghcr.io/cirruslabs/macos-tahoe-xcode` | The above plus Xcode, the Android SDK, and casks. Uses much more disk |
 
 The name `latest` alone does not reproduce anything. Record the digest and the guest OS on every pull (see "Collect versions and the digest" below).
@@ -181,6 +181,8 @@ db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
 python3 workers/bin/control --db "$db" submit <worker> guest-exec --lease auto --wait 120 \
   --command 'sw_vers; brew --version; brew list --versions; which -a node npm pnpm yarn python3 gh git brew claude timeout; xcodebuild -version'
 ```
+
+Passing `--command` sets a payload `timeout` of 60 seconds by default (`workers/bin/control`). `--wait` is how long this side blocks, not the guest-side limit. If `brew list --versions` takes longer than that on an image with Xcode, put a larger `timeout` in a payload file and pass it with `--payload-file`.
 
 `guest-exec` only goes through while the dedicated guest is up and a lease exists (see "[Recovering from `uncertain`](#recovering-from-uncertain)"); use the lease of a run held open with `kb run <id> --keep`. On an image without Xcode only the trailing `xcodebuild -version` fails, and the earlier output is still collected.
 
@@ -275,7 +277,7 @@ python3 workers/bin/control --db "$db" submit <worker> guest-exec \
 
 On the Mac host, an administrator checks `tart list` over SSH. If the guest is not listed, it has already stopped.
 
-**3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 4). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
+**3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 5). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
 
 - An administrator confirmed the guest's real state on the Mac (absent from `tart list`, or stopped with `tart stop`)
 - You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
@@ -287,16 +289,19 @@ python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stop
 
 `--confirmed-stopped` is required. Earlier results and logs are kept.
 
-**4. Releasing the lease is a separate operation.** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
+**4. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`, and a missing or half-built guest with `Mac setup is incomplete or the guest is stopped`). A run whose lease was released in step 5 can no longer be resumed.
+
+- **The guest is alive and the lease is still held** → do not go on to step 5. Leave the lease in place and continue with `kb run <id> --resume`. Resuming is only possible for a provisioning failure, before credentials, a repository, or step history exist (see "[Recovery](#recovery)").
+- **The guest is gone, or this run is being wound up** → clear the lease in step 5 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. If the board still points at a run in progress the command refuses; put the ticket back with `kb reopen <id>` first.
+
+**5. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
 
 ```bash
 python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<the successful guest-release operation ID>'
 ```
 
-`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`.
-
-**5. Resume.** Once the lease is cleared, continue with `kb run <id> --resume`. Which step it resumes from, when resuming is refused, and the fact that `--resume` requires owning the lease are covered under "Recovery" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
+`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 4. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
 ## Hardware verification and limitations
 

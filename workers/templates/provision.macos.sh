@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # workers/templates/provision.macos.sh: Mac worker の専用ゲスト用 provision.sh の雛形。
-#   これは雛形。そのまま置いても動くが、PJ 固有の追加は「4. PJ 固有」の下に足す。
+#   これは雛形。そのまま置いても動くが、PJ 固有の追加は「3. PJ 固有」の下に足す。
 #   置き場: $AIFACTORY_WORKSPACE/projects/<pj>/provision.sh（PJ 定義と同じディレクトリ）
 #   実行のされ方: runner が専用ゲストへ転送し、認証情報を注入する前に `bash provision.sh` で 1 回実行する。
 #     clone は runner が行う。ここで clone しない・認証情報を触らない・何度実行しても同じ結果にする。

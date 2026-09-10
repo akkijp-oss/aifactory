@@ -108,7 +108,7 @@ gates: gates.sh
 
 | 系統 | イメージ | 補足 |
 |---|---|---|
-| 素のmacOS | `ghcr.io/cirruslabs/macos-sequoia-base` | 導入スクリプトの既定。`MAC_IMAGE` で変更できる |
+| 素のmacOS | `ghcr.io/cirruslabs/macos-sequoia-base` | 導入スクリプトの既定。`AIFACTORY_MAC_IMAGE` で変更できる |
 | Xcode入り | `ghcr.io/cirruslabs/macos-tahoe-xcode` | 上にXcode・Android SDK・cask類を足したもの。ディスクを大きく使う |
 
 `latest` という名前だけでは再現しない。取得のたびにdigestとゲストOSを記録する（この節の「版とdigestを採取する」）。
@@ -181,6 +181,8 @@ db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
 python3 workers/bin/control --db "$db" submit <worker> guest-exec --lease auto --wait 120 \
   --command 'sw_vers; brew --version; brew list --versions; which -a node npm pnpm yarn python3 gh git brew claude timeout; xcodebuild -version'
 ```
+
+`--command` で渡すと、payloadの `timeout` は60秒が既定（`workers/bin/control`）。`--wait` はこちらの待ち時間で、ゲスト側の上限ではない。Xcode入りで `brew list --versions` が60秒を超えるなら、payloadファイルに `timeout` を書いて `--payload-file` で渡す。
 
 `guest-exec` は専用ゲストが起きていてleaseがある間しか通らない（「[uncertainからの復旧](#uncertainからの復旧)」）。`kb run <id> --keep` で保持したrunのleaseを使う。Xcodeの無い系統では最後の `xcodebuild -version` だけが失敗するが、手前の出力は取れる。
 
@@ -275,7 +277,7 @@ python3 workers/bin/control --db "$db" submit <worker> guest-exec \
 
 Macホスト側では管理者のSSHで `tart list` を見る。ゲストが一覧に無ければ既に止まっている。
 
-**3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは4）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
+**3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは5）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
 
 - 管理者がMac上でそのゲストの実状態を確認した（`tart list` に無い、または `tart stop` した）
 - `cancel` を送っただけで済ませていない。`cancel` は停止要求であって停止確認ではない
@@ -287,16 +289,19 @@ python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stop
 
 `--confirmed-stopped` は必須。以前の結果とログは保存される。
 
-**4. leaseの解放は別の操作。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
+**4. 続けるか、片づけるかを決める。** ここでゲストの実状態によって道が分かれる。`--resume` は、そのrunのleaseをワーカーが**保持したまま**であることと、ゲストが**動いたまま**であることの両方を要求する（`workflow/lib/macos.py`。leaseを欠くと `Mac resume requires this run's retained lease`、ゲストが無いか作りかけだと `Mac setup is incomplete or the guest is stopped` で止まる）。5でleaseを解放したrunは `--resume` できない。
+
+- **ゲストが生きていて、leaseも保持している** → 5へ進まない。leaseを解放しないまま `kb run <id> --resume` で続ける。再開できるのは、認証情報・リポジトリ・工程履歴がまだ無いprovision失敗のときに限る（「[失敗時の復旧](#失敗時の復旧)」）。
+- **ゲストが落ちている、またはこのrunを畳む** → 5でleaseを片づけ、`--resume` ではなく新しいrunを投げ直す。新しいVMを取り直して記録のwipブランチと工程から続けるなら `kb run <id> --from`、最初から回すなら `kb run <id>`。台帳が実行中のrunを指したままだと断られるので、その場合は `kb reopen <id>` で板を戻してから投げる。
+
+**5. leaseを解放する（片づける場合）。** 操作を `resolved` にしてもrunの予約は残る。解放するには、そのleaseを持つ `guest-release` を投げて**成功させ**、その操作IDを渡す。制御系は「成功した `guest-release` で、payloadのleaseが一致するもの」以外を受け付けない。
 
 ```bash
 python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<成功したguest-releaseの操作ID>'
 ```
 
-`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。
-
-**5. 再開する。** leaseを片づけたら `kb run <id> --resume` で続ける。どの工程から再開するか、再開できない条件、`--resume` がleaseの所有を要求することは「失敗時の復旧」と [ADR-0047](adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
+`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは4の2つめの道で投げ直す。どの工程から再開するか、再開できない条件は「[失敗時の復旧](#失敗時の復旧)」と [ADR-0047](adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
 
 ## 実機で確認した範囲と制約
 
