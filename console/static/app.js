@@ -126,7 +126,8 @@ function jst(j) { return `<span class="st ${esc(j.state)}">${j.state === 'runnin
 function prLink(t) { if (!t.pr) return ''; const u = t.repo ? `https://github.com/${t.repo}/pull/${t.pr}` : null; return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">#${esc(t.pr)}</a>` : `#${esc(t.pr)}`; }
 const runName = run => String(run || '').replace(/^workflow\/runs\//, '');
 function runLink(run) { if (!run) return ''; const n = runName(run); return `<a href="#/run/${encodeURIComponent(n)}" class="mono">${esc(n)}</a>`; }
-function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
+function jobLink(j) { return `<a href="#/job/${esc(j.id)}">${esc(j.label)}</a>`; }
+function ticketLink(x) { return `<a href="#/ticket/${esc(x.id)}" class="mono" aria-label="${esc(tt(T.tickets.link, { id: x.id, title: x.title }))}">${esc(x.id)}</a>`; }  /* 番号だけでは読み上げ名が弱いので、題名を aria-label に添える（見えている番号を含むので label-in-name も満たす） */  /* 行クリックだけに頼らず、開く先の名前自体をリンクにする（Tab で届き、読み上げで link と分かる） */
 function editing() { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}<span class="spacer"></span>${right || ''}</div>`;
 const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
@@ -199,14 +200,27 @@ async function viewBoard() {
   const nLive = runsRun.length + runsNew.length + runsGone.length;
   const moreRuns = (o.runs_active_n || runsRun.length) - runsRun.length;        /* サーバーの上限からあふれた「実行中」の件数 */
   const live = (nLive ? `<div class="help">${esc(T.board.ticketCount)}${esc(tt(T.board.runsCount, { n: nLive, m: runsNew.length, a: runsGone.length }))}</div>` : '')
-    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)} / ${r.current ? tt(T.board.liveStep, { step: esc(stepName(r.current.step)), t: esc(since(r.current.since)) }) : tt(T.board.liveNext, { step: esc(r.next) })}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
+    + runsRun.map(r => `<div><span class="dot pulse"></span><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj)} ${esc(r.task)}</a> · ${esc(r.workflow)}${tt(T.board.liveSince, { t: esc(since(r.started)) })}</div>`).join('')
     + runsGone.map(r => `<div><a href="#/run/${encodeURIComponent(r.name)}">${esc(r.pj || '')} ${esc(r.task || '')}</a> · ${r.runner ? `${esc(tt(T.board.liveAbandoned, { t: fmtT(r.runner.finished) }))} <a href="#/job/${esc(r.runner.id)}">${esc(T.btn.openJob)}</a>` : `<span class="tag">${esc(T.result.abandoned)}</span>`}</div>`).join('')
     + runsNew.map(r => `<div>${runLink(r.name)} · <span class="tag">${esc(T.run.notStarted)}</span></div>`).join('')
     + (o.jobs_running ? `<div><a href="#/jobs">${esc(tt(T.board.jobsRunning, { n: o.jobs_running }))}</a></div>` : '')
     + (moreRuns > 0 ? `<div><a href="#/runs">${esc(tt(T.board.moreRuns, { n: moreRuns }))}</a></div>` : '');   /* 上限からあふれた分は実行記録で見る */
   const cell = s => `<div class="cell s-${s}"><div class="k">${esc(T.status[s])}</div><div class="n">${n(s)}</div>${s === 'in_progress' ? `<div class="live">${live || esc(T.board.noLive)}</div>` : ''}</div>`;
-  const card = x => `<a class="card" href="#/ticket/${x.id}"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><span class="t">${esc(x.title)}</span>
-    <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</a>`;
+  /* チケット 1 枚に紐づく「動いている run」。runs_live は上限なし・新しい順なので、先頭が最新の attempt（実行記録画面の runOf と同じ考え方）。
+     記録から PJ が分からない run（pj が空）は帯と同じくチケット番号だけで拾う */
+  const liveOf = x => (o.runs_live || []).find(r => String(r.task) === String(x.id) && (!r.pj || r.pj === x.pj));
+  /* 工程行。current が無い run（開始前・工程の切れ目）は前の工程ではなく「次は」を出す。
+     読み上げ名は見えている文字（工程と経過時間）で始める。aria-label は中身を上書きするので、
+     行き先だけを入れると主役の工程が読み上げから消え、音声操作で見えている文字を言っても押せない（ticketLink と同じ約束） */
+  const liveRow = r => {
+    const txt = (r.step ? tt(T.board.liveStep, { step: stepName(r.step), t: since(r.since) }) : tt(T.board.liveNext, { step: r.next }))
+      + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
+    return `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { text: txt, run: r.name }))}"><span class="dot pulse"></span>${esc(txt)}</a>`;
+  };
+  /* カードの外枠は div。チケット詳細（題名）と実行記録（工程行）を兄弟の <a> にする（<a> の入れ子は無効な HTML。376）。
+     カード全面のクリックは題名リンクの ::after（style.css）で今までどおり保つ */
+  const card = x => { const r = liveOf(x); return `<div class="card"><span class="id">${x.id}</span><span class="tag pj">${esc(x.pj)}</span> <span class="tag">${esc(x.kind)}</span><a class="t" href="#/ticket/${x.id}">${esc(x.title)}</a>${r ? liveRow(r) : ''}
+    <span class="meta">${x.pr ? `<span>PR #${esc(x.pr)}</span>` : ''}<span>${fmtT(x.updated)}</span></span>${x.note ? `<span class="note" title="${esc(x.note)}">${esc(x.note)}</span>` : ''}</div>`; };
   const tickets = extra => `#/tickets?pj=${encodeURIComponent(pj)}${extra || ''}`;                /* ボードで選んだ PJ を一覧に引き継ぐ */
   const col = (s, list, cap) => `<section class="col s-${s}"><h2>${esc(T.status[s])}<span>${list.length}</span></h2>${list.length ? list.slice(0, cap || 999).map(card).join('') : `<div class="empty">${esc(T.empty.col[s])}</div>`}${cap && list.length > cap ? `<div class="empty"><a href="${tickets('&amp;status=' + s)}">${esc(tt(T.board.more, { n: list.length - cap }))}</a></div>` : ''}</section>`;
   const canDispatch = by.todo.length > 0;
@@ -269,7 +283,7 @@ function tkMatch(x) {
 function tkRender() {
   const box = $('tk-list'); if (!box) return;
   const list = tkAll.filter(tkMatch);
-  const row = x => `<tr class="link" data-href="#/ticket/${x.id}"><td class="mono">${x.id}</td><td>${esc(x.pj)}</td><td>${esc(x.kind)}</td><td>${esc(x.title)}</td><td>${st(x.status)}</td><td>${prLink(x)}</td><td>${fmtT(x.updated)}</td></tr>`;
+  const row = x => `<tr class="link" data-href="#/ticket/${x.id}"><td class="mono">${ticketLink(x)}</td><td>${esc(x.pj)}</td><td>${esc(x.kind)}</td><td>${esc(x.title)}</td><td>${st(x.status)}</td><td>${prLink(x)}</td><td>${fmtT(x.updated)}</td></tr>`;
   box.innerHTML = `<div class="help">${esc(tt(T.tickets.count, { n: list.length, m: tkAll.length }))}</div>`
     + (list.length ? `<table><tr><th>${esc(T.th.ticket)}</th><th>${esc(T.label.pj)}</th><th>${esc(T.label.kind)}</th><th>${esc(T.th.title)}</th><th>${esc(T.th.state)}</th><th>PR</th><th>${esc(T.th.updated)}</th></tr>${list.map(row).join('')}</table>`
       : `<div class="empty">${esc(T.empty.tickets)}</div>`);

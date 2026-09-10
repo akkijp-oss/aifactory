@@ -382,6 +382,18 @@ _pool_mark_used() { # name
 # _pool_need: この take / reset / reinject が要る用途（fable / other。空白区切り）。take は --need=fable,other で受け取り（既定は両方）、
 #   reset / reinject は貸出台帳に残っている用途（無ければ両方）。_pool_missing: 足りなかった用途（呼び元が「鍵なし」で止める。ADR-0046）
 _pool_need="fable other"; _pool_missing=""
+# _pool_cur_override: 「この task が前に使っていた鍵」の外からの指定（fable=<名前>,other=<名前>）。
+#   Proxmox の run は貸出台帳 $STATE に載るが、pull backend（Mac / Windows / Linux）の run は載らないので、
+#   runner が run の state.json に残した名前を `keys pick --current=…` で渡す（チケット 391）
+_pool_cur_override=""
+_pool_cur_of() { # task group → その task が前に使っていた鍵の名前（無ければ空）
+  local kv
+  if [[ -n "$_pool_cur_override" ]]; then
+    for kv in ${_pool_cur_override//,/ }; do [[ "${kv%%=*}" == "$2" ]] && { printf '%s' "${kv#*=}"; return 0; }; done
+    return 0
+  fi
+  jq -r --arg id "$1" --arg g "$2" '.[$id].keys[$g] // empty' "$STATE"
+}
 _pool_need_from_state() { # task → 台帳の keys の用途。無ければ両方
   local g; g="$(jq -r --arg id "$1" '(.[$id].keys // {}) | keys | join(" ")' "$STATE" 2>/dev/null || true)"
   _pool_need="${g:-fable other}"
@@ -401,11 +413,11 @@ _pool_apply_locked() { # task
   fi
   # 先に、要る用途の鍵が全部そろうかを見る（足りなければ何も選ばない。使用回数も動かさない）
   for group in $_pool_need; do
-    cur="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
+    cur="$(_pool_cur_of "$task" "$group")"
     [[ -n "$(keys_pick "$group" "$cur")" ]] || _pool_missing+="$group "
   done
   [[ -z "$_pool_missing" ]] && for group in fable other; do
-    cur="$(jq -r --arg id "$task" --arg g "$group" '.[$id].keys[$g] // empty' "$STATE")"
+    cur="$(_pool_cur_of "$task" "$group")"
     name="$(keys_pick "$group" "$cur")"
     [[ -n "$name" ]] || continue
     tok="$(keys_token_of "$name")"
@@ -466,7 +478,7 @@ keys_json_view() {
 }
 
 _keys_usage() {
-  die "usage: sandbox keys list [--json] / keys add <名前> [--fable] [--other] [--note …] / keys set <名前> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <名前> [--force] / keys token <名前> / keys used <名前>（runner が起動を報告する）
+  die "usage: sandbox keys list [--json] / keys add <名前> [--fable] [--other] [--note …] / keys set <名前> [--fable=on|off] [--other=on|off] [--enable|--disable] [--note …] / keys rm <名前> [--force] / keys token <名前> / keys used <名前>（runner が起動を報告する） / keys pick --pj <pj> --task <id> [--need=fable,other] [--current=fable=<名前>,other=<名前>] --json（runner が呼ぶ。人が打つことはない）
   --fable = Fable に使う（計画・設計・レビューの工程）  --other = Opus・Sonnet・Haiku に使う（実装・調査の工程）。両方でも可。トークンは stdin か対話で入れる（コマンド行に書かない）"
 }
 # 鍵の値は $_keys_token_in に置き、jq へは環境変数で渡す（コマンド行に書くと ps で他人に見える）
@@ -528,6 +540,28 @@ cmd_keys() {
       [[ -n "$(keys_get "$name")" ]] || { echo "[keys] ${name}: 無い（消された鍵か）。数えない"; return 0; }
       with_state_lock _keys_mark_launched "$name"
       echo "[keys] ${name}: launches $(keys_load | jq -r --arg n "$name" 'first(.keys[] | select(.name==$n) | .launches) // 0')" ;;
+    pick)
+      # pull backend の runner が「この task の鍵をくれ」と聞く口（チケット 391）。選び方の正本は keys_pick /
+      # _pool_apply_locked のままで、ここは cmd_take と同じ並びで呼べるようにするだけ（規則を Python に複製しない）。
+      # stdout は JSON 1 行だけ（鍵の値が入るので人向けの行を混ぜない）。足りなければ「鍵なし:」で止まる
+      local pj="" task="" need="" current="" as_json=0
+      while (( $# )); do
+        case "$1" in
+          --pj) pj=${2:-}; shift ;;
+          --task) task=${2:-}; shift ;;
+          --need=*) need=${1#--need=} ;;
+          --current=*) current=${1#--current=} ;;
+          --json) as_json=1 ;;
+          *) _keys_usage ;;
+        esac; shift
+      done
+      [[ -n "$pj" && -n "$task" ]] && (( as_json )) || _keys_usage
+      load_pj "$pj"
+      _pool_need="${need//,/ }"; [[ -n "${_pool_need// /}" ]] || _pool_need="fable other"
+      _pool_cur_override="$current"
+      pool_apply_keys "$task"
+      pool_require_keys   # 要る用途の鍵が無ければここで止まる（stdout は空。使用回数も動かさない）
+      keys_pick_json ;;
     add)
       local name=${1:-}; shift || true
       [[ -n "$name" ]] || _keys_usage
@@ -608,6 +642,17 @@ claude_key_name_lines() {
   [[ -n "${_pool_fable:-}" ]] && echo "CLAUDE_KEY_NAME_FABLE=${_pool_fable}"
   [[ -n "${_pool_other:-}" ]] && for f in OPUS SONNET HAIKU; do echo "CLAUDE_KEY_NAME_$f=${_pool_other}"; done
   return 0
+}
+# keys_pick_json: `keys pick` が runner に返す JSON 1 行。guest の runtime.env に入れる変数は
+#   inject_env が VM に書くのと同じ集合（無印 + claude_family_lines + claude_key_name_lines）にそろえる。
+#   値はコマンド行に置かず環境変数で jq に渡す（ps に出さない。_keys_add_locked と同じ流儀）
+keys_pick_json() {
+  local lines
+  lines="$( { [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] && echo "CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}"
+              claude_family_lines; claude_key_name_lines; } )"
+  KEYS_PICK_ENV="$lines" jq -nc --argjson k "$(pool_keys_json)" \
+    '{keys: $k,
+      env: (env.KEYS_PICK_ENV | split("\n") | map(select(index("=")) | index("=") as $i | {key: .[:$i], value: .[$i+1:]}) | from_entries)}'
 }
 inject_env() { # ip task pj
   local ip=$1 task=$2 pj=$3

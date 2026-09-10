@@ -9,7 +9,7 @@ checkout・持ち込み・step の遷移・依頼文の組み立ては実物を�
 
 - `--from` で始めた run は implement から動く（research / design は呼ばれない）
 - 作業ブランチは base ではなく origin/<wip> の続きで、前回の work/*.md が新しい VM に載る
-- 最初の依頼文に「前回の結果（直すこと）」として前回の review.md が入る（review からやり直すときは入れない）
+- 最初の依頼文に「前回の結果（直すこと）」として前回の review.md が入る（review からやり直すとき・前回が PASS のときは入れない）
 - state.json に `resumed_from` / `from_step` / `from_branch` が残り、`loops` は空から数え直す。前回の run は消えない
 - 前回が「今日の同じ名前の run」なら、退避先（-attemptN）を前回として読む
 - human で止まった run は `resume_step`（やり直す step）を残す: review の 2 連続 FAIL → implement、implement 自身の失敗 → implement
@@ -36,6 +36,7 @@ run.paths = types.SimpleNamespace(project_dir=run.paths.project_dir, PROJECT_DIR
 
 TICKET = "# 機能: 止まった run を続きから回す\n\n2 回目のレビューで止まった run をやり直す。\n"
 REVIEW_FAIL = "# レビュー: FAIL\n## 指摘\n1. workflow/bin/run:248 の分岐が 1 件足りない\n"
+REVIEW_PASS = "# レビュー: PASS\n## 要約\n計画の範囲に収まっている。ゲートも全緑\n"
 PLAN = "# 計画: 続きから回す\n\n- 分岐を 1 つ足す\n"
 RESEARCH = "# 調査: 既存の resume\n\n- take() が resume で丸ごと return する\n"
 
@@ -251,6 +252,19 @@ class ResumeFromStepTest(unittest.TestCase):
         self.assertEqual(r.first_retry_note(), "")
         r.main()
         self.assertEqual(self.done, ["implement", "gates", "review", "sync", "pr"])
+
+    def test_a_passing_review_is_not_carried_as_something_to_fix(self):
+        """review が PASS した後の step（sync / pr / resolve）で止まった run をやり直すとき、
+        前回の合格の判定文を「レビュー指摘（直すこと）」として渡さない（チケット 352）。代わりに止まった理由 1 行を添える"""
+        prev = self.prev_run("2026-09-06-kumitate-954", 954, wip="sandbox/954-feature-wip",
+                             work={"plan.md": PLAN, "review.md": REVIEW_PASS}, resume_step="resolve",
+                             error="sync: base の取り込みで衝突した（workflow/bin/run）")
+        self.setenv(AIFACTORY_FROM_RUN=prev.name)
+        r = self.build(954, from_step="resolve", from_branch=None)
+        note = r.first_retry_note()
+        self.assertNotIn("レビュー指摘", note)
+        self.assertNotIn("計画の範囲に収まっている", note)
+        self.assertIn("base の取り込みで衝突した", note)
 
     def test_the_error_of_the_previous_run_is_carried_when_there_is_no_review(self):
         """レビューが無い（gates や timeout で止まった）run では、前回の停止理由 1 行を「直すこと」に添える"""

@@ -261,6 +261,24 @@ def valid_branch(b):
     return bool(b) and bool(BRANCH_NAME.fullmatch(b)) and ".." not in b and not b.endswith(("/", ".lock"))
 
 
+# review.md の読み取り。1 行目 `# レビュー: PASS|FAIL` は 5 つの workflow が共有する契約で、変えない（ADR-0036 / ADR-0042）。
+# severity は 2 行目以降の `severity: minor|major` 行（FAIL のときだけ reviewer が書く。ADR-0053）
+SEVERITY_LINE = re.compile(r"^\s*severity\s*[:：]\s*(minor|major)\b", re.IGNORECASE | re.MULTILINE)
+
+def review_verdict(text):
+    """review.md の判定。1 行目に PASS が含まれれば PASS（それ以外は FAIL 扱い）。中身が無ければ None"""
+    head = (text or "").splitlines()[:1]
+    if not head: return None
+    return "PASS" if "PASS" in head[0] else "FAIL"
+
+
+def review_severity(text):
+    """review.md の `severity: minor|major` 行（無ければ None）。1 行目の判定行は見ない（`# レビュー: PASS` を拾わない）"""
+    body = "\n".join((text or "").splitlines()[1:])
+    m = SEVERITY_LINE.search(body)
+    return m.group(1).lower() if m else None
+
+
 def resume_start(state, steps):
     """`--resume`（貸出中の VM で続き）の開始工程を、state.json の `next` ではなく工程履歴から決める（チケット 338 / ADR-0047）。
 
@@ -298,6 +316,9 @@ class Run:
     # backend は Run クラスしか受け取らないので、例外の種類はクラス属性で渡す（チケット 373）
     PoolBusy = PoolBusy
     PoolTimeout = PoolTimeout
+    # 鍵プールに要る用途の鍵が無いときの例外と、そのとき保全する wip の文言（pull backend が使う。チケット 391）
+    NoKey = NoKey
+    WIP_KEY_MESSAGE = WIP_KEY_MESSAGE
 
     def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
@@ -305,6 +326,7 @@ class Run:
         # --from の再開（チケット 333）。--resume（貸出中の同じ VM で続ける）とは別経路で、新しい VM を取り直す
         self.from_step = self.from_branch = self.from_run = None
         self.from_state = {}
+        self.last_severity = None    # 直前の reviewer の FAIL の重さ（`severity: minor|major`）。transition() が読む
         self.project_dir = paths.project_dir(pj) or die(f"PJ {pj} の定義が無い（{' / '.join(str(d / pj) for d in paths.PROJECT_DIRS)}）")
         (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
         self.project = load_yaml(self.project_dir / "project.yml")
@@ -360,7 +382,7 @@ class Run:
         self.state_file = self.run_dir / "state.json"
         self.state = json.loads(self.state_file.read_text()) if (resume and self.state_file.exists()) else {
             "pj": pj, "task": task, "workflow": wf_name, "branch": self.branch, "base": self.base,
-            "started": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "history": [], "loops": {}, "next": self.wf["steps"][0]["id"]}
+            "started": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "history": [], "loops": {}, "severity_bonus": {}, "next": self.wf["steps"][0]["id"]}
         if resume:
             self.branch = self.state["branch"]; self.base = self.state["base"]
             # 開始工程は `next`（＝遷移先。失敗した run では必ず human）ではなく履歴から決め直す（338）。
@@ -453,7 +475,9 @@ class Run:
         if (self.steps.get(self.from_step) or {}).get("role") == "reviewer": return ""
         rv = self.from_run / "work" / "review.md"
         body = rv.read_text(encoding="utf-8", errors="replace").strip() if rv.is_file() else ""
-        if body: return f"前回の run {self.from_run.name} のレビュー指摘（直すこと）:\n\n{body}"
+        # PASS した review.md は「直すこと」ではない。review の後の step（sync / pr / resolve）で止まった run を
+        # やり直すとき、前回の合格の判定文を指摘として渡してしまっていた（ADR-0053）。FAIL のときだけ渡す
+        if review_verdict(body) == "FAIL": return f"前回の run {self.from_run.name} のレビュー指摘（直すこと）:\n\n{body}"
         err = ([l.strip() for l in str(self.from_state.get("error") or "").splitlines() if l.strip()] or [""])[-1]
         if not err: return ""
         note = f"前回の run {self.from_run.name} は次の理由で止まった: {err}"
@@ -708,7 +732,12 @@ class Run:
         pool の uses は「割り当てた回数」で実使用と違ったので（2026-09-10）、起動の回数は runner が数える。失敗しても run は止めない"""
         m = self.POOL_KEY_RE.search(key_line or "")
         if not m or self.dry: return
-        r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        # sandbox が PATH に無い環境（CI・テスト）では sh() が OSError を投げる（check=False でも握らない）。
+        # 報告できないだけで run を止める理由は無いので、ここで握って log に落とす（391）
+        try:
+            r = sh(["sandbox", "keys", "used", m.group(1)], check=False)
+        except OSError as e:
+            self.log(f"keys used {m.group(1)}: 報告できなかった（{type(e).__name__}）"); return
         if r.returncode: self.log(f"keys used {m.group(1)}: 報告できなかった（rc={r.returncode}）")
 
     def agent_command(self, prompt_path, model, timeout_min):
@@ -786,8 +815,11 @@ class Run:
             missing.append("git(コミットなし)")
         if missing: return False, f"出力が無い: {', '.join(missing)}"
         if step["role"] == "reviewer":
-            head = self.vm_read("review.md").splitlines()[:1]
-            return (bool(head) and "PASS" in head[0]), self.vm_read("review.md")[:4000]
+            body = self.vm_read("review.md")
+            ok = review_verdict(body) == "PASS"
+            # FAIL の重さ（reviewer が書いていれば）。transition() が「軽微なら上限を 1 回だけ超えて戻す」判断に使う（ADR-0053）
+            if not ok: self.last_severity = review_severity(body)
+            return ok, body[:4000]
         return True, ""
 
     ADR_FILE = re.compile(r"^(\d{4})-[^/]*\.md$")
@@ -934,9 +966,24 @@ class Run:
         if t is None: return "end" if ok else "human"
         if isinstance(t, str): return t
         key = f"{step['id']}->{t['goto']}"; n = self.state["loops"].get(key, 0)
-        if n < t.get("max_loops", 1):
+        if n < t.get("max_loops", 1) + self.severity_bonus(step, t, key):
             self.state["loops"][key] = n + 1; return t["goto"]
         return t.get("else", "human")
+
+    def severity_bonus(self, step, t, key):
+        """reviewer が `severity: minor` と書いた FAIL に限り、戻せる回数を 1 回だけ足す（ADR-0053）。
+
+        軽微な指摘 1 件で human に落ちると、VM を返して人が `kb run --from` を打ち直す手間の方が高い。
+        暴走を防ぐため加点は **1 遷移につき 1 回きり**（何度 minor と書かれても増えない）。
+        major / 無指定は従来どおり（上限を超えたら human）。事実だけを state.json に残す（文言は console 側。ADR-0025）"""
+        used = self.state.setdefault("severity_bonus", {})
+        if used.get(key): return 1                      # 既に使った分は上限に足したまま（同じ遷移で 2 回目は増えない）
+        if step.get("role") != "reviewer" or getattr(self, "last_severity", None) != "minor": return 0
+        n = self.state["loops"].get(key, 0)
+        if n < t.get("max_loops", 1): return 0          # まだ上限内。加点を使わずに戻す（使い切ってから足す）
+        used[key] = 1
+        self.log(f"{step['id']}: レビューの指摘は severity: minor。戻せる回数の上限を 1 回だけ超えて {key.split('->')[-1]} に戻す")
+        return 1
 
     def resume_step_for(self, step):
         """human で止まったとき、次にどの step からやり直せば続きになるか（`kb run --from <step>` に渡る事実）。
@@ -1010,6 +1057,7 @@ class Run:
                 self.state["next"] = cur = "human"; self.state["current"] = None; self.save()
                 continue
             self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
+            self.last_severity = None               # 同上（前の review の severity を次の step の判断に持ち越さない）
             self.base_check_broken = False          # 同上（gates.sh が base を見た後にツリーを戻せなかった、の目印）
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)

@@ -290,6 +290,43 @@ class ApiTest(unittest.TestCase):
         finally:
             for name in mine: shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
 
+    def test_overview_runs_live_is_not_capped_for_the_board_cards(self):
+        """ボードのカードがチケットと動いている run を突き合わせるための一覧（チケット 376）。
+
+        `runs_active` は帯のために 6 件で切るので、それで突き合わせると 7 本以上動いているときに
+        7 枚目以降のカードだけ工程が出ない。`runs_live` は上限を掛けず、カードに要る分だけを軽い形で返す。
+        工程（step / since）は state.json の current があるときだけ入れる（開始前のカードに前の工程を出さない）。
+        """
+        mine = [self._fixture_run(f"2020-03-0{i}-other-80{i}",
+                                  {"pj": "other", "task": f"80{i}", "workflow": "feature", "started": f"2020-03-0{i}T09:00:00+00:00",
+                                   "next": "implement", "loops": {}, "current": None, "history": []}) for i in range(1, 8)]
+        mine.append(self._fixture_run("2020-03-09-other-809",
+                                      {"pj": "other", "task": "809", "workflow": "feature", "started": "2020-03-09T09:00:00+00:00",
+                                       "next": "gates", "loops": {}, "history": [],
+                                       "current": {"step": "implement", "kind": "agent", "log": "agent-implement-1.log",
+                                                   "since": "2020-03-09T09:30:00+00:00"}}))
+        try:
+            st, o = self.http.get("/api/overview?pj=other")
+            self.assertEqual(st, 200)
+            self.assertEqual(len(o["runs_active"]), 6); self.assertEqual(o["runs_active_n"], 8)   # 帯は上限つきのまま
+            names = [r["name"] for r in o["runs_live"]]
+            self.assertEqual(len(names), 8, "突き合わせ用の一覧に上限が掛かっている（7 枚目以降のカードに工程が出ない）")
+            self.assertEqual(names, sorted(names, reverse=True), "新しい順ではない（複数 attempt のうち古い run を拾ってしまう）")
+            live = {r["name"]: r for r in o["runs_live"]}
+            self.assertEqual(live["2020-03-09-other-809"]["step"], "implement")
+            self.assertEqual(live["2020-03-09-other-809"]["task"], "809")
+            self.assertNotIn("step", live["2020-03-01-other-801"], "current が無い run に工程が入っている（前の工程を出してしまう）")
+            self.assertEqual(live["2020-03-01-other-801"]["next"], "implement")            # 開始前は「次は」を出せる
+            for r in o["runs_live"]:
+                self.assertEqual(set(r) >= {"name", "pj", "task", "workflow", "next", "started"}, True, r)
+                self.assertNotIn("history", r); self.assertNotIn("status", r)               # カードに要らないものは載せない
+
+            _, f = self.http.get(f"/api/overview?pj={PJ}")
+            self.assertEqual([r["name"] for r in f["runs_live"] if r["pj"] == "other"], [], "PJ で絞ったのに他の PJ の run が残っている")
+            self.assertEqual(self.http.get("/api/overview?pj=nosuch")[1]["runs_live"], [])
+        finally:
+            for name in mine: shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
     def test_board_and_nav_read_the_run_count_from_the_server(self):
         """ボードは PJ で絞った overview を読み、上限からあふれた分を画面に出す。
 
@@ -352,6 +389,41 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(re.findall(r"col\('(\w+)'", body), ["todo", "in_progress", "review", "done", "blocked"],
                          "列の並びを帯と揃える（未着手・実行中・レビュー待ち・完了・人間待ち）")
         for key in ("T.board.scopeAll", "T.board.scopePj"): self.assertIn(key, body, f"対象範囲の明示 {key} が無い")
+
+    def test_board_cards_show_the_running_step_and_two_separate_links(self):
+        """実行中のカードに今の工程・経過時間と実行記録への導線を出す（チケット 376）。
+
+        カード全体が `<a class="card">` のままだと、中に実行記録の `<a>` を足せない（`<a>` の入れ子は無効な HTML で、
+        ブラウザーの挙動が決まらない）。チケット詳細と実行記録は兄弟の `<a>` にする。
+        JS を動かす基盤が無いので、test_board_strip_and_columns_share_source と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn('<a class="card"', app, "カード全体がリンクのままで、中に実行記録のリンクを足せない（<a> の入れ子）")
+        i = app.index("async function viewBoard")
+        board = app[i:app.index("\n}", i)]
+        self.assertIn("runs_live", board, "カードが突き合わせ用の run 一覧（runs_live）を読んでいない。上限つきの runs_active では漏れる")
+        self.assertRegex(board, r'<div class="card"', "カードの外枠が div になっていない")
+        self.assertRegex(board, r'<a class="t" href="#/ticket/', "題名がチケットへのリンクになっていない（Tab で届かない）")
+        self.assertRegex(board, r'<a class="live" href="#/run/', "カードから実行記録へ移るリンクが無い")
+        self.assertIn("T.board.liveOpen", board, "実行記録リンクの読み上げ名（aria-label）が無い")
+        for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, board, f"{key} をカードで使っていない")
+        self.assertRegex(board, r"r\.step \?", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
+        # aria-label は中身を上書きする。見えている工程と経過時間を読み上げ名に含める（label in name。ticketLink と同じ約束）
+        i = board.index("const liveRow")
+        row = board[i:board.index("\n  };", i)]
+        self.assertIn("text: txt", row, "工程行の読み上げ名に見えている文字（工程・経過時間）が入っていない")
+        for key in ("T.board.liveStep", "T.board.liveNext", "T.board.liveSince"):
+            self.assertLess(row.index(key), row.index("aria-label"), f"{key} を組む前に aria-label を書いている（見えている文字を含められない）")
+        T = load_strings()
+        self.assertIn("{text}", T["board"]["liveOpen"], "読み上げ名の文言に見えている文字の差し込み口が無い")
+        self.assertLess(T["board"]["liveOpen"].index("{text}"), T["board"]["liveOpen"].index("{run}"), "読み上げ名が見えている文字で始まっていない")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.card \.t::after", "題名リンクの当たり判定がカード全面に無い（クリックできる範囲が狭くなる）")
+        self.assertRegex(css, r"\.card \.live \{", "カードの工程行の指定が無い")
+        # メモは title のツールチップでしか全文が読めない。題名リンクの ::after に覆わせない
+        note = re.search(r"\.card \.note \{[^}]*\}", css).group(0)
+        for prop in ("position: relative", "z-index: 1"):
+            self.assertIn(prop, note, f"メモに {prop} が無く、題名リンクの当たり判定がツールチップを覆う")
 
     def test_nav_badges_say_which_scope_they_count(self):
         """左ナビのバッジは全 PJ の数字（画面をまたぐので絞らない）。その対象範囲が画面で分かること。
@@ -535,6 +607,27 @@ class ApiTest(unittest.TestCase):
         body = app[i:app.index("\n}", i)]
         self.assertNotIn("window.scrollTo(0, 0)", body, "経路が変わるたび先頭に飛ぶと、詳細から戻ったとき一覧の位置が失われる")
         self.assertIn("scrollPos", body, "戻ったときに一覧の位置を戻す仕掛けが無い")
+
+    def test_tickets_list_rows_have_real_links(self):
+        """チケットの一覧の行も本物の `<a>` にする（チケット 375）。
+
+        #224 で実行記録・ジョブ・ログの表は直したが、`tkRender` の行だけが素の `<td>` のまま残っていた。
+        検索した後に Tab で結果へ届かず、Enter でも開けず、読み上げでは cell にしか見えない。
+        JS を動かす基盤が無いので、test_list_rows_have_real_links と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(app, r"function ticketLink\([^\n]*<a href=\"#/ticket/",
+                         "チケット番号を <a> にする ticketLink が無い")
+        self.assertRegex(app, r"function ticketLink\([^\n]*aria-label=",
+                         "ticketLink に読み上げ名（aria-label）が無い。番号だけでは何のリンクか分からない")
+        i = app.index("function tkRender"); body = app[i:app.index("\n}", i)]
+        self.assertIn("ticketLink(", body, "チケットの一覧が番号をリンクにしていない（ticketLink）")
+        self.assertIn('tr class="link" data-href', body, "一覧の行クリック（tr.link data-href）が消えている")
+        self.assertIn("T.empty.tickets", body, "0 件のときの案内が消えている")
+        self.assertIn("closest('a, button')", app,
+                      "行クリックの委譲がリンクを除外していない（リンクと行クリックが二重に発火する）")
+        self.assertRegex(css, r":focus-visible[^{]*\{[^}]*outline", "フォーカスの表示（:focus-visible の outline）が無い")
 
     def test_logs_are_derived_into_rows(self):
         """起票・配車のログを、項目名つきの表にできる形（entries）にして返す（チケット 230、ADR-0027）。
@@ -2096,6 +2189,46 @@ class LoadCtlEnvTest(unittest.TestCase):
         self.core.load_ctl_env(self.envf)
         self.assertEqual(self.core.SANDBOX_STATE, ledger)
         self.assertEqual(self.core.sandbox_view()["state_file"], str(ledger))
+
+
+class ChildEnvKeysTest(unittest.TestCase):
+    """ジョブに渡す環境から、親プロセスに残った Claude の鍵を落とす（チケット 391）。
+
+    bin/mcp は起動時に 1 回だけ ctl.env を読んで環境に持つので、長生きした MCP サーバーは
+    起動時点の CLAUDE_CODE_OAUTH_TOKEN を持ち続けた。無効化した鍵がそのまま runner → guest まで
+    流れて使われ続けたので、child_env() は毎回 ctl.env を読み直して鍵を入れ直す"""
+
+    KEYS = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_OPUS", "CLAUDE_CODE_OAUTH_TOKEN_FABLE",
+            "CLAUDE_KEY_NAME_OPUS", "CLAUDE_KEY_NAME_FABLE")
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-childenv-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.core = load_module(self.tmp / "jobs").core
+        self.envf = self.tmp / "ctl.env"
+        self.envf.write_text("CLAUDE_CODE_OAUTH_TOKEN=fake-token-new\n", encoding="utf-8")
+        self.core.CTL_ENV = self.envf
+        for k in self.KEYS:
+            os.environ.pop(k, None)
+            self.addCleanup(os.environ.pop, k, None)
+
+    def test_a_stale_key_in_the_parent_is_replaced_by_the_current_ctl_env(self):
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "fake-token-old-n5"
+        self.assertEqual(self.core.child_env()["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-new")
+        self.assertEqual(os.environ["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-old-n5")   # 親の環境は触らない
+
+    def test_keys_absent_from_ctl_env_are_dropped_entirely(self):
+        for k in self.KEYS: os.environ[k] = "fake-token-old-n5"
+        env = self.core.child_env()
+        self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "fake-token-new")   # ctl.env にある key だけ入れ直す
+        for k in self.KEYS[1:]: self.assertNotIn(k, env)
+        self.assertIn("PATH", env)                                           # 鍵以外はそのまま
+
+    def test_read_ctl_env_parses_without_touching_the_process(self):
+        self.envf.write_text('# コメント\nA=1\nQ="q v"\nEMPTY=\n', encoding="utf-8")
+        self.assertEqual(self.core.read_ctl_env(self.envf), {"A": "1", "Q": "q v"})
+        self.assertNotIn("A", os.environ)
+        self.assertEqual(self.core.read_ctl_env(self.tmp / "no-such.env"), {})
 
 
 class RepoStatusTest(unittest.TestCase):

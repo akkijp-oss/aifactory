@@ -14,7 +14,7 @@ kb attach <id> <file>...
 kb attachments <id> [--json]
 kb detach <id> <name>
 kb next [--pj P] [--json]
-kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [minutes]]
+kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [minutes]]
 kb sync <id> [--run DIR]
 kb sync --all-review [--pj P]
 kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
@@ -138,7 +138,7 @@ The agent (Claude Code) can open images (PNG, JPG …) and PDFs with the Read to
 ### run
 
 ```bash
-kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [minutes]]
+kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [minutes]]
 ```
 
 1. Error if the project has no `project.yml`. `done` tickets error except with `--dry-run` (`reopen` first)
@@ -148,7 +148,11 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 
 With `--wait`, a run whose project pool is full does not fail: it waits for a free VM and then starts (minutes; 60 when the value is omitted). While waiting the ticket stays `in_progress`, and the console board and run page show "waiting for a free VM" with the elapsed time. Only when the limit is exceeded does the ticket go back to `todo`, with the reason in its note (ADR-0031).
 
-With `--from`, a run that ended at `human` is redone **on a new VM**, continuing from the recorded wip branch and starting at the given step. Omit the step and it starts at the step recorded as the one to redo. The name of the previous run is passed to the runner in an environment variable, so its artifacts and review findings come along to the new VM (ADR-0036). It cannot be combined with `--resume`.
+With `--from`, a run that ended at `human` is redone **on a new VM**, continuing from the recorded wip branch and starting at the given step. Omit the step and it starts at the step recorded as the one to redo. The name of the previous run is passed to the runner in an environment variable, so its artifacts come along to the new VM (ADR-0036). The previous review findings are put in the prompt only when the previous `review.md` was a FAIL (ADR-0053). It cannot be combined with `--resume`.
+
+!!! warning "Resuming the same ticket twice at once is refused"
+
+    The wip branch name is derived from the ticket and the workflow, so resuming the same ticket twice with `--from` lets whichever run finishes last overwrite the other's work. While the ledger says the ticket is in progress and that run's record has not finished either (no `finished` in `state.json`), `kb run --from` stops with an error. If it really is still running, wait for it to finish. If it is not running any more (you stopped the runner, or the VM went down), `kb reopen <id>` puts the ticket back on the board and lets the resume through (`kb sync` does not: a record with no `finished` stays `in_progress`). Add `--force` only when you mean to go ahead anyway (ADR-0053).
 
 | state.json | State | Note |
 |---|---|---|

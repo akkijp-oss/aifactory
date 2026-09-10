@@ -9,7 +9,7 @@
 | **planner** | judgment | Reads the ticket and repository; decides reproduction, hypotheses, scope (per file), verification and risks. Writes **STOP** at the top if the request is unclear, contradictory or dangerous | Write code | `plan.md` |
 | **implementer** | coding | Implements according to the plan. For bugs, writes a failing test first and confirms red. Runs lint / types / relevant tests to green before committing | Step outside the scope (stops and explains in report.md). Push | git commits + `report.md` |
 | **researcher** | research | Splits the question into at most 3 items, gathers primary sources from the repository and the web, organises them with citations. GitHub via `gh` (CI history via `gh run list`) | Change code, commit. Write guesses as facts | `research.md` (in the research workflow the judge writes `summary.md`) |
-| **reviewer** | judgment | Reads diff, plan, report and gate results in the order "scope → correctness → safety → project-specific → gates" and decides PASS / FAIL. Concerns outside the scope go into notes for humans | Fix code | `review.md` |
+| **reviewer** | judgment | Reads diff, plan, report and gate results in the order "scope → correctness → safety → project-specific → gates" and decides PASS / FAIL, and writes how heavy a FAIL is (`severity: minor` / `major`). Concerns outside the scope go into notes for humans | Fix code | `review.md` |
 
 Every role is preceded by `_common.md` (shared rules).
 
@@ -61,12 +61,15 @@ Every role is preceded by `_common.md` (shared rules).
 === "review.md"
 
     ```
-    # Review: <title>
-    ## Verdict: PASS / FAIL
-    ## Reasons
-    ## What to fix (on FAIL)
-    ## Notes for humans (concerns outside the scope)
+    # レビュー: PASS | FAIL
+    severity: minor | major   (on FAIL only, on the second line)
+    ## Summary (3 lines at most)
+    ## Findings (on FAIL; numbered, file:line, how to fix)
+    ## Questions for humans (if any)
+    ## What was checked (scope / correctness / safety / project points / gates)
     ```
+
+    The first line is always `# レビュー: PASS` or `# レビュー: FAIL` (the runner branches on it). `severity` goes on its own line below, never mixed into the first line. A FAIL marked `severity: minor` (findings small enough for the implementer to fix in one more loop) sends the run back to implement **one more time** even when the loop limit is used up (ADR-0053).
 
 ## routes.env
 

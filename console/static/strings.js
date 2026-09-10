@@ -92,6 +92,7 @@ const T = {
 
   "board": {
     "liveStep": "{step} を実行中 {t}", "liveNext": "次は {step}", "liveSince": "（開始から {t}）", "jobsRunning": "ジョブ {n} 件が実行中",
+    "liveOpen": "{text}: {run} の実行記録を開く",
     "runsCount": "実行記録 {n} 件（うち開始前 {m} 件、中断 {a} 件）", "liveAbandoned": "中断。runner は {t} に終わっています。", "ticketCount": "左の数字はチケットの件数です。",
     "noLive": "動いている run はありません。", "more": "ほか {n} 件をすべて見る", "moreRuns": "ほか {n} 件の動いている run を実行記録で見る",
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}（左のナビの数字はすべての PJ）",
@@ -99,7 +100,7 @@ const T = {
     "repoBehind": "取り込んでいないコミット {n} 件", "repoDirty": "未コミットの変更 {n} 件",
     "repoHow": "PJ 定義はこの作業ツリーから読むので、直したときは sandbox/OPERATIONS.md の「PJ 定義の変更手順」で origin に反映してください。"
   },
-  "tickets": { "count": "{n} 件（全 {m} 件）" },
+  "tickets": { "count": "{n} 件（全 {m} 件）", "link": "チケット {id}: {title}" },
   "logs": {
     "count": "{n} 件（全 {m} 件）", "capped": "新しい {n} 件だけ表示しています。", "confidence": "確度 {v}",
     "endDetail": "終了コード {code}・所要 {t}", "dryRun": "dry-run",

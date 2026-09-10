@@ -96,7 +96,7 @@ sandbox url 204                              # アプリの URL（ブラウザ�
 - **止める**: runner のプロセスを Ctrl-C。VM は貸出中のまま残るので、`sandbox release <id>` で返すか、`--resume` で続けます
 - **base が赤くて `gates` で止まった**: 人が base（`develop` / `main`）を直してから、VM が貸出中のままなら `kb run <id> --resume`、返却済みなら `kb run <id> --from gates` で **gates から**続けられます。実装はやり直しません。`--resume` の再開位置は `state.json` の工程履歴から決まり、履歴が空（準備で落ちて 1 工程も終えていない）なら workflow の先頭工程から回ります（ADR-0047）
 - **VM 起因で落ちた**（ssh 切断、トークン失効など）: `kb reopen <id>` → `kb run <id>`。同じ日の再実行は前回の `runs/` を `-attemptN` に退避してから作ります
-- **エージェントの出力が悪くて `human` 行き**: `work/` と `agent-*.log` を読んでチケットを直し、`kb reopen` → `kb run`。成果を残したければ `origin/sandbox/<id>-<wf>-wip` にあります。指摘が軽ければ、最初からやり直さず `kb run <id> --from` で続きから回せます（下）
+- **エージェントの出力が悪くて `human` 行き**: `work/` と `agent-*.log` を読んでチケットを直し、`kb reopen` → `kb run`。成果を残したければ `origin/sandbox/<id>-<wf>-wip` にあります。指摘が軽ければ、最初からやり直さず `kb run <id> --from` で続きから回せます（下）。なお、レビュー役が FAIL に `severity: minor` と書いた回は、戻せる回数を使い切っていても run が自分で **もう 1 周だけ**実装に戻ります（ADR-0053）
 - **定義を変えた**（project.yml / ワークフローの YAML / roles）: 実行中の run には効きません。次の run から
 
 ### 止まった run を続きから回す（`--from`）
@@ -112,10 +112,10 @@ kb run 204 --from implement --branch sandbox/204-feature-wip   # 続きに使う
 打つべき 1 行は、チケットのメモ・コンソールの run 画面の「結果」・`ticket_show` の実行記録にそのまま出ます。
 
 - 続きは記録の `wip_branch`（人間待ちのときに runner が退避したブランチ）から始まります。`--branch` はその上書きです
-- 前回の `work/plan.md` などは新しい VM に持ち込み、前回の `review.md` は最初の依頼文に「前回の結果（直すこと）」として入ります
+- 前回の `work/plan.md` などは新しい VM に持ち込みます。前回の `review.md` が最初の依頼文に「前回の結果（直すこと）」として入るのは、それが **FAIL だったときだけ**です（レビューが通った後の工程で止まった run では、代わりに止まった理由 1 行が入ります）
 - 前回の run はそのまま残り、新しい run の `state.json` に `resumed_from` が入ります。戻せる回数（`loops`）は数え直しです
 - `--resume`（貸出中の**同じ** VM で続ける）とは別物で、併用はできません
-- 同じチケットを 2 つ同時に再開しないでください（退避ブランチの名前がチケットと workflow で決まるため、後から終わった方が上書きします）
+- 同じチケットを 2 つ同時に再開しないでください（退避ブランチの名前がチケットと workflow で決まるため、後から終わった方が上書きします）。実行中の run があるうちは `kb run --from` がエラーで止まります。もう動いていない run なら `kb reopen <id>` で板を戻すと通ります（`kb sync` では通りません）。承知の上なら `--force` を付けます
 
 ## runner を直接呼ぶ
 

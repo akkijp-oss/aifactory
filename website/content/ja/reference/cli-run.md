@@ -39,6 +39,8 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 8. `~/work/<id>/` を `workspace/runs/…/work/` に回収。`--keep` でなければ `sandbox release`
 9. `state.json` に `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s`。`human` で止まったときは `resume_step`（次にやり直す工程）も。`--from` で始めた run には `resumed_from` / `from_step` / `from_branch` が入る
 
+`--from` で始めた run の最初の依頼文には、前回の `review.md` が **1 行目が `# レビュー: FAIL` のときだけ**「前回の結果（直すこと）」として入ります。前回が PASS だった（レビューの後の工程で止まった）ときは、代わりに `state.json` の `error` の最終行 1 行が入ります（ADR-0053）。
+
 `--wait` の上限を超えたときは、`result: failed` に加えて `failure: "wait_timeout"` と `waited_s`（待った秒数）を残して終了コード 2 で終わります。`kb` はこの目印を見て、チケットを `blocked` ではなく `todo` に戻します。
 
 ### エージェントが担当する工程

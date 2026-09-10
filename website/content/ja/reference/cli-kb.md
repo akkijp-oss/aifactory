@@ -14,7 +14,7 @@ kb attach <id> <file>...
 kb attachments <id> [--json]
 kb detach <id> <name>
 kb next [--pj P] [--json]
-kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
+kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]
 kb sync <id> [--run DIR]
 kb sync --all-review [--pj P]
 kb run-note <run> [--result done|abandoned] [--pr N] [--text T] [--force]
@@ -138,7 +138,7 @@ agent（Claude Code）は Read ツールで画像（PNG / JPG など）と PDF �
 ### run
 
 ```bash
-kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--wait [分]]
+kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]
 ```
 
 1. `pj` に `project.yml` がなければエラー。`done` は `--dry-run` 以外エラー（`reopen` してから）
@@ -148,7 +148,11 @@ kb run 204 [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--bra
 
 `--wait` を付けると、VM のプールに空きがないときに失敗せず、空くまで待ってから実行します（分。値を省くと 60 分）。待っている間、チケットは `in_progress` のままで、コンソールとボードには「VM の空き待ち」と経過時間が出ます。上限を超えたときだけチケットは `todo` に戻り、理由がメモに残ります（ADR-0031）。
 
-`--from` を付けると、人間待ちで終わった run を**新しい VM**で、その続き（記録の退避ブランチ）から指定の工程だけやり直します。工程を省くと、記録に残った「やり直す工程」から始まります。前回の run の名前は環境変数で runner に渡り、前回の成果物とレビュー指摘が新しい VM に持ち込まれます（ADR-0036）。`--resume` とは併用できません。
+`--from` を付けると、人間待ちで終わった run を**新しい VM**で、その続き（記録の退避ブランチ）から指定の工程だけやり直します。工程を省くと、記録に残った「やり直す工程」から始まります。前回の run の名前は環境変数で runner に渡り、前回の成果物が新しい VM に持ち込まれます（ADR-0036）。前回のレビュー指摘が依頼文に入るのは、前回の `review.md` が FAIL だったときだけです（ADR-0053）。`--resume` とは併用できません。
+
+!!! warning "同じチケットの二重再開は断ります"
+
+    退避ブランチの名前はチケットと workflow で決まるので、同じチケットを 2 本同時に `--from` で再開すると、後から保全した方が先の run の成果を上書きします。台帳が実行中で、その run の記録もまだ終わっていない（`state.json` に `finished` が無い）ときは、`kb run --from` はエラーで止まります。まだ動いているなら終わるのを待ってください。もう動いていない（runner を止めた・VM が落ちた）run なら `kb reopen <id>` で板を戻すと通ります（`kb sync` では通りません。記録に `finished` が無い run は `in_progress` のままだからです）。承知の上で通すときだけ `--force` を付けます（ADR-0053）。
 
 | state.json | 状態 | メモ |
 |---|---|---|
