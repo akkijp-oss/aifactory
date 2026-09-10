@@ -1317,6 +1317,75 @@ class ApiTest(unittest.TestCase):
         pj = next(x for x in v["templates"] if x["pj"] == PJ)
         self.assertIn("unittest-console", pj["known_red_gates"])
 
+    def _red_run(self, name, pj, gates, started, finished=None):
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({
+            "pj": pj, "task": name.rsplit("-", 1)[-1], "workflow": "feature", "branch": "sandbox/x", "base": "develop",
+            "started": started, "finished": finished, "history": [], "loops": {},
+            "result": "human", "known_red_gates": gates}, ensure_ascii=False), encoding="utf-8")
+        return name
+
+    def test_sandbox_separates_hand_written_known_red_gates_from_what_the_runner_confirmed(self):
+        """「base でも赤いゲート」は出どころが 2 つある（チケット 356）。
+
+        project.yml に人が書いた分（known_red_manual）と、runner が base で回して確かめた分（known_red_auto）は
+        確かさが違うので、画面が分けて出せるように別のキーで返す。自動の分には確かめた run と時刻を添える。
+        合成した known_red_gates は MCP の読み手のために今までどおり残す"""
+        redpj = self.ws / "projects" / "redpj"; redpj.mkdir(parents=True)
+        (redpj / "project.yml").write_text("repo: x/redpj\nbase_branch: develop\nknown_red_gates:\n  - e2e\n  - lint\n", encoding="utf-8")
+        try:
+            # 同じ e2e を 2 つの run が確かめている。新しい run（名前の降順で先）の分を採る
+            self._red_run("2026-09-05-redpj-901", "redpj", ["e2e"], "2026-09-05T09:00:00", "2026-09-05T10:00:00")
+            self._red_run("2026-09-06-redpj-902", "redpj", ["e2e", "typecheck"], "2026-09-06T09:00:00", "2026-09-06T11:30:00")
+            st, v = self.http.get("/api/sandbox")
+            self.assertEqual(st, 200)
+            p = next(x for x in v["templates"] if x["pj"] == "redpj")
+            self.assertEqual(p["known_red_manual"], ["e2e", "lint"])            # project.yml のまま（自動の分を混ぜない）
+            auto = {g["name"]: g for g in p["known_red_auto"]}
+            self.assertEqual(sorted(auto), ["e2e", "typecheck"])
+            self.assertEqual(auto["e2e"]["run"], "2026-09-06-redpj-902")        # 古い 901 ではなく新しい run
+            self.assertEqual(auto["typecheck"]["run"], "2026-09-06-redpj-902")
+            self._assert_offset("known_red_auto[].at", auto["e2e"]["at"])
+            self.assertTrue(auto["e2e"]["at"].startswith("2026-09-06T11:30:00"), auto["e2e"]["at"])   # finished（無ければ started）
+            # 手書きと自動で重なる e2e は両方に残す（事実を消さない）。合成は重複を落とした 1 本
+            self.assertEqual(p["known_red_gates"], ["e2e", "lint", "typecheck"])
+
+            # 別の PJ の run は混ざらない（手書きも自動も PJ ごと）
+            seed = next(x for x in v["templates"] if x["pj"] == PJ)
+            self.assertEqual(seed["known_red_manual"], [], "kumitate の project.yml に known_red_gates は書かれていない")
+            self.assertNotIn("e2e", [g["name"] for g in seed["known_red_auto"]])
+        finally:
+            shutil.rmtree(redpj, ignore_errors=True)
+            for n in ("2026-09-05-redpj-901", "2026-09-06-redpj-902"):
+                shutil.rmtree(self.ws / "runs" / n, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.sandbox.knownRedAuto", app); self.assertIn("T.sandbox.knownRedManual", app)
+
+    def test_run_gates_mark_the_reds_that_are_also_red_on_base(self):
+        """base でも赤くて INFO に格下げされたゲート（ADR-0038）を、FAIL と区別して画面に渡す（チケット 356）。
+
+        由来（runner が確かめた分 / project.yml で分かっていた分）の見分けは kit/steps/gates.sh の補足文が唯一の
+        一次情報なので、core が base_red に直して返す。app.js が note を文字列で読まなくて済むようにするため"""
+        name = self._fixture_run("2026-09-07-kumitate-994", self._state([("implement", True), ("gates", False)]), {
+            "work/gates.txt": "PASS lint\nFAIL test\n"
+                              "INFO e2e red (also red on base; not a gate)\n"
+                              "INFO typecheck red (known on base; not a gate)\n"
+                              "\n=== base check: origin/develop\nFAIL e2e\n",
+            "work/ticket.md": "# x\n"})
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200)
+        gates = {g["name"]: g for g in d["progress"]["gates"]}
+        self.assertEqual(gates["e2e"]["status"], "INFO"); self.assertEqual(gates["e2e"]["base_red"], "confirmed")
+        self.assertEqual(gates["typecheck"]["base_red"], "known")
+        self.assertIsNone(gates["lint"]["base_red"]); self.assertIsNone(gates["test"]["base_red"])
+        self.assertEqual(d["outcome"]["gate_fails"], ["test"], "INFO に落ちた分を赤いゲートに混ぜている")
+        self.assertNotIn("base check", str(gates), "=== 以降のログ末尾を読んでいる")
+        shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.baseRedConfirmed", app); self.assertIn("T.outcome.baseRedKnown", app)
+
     def test_run_whose_job_ended_is_abandoned(self):
         """起動したジョブが終わっているのに finished が書かれていない run は「実行中」ではなく「中断」（チケット 236）。
 

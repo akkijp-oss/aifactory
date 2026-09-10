@@ -150,6 +150,8 @@ const T = {
     "quota_exceeded": "工程 {step} が Claude の鍵の利用枠の上限で {n} 回続けて中断されました。自動再開は止めています。鍵の枠を確かめてください。",
     "key_failed": "工程 {step} で Claude の鍵が使えず中断されました: {summary}。鍵を直してから続きを回してください。",
     "gateFails": "赤いゲート: {gates}。",
+    "baseRedConfirmed": "base でも赤いゲート（直さなくてよいゲートです）: {gates}。",
+    "baseRedKnown": "project.yml で赤と分かっているゲート: {gates}。",
     "ended": "すべての工程が終わりました。",
     "waiting": "工程は終わり、人間の判断を待っています。",
     "human_done": "人間が PR #{pr} で仕上げました（完了）。",
@@ -183,7 +185,10 @@ const T = {
     "keySource": { "pool": "鍵プール", "pool_partial": "鍵プール（片方の用途だけ）", "pool_partial_nofallback": "鍵プール（片方の用途だけ）", "pj": "PJ 別の設定ファイル（非推奨）", "global": "全体の設定ファイル", "none": "未設定" },
     "lsAt": "{t} 取得", "lsNever": "まだ取っていません", "lsFailed": "{t} に取れませんでした",
     "actualAt": "実体は {t} 取得", "actualStale": "実体は {t} 取得（{n} 分前）", "actualNever": "実体はまだ取っていません",
-    "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。"
+    "actualUnknown": "未取得", "unbuilt": "未構築 {n} 台。proxmox/40-pool.sh {pj} {n} で足せます。",
+    "knownRedAuto": "base でも赤いゲート（runner が確かめた分）: {gates}",
+    "knownRedManual": "base でも赤いゲート（project.yml に書いた分）: {gates}",
+    "knownRedItem": "{name}（{run} / {at}）"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
   "config": { "roles": "役割:" },

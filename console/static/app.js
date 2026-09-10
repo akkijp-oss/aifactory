@@ -470,6 +470,12 @@ function outcomePanel(name, d) {
   const lines = [outcomeLead(o, s)];
   if (job) lines.push(tt(T.outcome.runnerJob, { label: job.label || '', state: T.jobState[job.state] || job.state || '', rc: job.rc == null ? '' : job.rc }));
   if (o.gate_fails && o.gate_fails.length) lines.push(tt(T.outcome.gateFails, { gates: o.gate_fails.join(', ') }));
+  /* base でも赤くて INFO に格下げされたゲート（ADR-0038）。FAIL と混ぜずに別の行で出す。
+     由来の見分けは core が付けた base_red だけを見る（note の文字列は読まない。ADR-0025 / ADR-0036） */
+  const baseRed = k => ((d.progress || {}).gates || []).filter(g => g.base_red === k).map(g => g.name);
+  const redConfirmed = baseRed('confirmed'), redKnown = baseRed('known');
+  if (redConfirmed.length) lines.push(tt(T.outcome.baseRedConfirmed, { gates: redConfirmed.join(', ') }));
+  if (redKnown.length) lines.push(tt(T.outcome.baseRedKnown, { gates: redKnown.join(', ') }));
   if (o.automerge_error) lines.push(tt(T.outcome.automerge_skipped, { why: o.automerge_error }));   /* 自動マージまで行って条件を満たさなかった run（チケット 358） */
   if (o.resume) lines.push(tt(T.outcome.resume, { cmd: o.resume }));   /* 続きから回す口（チケット 333） */
   if (o.human && o.human.text) lines.push(tt(T.outcome.humanNote, { by: o.human.by || '', at: fmtT(o.human.at), text: o.human.text }));
@@ -564,6 +570,14 @@ async function viewSandbox() {
   /* 実勢の表（sandbox ls）の貸出先は、同じ VM に複数の貸出があると `221,222` で来る。
      1 本のリンクにするとチケットを開けないので、1 チケット 1 リンクに分けて共有の印を添える */
   const lentToCell = task => { const ts = String(task).split(',').filter(t => t); return ts.map(t => `<a href="#/ticket/${esc(t)}" class="mono">${esc(t)}</a>`).join('、') + (ts.length > 1 ? ` <span class="st blocked">${esc(T.sandbox.sharedBadge)}</span>` : ''); };
+  /* base でも赤いゲート（ADR-0038）を PJ の行の下に添える。手書き（project.yml）と runner が確かめた分（run の記録）は
+     出どころが違うので別の行にする。自動の分は「どの run がいつ確かめたか」を添える（時刻は run 単位。core を見よ） */
+  const redRow = text => `<tr><td colspan="9" class="help">${esc(text)}</td></tr>`;
+  const redRows = p => {
+    const manual = p.known_red_manual || [], auto = p.known_red_auto || [];
+    return (manual.length ? redRow(tt(T.sandbox.knownRedManual, { gates: manual.join('、') })) : '')
+      + (auto.length ? redRow(tt(T.sandbox.knownRedAuto, { gates: auto.map(g => tt(T.sandbox.knownRedItem, { name: g.name, run: g.run, at: fmtT(g.at) })).join('、') })) : '');
+  };
   render(head(esc(T.nav.sandbox), T.sub.sandbox, `${lsRunning ? `<span class="help"><span class="dot pulse"></span>${esc(T.label.fetching)}</span>` : ''}<button data-act="sandbox-ls" ${lsRunning ? 'disabled' : ''}>${esc(T.btn.refreshVms)}</button>`) + `
     <div class="panel"><h2>${esc(T.h.lent)}<small>${esc(sharedEntries.length ? tt(T.sandbox.countShared, { n: d.lease_count, m: d.vm_count }) : tt(T.sandbox.count, { n: lent.length }))}</small></h2>
       ${sharedEntries.map(([vmid, tasks]) => `<div class="warn">${esc(tt(T.sandbox.sharedWarn, { vm: vmOf(vmid), vmid, tasks: tasks.join('、') }))}</div>`).join('')}
@@ -572,7 +586,8 @@ async function viewSandbox() {
         <div class="help top">${esc(T.help.release)}</div>` : `<div class="help">${esc(T.empty.lent)}</div>`}</div>
     <div class="panel"><h2>${esc(T.h.pjPool)}<small>${esc(poolAt)}</small></h2><table><tr><th>${esc(T.label.pj)}</th><th>repo</th><th>base</th><th>project.yml</th><th>${esc(T.th.token)}</th><th>${esc(T.th.poolDefined)}</th><th>${esc(T.th.poolActual)}</th><th>${esc(T.th.lent)}</th><th>${esc(T.th.free)}</th></tr>
       ${d.templates.map(p => `<tr><td><b>${esc(p.pj)}</b>${p.display_name !== p.pj ? `<div class="help">${esc(p.display_name)}</div>` : ''}</td><td class="mono">${esc(p.repo || '')}</td><td class="mono">${esc(p.base_branch || '')}</td><td>${p.project_yml ? `<span class="st done">${esc(T.sandbox.yes)}</span>` : `<span class="st blocked">${esc(T.sandbox.no)}</span>`}</td><td>${p.key_source === 'pool' ? `<span class="st done">${esc(T.sandbox.keySource.pool)}</span>` : p.key_source === 'none' ? `<span class="st blocked">${esc(T.sandbox.keySource.none)}</span>` : `<span class="st todo">${esc(T.sandbox.keySource[p.key_source] || p.key_source)}</span>`}</td><td>${p.pool_defined}</td><td>${num(p.pool_actual)}</td><td>${p.lent}${p.leases !== p.lent ? ` <span class="help">${esc(tt(T.sandbox.leasesOnPool, { n: p.leases }))}</span>` : ''}</td><td>${num(p.free)}</td></tr>
-        ${p.unbuilt ? `<tr><td colspan="9" class="help">${esc(tt(T.sandbox.unbuilt, { n: p.unbuilt, pj: p.pj }))}</td></tr>` : ''}`).join('')}</table>
+        ${p.unbuilt ? `<tr><td colspan="9" class="help">${esc(tt(T.sandbox.unbuilt, { n: p.unbuilt, pj: p.pj }))}</td></tr>` : ''}
+        ${redRows(p)}`).join('')}</table>
       <div class="help top">${esc(T.help.pjPool)}</div><div class="help">${esc(T.help.pjPoolMore)}</div><div class="help">${esc(T.help.pjPoolYml)}</div><div class="help">${esc(T.help.pjPoolKeys)} <a href="#/keys">${esc(T.nav.keys)}</a></div></div>
     <div class="panel"><h2>${esc(T.h.lsResult)}<small>${lsRunning ? esc(T.label.fetching) : d.last_ok_ls ? esc(tt(T.sandbox.lsAt, { t: fmtT(d.last_ok_ls.finished) })) : lsFailed ? '' : esc(T.sandbox.lsNever)}</small></h2>
       ${lsFailed ? `<div class="err">${esc(tt(T.sandbox.lsFailed, { t: fmtT(lsFailed.finished) }))} <a href="#/job/${esc(lsFailed.id)}">${esc(T.btn.openJob)}</a></div>
