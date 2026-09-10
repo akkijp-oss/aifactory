@@ -84,11 +84,121 @@ gates: gates.sh
 
 Match `worker` to an enrolled ID and `app_dir` to the guest account. Add project-specific `gates.sh` and, if needed, `provision.sh` in the same directory. Gates must run checks appropriate to the product and change, returning nonzero on failure.
 
-The guest needs runner tools including `gh`, the Claude CLI, and GNU `timeout`. Provisioning runs before credential injection and prepares tools; the runner clones the repository. Make provisioning repeatable, including avoiding unnecessary downloads of tools already installed. Do not reuse Linux paths or package commands unchanged.
+The guest needs runner tools including `gh`, the Claude CLI, and GNU `timeout`. Provisioning runs before credential injection and prepares tools; the runner clones the repository. Make provisioning repeatable, including avoiding unnecessary downloads of tools already installed. Do not reuse Linux paths or package commands unchanged. Read "[What the base image already contains](#what-the-base-image-already-contains)" first to see what is already installed, and start from the template [workers/templates/provision.macos.sh](https://github.com/akkijp-oss/aifactory/blob/main/workers/templates/provision.macos.sh).
 
 Configure the sandbox project's GitHub App settings and Claude OAuth token on the control plane. Verify the App installation covers the target repository and grants the permissions required to create PRs. Keep credential values out of project definitions, tickets, and logs.
 
 Where keys come from: **the control-plane key pool (`~/.config/sandbox/keys.json`) is the source of truth for Claude keys**. The runner calls `sandbox keys pick` once per step and writes the per-family keys it chose into the guest's `runtime.env` (ADR-0044 / ADR-0046). Disabling a key moves the next step to another one. Only an empty pool falls back to `pj/<pj>.env` and `env` for compatibility; if neither holds a key the run **never falls back to whatever is left in the runner's process** and pauses with `鍵なし` until a key is registered. Jobs started from the console and MCP take their keys from `~/.config/aifactory/ctl.env`, re-read for every job.
+
+## What the base image already contains
+
+Before writing `provision.sh`, find out what is **already installed** in the dedicated guest. Reinstalling something that is already there breaks the guest. On 2026-09-09 a project's `provision.sh` ran `brew install gh coreutils node@24 pnpm` unconditionally; the existing `pnpm` collided with the `/opt/homebrew/bin/pn` link Homebrew tried to create, and provisioning exited non-zero.
+
+### Three layers
+
+Whether something may be reinstalled depends on which layer installed it.
+
+| Layer | Who, and when | What it adds |
+|---|---|---|
+| 1. Upstream base image | The Tart images published by Cirrus Labs | Homebrew, Xcode Command Line Tools, gh, node@24, pnpm/yarn via `npm -g`, mise, rbenv, the Tart Guest Agent, and more. The Xcode line also has Xcode and Claude Code as a cask |
+| 2. Dedicated base VM | An administrator, once, via [one-command install](worker-install.md) | `brew install python gh coreutils`, `claude` (if missing, from the official script), the desktop helper, and guest DNS/IPv6 settings (`workers/bootstrap/install.py`) |
+| 3. Dedicated guest | The runner, once per run, through the project's `provision.sh` | Only what that project needs |
+
+There are two image lines. Check on hardware which one is in use.
+
+| Line | Image | Notes |
+|---|---|---|
+| Plain macOS | `ghcr.io/cirruslabs/macos-sequoia-base` | The installer default; override with `AIFACTORY_MAC_IMAGE` |
+| With Xcode | `ghcr.io/cirruslabs/macos-tahoe-xcode` | The above plus Xcode, the Android SDK, and casks. Uses much more disk |
+
+The name `latest` alone does not reproduce anything. Record the digest and the guest OS on every pull (see "Collect versions and the digest" below).
+
+### How commands run in the guest
+
+What `command -v` finds follows from this.
+
+- The worker runs guest operations as `tart exec <guest> /bin/bash -lc '<command>'` (`workers/cmd/aifactory-worker/main.go`). That is a **login shell**, so it reads `~/.profile`. The upstream image makes `~/.profile` a symlink to `~/.zprofile`, so the PATH entries written there (`node@24`, `PNPM_HOME`, `openjdk@17`) apply too (from the upstream image definition, retrieved 2026-09-10; this one sentence is not verified on real hardware, so check it there with `ls -l ~/.profile` and `command -v node`). Creating `~/.bash_profile` or `~/.bash_login` stops that symlink from being read, so provisioning must not create them.
+- On top of that, the runner prefixes every command with a fixed PATH (`workflow/lib/macos.py`).
+
+    ```
+    /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
+    ```
+
+- `provision.sh` runs as `bash provision.sh` with that PATH inherited. As a child of the login shell it also sees what `~/.zprofile` added.
+
+### What is installed
+
+The table below is derived from the upstream image definitions (`templates/base.pkr.hcl` and `templates/xcode.pkr.hcl` in `cirruslabs/macos-image-templates`, read 2026-09-10) and from this repository's code. **It records no version numbers: the values collected on hardware are authoritative.**
+
+| Tool | How it arrives | Location | Visible on the runner's PATH | Safe to install in provisioning |
+|---|---|---|---|---|
+| brew | The Homebrew install script | `/opt/homebrew/bin/brew` | Yes | No |
+| git | Xcode Command Line Tools (installed with Homebrew) | `/usr/bin/git` | Yes | No |
+| python3 | The same, plus `brew install python` at layer 2 | `/usr/bin/python3`, `/opt/homebrew/bin/python3` | Yes | No |
+| gh | The brew formula `gh` (layers 1 and 2) | `/opt/homebrew/bin/gh` | Yes | Only when guarded by `command -v`; effectively a no-op |
+| node | The brew formula `node@24`, which is **keg-only** and not linked into `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/node` | Yes, via the PATH from `~/.zprofile` (verify on real hardware) | No |
+| npm | Ships with `node@24`. The formula writes `prefix = /opt/homebrew` into `npmrc`, so anything from `npm install -g` lands in `/opt/homebrew/bin` | `/opt/homebrew/opt/node@24/bin/npm` | Yes, as above (verify on real hardware) | No |
+| pnpm / yarn | `npm install --global yarn pnpm` (layer 1) | `/opt/homebrew/bin/pnpm`, `/opt/homebrew/bin/yarn` | Yes | **Never through brew** (see below) |
+| Xcode | Installed with `xcodes` and already selected with `xcode-select` (Xcode line only) | `/Applications/Xcode_<version>.app` | Yes, `xcodebuild` through `/usr/bin` | No |
+| claude | The `claude-code` cask (Xcode line) or the official script at layer 2 | `/opt/homebrew/bin/claude` or `$HOME/.local/bin/claude` | Yes | Install only if missing |
+| timeout (GNU) | The brew formula `coreutils`. **Not in the upstream image**; added at layer 2 | `/opt/homebrew/opt/coreutils/libexec/gnubin/timeout` | Yes | Install only if missing |
+
+The upstream image also carries mise, rbenv, git-lfs, jq, yq, awscli, wget, unzip, zip, cmake, gcc, gitlab-runner, and the Tart Guest Agent. The Xcode line adds openjdk@17, xcodes, the Android SDK, codex, and amazon-q.
+
+### What must not be reinstalled
+
+One rule decides it.
+
+> **Rerunning `brew install` on something brew installed is harmless** (it stops at "already installed"). Installing a brew formula over files that something **other than brew** put in the same place (`npm -g`, a cask binary, `curl | bash`) fails on a link collision and exits non-zero.
+
+- **`pnpm` / `yarn`**: the upstream image installs them with `npm install --global`, and because npm's prefix is `/opt/homebrew` the executables sit in `/opt/homebrew/bin`. Homebrew's `pnpm` formula places `pn`, `pnpx`, and `pnx` alongside `pnpm` in that same directory, so `brew install pnpm` collides while linking. This is what broke on 2026-09-09. If a project needs pnpm, use the one that is there; pin the version through the repository's `packageManager` and `corepack`
+- **`node` / `node@24`**: keg-only means there is no `/opt/homebrew/bin/node`, not that node is missing. Adding another node puts it first on PATH and silently changes the version. If `command -v node` looks empty, first check that the command runs in a login shell and that nothing created `~/.bash_profile`
+- **`gh`**: present from both layer 1 and layer 2. `brew install gh` will not fail, but it wastes time on every run
+- **`claude`**: on the Xcode line it may already be at `/opt/homebrew/bin/claude` from the cask. The official script installs to `$HOME/.local/bin/claude`, which the runner's PATH searches after `/opt/homebrew/bin`. Guard with `command -v` so two copies cannot drift apart
+
+### How to guard existing tools
+
+```bash
+command -v gh      >/dev/null || brew install gh
+command -v timeout >/dev/null || brew install coreutils
+command -v claude  >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
+```
+
+To make sure a keg-only tool is used, extend PATH instead of reinstalling it.
+
+```bash
+if [ -d /opt/homebrew/opt/node@24/bin ]; then
+  export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+fi
+```
+
+The template is [workers/templates/provision.macos.sh](https://github.com/akkijp-oss/aifactory/blob/main/workers/templates/provision.macos.sh); it contains the network isolation probe and those three tools only. Add project-specific steps below the marked point.
+
+### Collect versions and the digest
+
+Versions and digests differ per environment, so no numbers are recorded here. Collect them on hardware and paste them, dated, into the untracked `$AIFACTORY_WORKSPACE/docs/STATUS.md`.
+
+```bash
+db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
+python3 workers/bin/control --db "$db" submit <worker> guest-exec --lease auto --wait 120 \
+  --command 'sw_vers; brew --version; brew list --versions; which -a node npm pnpm yarn python3 gh git brew claude timeout; xcodebuild -version'
+```
+
+Passing `--command` sets a payload `timeout` of 60 seconds by default (`workers/bin/control`). `--wait` is how long this side blocks, not the guest-side limit. If `brew list --versions` takes longer than that on an image with Xcode, put a larger `timeout` in a payload file and pass it with `--payload-file`.
+
+`guest-exec` only goes through while the dedicated guest is up and a lease exists (see "[Recovering from `uncertain`](#recovering-from-uncertain)"); use the lease of a run held open with `kb run <id> --keep`. On an image without Xcode only the trailing `xcodebuild -version` fails, and the earlier output is still collected.
+
+Check the digest of the source image on the Mac that pulled it.
+
+```bash
+image=cirruslabs/macos-tahoe-xcode
+token=$(curl -sS "https://ghcr.io/token?scope=repository:$image:pull" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+curl -sS -o /dev/null -D - -H "Authorization: Bearer $token" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  "https://ghcr.io/v2/$image/manifests/latest" | grep -i docker-content-digest
+```
+
+**When the base image is updated, update this section and the collected output in `$AIFACTORY_WORKSPACE/docs/STATUS.md` on the same day.**
 
 ## Submit and monitor work
 
@@ -134,7 +244,7 @@ Collection accepts regular files directly under the guest working directory, up 
 | CLI installation takes a long time | Inspect provisioning logs for progress or repeated downloads. An existing download is not sufficient grounds to install an unverified binary |
 | GitHub token minting fails | Check project settings and App installation permissions. The runner uses the sandbox CLI in its own repository. Never log the token |
 | Resuming after the date changed | Use `kb run <id> --resume`; it uses the run recorded on the ticket |
-| An operation is `uncertain` | Have an administrator verify guest shutdown and operation state. Do not delete the journal and rerun. Exceeding the log limit is not a cause of this |
+| An operation is `uncertain` | Have an administrator verify guest shutdown and operation state. The procedure is under "[Recovering from `uncertain`](#recovering-from-uncertain)" |
 | The log stops partway | The 16 MiB per-operation limit was reached. A truncation line is recorded and the result carries `truncated`. The operation itself ran to completion, so judge it by the exit code and the artifacts |
 | Artifact collection or guest deletion fails | Keep the lease and establish artifact and guest state before recovery |
 
@@ -142,7 +252,72 @@ Collection accepts regular files directly under the guest working directory, up 
 
 Which step it restarts from is decided from the step history (`history`) in `state.json`: from the first step of the workflow when the history is empty (provisioning failed before any step ran), and from the last step that ran when it is not. It never carries over `next: human` and releases the guest without running a single step. A run with nothing left to continue (the PR is already out, or `next: end`) stops before the guest is touched (ADR-0047).
 
-`control cancel` requests a stop; it does not confirm it. Use `resolve <operation-id> --confirmed-stopped` only after an administrator verifies shutdown. Resolving an operation is separate from releasing the run's lease: `control release-lease` requires a successful `guest-release` operation. See the [worker recovery reference](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧) for arguments and disconnection behavior.
+`control cancel` requests a stop; it does not confirm it. The procedure for bringing back an operation that went `uncertain` is in the next section, "[Recovering from `uncertain`](#recovering-from-uncertain)". See the [worker recovery reference](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#操作と復旧) for the full argument list and disconnection behavior.
+
+## Recovering from `uncertain`
+
+`uncertain` means the control plane tried to stop an operation and could not confirm that it stopped. It never clears the reservation on its own; it waits for a person to establish the real state. Reaching the 16 MiB log limit is not a cause of this. Run the commands below from the control plane repository root.
+
+**1. Look at the state.**
+
+```bash
+db="$AIFACTORY_WORKSPACE/workers/queue.sqlite3"
+python3 workers/bin/control --db "$db" list
+python3 workers/bin/control --db "$db" show '<operation-id>'
+```
+
+For each worker, `list` prints `online`, `info` (`lifecycle`, `base_ready`, `network_ready`), the one unfinished `operation` if any (`queued`, `running`, or `uncertain`, with its ID), and the held `lease`. That is where the `uncertain` operation ID comes from; match it against `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` to find the run. `show` prints that operation's state, exit code, and logs.
+
+**2. Check whether the guest is alive (from the Mac host).** While one `uncertain` operation remains, no new operation can be submitted to that worker. The control plane allows a worker only one unfinished operation (`queued`, `running`, or `uncertain`); a second submit is refused with HTTP 409 and `worker is busy; operation not queued` (the `one_reserved_worker` unique index in `workers/lib/pull.py`). Diagnostic `guest-exec` goes through the same queue, so it is unavailable at this point.
+
+An administrator checks `tart list` on the Mac host over SSH. A guest listed as `running` is alive; one that is not listed has already stopped. What to check next depends on whether the run is being wound up or kept.
+
+- **Winding it up** → finish with `tart stop <guest>` so the real state is settled.
+- **Keeping it (you want to continue the run)** → do not stop the guest. Instead look inside it directly from the Mac host and confirm that the operation's command is no longer running. The worker itself runs guest commands through the same entry point (`tart exec <guest> /bin/bash -lc '<command>'` in `workers/cmd/aifactory-worker/main.go`).
+
+```bash
+# On the Mac host. This bypasses the control-plane queue, so it works while the operation is uncertain
+tart exec <guest> /bin/bash -lc 'pgrep -fl claude; pgrep -fl bash; uptime'
+```
+
+`uncertain` also appears while the guest is still running: the worker sets it both when it tried to stop the guest and could not confirm the stop, and when it restarts and takes over an operation that has no result (`workers/cmd/aifactory-worker/main.go`). A running guest is not by itself an anomaly.
+
+**3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 6). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
+
+- An administrator confirmed the guest's real state from the Mac host, in one of two ways
+    - **Stopped it**: absent from `tart list`, or stopped with `tart stop <guest>` (this run is being wound up → the second path in step 5)
+    - **Left it running**: the guest stays `running`, but `tart exec` in step 2 confirmed that the operation's command is not running (this run continues → the first path in step 5)
+- You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
+- You did not delete the journal. Never delete it and then rerun the same unfinished operation: that is the record that keeps an already-started command from running twice
+
+```bash
+python3 workers/bin/control --db "$db" resolve '<operation-id>' --confirmed-stopped
+```
+
+`--confirmed-stopped` is required. Earlier results and logs are kept.
+
+**4. Look inside the guest (after `resolve`, in the "left it running" case of step 3, with the lease still held).** Once the reservation is free, operations can be submitted to that worker again. Diagnostics go through the same operation queue. `--lease auto` reads the lease the worker currently holds from the database and puts it in the payload.
+
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-exec \
+  --lease auto --command 'pgrep -fl claude; pgrep -fl bash; uptime' --wait 60
+```
+
+**Without the lease in the payload the operation is refused.** While a worker holds a lease, the control plane rejects any operation whose payload lease does not match it with HTTP 409 and `operation does not own worker lease` (`workers/lib/pull.py`). `--lease auto` adds nothing when no lease is held, and a lifecycle worker such as the Mac then reports `lifecycle worker requires a lease` instead. A `lease` in a payload file wins over `auto`, and an explicit `--lease <id>` overrides the payload. Payloads are stored in the database, so never put secrets in a diagnostic command.
+
+**5. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`). A run whose lease was released in step 6 can no longer be resumed.
+
+- **The guest is alive (the "left it running" case of step 3) and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. A prepared guest (the clone is done and `work/ticket.md` is not empty) continues from the last step in the step history. Before that point, it can rerun provisioning only when the step history is empty and neither `$SANDBOX_APP_DIR` nor `work/runtime.env` exists yet. A guest that is neither stops the run with `Mac setup is incomplete or the guest is stopped`, so look inside it before deciding (how the step is chosen is under "[Recovery](#recovery)").
+- **The guest is gone, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. There are two different refusals (`kanban/bin/kb`). `--from` (and `--branch`) is refused when the board points at a run in progress **and that run's record has not finished either**; wait for it if it is still going, otherwise put the ticket back with `kb reopen <id>` or pass `--force` deliberately. A plain `kb run <id>` is refused when **the ticket is `done`**, which `kb reopen <id>` also clears.
+
+**6. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
+
+```bash
+python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <lease> --wait 300
+python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<the successful guest-release operation ID>'
+```
+
+`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
 ## Hardware verification and limitations
 

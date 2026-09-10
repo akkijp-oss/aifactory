@@ -92,6 +92,7 @@ VM は各 8GB / 4 vCPU（`VM_MEMORY` / `VM_CORES`）。アプリは各 VM の :3
 - sb-gw の FORWARD DROP は `--ctstate NEW` 限定。無条件にすると Mac → VM の戻りパケットまで落ちて疎通が切れる
 - `local-lvm` は thin なので `qm clone` / `snapshot` のたびに "Sum of all thin volume sizes exceeds..." の WARNING が出る。実使用は `lvs pve/data` の data% を見る
 - Tailscale は route 承認だけでは届かない。ACL が grants 形式で subnet 宛てを個別許可している tailnet では `10.77.0.0/16` を grant に足す（BUILD.md Step 2b の 3）
+- Mac worker の基準イメージを更新したら、`docs/macos-worker.md` の「基準イメージの中身」の節と、`$AIFACTORY_WORKSPACE/docs/STATUS.md` に貼った `brew list --versions` / `which` / digest の採取結果を同じ日に更新する
 
 ## 1周の所見（Step 6、YYYY-MM-DD 実施）
 
