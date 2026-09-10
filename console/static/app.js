@@ -320,12 +320,16 @@ async function viewTicket(id, flash) {
   const canRun = t.status !== 'done';                                                     /* kb run は完了済みを断る。画面でも先に押せなくする */
   /* 状態を進めるボタンは primary を付けない。操作領域の強いボタンは「実行する」（実行できないときは隣の次の一手）の 1 つだけにして、
      「実行も始まるのか、状態だけ変わるのか」を色で見分けられるようにする（377）。
-     完了ずみのときの reopen は実行の塊に次の一手として出す約束（UX.md）なので、ここからは落とす（同じ名前のボタンが 2 個並ばない） */
+     完了ずみのときの reopen は実行の塊に次の一手として出す約束（UX.md）なので、ここからは落とす（同じ名前のボタンが 2 個並ばない）。
+     ただし実行の塊が警告に差し替わる（project.yml が無い／VM を返却中）ときは、そこに reopen が出ないので状態の塊に残す（戻す手段を消さない）。
+     つまり塊が空になるのは「完了ずみで上に reopen がある」ときだけで、そのときだけ上のボタンを名指しする T.help.moveNone を出す
+     （台帳に想定外の status が入って空になったときに、画面に無いボタンを案内しない） */
+  const runBoxRedo = d.project_yml && !runBusy;                                            /* 完了ずみの reopen を実行の塊が出せるか（出せないなら状態の塊に残す） */
   const moves = { todo: [stBtn('start', T.btn.start), stBtn('block', T.btn.block)],
     in_progress: [stBtn('review', T.btn.review), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
     review: [stBtn('done', T.btn.done), stBtn('block', T.btn.block), stBtn('reopen', T.btn.reopen)],
     blocked: [stBtn('reopen', T.btn.reopen), stBtn('done', T.btn.done)],
-    done: [] }[t.status] || [];
+    done: runBoxRedo ? [] : [stBtn('reopen', T.btn.redo)] }[t.status] || [];
   const runHint = { in_progress: T.help.runInProgress, review: T.help.runReview, blocked: T.help.runBlocked, done: T.help.runDone }[t.status] || T.help.runDefault;
   const runsEmpty = !d.project_yml ? T.empty.ticketRunsNoProjectYml : runBusy ? T.empty.ticketRunsBusy : canRun ? T.empty.ticketRuns : T.empty.ticketRunsDone;
   kindDesc = d.kind_desc || {};
@@ -365,7 +369,7 @@ async function viewTicket(id, flash) {
           </details>`}
           <h3>${esc(T.h.move)}</h3>
           ${moves.length ? `<div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveOnly)}</div><div class="help">${esc(T.help.moveUndo)}</div>`
-                         : `<div class="help">${esc(T.help.moveNone)}</div>`}
+                         : `<div class="help">${esc(t.status === 'done' ? T.help.moveNone : T.help.moveUndo)}</div>`}
           <h3>${esc(T.h.fix)}<small>kb set</small></h3>
           <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
             <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>

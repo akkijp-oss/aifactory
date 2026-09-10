@@ -539,9 +539,13 @@ class ApiTest(unittest.TestCase):
         # 強いボタンは操作領域に 1 つだけ（実行も始まるのか、状態だけ変わるのかを色で見分ける）
         self.assertNotRegex(ops[:ops.index("T.h.fix")], r"stBtn\('(start|review|done|block)'[^)]*primary",
                             "状態を進めるボタンに primary が残っている（実行するボタンと見分けられない）")
-        moves = body[body.index("const moves = "):body.index("const runHint")]
+        moves = body[body.index("const runBoxRedo = "):body.index("const runHint")]
         self.assertNotIn("primary", moves, "moves に primary が残っている")
-        self.assertRegex(moves, r"done: \[\]", "完了ずみで状態の塊にも reopen が残っている（同じボタンが 2 個並ぶ）")
+        self.assertRegex(moves, r"done: runBoxRedo \? \[\]", "完了ずみで状態の塊にも reopen が残っている（同じボタンが 2 個並ぶ）")
+        # ただし実行の塊が警告に差し替わるとき（project.yml が無い / VM 返却中）は、そこに reopen が出ないので状態の塊に残す
+        self.assertIn("d.project_yml && !runBusy", moves, "実行の塊が reopen を出せるかを見ていない（戻す手段が画面から消える）")
+        self.assertRegex(moves, r"done: runBoxRedo \? \[\] : \[stBtn\('reopen'", "実行の塊が reopen を出せないときに状態の塊が空のままになる")
+        self.assertRegex(ops, r"t\.status === 'done' \? T\.help\.moveNone", "無い「未着手に戻す（やり直す）」を案内する経路が残っている")
         for key in ("T.help.moveOnly", "T.help.moveNone", "T.help.moveUndo"):
             self.assertIn(key, ops, f"{key} が無い（状態変更の効果と次の一手を言っていない）")
         css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
