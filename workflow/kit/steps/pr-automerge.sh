@@ -4,6 +4,7 @@
 #   AUTO_MERGE_METHOD(merge|squash|rebase) AUTO_MERGE_WAIT_MIN AUTO_MERGE_DELETE_BRANCH(0/1) AUTO_MERGE_REQUIRE_CHECKS(0/1)
 # 待ちの長さはテストのために env で上書きできる: AUTOMERGE_POLL_S(30) AUTOMERGE_ZERO_CHECKS_GRACE_S(180) AUTOMERGE_MERGEABLE_POLL_S(5)
 #   AUTOMERGE_WAIT_S（既定は AUTO_MERGE_WAIT_MIN 分。テストが 20 分待たずに「終わらない」側を確かめるため）
+# pull worker（macos / linux）は この script を guest に置いて guest の中で走らせる: SB_LOCAL=1（チケット 386）
 # マージしたら $WORK/merged.json を書き、最終行に `MERGED: <sha> <url>` を出して 0 で終わる（runner が state.json に転記する）。
 # マージしないのは失敗ではなく正常な終わり方の 1 つ。理由を **最終行** に `NOMERGE: <理由>` として出し、1 で終わる（runner が error に使う）
 set -euo pipefail
@@ -18,7 +19,14 @@ POLL_S="${AUTOMERGE_POLL_S:-30}"
 GRACE_S="${AUTOMERGE_ZERO_CHECKS_GRACE_S:-180}"
 MERGEABLE_POLL_S="${AUTOMERGE_MERGEABLE_POLL_S:-5}"
 
-sb() { sandbox ssh "$TASK" "$@"; }
+# guest への 1 手。Proxmox backend では制御系から `sandbox ssh` で VM に入る。
+# pull worker（macos / linux）には `sandbox ssh` が無いので、backend はこの script 自体を guest に置いて
+# guest の中で走らせる。そのときは SB_LOCAL=1 が渡り、「guest の中の自分」に対してそのまま実行する（チケット 386）
+if [[ "${SB_LOCAL:-0}" == "1" ]]; then
+  sb() { bash -c "$1"; }
+else
+  sb() { sandbox ssh "$TASK" "$@"; }
+fi
 ghq() { sb "cd \$SANDBOX_APP_DIR && gh $1"; }        # VM の中で gh を叩く（GitHub App の installation token）
 nomerge() { echo "NOMERGE: $1"; exit 1; }            # 必ずこれが最終行になるよう、呼んだ後に何も出さない
 

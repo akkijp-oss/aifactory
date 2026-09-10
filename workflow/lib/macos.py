@@ -119,11 +119,22 @@ def acquire_lease(run, worker, lease):
 def backend(Run):
     class MacRun(Run):
         backend_label = "Mac VM"
+        # pull backend が kit/workflows/*.yml の code step をどう扱うかの対応表。分類は 3 つ:
+        #   run         … この backend が実装している
+        #   noop        … 対応しないが素通りさせる（True を返す。Windows の sync-base）
+        #   unsupported … 起動前に拒否する（実装が無いまま黙って PR を作らずに終わらせない）
+        # code step を足す人は kit/steps/ に置くだけでなく 3 つの pull backend（macos / windows / linux）の
+        # この表も更新すること。忘れると workflow/tests/test_code_steps.py が赤くなる（チケット 386 / asura #381）
+        CODE_STEPS = {"gates.sh": "run", "sync-base": "run", "pr-create.sh": "run",
+                      "pr-automerge.sh": "run", "pr-merge.sh": "unsupported"}
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             # auto_merge の無い PJ では runner が automerge 工程を飛ばす（ADR-0042）ので、未対応の判定からも外す
-            skipped = set() if getattr(self, "auto_merge", None) else {"pr-automerge.sh"}
-            unsupported = {s["code"] for s in self.wf["steps"] if "code" in s} - {"gates.sh", "pr-create.sh", "sync-base"} - skipped
+            skipped = set() if getattr(self, "auto_merge", None) else set(getattr(Run, "SKIPPABLE_CODE_STEPS", ("pr-automerge.sh",)))
+            codes = {s["code"] for s in self.wf["steps"] if "code" in s} - skipped
+            # 表に無い step（足した人が対応表を更新していない）は unsupported と同じ扱いにする
+            unsupported = {c for c in codes if self.CODE_STEPS.get(c, "unsupported") == "unsupported"}
             if unsupported: raise ValueError("unsupported pull-worker code steps: " + ", ".join(sorted(unsupported)))
             self.work = str(pathlib.PurePosixPath(self.project["app_dir"]).parent / "work" / self.task)
             self.env_file = str(pathlib.PurePosixPath(self.work) / "runtime.env")
@@ -362,6 +373,7 @@ def backend(Run):
                 # Never turn a nonzero exit without a FAIL line into success.
                 self.sb(f"cat > {shlex.quote(self.work + '/gates.txt')}", input_text=out)
                 return rc == 0 and not re.search(r"^FAIL(?:\s|$)", out, re.M), out[-4000:]
+            if name == "pr-automerge.sh": return self.run_automerge(log_path)
             if name != "pr-create.sh":
                 return False, f"Mac backend does not support code step {name}"
             self.refresh_token()
@@ -381,6 +393,28 @@ def backend(Run):
             if rc or not urls: return False, out[-4000:]
             self.sb(f"cat > {shlex.quote(self.work + '/pr_url')}", input_text=urls[-1] + "\n")
             return True, urls[-1]
+
+        def run_automerge(self, log_path):
+            """automerge（ADR-0042）を guest の中で走らせる（チケット 386）。
+
+            pull worker には制御系から入る `sandbox ssh` が無いので、kit/steps/pr-automerge.sh を guest の $WORK に
+            置き、SB_LOCAL=1 で「guest の中の自分」に対して走らせる。判定に使う pr_url / gates.txt / review.md は
+            回収前の guest の $WORK にあるのでそのまま読め、gh は runtime.env の GH_TOKEN（PJ 限定の App token）で動く。
+            CI 待ちのポーリングも guest の中で回るので、guest-exec は待ち時間ぶん長く張る（上限は run_remote の 3600 秒）"""
+            self.refresh_token()
+            remote = self.work + "/pr-automerge.sh"
+            self.scp_to(ROOT / "workflow" / "kit" / "steps" / "pr-automerge.sh", remote)
+            env = {"SB_LOCAL": "1", "TASK": str(self.task), "WORK": self.work,
+                   "BASE": self.base, "BRANCH": self.branch, **self.automerge_env()}
+            prefix = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in sorted(env.items()))
+            wait_min = int((self.auto_merge or {}).get("wait_min", 20) or 20)
+            # CI 待ち（wait_min）+ マージと後始末の余裕。上限に当たった回は NOMERGE と同じ「PR を開いたまま人へ」で終わる
+            rc, out = self.run_remote(f"cd $SANDBOX_APP_DIR && {prefix} bash {shlex.quote(remote)}", log_path,
+                                      timeout=min(3600, wait_min * 60 + 900))
+            # Proxmox backend では bin/run の run_code が呼ぶ。pull backend はそこを通らないので自分で呼ぶ
+            # （忘れると実際にマージしても state.json に merged が入らず、kb がチケットを done にしない）
+            self.note_merged()
+            return rc == 0, out[-4000:]
 
         def collect(self):
             return self.sb(f"python3 -c {shlex.quote(COLLECT_SCRIPT)} {shlex.quote(self.work)}")

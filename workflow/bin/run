@@ -319,6 +319,10 @@ class Run:
     # 鍵プールに要る用途の鍵が無いときの例外と、そのとき保全する wip の文言（pull backend が使う。チケット 391）
     NoKey = NoKey
     WIP_KEY_MESSAGE = WIP_KEY_MESSAGE
+    # 条件を満たさない PJ では runner が工程ごと飛ばす code step（今は auto_merge を書いていない PJ の automerge。ADR-0042）。
+    # 「その backend が実装していなくても起動を拒む必要がない step」でもあるので、pull backend の起動時検証も
+    # ここを読む（判断を 2 か所に書かない。チケット 386）
+    SKIPPABLE_CODE_STEPS = frozenset({"pr-automerge.sh"})
 
     def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
@@ -1052,7 +1056,7 @@ class Run:
             step = self.steps.get(cur) or die(f"step {cur} が無い")
             # auto_merge の無い PJ では automerge の工程そのものを回さない（PR を作って人間に渡す、今までどおりの終わり方）。
             # workflow の定義は全 PJ 共通なので、飛ばす判断は PJ の設定を持っている runner 側に置く（ADR-0042）
-            if step.get("code") == "pr-automerge.sh" and not self.auto_merge:
+            if step.get("code") in self.SKIPPABLE_CODE_STEPS and not self.auto_merge:
                 self.log("automerge: この PJ は auto_merge が無いので飛ばす（PR は人間が判断する）")
                 self.state["next"] = cur = "human"; self.state["current"] = None; self.save()
                 continue

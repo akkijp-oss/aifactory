@@ -12,7 +12,15 @@ let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
 const stepName = id => (T.step && T.step[id]) || id;   // 工程の id は英単語のまま読める。表示名を決めた特別な工程（VM の空き待ち）だけ言い換える
-const nowStep = st => (T.step && st.current && T.step[st.current.step]) || st.next;   // 実行中の帯に出す工程。表示名を決めた工程のときだけ current を優先する
+/* 動いている run の「今」を 1 か所で決める（チケット 384）。runner は工程を走らせている間 next を書き換えないので、
+   実行中は current.step == next になる。next だけを見ると走っている工程を「次は」と説明してしまう。
+   current があれば phase='step'（その工程を実行中）、無ければ phase='wait'（次の工程の開始待ち。開始前・工程の切れ目）。
+   ボードの runs_live は current を平たくした形（r.step / r.since）なので、そちらも同じ関数で拾う */
+const stepNow = r => {
+  const c = (r && r.current) || null, step = (c && c.step) || (r && r.step) || '';
+  return step ? { phase: 'step', step, since: (c && c.since) || (r && r.since) || null } : { phase: 'wait', step: (r && r.next) || '' };
+};
+const stepText = r => { const c = stepNow(r); return c.phase === 'step' ? tt(T.board.liveStep, { step: stepName(c.step), t: since(c.since) }) : tt(T.board.liveNext, { step: stepName(c.step) }); };
 let pjReady = {};    // PJ → project.yml があるか（起票画面が、配車で人間待ちになる PJ を先に知らせる）
 
 /* ---------- 通信・通知 */
@@ -133,17 +141,41 @@ const head = (title, sub, right) => `<div class="head"><h1>${title}</h1>${sub ? 
 const crumb = (href, label, cur) => `<div class="crumb"><a href="${href}">${esc(label)}</a> › ${esc(cur)}</div>`;
 const link = (href, label, primary) => `<a class="btn ${primary ? 'primary' : ''}" href="${href}">${esc(label)}</a>`;
 
-/* 最小限の Markdown（見出し・箇条書き・コードフェンス・インラインコード・リンク・罫線） */
+/* 最小限の Markdown（見出し・箇条書き・表・コードフェンス・インラインコード・リンク・罫線） */
 function md(text) {
   const lines = String(text || '').split('\n'); let out = [], inCode = false, inList = false, para = [];
-  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[^"'>])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  /* 裸URLの終わりは空白だけでは決まらない。日本語は「、」「。」で続くので、句読点と全角かっこは URL に入れない（チケット 385）。
+     日本語のパス（/管理画面/一覧）は URL に残す。外すのは句読点だけ。\u3000 は全角空白、\u0000 は下の伏字 */
+  const bare = new RegExp(`(^|[^"'>])(https?://[^\\s<)、。，．！？；：「」『』（）〔〕【】・…〜\u3000\u0000]+)`, 'g');
+  const inline = s => {
+    const codes = [];                                                           /* 行内コードは先に伏せる（中の URL をリンクにしない） */
+    return esc(s).replace(/`([^`]+)`/g, (m, c) => `\u0000${codes.push(c) - 1}\u0000`)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(bare, (m, pre, u) => { const t = (u.match(/[.,:!?\]]+$/) || [''])[0], url = t ? u.slice(0, -t.length) : u;
+                                      return `${pre}<a href="${url}" target="_blank" rel="noopener">${url}</a>${t}`; })
+      .replace(/\u0000(\d+)\u0000/g, (m, i) => `<code>${codes[i]}</code>`);
+  };
+  const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  const isSep = row => row.includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(row);
   const flushP = () => { if (para.length) { out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; } };
   const flushL = () => { if (inList) { out.push('</ul>'); inList = false; } };
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     if (raw.startsWith('```')) { flushP(); flushL(); if (inCode) { out.push('</code></pre>'); inCode = false; } else { out.push('<pre><code>'); inCode = true; } continue; }
     if (inCode) { out.push(esc(raw)); continue; }
+    /* 表は次の行（|---|---|）まで見ないと決まらないので、ここだけ先読みする。桁ぞろえ（:---:）は区切りとして認めるだけで解釈しない */
+    if (/^\s*\|/.test(raw) && isSep(lines[i + 1] || '')) {
+      flushP(); flushL();
+      const body = [];
+      let j = i + 2;
+      for (; j < lines.length && /^\s*\|/.test(lines[j]); j++) body.push(cells(lines[j]));
+      out.push(`<div class="scroll" tabindex="0" role="region" aria-label="${esc(T.label.table)}"><table>`
+        + `<thead><tr>${cells(raw).map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead>`
+        + (body.length ? `<tbody>${body.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody>` : '')
+        + `</table></div>`);                                                    /* 狭い幅では囲いごと横に流す（.scroll。Tab で届くよう tabindex を付ける） */
+      i = j - 1; continue;
+    }
     const h = raw.match(/^(#{1,3})\s+(.*)$/);
     if (h) { flushP(); flushL(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
     if (/^\s*---+\s*$/.test(raw)) { flushP(); flushL(); out.push('<hr>'); continue; }
@@ -213,8 +245,7 @@ async function viewBoard() {
      読み上げ名は見えている文字（工程と経過時間）で始める。aria-label は中身を上書きするので、
      行き先だけを入れると主役の工程が読み上げから消え、音声操作で見えている文字を言っても押せない（ticketLink と同じ約束） */
   const liveRow = r => {
-    const txt = (r.step ? tt(T.board.liveStep, { step: stepName(r.step), t: since(r.since) }) : tt(T.board.liveNext, { step: r.next }))
-      + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
+    const txt = stepText(r) + tt(T.board.liveSince, { t: since(r.started) });                          /* 素の文字列を 1 度だけ組む（本文にも読み上げ名にも使う。esc は出口で 1 回） */
     return `<a class="live" href="#/run/${encodeURIComponent(r.name)}" aria-label="${esc(tt(T.board.liveOpen, { text: txt, run: r.name }))}"><span class="dot pulse"></span>${esc(txt)}</a>`;
   };
   /* カードの外枠は div。チケット詳細（題名）と実行記録（工程行）を兄弟の <a> にする（<a> の入れ子は無効な HTML。376）。
@@ -315,6 +346,13 @@ async function viewTickets(q) {
 /* ---------- チケット */
 async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
+  /* この回のサーバー値を控え、「項目を直す」の 3 欄は下書きがあればそれを優先して描く（自動更新に未保存の入力を消させない） */
+  tkServerId = String(t.id);
+  tkServer = { kind: t.kind, pr: String(t.pr ?? ''), note: t.note || '' };
+  const draft = tDraftGet(tkServerId);
+  const dv = eid => (draft && TDRAFT[eid] in draft.v) ? draft.v[TDRAFT[eid]] : tkServer[TDRAFT[eid]];
+  /* 下書きを作った時点の記録から動いた欄。保存すればこちらが消えるので、黙って上書きせず先に言う */
+  const moved = draft ? Object.keys(draft.v).filter(f => draft.base && draft.base[f] !== tkServer[f]) : [];
   const runBusy = d.jobs.find(j => j.state === 'running' && (j.kind === 'kb-run' || j.kind === 'sandbox-release'));
   const stBtn = (act, label, cls) => `<button data-act="status" data-id="${t.id}" data-do="${act}" data-from="${esc(t.status)}" class="${cls || ''}">${esc(label)}</button>`;
   const canRun = t.status !== 'done';                                                     /* kb run は完了済みを断る。画面でも先に押せなくする */
@@ -333,14 +371,13 @@ async function viewTicket(id, flash) {
   const runHint = { in_progress: T.help.runInProgress, review: T.help.runReview, blocked: T.help.runBlocked, done: T.help.runDone }[t.status] || T.help.runDefault;
   const runsEmpty = !d.project_yml ? T.empty.ticketRunsNoProjectYml : runBusy ? T.empty.ticketRunsBusy : canRun ? T.empty.ticketRuns : T.empty.ticketRunsDone;
   kindDesc = d.kind_desc || {};
-  const kindKnown = d.kinds.includes(t.kind);                                              /* 台帳に workflow の無い種別が入っていることがある */
+  const kindKnown = d.kinds.includes(dv('set-kind'));                                      /* 台帳に workflow の無い種別が入っていることがある */
   const runBtn = (label, cls, dry, disabled) => `<button class="${cls}" data-act="run" data-id="${t.id}" data-pj="${esc(t.pj)}" data-kind="${esc(t.kind)}" data-title="${esc(t.title)}" ${dry ? 'data-dry="1"' : ''} ${disabled ? `disabled title="${esc(runHint)}"` : ''}>${esc(label)}</button>`;
   const from = prevRoute.startsWith('#/tickets') ? prevRoute : '#/board';                        /* 絞り込んだ一覧から来たなら、その条件のまま戻す */
   /* 実行状況の 1 行。本文より前に置くのは「今どうなっているか」だけで、判断を迫る操作は下（広い画面では右）の操作領域にまとめる。
      runs は新しい順なので先頭が最新の attempt。判定はボードの工程行（liveRow）と同じで、current の無い run は「次は」を出す */
   const live = d.runs[0] && d.runs[0].status === 'running' ? d.runs[0] : null;
-  const liveTxt = live ? ((live.current && live.current.step ? tt(T.board.liveStep, { step: stepName(live.current.step), t: since(live.current.since) })
-                                                            : tt(T.board.liveNext, { step: live.next || '' })) + tt(T.board.liveSince, { t: since(live.started) })) : '';
+  const liveTxt = live ? stepText(live) + tt(T.board.liveSince, { t: since(live.started) }) : '';
   const nowPanel = live ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(liveTxt)} ${runLink(live.name)}</div></div>`
     : runBusy ? `<div class="panel next"><h2>${esc(T.h.now)}</h2><div class="line"><span class="dot pulse"></span>${esc(T.help.runBusy)} <a href="#/job/${esc(runBusy.id)}">${esc(runBusy.label)}</a></div></div>` : '';
   render(crumb(esc(from), from === '#/board' ? T.nav.board : T.nav.tickets, tt(T.ticket.crumb, { id: t.id })) + `
@@ -371,13 +408,15 @@ async function viewTicket(id, flash) {
           ${moves.length ? `<div class="actions">${moves.join('')}</div><div class="help top">${esc(T.help.moveOnly)}</div><div class="help">${esc(T.help.moveUndo)}</div>`
                          : `<div class="help">${esc(t.status === 'done' ? T.help.moveNone : T.help.moveUndo)}</div>`}
           <h3>${esc(T.h.fix)}<small>kb set</small></h3>
-          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(t.kind)}</option>`}${d.kinds.map(k => `<option ${k === t.kind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
-            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(t.pr || '')}" class="w100"></label>
-            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(t.note || '')}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
-          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(t.kind)) : esc(tt(T.help.kindUnknown, { kind: t.kind }))}</div>
-          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
+          <div class="row"><label class="field">${esc(T.label.kind)}<select id="set-kind" data-act="kind-help">${kindKnown ? '' : `<option selected>${esc(dv('set-kind'))}</option>`}${d.kinds.map(k => `<option ${k === dv('set-kind') ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></label>
+            <label class="field">${esc(T.label.pr)}<input type="number" id="set-pr" value="${esc(dv('set-pr'))}" class="w100"></label>
+            <label class="field grow">${esc(T.label.note)}<input type="text" id="set-note" value="${esc(dv('set-note'))}" placeholder="${esc(T.label.notePlaceholder)}"></label></div>
+          <div class="${kindKnown ? 'help' : 'warn'}" id="set-kind-help">${kindKnown ? esc(kindHelp(dv('set-kind'))) : esc(tt(T.help.kindUnknown, { kind: dv('set-kind') }))}</div>
+          ${draft ? `<div class="help" id="set-draft-note">${esc(T.msg.editDraftKept)}</div>` : ''}
+          ${moved.map(f => `<div class="warn">${esc(tt(T.help.editDraftServerChanged, { v: T.label[f], now: tkServer[f] }))}</div>`).join('')}
+          <div class="actions"><button data-act="set" data-id="${t.id}">${esc(T.btn.save)}</button>${draft ? `<button data-act="set-clear" data-id="${t.id}">${esc(T.btn.draftClear)}</button>` : ''}${t.run ? `<button data-act="sync" data-id="${t.id}" title="${esc(T.help.syncTitle)}">${esc(T.btn.sync)}</button>` : ''}</div>
         </div>
-        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(tt(T.run.nextStep, { step: r.next || '' }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
+        <div class="panel"><h2>${esc(T.h.runs)}</h2>${d.runs.length ? `<table><tr><th>${esc(T.th.run)}</th><th>${esc(T.th.workflow)}</th><th>${esc(T.th.started)}</th><th>${esc(T.th.elapsed)}</th><th>${esc(T.th.result)}</th></tr>${d.runs.map(r => `<tr><td>${runLink(r.name)}</td><td>${esc(r.workflow)}</td><td>${fmtT(r.started)}</td><td>${r.finished ? fmtDur(r.elapsed_s) : (r.status === 'running' ? `<span class="dot pulse"></span>${esc(since(r.started))}` : '')}</td><td>${r.result ? rst(r.result) : r.kind === 'v0' ? 'v0' : r.status === 'not_started' ? `<span class="tag">${esc(T.run.notStarted)}</span>` : r.status === 'abandoned' ? rst('abandoned') : esc(stepNow(r).phase === 'step' ? stepText(r) : tt(T.run.nextStep, { step: stepName(stepNow(r).step) }))}</td></tr>`).join('')}</table>` : `<div class="help">${esc(runsEmpty)}${t.run ? ` ${esc(T.ticket.dbRun)} ${runLink(t.run)}` : ''}</div>`}</div>
         ${d.jobs.length ? `<div class="panel"><h2>${esc(T.h.jobs)}</h2><table>${d.jobs.map(j => `<tr class="link" data-href="#/job/${esc(j.id)}"><td>${jst(j)}</td><td>${jobLink(j)}</td><td>${fmtT(j.started)}</td></tr>`).join('')}</table></div>` : ''}
         <div class="panel"><h2>${esc(T.h.history)}</h2><table><tr><th>${esc(T.th.at)}</th><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${d.history.map(h => `<tr><td class="mono">${fmtT(h.at)}</td><td>${esc(h.field)}</td><td>${esc(h.old ?? '-')}</td><td>${esc(h.new ?? '-')}</td></tr>`).join('')}</table>
           <div class="help top">${esc(tt(T.ticket.stamps, { c: fmtT(t.created), u: fmtT(t.updated) }))}</div></div>
@@ -408,7 +447,7 @@ function track(state, wf, gone) {
     parts.push(`<div class="step ${e.ok ? 'ok' : 'ng'}"><div class="nm">${esc(e.step)}</div><div class="ds">${fmtDur(d)}</div></div>`);
   });
   if (state.finished) { parts.push(`<div class="arrow">→</div><div class="step term ${esc(state.result)}"><div class="nm">${esc(T.result[state.result] || state.result)}</div><div class="ds">${esc(state.result)}</div></div>`); }
-  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(nowStep(state))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
+  else if (state.next) { if (h.length) parts.push('<div class="arrow">→</div>'); parts.push(`<div class="step now"><div class="nm">${gone ? '' : '<span class="dot pulse"></span>'}${esc(stepName(stepNow(state).step))}</div><div class="ds">${gone ? esc(T.run.runnerGone) : esc(tt(T.run.elapsed, { t: since(state.current && state.current.since || prev) }))}</div></div>`); }
   return `<div class="track">${parts.join('')}</div>${planBlock(wf)}`;
 }
 
@@ -439,7 +478,8 @@ const prNumber = u => ((/(?:\/pull\/|#)(\d+)/.exec(u || '')) || [])[1] || '';
 function outcomeLead(o, s) {
   if (o.reason === 'not_started') return s.state_error ? T.run.stateBroken : s.kind === 'v0' ? T.run.v0 : T.run.noState;
   if (o.reason === 'v0') return T.run.v0;
-  if (o.reason === 'running') return tt(T.outcome.running, { step: o.stopped_step || s.next || '' });
+  /* 実行中は state.next（= run_outcome の stopped_step）ではなく current を先に見る。工程の切れ目だけ「開始を待っています」（チケット 384） */
+  if (o.reason === 'running') { const c = stepNow(s); return tt(c.phase === 'step' ? T.outcome.running : T.outcome.runningWait, { step: stepName(c.step) }); }
   if (o.reason === 'runner_gone') return tt(T.outcome.runner_gone, { end: fmtT((o.job || {}).finished || s.mtime) });
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });
@@ -647,8 +687,49 @@ async function draftClear(ids) {
   await viewIntake();
   toast(esc(T.msg.draftCleared), { action: { label: T.btn.undo, run: async () => { draftPut(before); await viewIntake(); } } });
 }
+/* ---------- チケット詳細の「項目を直す」（kb set）の下書き
+   詳細画面も hash が変わるたび作り直され、そのうえ 5 秒ごとに自分を描き直す（viewTicket 末尾の schedule）。
+   入力を DOM の外に持たないと、ボードへ寄り道して戻る・再読み込み・ブラウザーの戻るで消えるうえ、
+   同じ画面に居ても「欄からフォーカスを外して 5 秒」でサーバー値に戻る（editing() はフォーカス中しか守らない）。
+   入れ物はチケット ID ごとに分けて、別のチケットのフォームへ混ざらないようにする。保存先は起票と同じ sessionStorage。
+   持つのは「サーバー値と違う欄」だけで、下書きを作った時点の記録（base）も一緒に焼き付ける。
+   base があると、後から記録の側が動いたとき（自動更新・sync・runner）に、それを黙って上書きせず画面で言える。 */
+const TDRAFT_KEY = 'ticket-draft';
+const TDRAFT = { 'set-kind': 'kind', 'set-pr': 'pr', 'set-note': 'note' };
+const TDRAFT_MAX = 20;                                                    /* 古い順にうち止め。同じタブで何十件開いても膨らませない */
+let tkServerId = '', tkServer = { kind: '', pr: '', note: '' };           /* 今描いているチケットと、その回のサーバー値 */
+const tkId = () => (location.hash.startsWith('#/ticket/') ? location.hash.slice(9) : '');
+function tDraftRead() { try { return JSON.parse(sessionStorage.getItem(TDRAFT_KEY)) || {}; } catch (e) { return {}; } }
+function tDraftWrite(d) { try { sessionStorage.setItem(TDRAFT_KEY, JSON.stringify(d)); } catch (e) { /* 保存できなくても保存操作は動く */ } }
+function tDraftGet(id) { const e = tDraftRead()[id]; return (e && e.v) ? e : null; }
+function tDraftDrop(id) { const d = tDraftRead(), before = d[id]; delete d[id]; tDraftWrite(d); return before; }
+function tDraftPut(id, e) { const d = tDraftRead(); if (e) d[id] = e; else delete d[id]; tDraftWrite(d); }
+/* 3 欄の今の値を集め、サーバー値と違う欄だけ残す。全部そろって同じなら項目ごと消す（打ち消しても下書きが残らない） */
+function tDraftSave(id) {
+  if (!id || id !== tkServerId) return;                                   /* 画面に出ているチケット以外には書かない */
+  const d = tDraftRead(), v = {};
+  for (const eid in TDRAFT) {
+    const el = $(eid); if (!el) return;                                    /* 3 欄そろっていないなら描き替えの途中。触らない */
+    if (el.value !== tkServer[TDRAFT[eid]]) v[TDRAFT[eid]] = el.value;
+  }
+  if (!Object.keys(v).length) { delete d[id]; tDraftWrite(d); return; }
+  const base = (d[id] && d[id].base) || { ...tkServer };                   /* 焼き付けは新規に作るときだけ */
+  d[id] = { v, base, at: Date.now() };
+  const ids = Object.keys(d);
+  if (ids.length > TDRAFT_MAX) {
+    ids.sort((a, b) => (d[a].at || 0) - (d[b].at || 0)).slice(0, ids.length - TDRAFT_MAX).forEach(k => delete d[k]);
+    tDraftWrite(d);
+    return;
+  }
+  tDraftWrite(d);
+}
+
 /* 入力のたびに保存する。離脱の hook に頼らないので、サイドバーでの移動・g i の近道・再読み込み・戻るのどれでも残る */
-const draftWatch = e => { if (e.target.id && e.target.id in DRAFT) draftSave(); };
+const draftWatch = e => {
+  const id = e.target.id; if (!id) return;
+  if (id in DRAFT) draftSave();
+  else if (id in TDRAFT) tDraftSave(tkId());
+};
 main.addEventListener('input', draftWatch);
 main.addEventListener('change', draftWatch);
 
@@ -920,7 +1001,14 @@ const actions = {
     } } });
     viewTicket(id, true);
   },
-  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  /* 下書きを捨てるのは api が通った後だけ。失敗すれば例外で抜けるので、直して送り直せる（起票側と同じ並び） */
+  'set': async el => { const id = el.dataset.id; await api(`tickets/${id}/action`, { action: 'set', kind: $('set-kind').value, pr: $('set-pr').value || undefined, note: $('set-note').value.trim() }); tDraftDrop(id); toast(esc(tt(T.msg.saved, { id }))); viewTicket(id, true); },
+  /* 破棄は明示操作。可逆なので確認せず、トーストの「元に戻す」で書き戻す */
+  'set-clear': async el => {
+    const id = el.dataset.id, before = tDraftDrop(id);
+    await viewTicket(id);
+    toast(esc(T.msg.draftCleared), { action: { label: T.btn.undo, run: async () => { tDraftPut(id, before); await viewTicket(id); } } });
+  },
   /* 状態を合わせるのは半可逆・影響大（状態とメモを上書きする）: 下見（kb sync --dry-run）で前後を見せてから */
   'sync': async el => {
     const id = el.dataset.id, run = el.dataset.run || '';

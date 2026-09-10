@@ -65,7 +65,8 @@ const T = {
     "keyName": "名前（この画面と記録に出る呼び名。英数字と . _ - で 40 文字まで）", "keyNamePlaceholder": "例: max-akki、team-fable",
     "keyNote": "メモ（誰の契約か、どのプランか、など）", "keyNotePlaceholder": "例: akki の Max プラン",
     "keyToken": "トークン（claude setup-token で表示される、sk-ant-oat01- で始まる文字列。登録後は表示しません）",
-    "keyAllowFable": "Fable に使う（計画・設計・レビューの工程）", "keyAllowOther": "Opus・Sonnet・Haiku に使う（実装・調査の工程）"
+    "keyAllowFable": "Fable に使う（計画・設計・レビューの工程）", "keyAllowOther": "Opus・Sonnet・Haiku に使う（実装・調査の工程）",
+    "table": "表"
   },
 
   "stats": {
@@ -112,7 +113,7 @@ const T = {
   "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
   "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
-    "nextStep": "次は {step}", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
+    "nextStep": "次は {step}（開始待ち）", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
     "truncated": "末尾 300 KB だけ表示しています。", "following": "{step}（{kind}）の出力を追い読みしています。", "refresh": "5 秒ごとに更新します。",
     "notStarted": "開始前（記録なし）", "error": "失敗の理由", "runnerGone": "runner は終了",
     "noState": "state.json がありません。工程が始まる前に止まった run です。今の状態はチケットで確かめてください。",
@@ -160,6 +161,7 @@ const T = {
     "humanNote": "{by} が {at} に記録: {text}",
     "resume": "同じチケットを続きから回すには {cmd} を実行します。",
     "running": "工程 {step} を実行中です。",
+    "runningWait": "工程 {step} の開始を待っています。",
     "unknown": "止まった理由は記録にありません。工程のログを確かめてください。",
     "runner_gone": "runner は {end} に終わっています。待っても進みません。",
     "runnerJob": "ジョブ {label} は{state}で、終了コードは {rc} です。",
@@ -276,6 +278,7 @@ const T = {
     "shortcutsToggle": "この一覧を出す / 閉じる。",
     "shortcutsClose": "ダイアログを閉じる。",
     "draftLost": "下書きの {v} は今は選べません。既定に戻しました。",
+    "editDraftServerChanged": "{v} は記録の側が変わりました。今の記録は「{now}」です。",
     "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
     "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
     "attachEmpty": "まだ添付はありません。"
@@ -294,6 +297,7 @@ const T = {
     "lsStarted": "VM の一覧を取得しています。終わると表が入れ替わります。",
     "draftRestored": "前回の下書きを復元しました。",
     "draftCleared": "下書きを捨てました。",
+    "editDraftKept": "未保存の変更を覚えています。保存するまで記録には入りません。",
     "keyAdded": "鍵 {name} を登録しました。次に VM を借りる run から使われます。",
     "keySaved": "鍵 {name} を保存しました。",
     "keyRemoved": "鍵 {name} を削除しました。",

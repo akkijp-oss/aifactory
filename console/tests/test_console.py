@@ -406,13 +406,16 @@ class ApiTest(unittest.TestCase):
         self.assertRegex(board, r'<a class="t" href="#/ticket/', "題名がチケットへのリンクになっていない（Tab で届かない）")
         self.assertRegex(board, r'<a class="live" href="#/run/', "カードから実行記録へ移るリンクが無い")
         self.assertIn("T.board.liveOpen", board, "実行記録リンクの読み上げ名（aria-label）が無い")
-        for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, board, f"{key} をカードで使っていない")
-        self.assertRegex(board, r"r\.step \?", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
+        self.assertIn("stepText(r)", board, "カードが共用の工程判定（stepText）を使っていない")
+        helper = app[app.index("const stepNow = "):app.index("let pjReady")]        # 判定は 1 か所（384。ボード・チケット・run 詳細で同じ説明にする）
+        for key in ("T.board.liveStep", "T.board.liveNext"): self.assertIn(key, helper, f"{key} を工程の文言に使っていない")
+        self.assertRegex(helper, r"r\.step", "ボードの runs_live（平たい step / since）を拾っていない")
+        self.assertRegex(helper, r"phase: 'wait'", "current の無い run（開始前・工程の切れ目）に前の工程を出さない分岐が無い")
         # aria-label は中身を上書きする。見えている工程と経過時間を読み上げ名に含める（label in name。ticketLink と同じ約束）
         i = board.index("const liveRow")
         row = board[i:board.index("\n  };", i)]
         self.assertIn("text: txt", row, "工程行の読み上げ名に見えている文字（工程・経過時間）が入っていない")
-        for key in ("T.board.liveStep", "T.board.liveNext", "T.board.liveSince"):
+        for key in ("stepText(r)", "T.board.liveSince"):
             self.assertLess(row.index(key), row.index("aria-label"), f"{key} を組む前に aria-label を書いている（見えている文字を含められない）")
         T = load_strings()
         self.assertIn("{text}", T["board"]["liveOpen"], "読み上げ名の文言に見えている文字の差し込み口が無い")
@@ -520,8 +523,8 @@ class ApiTest(unittest.TestCase):
         self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
         # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
         self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
-        for key in ("T.board.liveStep", "T.board.liveNext"):
-            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない）")
+        for key in ("stepText(live)", "T.board.liveSince"):
+            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない。384 で共用関数に出した）")
         self.assertRegex(body, r"nowPanel[^\n]*runLink\(live\.name\)", "実行状況から実行記録へ移る入口が無い")
         # 実行・状態変更・項目編集は 1 枚の操作領域にまとまり、既存の操作は全部残る
         ops = body[at("T.h.ops"):at("T.h.runs")]
@@ -591,6 +594,63 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}'", view, f"「下書きを捨てる」（{act}）のボタンが起票画面に無い")
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
+
+
+    def test_ticket_edit_keeps_draft_per_ticket(self):
+        """チケット詳細の「項目を直す」（種別・PR・メモ）の未保存値が、画面往復・戻る・再読み込み・自動更新で消えない。
+
+        `route()` は hash が変わるたび `viewTicket()` を呼び、`render()` が main を作り直す。さらに `viewTicket` 自身が
+        5 秒ごとに自分を呼び直す（`schedule`）。入力を DOM の外に持たないと、
+        (A) パンくず「ボード」→ 戻る / 再読み込み と (B) 欄からフォーカスを外して 5 秒待つ、のどちらでもサーバー値に戻る。
+        下書きはチケット単位（鍵に ID を含める）にして、別 ID のフォームへ混ざらないようにする。
+        JS を動かす基盤が無い（CI は Python 標準ライブラリだけ）ので、起票側と同じくソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(id")
+        view = app[i:app.index("\n}", i)]
+        ops = view[view.index("T.h.fix"):]                                    # 「項目を直す」の塊だけ見る
+
+        def action(name):
+            j = app.index(f"  '{name}': ")
+            m = re.compile(r"\n  '[\w-]+': ").search(app, j + 1)
+            return app[j:m.start() if m else len(app)]
+
+        # 保存先は起票側と同じ sessionStorage。離脱の警告は出さない（保持で守る。UX.md）
+        self.assertIn("TDRAFT_KEY", app, "チケット詳細の下書きの入れ物が無い")
+        self.assertTrue(re.search(r"TDRAFT_KEY[\s\S]{0,400}sessionStorage", app), "チケットの下書きが sessionStorage に載っていない")
+        self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
+
+        # 3 欄すべてが対応表にあり、下書きはチケット ID ごとに分かれている（別 ID のフォームへ混ざらない）
+        for eid, key in (("set-kind", "kind"), ("set-pr", "pr"), ("set-note", "note")):
+            self.assertIn(f'id="{eid}"', ops, f"{eid} が「項目を直す」に無い")
+            self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} がチケットの下書きの対応表に無い（保存されない）")
+        for fn in ("tDraftGet", "tDraftDrop", "tDraftSave"):
+            self.assertIn(fn, app, f"{fn} が無い")
+        self.assertTrue(re.search(r"function tDraftGet\(\s*id\s*\)", app), "下書きの読み出しがチケット ID を取っていない（別 ID と混ざる）")
+        self.assertTrue(re.search(r"function tDraftDrop\(\s*id\s*\)", app), "下書きの破棄がチケット ID を取っていない")
+
+        # 描画は「下書きがあれば下書き、無ければサーバー値」。サーバー値の直書きが残っていると自動更新で上書きされる
+        self.assertNotIn('value="${esc(t.note', ops, "メモがサーバー値の直書きのまま（5 秒の自動更新で未保存の入力が消える）")
+        self.assertNotIn('value="${esc(t.pr', ops, "PR がサーバー値の直書きのまま（5 秒の自動更新で未保存の入力が消える）")
+        self.assertTrue(re.search(r"dv\('set-note'\)", ops), "メモを下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"dv\('set-pr'\)", ops), "PR を下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"dv\('set-kind'\)", ops), "種別を下書き優先の値で描いていない")
+        self.assertTrue(re.search(r"tDraftGet\([\s\S]{0,300}(?:const|let)\s+dv\s*=", view), "下書き優先の値を作る dv が保存済みの下書きを読んでいない")
+
+        # 破棄の規則: 保存が成功したときだけ捨てる（失敗したら入力が残り、直して送り直せる）
+        b = action("set")
+        self.assertIn("tDraftDrop", b, "actions['set'] が保存の成功後に下書きを消していない")
+        self.assertGreater(b.index("tDraftDrop"), b.index("await api("), "actions['set'] が保存の前に下書きを消している（失敗すると入力が消える）")
+
+        # 明示的な破棄（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
+        self.assertIn("set-clear", ops, "「下書きを捨てる」のボタンが「項目を直す」に無い")
+        self.assertIn("'set-clear':", app, "actions に set-clear が無い")
+        self.assertIn("T.btn.undo", action("set-clear"), "下書きの破棄に「元に戻す」が無い")
+
+        # 自動更新・サーバー側の同時更新で無断上書きしない: 下書きを焼き付けた時点の値と今の記録を比べて知らせる
+        self.assertIn("T.help.editDraftServerChanged", view, "記録の側が変わったことを知らせる経路が無い（無断で上書きしたことになる）")
+        self.assertTrue(re.search(r"base\[[^\]]+\]\s*!==", view), "下書きを作った時点の値と今の記録を比べていない")
+        self.assertIn("T.msg.editDraftKept", view, "未保存の変更を覚えていることを画面で言っていない")
 
     def test_intake_shows_project_yml_readiness(self):
         """起票画面が、PJ を選んだ時点で「配車すると人間待ちになるか」を出せる。
@@ -925,6 +985,63 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 400); self.assertIn("説明", e2["error"])
         st, e3 = self.http.post("/api/runs/2020-01-06-nosuch-run/action", {"action": "close"})
         self.assertEqual(st, 404)
+
+    def test_ticket_runs_table_tells_a_running_step_from_a_waiting_one(self):
+        """チケット詳細の実行記録表は「今その工程を走っている」と「次の工程の開始待ち」を分ける（チケット 384）。
+
+        runner は工程を走らせている間 `next` を書き換えない（workflow/bin/run。工程が終わった時にだけ `next` を進めて
+        `current` を null にする）ので、実行中の run は `current.step == next` になる。
+        結果セルが `current` を見ずに「次は {step}」だけを出すと、走っている工程を開始待ちと読ませてしまう。
+        JS を動かす基盤が無いので、材料が API から出ていることを fixture で、表示はソース検査で固定する（test_board_* と同じ流儀）。
+        """
+        base = dict(finished=None, elapsed_s=None, result=None)
+        hist = [("plan", True)]
+        # (a) 実行中（#362 の再現。current.step と next が同じ）
+        running = self._fixture_run(f"2026-09-11-{PJ}-{self.seed}", self._state(
+            hist, next="implement", current={"step": "implement", "kind": "agent", "log": "agent-implement-1.log",
+                                             "since": "2026-09-11T09:05:00"}, **base), {"work/ticket.md": "# x\n"})
+        # (b) 工程の切れ目（current が無く、次の工程の開始待ち）
+        waiting = self._fixture_run(f"2026-09-11-{PJ}-{self.seed}-attempt2", self._state(
+            hist, next="gates", current=None, **base), {"work/ticket.md": "# x\n"})
+        # (c) 終了 / (d) 記録なし
+        done = self._fixture_run(f"2026-09-12-{PJ}-{self.seed}", self._state(hist, result="end"), {"work/ticket.md": "# x\n"})
+        bare = self._fixture_run(f"2026-09-12-{PJ}-{self.seed}-attempt2", None, {"ticket.md": "# x\n"})
+        try:
+            _, td = self.http.get(f"/api/tickets/{self.seed}")
+            by = {r["name"]: r for r in td["runs"]}
+            for n in (running, waiting, done, bare): self.assertIn(n, by, "チケットの実行記録に fixture が出ていない")
+            a = by[running]
+            self.assertEqual(a["status"], "running"); self.assertEqual(a["current"]["step"], "implement")
+            self.assertEqual(a["next"], "implement", "実行中の run は current.step と next が同じ（この票の前提）")
+            self.assertIsNone(a["result"]); self.assertIsNotNone(a["current"]["since"])
+            b = by[waiting]
+            self.assertEqual(b["status"], "running"); self.assertIsNone(b["current"]); self.assertEqual(b["next"], "gates")
+            self.assertEqual(by[done]["status"], "finished"); self.assertEqual(by[done]["result"], "end")
+            self.assertEqual(by[bare]["status"], "not_started")
+        finally:
+            for n in (running, waiting, done, bare): shutil.rmtree(self.ws / "runs" / n, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(")
+        body = app[i:app.index("\n}", i)]
+        panel = body[body.index("T.h.runs"):body.index("T.h.jobs")]
+        self.assertIn("stepNow", panel, "実行記録表の結果セルが共用の判定（stepNow）を通っていない")
+        self.assertIn("stepText(r)", panel, "実行中の run に「{step} を実行中」を出していない（表と run 詳細で説明が食い違う）")
+        helper = app[app.index("const stepNow = "):app.index("let pjReady")]
+        self.assertIn("T.board.liveStep", helper, "共用の判定が「{step} を実行中」を組んでいない")
+        self.assertLess(panel.index("stepNow"), panel.index("T.run.nextStep"),
+                        "running の結果セルが current を見ずに「次は」を出している（チケット 384 の不具合）")
+        for key in ("T.run.notStarted", "'abandoned'"): self.assertIn(key, panel, f"結果セルに {key} の枝が無い")
+        self.assertIn("schedule(() => viewTicket(id), 5000)", body, "チケット画面が自動で描き直さない（工程の切替が反映されない）")
+        # run 詳細の 1 文も同じ判定を使う（state.next 由来のままだと工程の切れ目で表と逆向きに誤る）
+        j = app.index("function outcomeLead(")
+        lead = app[j:app.index("\n}", j)]
+        self.assertIn("stepNow", lead, "run 詳細の「結果」が共用の判定を使っていない")
+        self.assertIn("T.outcome.runningWait", lead, "工程の開始待ちを言う文言が無い")
+        self.assertNotRegex(lead, r"'running'[^\n]*stopped_step",
+                            "running の 1 文が state.next 由来の stopped_step を読んでいる")
+        T = load_strings()
+        self.assertIn("開始待ち", T["run"]["nextStep"], "表の「次は」が開始待ちだと分かる文言になっていない")
 
     def test_run_outcome_loop_limit(self):
         """ゲートが上限まで通らず人間待ちになった run: 止まった工程・赤いゲート・読むべきファイルが API から出る（チケット 226）"""
@@ -2223,6 +2340,21 @@ def js_line(src, name):
     return m.group(0)
 
 
+def js_block(src, name):
+    """app.js から複数行の関数定義を抜く（波かっこの対応が取れる位置まで）。1 行で書けない md() 用"""
+    m = re.search(rf"^function {name}\(", src, re.M)
+    assert m, f"app.js に {name} の定義が無い"
+    depth = 0
+    for j in range(src.index("{", m.start()), len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[m.start():j + 1]
+    raise AssertionError(f"{name} の波かっこが閉じていない")
+
+
 @unittest.skipUnless(shutil.which("node"), "node が無い")
 class BrowserTimeTest(unittest.TestCase):
     """経過時間の計算がブラウザーの時間帯に左右されないこと（チケット 235）。app.js の関数を node で直に動かす"""
@@ -2286,6 +2418,118 @@ class BrowserTimeTest(unittest.TestCase):
             self.assertEqual(r["spanNone"], self.T["time"]["unknown"])
             self.assertEqual(r["ahead"], self.T["time"]["ahead"])
             self.assertEqual(r["unreadable"], "2026-09-08 の夕方")
+
+
+@unittest.skipUnless(shutil.which("node"), "node が無い")
+class MarkdownRenderTest(unittest.TestCase):
+    """チケット本文と実行報告が通る md()（チケット 385）。裸URLの境界と Markdown 表。app.js を node で直に動かす"""
+
+    CASES = {
+        "bare": "確認環境: http://localhost:3094、管理画面、development、既存取込",
+        "explicit": "[管理画面](http://localhost:3094/admin) を開く",
+        "jaPath": "http://localhost:3094/管理画面/一覧 を開く",
+        "fence": "```\nhttp://localhost:3094、管理画面\n```",
+        "html": "<script>alert(1)</script>",
+        "jsLink": "[x](javascript:alert(1)) と javascript:alert(2)",
+        "table": ("## 1万社規模の計測\n\n| 計測 | 所要 | SQL 本数 |\n|---|---|---|\n"
+                  "| 一覧 | 1.2s | `3` 本 |\n| 明細 | 0.4s | 1 本 |\n\nあとがき"),
+        "checkbox": "- [ ] 未完",
+        "inlineCode": "`see http://a.example/x` と http://a.example/y",
+        "trailing": "詳しくは http://a.example/x. 次",
+        "hr": "---",
+        "paren": "(http://a.example/x)",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        static = pathlib.Path(__file__).resolve().parents[1] / "static"
+        app = (static / "app.js").read_text(encoding="utf-8")
+        strings = (static / "strings.js").read_text(encoding="utf-8")
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-md-test-"))
+        cls.addClassCleanup(shutil.rmtree, tmp, True)
+        src = tmp / "md.js"
+        src.write_text("\n".join([strings, js_line(app, "esc"), js_block(app, "md"),
+                                  f"const cases = {json.dumps(cls.CASES, ensure_ascii=False)};",
+                                  "const out = {}; for (const k of Object.keys(cases)) out[k] = md(cases[k]);",
+                                  "console.log(JSON.stringify(out));"]), encoding="utf-8")
+        p = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        assert p.returncode == 0, p.stderr
+        cls.html = json.loads(p.stdout)
+
+    def anchors(self, key):
+        """(href, リンク文字列) の並び"""
+        return re.findall(r'<a [^>]*href="([^"]*)"[^>]*>(.*?)</a>', self.html[key], re.S)
+
+    def test_a_bare_url_stops_at_japanese_punctuation(self):
+        """385 の症状そのもの: 裸URLの後ろの「、管理画面…」まで href に飲み込まない"""
+        h = self.html["bare"]
+        self.assertEqual(self.anchors("bare"), [("http://localhost:3094", "http://localhost:3094")])
+        self.assertIn("、管理画面、development、既存取込</p>", h)
+
+    def test_an_explicit_link_keeps_its_target(self):
+        self.assertEqual(self.anchors("explicit"), [("http://localhost:3094/admin", "管理画面")])
+        self.assertIn("を開く", self.html["explicit"])
+
+    def test_a_japanese_path_stays_in_the_url(self):
+        """句読点だけを外すのであって、日本語そのものを URL から外さない"""
+        self.assertEqual(self.anchors("jaPath"),
+                         [("http://localhost:3094/管理画面/一覧", "http://localhost:3094/管理画面/一覧")])
+        self.assertNotIn("を開く</a>", self.html["jaPath"])
+
+    def test_trailing_ascii_punctuation_is_not_part_of_the_url(self):
+        self.assertEqual(self.anchors("trailing"), [("http://a.example/x", "http://a.example/x")])
+        self.assertIn("</a>. 次", self.html["trailing"])
+
+    def test_a_url_in_parentheses_is_not_swallowed(self):
+        self.assertEqual(self.anchors("paren"), [("http://a.example/x", "http://a.example/x")])
+
+    def test_urls_inside_code_stay_plain(self):
+        fence = re.search(r"<pre><code>(.*?)</code></pre>", self.html["fence"], re.S).group(1)
+        self.assertNotIn("<a ", fence)
+        self.assertIn("http://localhost:3094、管理画面", fence)
+        self.assertIn("<code>see http://a.example/x</code>", self.html["inlineCode"])
+        self.assertEqual(self.anchors("inlineCode"), [("http://a.example/y", "http://a.example/y")])
+
+    def test_html_and_dangerous_urls_are_still_neutralised(self):
+        """完了条件 5: 本文の HTML と javascript: がそのまま出ない（既存の守りを回帰させない）"""
+        self.assertNotIn("<script", self.html["html"])
+        self.assertIn("&lt;script&gt;", self.html["html"])
+        self.assertNotIn('href="javascript:', self.html["jsLink"])
+        self.assertEqual(self.anchors("jsLink"), [])
+
+    def test_a_markdown_table_becomes_a_table(self):
+        """385 の症状そのもの: 報告の比較表が段落の文字列にならず、見出しとセルを持つ表になる"""
+        h = self.html["table"]
+        self.assertIn("<table>", h)
+        self.assertEqual(re.findall(r"<th>(.*?)</th>", h), ["計測", "所要", "SQL 本数"])
+        rows = re.findall(r"<tr>((?:<td>.*?</td>)+)</tr>", h)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(re.findall(r"<td>(.*?)</td>", rows[0]), ["一覧", "1.2s", "<code>3</code> 本"])
+        self.assertNotIn("|---|", h)
+        self.assertIn("<h2>1万社規模の計測</h2>", h)          # 見出しは今までどおり
+        self.assertIn("<p>あとがき</p>", h)                    # 表の後ろは段落に戻る
+
+    def test_a_narrow_screen_can_scroll_the_table(self):
+        """完了条件 3: 狭い幅でも 3 列の中身を確認できるよう、表は横スクロールの囲いに入れる"""
+        self.assertIn('class="scroll"', self.html["table"])
+        css = (pathlib.Path(__file__).resolve().parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertIn(".md table", css)
+        self.assertIn(".scroll { overflow-x: auto; }", css)
+
+    def test_a_lone_rule_is_still_a_rule(self):
+        """区切り行の判定は `|` のある行に限る（既存の <hr> と重ならない）"""
+        self.assertIn("<hr>", self.html["hr"])
+        self.assertNotIn("<table", self.html["hr"])
+
+    def test_a_checklist_line_is_left_as_it_is(self):
+        """`- [ ]` の表示対応は 385 の範囲外。今の見え方（素のテキスト）を変えないことだけ確かめる"""
+        self.assertIn("<li>[ ] 未完</li>", self.html["checkbox"])
+
+    def test_the_body_and_the_report_share_the_renderer(self):
+        """完了条件 4: チケット本文と「報告を読む」が同じ md() を通る"""
+        app = (pathlib.Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("md(d.body)", app)                       # チケット本文
+        self.assertIn("md(file.text)", app)                    # 実行記録の .md（報告を読む）
 
 
 class KitListingTest(unittest.TestCase):
