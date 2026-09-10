@@ -1,0 +1,2 @@
+### Added
+- **console: 「base でも赤いゲート」を sandbox 画面と実行記録の画面に出す**。sandbox 画面の PJ 一覧では、`project.yml` に人が書いた分と runner が base で回して確かめた分（ADR-0038）を行の下の別々の注記に分け、確かめた分にはその run の名前と時刻を添える。実行記録の「結果」パネルでは、INFO に落ちたゲートを赤いゲートとは別の行に「base でも赤いゲート（直さなくてよいゲートです）」として並べる。今まではこれを見るのに MCP か run の `gates.txt` を開くしかなかった。時刻は run 単位で、ゲートごとの確認時刻は run の記録（`state.json` の `known_red_gates`）がゲート名の配列だけなので持たない。MCP の `sandbox_status` にも出どころ別の `known_red_manual` / `known_red_auto` が増える（合成した `known_red_gates` は今までどおり）。

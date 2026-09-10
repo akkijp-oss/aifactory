@@ -4,7 +4,7 @@
 - 動かす: kb / intake / dispatch / sandbox を子プロセスで。長いものは JobStore（console/jobs/）。判定（二重起動・入力検査）はここに 1 つ
 - 置き場は lib/aifactory_paths.py（AIFACTORY_WORKSPACE。KB_ROOT / CONSOLE_JOBS で個別に差し替え可）
 """
-import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time
+import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time, zoneinfo
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
@@ -82,12 +82,31 @@ def ts_keys(d, *keys):
     return {**d, **{k: ts_aware(d[k]) for k in keys if k in d}}
 
 
-def tz_info():
-    """このサーバーの時間帯。画面がブラウザーとの違いを言うために使う"""
-    d = datetime.datetime.now().astimezone()
+TZ_OFFSET = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
+
+
+def tz_of(tz=None):
+    """集計や日付の基準にする時間帯。'+09:00' のようなオフセットか IANA 名（'Asia/Tokyo'）を受ける。
+       空・読めない値はこのサーバーの時間帯に落とす（読むだけの画面なので、400 で画面を白くするより安全）"""
+    if isinstance(tz, datetime.tzinfo): return tz
+    if isinstance(tz, str) and tz.strip():
+        s = tz.strip()
+        m = TZ_OFFSET.match(s)
+        if m and int(m.group(3)) < 60:   # 分は 60 未満（+09:99 を UTC+10:39 と読み替えない）
+            d = datetime.timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
+            try: return datetime.timezone(-d if m.group(1) == "-" else d)
+            except ValueError: pass      # ±24 時間を超えるオフセット。zoneinfo の失敗と同じくサーバーの時間帯に落とす
+        try: return zoneinfo.ZoneInfo(s)
+        except Exception: pass
+    return datetime.datetime.now().astimezone().tzinfo
+
+
+def tz_info(tz=None):
+    """時間帯を画面に出せる形にする（既定はこのサーバーの時間帯。画面がブラウザーとの違いを言うために使う）"""
+    d = datetime.datetime.now(tz_of(tz))
     off = d.isoformat()[-6:]
     name = d.tzname() or ""
-    plain = not name or name.upper() in ("UTC", "GMT") or name[0] in "+-"
+    plain = not name or name.upper().startswith(("UTC", "GMT")) or name[0] in "+-"   # オフセット指定の時間帯は tzname() が "UTC+09:00" になる（二重に言わない）
     return {"name": name, "offset": off, "label": f"UTC{off}" if plain else f"{name} UTC{off}"}
 
 
@@ -317,6 +336,10 @@ def apply_liveness(runs):
 
 # ---------- 実行記録の要約（ADR-0025: 停止の理由は表示側で導く。runner の state.json は変えない）
 GATE_LINE = re.compile(r"^(PASS|FAIL|INFO) (\S+)\s*(.*)$")
+# 「base でも赤い」ので INFO に格下げされたゲートの補足文。kit/steps/gates.sh が書く置換文字列と対の取り決めで、
+# 片方だけ直すと静かに効かなくなる（gates.sh:27 が known、gates.sh:103 が also red）。テストで両方の文言を固定してある
+BASE_RED_NOTES = (("confirmed", "also red on base"),   # runner が base で実際に回して赤だと確かめた分（ADR-0038）
+                  ("known", "known on base"))          # project.yml の known_red_gates に人が書いてあった分
 STEP_LOG = re.compile(r"^(agent|code)-(.+)-(\d+)\.log$")
 WORK_DOC = re.compile(r"^work/[^/]+\.(md|txt)$")
 
@@ -330,14 +353,19 @@ def last_line(text, n=120):
 def gate_results(p):
     """work/gates.txt からゲート 1 件 = 1 行の結果を拾う（kit/steps/gates.sh の書式 `PASS/FAIL/INFO <ゲート名> <補足>`）。
        赤があると同じファイルの後ろに `=== <ゲート>.log (tail 60)` とログ末尾が続くので、そこから先は見ない（ログ中の FAIL を拾わないため）。
-       base でも赤かった赤は runner が INFO に格下げしてある。ここでは書いてある通りに返し、格下げの判断はしない（ADR-0038）"""
+       base でも赤かった赤は runner が INFO に格下げしてある。ここでは書いてある通りに返し、格下げの判断はしない（ADR-0038）。
+       格下げの由来（confirmed / known）は補足文からここで機械可読にして base_red に入れる。画面が note を文字列で
+       見分けなくて済むようにするため（ADR-0025 / ADR-0036: 導出は core、画面は組むだけ）"""
     out = []
     try: text = p.read_text(encoding="utf-8", errors="replace")
     except OSError: return out
     for line in text.splitlines():
         if line.startswith("=== "): break
         m = GATE_LINE.match(line)
-        if m: out.append({"name": m.group(2), "status": m.group(1), "note": m.group(3).strip() or None})
+        if not m: continue
+        note = m.group(3).strip() or None
+        base_red = next((k for k, s in BASE_RED_NOTES if m.group(1) == "INFO" and note and s in note), None)
+        out.append({"name": m.group(2), "status": m.group(1), "note": note, "base_red": base_red})
     return out
 
 
@@ -753,18 +781,24 @@ def idle_stop_view():
 
 
 def recent_red_gates(pj, limit=20):
-    """直近の run が「base でも赤い」と実際に確かめたゲート名（workflow/bin/run の note_base_red が state.json に書く。330）。
+    """直近の run が「base でも赤い」と実際に確かめたゲート（workflow/bin/run の note_base_red が state.json に書く。330）。
 
     project.yml の known_red_gates は人が手で書くもので、実際は誰も書かなかった。機械が確かめた分をここで拾って
-    合わせて見せる。run 名は <日付>-<pj>-<チケット> なので、名前の降順＝新しい順に数件だけ読む"""
+    合わせて見せる。run 名は <日付>-<pj>-<チケット> なので、名前の降順＝新しい順に数件だけ読む。
+    同じゲートを複数の run が確かめていたら、最初に当たった run＝一番新しい run を採る。
+    返すのは [{"name", "run", "at"}]。at は run 単位の時刻（finished、無ければ started）で、
+    ゲートごとの確認時刻は state.json に記録が無い（ゲート名の配列だけ）ので持てない"""
     out = []
     if not RUNS.is_dir(): return out
     names = sorted((p.name for p in RUNS.iterdir() if p.is_dir() and f"-{pj}-" in p.name), reverse=True)[:limit]
+    seen = set()
     for n in names:
         try: s = json.loads((RUNS / n / "state.json").read_text(encoding="utf-8"))
         except Exception: continue
+        at = s.get("finished") or s.get("started")
         for g in s.get("known_red_gates") or []:
-            if g not in out: out.append(g)
+            if g in seen: continue
+            seen.add(g); out.append({"name": g, "run": n, "at": ts_aware(at) if at else None})
     return out
 
 
@@ -800,8 +834,11 @@ def sandbox_view():
         # 実体と貸出は取得の時点が違う（ls に出ない VM が台帳にあることもある）。空きは 0 で止める
         free = max(n_actual - n_lent, 0) if n_actual is not None else None
         unbuilt = max(POOL_PER_PJ - n_actual, 0) if n_actual is not None else None
-        red_gates = list((y or {}).get("known_red_gates") or [])
-        red_gates += [g for g in recent_red_gates(pj) if g not in red_gates]
+        # 由来を分けて持つ（356）: 手書きは project.yml のまま、自動は run の記録のまま（重なっていても落とさない＝事実を消さない）。
+        # 合成した known_red_gates も今までどおり残す（MCP の sandbox_status / project_show の読み手を壊さないため）
+        red_manual = list((y or {}).get("known_red_gates") or [])
+        red_auto = recent_red_gates(pj)
+        red_gates = red_manual + [g["name"] for g in red_auto if g["name"] not in red_manual]
         tpl.append({"pj": pj, "project_yml": py.exists(), "repo": (y or {}).get("repo"), "base_branch": (y or {}).get("base_branch"),
                     "display_name": (y or {}).get("display_name", pj), "token_file": (SANDBOX_PJ_DIR / f"{pj}.env").exists(),
                     "key_source": key_source_for(pj, pool),   # VM に渡る Claude の鍵の出どころ（ADR-0045）
@@ -809,7 +846,8 @@ def sandbox_view():
                     "pool_defined": POOL_PER_PJ, "pool_actual": n_actual, "free": free, "unbuilt": unbuilt,
                     "hint": f"未構築 {unbuilt} 台。proxmox/40-pool.sh {pj} {unbuilt} で足せます" if unbuilt else None,
                     # 人が project.yml に書いた分と、runner が base で回して確かめた分（330）を合わせて見せる
-                    "pool": POOL_PER_PJ, "known_red_gates": red_gates})
+                    "pool": POOL_PER_PJ, "known_red_gates": red_gates,
+                    "known_red_manual": red_manual, "known_red_auto": red_auto})
     fetched = ts_aware(last_ok_ls["finished"]) if last_ok_ls and last_ok_ls.get("finished") else None
     age = None
     if fetched:
@@ -1842,12 +1880,22 @@ def _agg_new(**keys):
             "max_cost": 0.0, "max_run": None, "max_step_log": None}
 
 
-def stats_view(days=None, pj=None, include_dry=False):
+def _step_day(r, zone):
+    """工程が載る日付。run 名の日付（kb run を起動した制御系の今日。制御系は UTC）ではなく、
+    工程の時刻 at を見る側の時間帯に直した日付を使う（チケット 393。at が読めない古い記録だけ run 名に落とす）"""
+    try: return ts_dt(r["at"]).astimezone(zone).date().isoformat()
+    except (KeyError, TypeError, ValueError): return r["date"]
+
+
+def stats_view(days=None, pj=None, include_dry=False, tz=None):
     """工程ごとの消費統計。期間（今日からさかのぼる日数。None なら全部）と PJ で絞り、モデル別・工程別・日別・PJ 別・高い工程の上位にまとめる。
+    日別と「直近 N 日」の起点は tz の時間帯（'+09:00' か IANA 名。省略でこのサーバーの時間帯）で切る。
     費用は claude CLI の total_cost_usd（API 料金の換算値）の合計。利用枠（5 時間 / 7 日）の重みとは違うので、画面は「換算」と言う"""
     rows = agent_step_rows()
-    since = (datetime.date.today() - datetime.timedelta(days=int(days) - 1)).isoformat() if days else None
-    sel = [r for r in rows if (not since or r["date"] >= since) and (not pj or r["pj"] == pj) and (include_dry or not r["dry"])]
+    zone = tz_of(tz)
+    for r in rows: r["day"] = _step_day(r, zone)
+    since = (datetime.datetime.now(zone).date() - datetime.timedelta(days=int(days) - 1)).isoformat() if days else None
+    sel = [r for r in rows if (not since or r["day"] >= since) and (not pj or r["pj"] == pj) and (include_dry or not r["dry"])]
     by_model, by_step, by_day, by_pj = {}, {}, {}, {}
     total = _agg_new()
     for r in sel:
@@ -1855,12 +1903,12 @@ def stats_view(days=None, pj=None, include_dry=False):
         _agg_into(total, r)
         _agg_into(by_model.setdefault(model, _agg_new(model=model)), r)
         _agg_into(by_step.setdefault((r["step"], model), _agg_new(step=r["step"], model=model)), r)
-        _agg_into(by_day.setdefault((r["date"], model), _agg_new(date=r["date"], model=model)), r)
+        _agg_into(by_day.setdefault((r["day"], model), _agg_new(date=r["day"], model=model)), r)
         _agg_into(by_pj.setdefault(r["pj"], _agg_new(pj=r["pj"])), r)
     top = sorted(sel, key=lambda r: r["cost"], reverse=True)[:20]
     for r in top:
         r["log"] = f"agent-{r['step']}-{r['index']}.log"; r["log_path"] = rel(RUNS / r["run"] / r["log"]); r.pop("tools", None)
-    return {"since": since, "days": days, "pj": pj, "pjs": sorted({r["pj"] for r in rows if r["pj"]}),
+    return {"since": since, "days": days, "pj": pj, "tz": tz_info(zone), "pjs": sorted({r["pj"] for r in rows if r["pj"]}),
             "total": total,
             "by_model": sorted(by_model.values(), key=lambda a: -a["cost"]),
             "by_step": sorted(by_step.values(), key=lambda a: -a["cost"]),

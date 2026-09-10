@@ -501,6 +501,56 @@ class ApiTest(unittest.TestCase):
         T = json.loads(src[src.index("const T = ") + len("const T = "):src.rindex("};") + 1])
         self.assertIn(T["btn"]["redo"], T["help"]["runDone"], "完了時の案内が、隣に出すボタンの名前と一致していない")
 
+    def test_ticket_detail_reads_body_before_the_forms(self):
+        """チケット詳細は「読む → 状況 → 操作 → 記録」の順（チケット 377）。
+
+        幅 1100px 以下では grid2 が 1 カラムになり DOM 順がそのまま表示順・読み上げ順になるので、
+        CSS の order ではなく DOM の並びで本文を先に置く。JS を動かす基盤が無いのでソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewTicket(")
+        body = app[i:app.index("\n}", i)]
+        self.assertIn('<div class="grid2">', body, "2 カラムをやめている（広い画面で本文の 1 行が長くなる）")
+        # 本文パネルが操作のどの塊よりも前にある（狭い画面と読み上げでは DOM 順が読む順）
+        at = lambda key: body.index(key)
+        for key in ("T.h.ops", "T.h.run", "T.h.move", "T.h.fix", "T.h.runs", "T.h.history"):
+            self.assertLess(at("T.h.body"), at(key), f"本文より前に {key} のパネルが並んでいる")
+        self.assertLess(at("T.h.body"), at("T.h.attachments"), "添付が本文より前にある")
+        self.assertLess(at("T.h.attachments"), at("T.h.ops"), "添付と本文の間に操作が割り込んでいる（353 / 378 の位置関係）")
+        self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
+        # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
+        self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
+        for key in ("T.board.liveStep", "T.board.liveNext"):
+            self.assertIn(key, body, f"実行状況が {key} を使っていない（ボードと別の判定を作らない）")
+        self.assertRegex(body, r"nowPanel[^\n]*runLink\(live\.name\)", "実行状況から実行記録へ移る入口が無い")
+        # 実行・状態変更・項目編集は 1 枚の操作領域にまとまり、既存の操作は全部残る
+        ops = body[at("T.h.ops"):at("T.h.runs")]
+        for act in ("runBtn(T.btn.run", "moves.join(", 'data-act="set"', 'data-act="sync"', "runBtn(T.btn.dryRun"):
+            self.assertIn(act, ops, f"操作領域に {act} が無い（既存の操作を落としている）")
+        for act in ('data-act="run"', 'data-act="status"', 'data-act="attach"', 'data-act="detach"'):
+            self.assertIn(act, app, f"{act} の操作が消えている")
+        # 詳細設定は畳む。「実行する」と案内は畳まない（素の details なので Tab / Enter で届く）
+        self.assertIn("T.label.runOptions", ops, "実行の詳細設定を畳む summary が無い")
+        det = ops.index("<details")
+        self.assertLess(ops.index("runBtn(T.btn.run"), det, "「実行する」が折りたたみの中に入っている")
+        self.assertLess(ops.index("esc(runHint)"), det, "実行の案内が折りたたみの中に入っている")
+        for key in ("run-wf", "run-keep", "run-resume", "T.btn.dryRun"):
+            self.assertGreater(ops.index(key), det, f"{key} が折りたたみの外に残っている")
+        # 強いボタンは操作領域に 1 つだけ（実行も始まるのか、状態だけ変わるのかを色で見分ける）
+        self.assertNotRegex(ops[:ops.index("T.h.fix")], r"stBtn\('(start|review|done|block)'[^)]*primary",
+                            "状態を進めるボタンに primary が残っている（実行するボタンと見分けられない）")
+        moves = body[body.index("const runBoxRedo = "):body.index("const runHint")]
+        self.assertNotIn("primary", moves, "moves に primary が残っている")
+        self.assertRegex(moves, r"done: runBoxRedo \? \[\]", "完了ずみで状態の塊にも reopen が残っている（同じボタンが 2 個並ぶ）")
+        # ただし実行の塊が警告に差し替わるとき（project.yml が無い / VM 返却中）は、そこに reopen が出ないので状態の塊に残す
+        self.assertIn("d.project_yml && !runBusy", moves, "実行の塊が reopen を出せるかを見ていない（戻す手段が画面から消える）")
+        self.assertRegex(moves, r"done: runBoxRedo \? \[\] : \[stBtn\('reopen'", "実行の塊が reopen を出せないときに状態の塊が空のままになる")
+        self.assertRegex(ops, r"t\.status === 'done' \? T\.help\.moveNone", "無い「未着手に戻す（やり直す）」を案内する経路が残っている")
+        for key in ("T.help.moveOnly", "T.help.moveNone", "T.help.moveUndo"):
+            self.assertIn(key, ops, f"{key} が無い（状態変更の効果と次の一手を言っていない）")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.panel\.ops > h3 \{", "操作領域の小見出しの指定が無い")
+
     def test_intake_keeps_draft_across_navigation(self):
         """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
 
@@ -1065,6 +1115,8 @@ class ApiTest(unittest.TestCase):
             "code-gates-3.log": "PASS x\n"})
         self._fixture_run(f"{today}-{PJ}-{tid}-dry", {**self._state([("plan", True)], workflow="bug"), "task": tid}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 1, u(0, 1, 1, 1), 9.0)})
         self._fixture_run("2019-01-01-otherpj-1", {**self._state([("plan", True)], workflow="bug"), "pj": "otherpj", "task": "1"}, {"agent-plan-0.jsonl": jsonl("claude-fable-5-1", 3, u(0, 10, 10, 10), 0.5)})
+        old = self.ws / "runs" / "2019-01-01-otherpj-1" / "agent-plan-0.jsonl"   # 期間は工程の時刻で切る（チケット 393）ので、古い run の工程の時刻も揃えておく
+        ots = datetime.datetime.fromisoformat("2019-01-01T09:00:00+00:00").timestamp(); os.utime(old, (ots, ots))
         st, d = self.http.get("/api/stats?days=1")
         self.assertEqual(st, 200)
         self.assertGreaterEqual(d["files"], 5)
@@ -1097,6 +1149,54 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(round(sum(r["cost"] for r in d5["top"] if r["task"] == tid), 2), 6.7)
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("async function viewStats", app); self.assertIn("'stats'", app)
+
+    def test_stats_by_day_uses_the_given_timezone(self):
+        """日別（by_day）と「直近 N 日」は、run 名の日付（kb run を起動した制御系＝UTC の今日）ではなく、
+        工程の時刻 at を tz の時間帯に直した日付で切る（チケット 393）。run 名の日付は変えない"""
+        def jsonl(cost):
+            lines = [{"type": "system", "subtype": "init", "model": "claude-opus-5", "tools": [], "cwd": "/app"},
+                     {"type": "result", "subtype": "success", "is_error": False, "num_turns": 3, "duration_ms": 60000,
+                      "usage": {"input_tokens": 10, "cache_creation_input_tokens": 10, "cache_read_input_tokens": 10, "output_tokens": 10},
+                      "total_cost_usd": cost, "result": "ok"}]
+            return "\n".join(json.dumps(l) for l in lines) + "\n"
+        pj, tid = "tzpj", "7778"   # 他のテストの run と混ざらない PJ 名で絞って見る
+        run = f"2026-09-09-{pj}-{tid}"
+        self._fixture_run(run, {**self._state([("plan", True)], workflow="bug"), "pj": pj, "task": tid}, {"agent-plan-0.jsonl": jsonl(3.0)})
+        f = self.ws / "runs" / run / "agent-plan-0.jsonl"
+        def at(iso):
+            t = datetime.datetime.fromisoformat(iso).timestamp(); os.utime(f, (t, t))
+        try:
+            at("2026-09-09T23:30:00+00:00")   # UTC の 09-09 23:30 に終わった工程は、+09:00 では翌日の 08:30
+            _, d = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00")
+            self.assertEqual([a["date"] for a in d["by_day"]], ["2026-09-10"], "日別が工程の時刻を tz に直していない")
+            self.assertEqual((d["tz"]["offset"], d["tz"]["label"]), ("+09:00", "UTC+09:00"))
+            self.assertEqual([r["run"] for r in d["top"]], [run], "run 名の日付を変えてしまっている")
+            _, z = self.http.get(f"/api/stats?pj={pj}&tz=%2B00%3A00")
+            self.assertEqual([a["date"] for a in z["by_day"]], ["2026-09-09"])
+            # 「直近 N 日」の起点も同じ時間帯の今日から数える（その時間帯の今日 00:00 の 1 分前は今日に入らない）
+            zone = datetime.timezone(datetime.timedelta(hours=9))
+            today = datetime.datetime.now(zone).date()
+            at((datetime.datetime.combine(today, datetime.time(0, 0), zone) - datetime.timedelta(minutes=1)).isoformat())
+            _, d1 = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00&days=1")
+            self.assertEqual((d1["selected"], d1["since"]), (0, today.isoformat()))
+            _, d2 = self.http.get(f"/api/stats?pj={pj}&tz=%2B09%3A00&days=2")
+            self.assertEqual((d2["selected"], d2["since"]), (1, (today - datetime.timedelta(days=1)).isoformat()))
+            # 読めない tz はサーバーの時間帯に落とし、実際に使った時間帯を返す（統計は読むだけなので 400 にしない）
+            _, bad = self.http.get(f"/api/stats?pj={pj}&tz=Mars%2FOlympus")
+            self.assertEqual(bad["tz"]["offset"], datetime.datetime.now().astimezone().isoformat()[-6:])
+            here = datetime.datetime.now().astimezone().isoformat()[-6:]
+            for q, why in (("%2B24%3A00", "24 時以上のオフセット"), ("%2B09%3A99", "60 分以上の分")):
+                st, out = self.http.get(f"/api/stats?pj={pj}&tz={q}")
+                self.assertEqual(st, 200, f"{why}で 500 になっている")
+                self.assertEqual(out["tz"]["offset"], here, f"{why}をサーバーの時間帯に落としていない")
+            # 画面はブラウザーの時間帯を渡し、日別の表に基準を書く
+            app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+            body = app[app.index("async function viewStats("):]
+            body = body[:body.index("\n}")]
+            self.assertIn("tzOffset()", body, "画面がブラウザーの時間帯を渡していない")
+            self.assertIn("T.stats.dayTz", body); self.assertIn("T.help.statsDay", body)
+        finally:
+            shutil.rmtree(self.ws / "runs" / run, ignore_errors=True)
 
     def test_run_outcome_drives_the_run_view(self):
         """停止理由の判定は API（core.run_outcome）に寄せる。app.js が history から自前で決めない"""
@@ -1216,6 +1316,75 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200)
         pj = next(x for x in v["templates"] if x["pj"] == PJ)
         self.assertIn("unittest-console", pj["known_red_gates"])
+
+    def _red_run(self, name, pj, gates, started, finished=None):
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({
+            "pj": pj, "task": name.rsplit("-", 1)[-1], "workflow": "feature", "branch": "sandbox/x", "base": "develop",
+            "started": started, "finished": finished, "history": [], "loops": {},
+            "result": "human", "known_red_gates": gates}, ensure_ascii=False), encoding="utf-8")
+        return name
+
+    def test_sandbox_separates_hand_written_known_red_gates_from_what_the_runner_confirmed(self):
+        """「base でも赤いゲート」は出どころが 2 つある（チケット 356）。
+
+        project.yml に人が書いた分（known_red_manual）と、runner が base で回して確かめた分（known_red_auto）は
+        確かさが違うので、画面が分けて出せるように別のキーで返す。自動の分には確かめた run と時刻を添える。
+        合成した known_red_gates は MCP の読み手のために今までどおり残す"""
+        redpj = self.ws / "projects" / "redpj"; redpj.mkdir(parents=True)
+        (redpj / "project.yml").write_text("repo: x/redpj\nbase_branch: develop\nknown_red_gates:\n  - e2e\n  - lint\n", encoding="utf-8")
+        try:
+            # 同じ e2e を 2 つの run が確かめている。新しい run（名前の降順で先）の分を採る
+            self._red_run("2026-09-05-redpj-901", "redpj", ["e2e"], "2026-09-05T09:00:00", "2026-09-05T10:00:00")
+            self._red_run("2026-09-06-redpj-902", "redpj", ["e2e", "typecheck"], "2026-09-06T09:00:00", "2026-09-06T11:30:00")
+            st, v = self.http.get("/api/sandbox")
+            self.assertEqual(st, 200)
+            p = next(x for x in v["templates"] if x["pj"] == "redpj")
+            self.assertEqual(p["known_red_manual"], ["e2e", "lint"])            # project.yml のまま（自動の分を混ぜない）
+            auto = {g["name"]: g for g in p["known_red_auto"]}
+            self.assertEqual(sorted(auto), ["e2e", "typecheck"])
+            self.assertEqual(auto["e2e"]["run"], "2026-09-06-redpj-902")        # 古い 901 ではなく新しい run
+            self.assertEqual(auto["typecheck"]["run"], "2026-09-06-redpj-902")
+            self._assert_offset("known_red_auto[].at", auto["e2e"]["at"])
+            self.assertTrue(auto["e2e"]["at"].startswith("2026-09-06T11:30:00"), auto["e2e"]["at"])   # finished（無ければ started）
+            # 手書きと自動で重なる e2e は両方に残す（事実を消さない）。合成は重複を落とした 1 本
+            self.assertEqual(p["known_red_gates"], ["e2e", "lint", "typecheck"])
+
+            # 別の PJ の run は混ざらない（手書きも自動も PJ ごと）
+            seed = next(x for x in v["templates"] if x["pj"] == PJ)
+            self.assertEqual(seed["known_red_manual"], [], "kumitate の project.yml に known_red_gates は書かれていない")
+            self.assertNotIn("e2e", [g["name"] for g in seed["known_red_auto"]])
+        finally:
+            shutil.rmtree(redpj, ignore_errors=True)
+            for n in ("2026-09-05-redpj-901", "2026-09-06-redpj-902"):
+                shutil.rmtree(self.ws / "runs" / n, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.sandbox.knownRedAuto", app); self.assertIn("T.sandbox.knownRedManual", app)
+
+    def test_run_gates_mark_the_reds_that_are_also_red_on_base(self):
+        """base でも赤くて INFO に格下げされたゲート（ADR-0038）を、FAIL と区別して画面に渡す（チケット 356）。
+
+        由来（runner が確かめた分 / project.yml で分かっていた分）の見分けは kit/steps/gates.sh の補足文が唯一の
+        一次情報なので、core が base_red に直して返す。app.js が note を文字列で読まなくて済むようにするため"""
+        name = self._fixture_run("2026-09-07-kumitate-994", self._state([("implement", True), ("gates", False)]), {
+            "work/gates.txt": "PASS lint\nFAIL test\n"
+                              "INFO e2e red (also red on base; not a gate)\n"
+                              "INFO typecheck red (known on base; not a gate)\n"
+                              "\n=== base check: origin/develop\nFAIL e2e\n",
+            "work/ticket.md": "# x\n"})
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200)
+        gates = {g["name"]: g for g in d["progress"]["gates"]}
+        self.assertEqual(gates["e2e"]["status"], "INFO"); self.assertEqual(gates["e2e"]["base_red"], "confirmed")
+        self.assertEqual(gates["typecheck"]["base_red"], "known")
+        self.assertIsNone(gates["lint"]["base_red"]); self.assertIsNone(gates["test"]["base_red"])
+        self.assertEqual(d["outcome"]["gate_fails"], ["test"], "INFO に落ちた分を赤いゲートに混ぜている")
+        self.assertNotIn("base check", str(gates), "=== 以降のログ末尾を読んでいる")
+        shutil.rmtree(self.ws / "runs" / name, ignore_errors=True)
+
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.baseRedConfirmed", app); self.assertIn("T.outcome.baseRedKnown", app)
 
     def test_run_whose_job_ended_is_abandoned(self):
         """起動したジョブが終わっているのに finished が書かれていない run は「実行中」ではなく「中断」（チケット 236）。
