@@ -70,6 +70,19 @@ type config struct {
 	PowerShell       string `json:"powershell"`
 	TaskUser         string `json:"task_user"`
 	TaskPasswordFile string `json:"task_password_file"`
+	// Guest display resolution for every PJ on this worker. Absent leaves the base image as it is.
+	Display *displaySize `json:"display"`
+}
+
+type displaySize struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// The range project.schema.json and the control plane both enforce; a worker
+// configured outside it refuses to start rather than passing tart a bad size.
+func validDisplay(width, height int) bool {
+	return 800 <= width && width <= 2560 && 600 <= height && height <= 2560
 }
 
 type operation struct {
@@ -80,6 +93,8 @@ type operation struct {
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
 		Lease   string `json:"lease"`
+		Width   int    `json:"width"`
+		Height  int    `json:"height"`
 	} `json:"payload"`
 	Cancelled int `json:"cancelled"`
 }
@@ -307,6 +322,9 @@ func configureWorker(c config, journalRequired bool) (*worker, error) {
 	}
 	if c.BaseVM != "" && (!nameRE.MatchString(c.BaseVM) || c.GuestVM == "" || c.BaseVM == c.GuestVM) {
 		return nil, errors.New("base_vm must be a distinct local VM name")
+	}
+	if c.Display != nil && !validDisplay(c.Display.Width, c.Display.Height) {
+		return nil, errors.New("display width must be 800-2560 and height 600-2560")
 	}
 	u, err := url.Parse(c.URL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {

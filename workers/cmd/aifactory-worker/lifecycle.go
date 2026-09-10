@@ -76,6 +76,21 @@ func (w *worker) lifecycle(ctx context.Context, op operation, lw *logWriter) (r 
 		if err = run("set", w.c.GuestVM, "--cpu", "4", "--memory", "8192"); err != nil {
 			return uncertain
 		}
+		// Resolution comes from the PJ definition first, then this worker's config; without
+		// either, the base image keeps its own size. Tart only accepts it while stopped, so
+		// this stays before run, and separate from the cpu/memory call that must not change.
+		width, height := op.Payload.Width, op.Payload.Height
+		if width == 0 && height == 0 && w.c.Display != nil {
+			width, height = w.c.Display.Width, w.c.Display.Height
+		}
+		if width != 0 || height != 0 {
+			if !validDisplay(width, height) {
+				return uncertain
+			}
+			if err = run("set", w.c.GuestVM, "--display", fmt.Sprintf("%dx%d", width, height)); err != nil {
+				return uncertain
+			}
+		}
 		logFile, err := os.OpenFile(filepath.Join(w.j.root, "guest-console.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
 			return uncertain

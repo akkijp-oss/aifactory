@@ -4,6 +4,11 @@ import ScreenCaptureKit
 import ImageIO
 import UniformTypeIdentifiers
 
+// Screenshots and the click coordinate system share this cap, so a guest whose display is
+// set from the PJ definition (ticket 343) is captured 1:1 and clicks land where they look.
+// It matches the width project.schema.json allows; Windows and Linux keep their 1024 cap.
+let maxCapture=2560
+
 @main struct DesktopNative {
  static func main() async {
   do {
@@ -13,7 +18,7 @@ import UniformTypeIdentifiers
     guard CGPreflightScreenCaptureAccess() else { _=CGRequestScreenCaptureAccess();throw Failure("Screen Recording permission required for desktop-native") }
     let content=try await SCShareableContent.excludingDesktopWindows(false,onScreenWindowsOnly:true)
     guard let display=content.displays.first(where:{$0.displayID == CGMainDisplayID()}) else {throw Failure("main display unavailable")}
-    let config=SCStreamConfiguration();config.width=min(1024,Int(CGDisplayPixelsWide(display.displayID)));config.height=Int(Double(CGDisplayPixelsHigh(display.displayID))*Double(config.width)/Double(CGDisplayPixelsWide(display.displayID)));config.showsCursor=true
+    let config=SCStreamConfiguration();config.width=min(maxCapture,Int(CGDisplayPixelsWide(display.displayID)));config.height=Int(Double(CGDisplayPixelsHigh(display.displayID))*Double(config.width)/Double(CGDisplayPixelsWide(display.displayID)));config.showsCursor=true
     let filter=SCContentFilter(display:display,excludingWindows:[])
     let img=try await SCScreenshotManager.captureImage(contentFilter:filter,configuration:config)
     let bytes=NSMutableData();guard let dest=CGImageDestinationCreateWithData(bytes,UTType.png.identifier as CFString,1,nil) else {throw Failure("PNG encoding failed")}
@@ -26,7 +31,7 @@ import UniformTypeIdentifiers
    }
    switch action {
    case "move","click":
-    let display=CGMainDisplayID(),bounds=CGDisplayBounds(display),width=min(1024,Int(CGDisplayPixelsWide(display))),height=Int(Double(CGDisplayPixelsHigh(display))*Double(width)/Double(CGDisplayPixelsWide(display)))
+    let display=CGMainDisplayID(),bounds=CGDisplayBounds(display),width=min(maxCapture,Int(CGDisplayPixelsWide(display))),height=Int(Double(CGDisplayPixelsHigh(display))*Double(width)/Double(CGDisplayPixelsWide(display)))
     guard let x=r["x"] as? Int,let y=r["y"] as? Int,x>=0,y>=0,x<width,y<height else {throw Failure("coordinates outside screenshot")}
     let point=CGPoint(x:bounds.origin.x+Double(x)*bounds.width/Double(width),y:bounds.origin.y+Double(y)*bounds.height/Double(height))
     CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:point,mouseButton:.left)?.post(tap:.cghidEventTap)

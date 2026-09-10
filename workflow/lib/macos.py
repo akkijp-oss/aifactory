@@ -245,7 +245,10 @@ def backend(Run):
             acquire_lease(self, available, lease)
             self.state["lease"] = lease; self.save()
             self.log("Mac VM prepare")
-            _, r = self.client.execute("guest-prepare")
+            # display \u3092\u66f8\u3044\u305f PJ \u3060\u3051\u89e3\u50cf\u5ea6\u3092\u6e21\u3059\u3002\u7121\u3051\u308c\u3070\u5f15\u6570\u306a\u3057\u3067\u5f93\u6765\u3069\u304a\u308a\uff08343\uff09
+            display = self.project.get("display") or {}
+            prepare = {"width": display["width"], "height": display["height"]} if display else {}
+            _, r = self.client.execute("guest-prepare", prepare)
             if r.returncode: raise RuntimeError("Mac VM prepare failed; lease retained")
             self.setup_project()
 

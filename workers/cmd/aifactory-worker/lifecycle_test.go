@@ -171,3 +171,102 @@ func TestGuestCancellationConfirmsVMStopped(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+// Ticket 343: the guest display comes from the PJ definition first and the worker config
+// second, is set while the clone is stopped, and never rewrites the fixed cpu/memory call.
+func TestPrepareSetsTheDisplayOnlyWhenOneIsConfigured(t *testing.T) {
+	prepare := func(c config, op operation) [][]string {
+		t.Helper()
+		j, _ := newJournal(t.TempDir())
+		defer j.lock.Close()
+		w := &worker{c: c, j: j}
+		var calls [][]string
+		started := false
+		w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{}, args...))
+			output := "[]"
+			if args[0] == "run" {
+				started = true
+			}
+			if args[0] == "list" && started {
+				output = `[{"Source":"local","Name":"guest","State":"running"}]`
+			}
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' \"$FAKE_OUTPUT\"")
+			cmd.Env = append(os.Environ(), "FAKE_OUTPUT="+output)
+			return cmd
+		}
+		j.begin(op.ID)
+		if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "succeeded" {
+			t.Fatal(r, calls)
+		}
+		return calls
+	}
+	at := func(calls [][]string, want string) int {
+		for i, args := range calls {
+			if strings.Contains(strings.Join(args, " "), want) {
+				return i
+			}
+		}
+		return -1
+	}
+	resources := []string{"set", "guest", "--cpu", "4", "--memory", "8192"}
+	base := config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}
+	op := operation{ID: "prepare", Kind: "guest-prepare"}
+	op.Payload.Lease = "lease-1"
+
+	calls := prepare(base, op)
+	if at(calls, "--display") != -1 {
+		t.Fatal("display set without configuration", calls)
+	}
+	if strings.Join(calls[at(calls, "--cpu")], " ") != strings.Join(resources, " ") {
+		t.Fatal(calls)
+	}
+
+	configured := base
+	configured.Display = &displaySize{Width: 1600, Height: 1000}
+	calls = prepare(configured, op)
+	display := at(calls, "--display")
+	if strings.Join(calls[display], " ") != "set guest --display 1600x1000" {
+		t.Fatal(calls)
+	}
+	if display < at(calls, "--cpu") || display > at(calls, "run") {
+		t.Fatal("display not set on the stopped clone", calls)
+	}
+	if strings.Join(calls[at(calls, "--cpu")], " ") != strings.Join(resources, " ") {
+		t.Fatal(calls)
+	}
+
+	// The PJ definition wins over the worker's own setting.
+	op.Payload.Width, op.Payload.Height = 1400, 900
+	calls = prepare(configured, op)
+	if strings.Join(calls[at(calls, "--display")], " ") != "set guest --display 1400x900" {
+		t.Fatal(calls)
+	}
+}
+
+func TestPrepareRefusesADisplayOutsideTheAllowedRange(t *testing.T) {
+	for _, size := range []displaySize{{Width: 640, Height: 900}, {Width: 1400, Height: 0}, {Width: 4000, Height: 900}} {
+		j, _ := newJournal(t.TempDir())
+		w := &worker{c: config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+		var calls [][]string
+		w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+			calls = append(calls, append([]string{}, args...))
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' \"$FAKE_OUTPUT\"")
+			cmd.Env = append(os.Environ(), "FAKE_OUTPUT=[]")
+			return cmd
+		}
+		j.begin("prepare")
+		op := operation{ID: "prepare", Kind: "guest-prepare"}
+		op.Payload.Lease = "lease-1"
+		op.Payload.Width, op.Payload.Height = size.Width, size.Height
+		if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "uncertain" {
+			t.Fatal(size, r)
+		}
+		for _, args := range calls {
+			if strings.Contains(strings.Join(args, " "), "--display") {
+				t.Fatal("out-of-range display passed to tart", size, args)
+			}
+		}
+		j.lock.Close()
+	}
+}

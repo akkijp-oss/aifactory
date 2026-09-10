@@ -153,4 +153,6 @@ base を確認できなかった回（未コミットの変更を退避できな
 
 `computer_use: true` は `macos-pull` / `windows-pull` でVM内のcomputer MCPを有効にする。既定は無効。[導入手順](../guides/computer-use.md)。
 
+`display: {width, height}` は `macos-pull` のゲスト画面の大きさ（幅800〜2560・高さ600〜2560で両方必須）。省略すると基準VMのまま（1024×768）。ワーカー設定にも同じキーがあり、優先順位はPJ定義 > ワーカー設定 > 省略。`scale` は未対応。[設定手順](../guides/computer-use.md)。
+
 `backend: linux-pull` は単体Linuxインスタンスを使う。`app_dir` は `<work_root>/app`、`gates` は `.sh`。`computer_use: true` に対応。[Linux導入手順](../guides/linux-worker.md)。

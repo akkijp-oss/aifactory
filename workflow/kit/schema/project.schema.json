@@ -143,6 +143,27 @@
     "computer_use": {
       "type": "boolean",
       "description": "Enable the dedicated VM desktop MCP tool for workflow agents. Requires preinstalled desktop helpers."
+    },
+    "display": {
+      "type": "object",
+      "description": "Mac \u30b2\u30b9\u30c8\u306e\u8868\u793a\u89e3\u50cf\u5ea6\u3002\u7701\u304f\u3068\u57fa\u6e96 VM \u306e\u307e\u307e\uff081024x768\uff09\u3002scale \u306f\u672a\u5bfe\u5fdc\uff08ADR-0057\uff09",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 800,
+          "maximum": 2560
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 2560
+        }
+      }
     }
   },
   "allOf": [
@@ -192,6 +213,23 @@
           "gates": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_.-]+\\.ps1$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "display"
+        ]
+      },
+      "then": {
+        "required": [
+          "backend"
+        ],
+        "properties": {
+          "backend": {
+            "const": "macos-pull"
           }
         }
       }

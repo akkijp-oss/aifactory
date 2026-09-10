@@ -151,4 +151,6 @@ How to write it: [Add a project](../guides/add-project.md#gates-sh).
 
 `computer_use: true` enables the VM-local computer MCP on `macos-pull` / `windows-pull`. It defaults to disabled. See [setup](../guides/computer-use.md).
 
+`display: {width, height}` sets the guest screen size on `macos-pull` (800-2560 wide, 600-2560 high; both keys required). Without it the guest keeps the base image's 1024x768. The worker configuration takes the same key, and precedence is project definition, then worker configuration, then neither. `scale` is unsupported. See [setup](../guides/computer-use.md).
+
 `backend: linux-pull` uses a standalone Linux instance. Set `app_dir` to `<work_root>/app` and use a `.sh` gate. Supports `computer_use: true`. See [Linux setup](../guides/linux-worker.md).
