@@ -549,7 +549,7 @@ class ApiTest(unittest.TestCase):
         for key in ("T.help.moveOnly", "T.help.moveNone", "T.help.moveUndo"):
             self.assertIn(key, ops, f"{key} が無い（状態変更の効果と次の一手を言っていない）")
         css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
-        self.assertRegex(css, r"\.panel h3 \{", "操作領域の小見出しの指定が無い")
+        self.assertRegex(css, r"\.panel\.ops > h3 \{", "操作領域の小見出しの指定が無い")
 
     def test_intake_keeps_draft_across_navigation(self):
         """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。

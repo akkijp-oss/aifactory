@@ -385,6 +385,7 @@ async function viewTicket(id, flash) {
     </div>`);
   schedule(() => viewTicket(id), 5000);
 }
+
 /* ---------- 実行記録 */
 async function viewRuns() {
   const d = await api('runs'); const showAll = localStorage.getItem('runs-all') === '1';

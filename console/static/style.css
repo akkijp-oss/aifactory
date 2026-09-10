@@ -124,12 +124,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; margin-bottom: 14px; }
 .panel h2 { font-size: 14px; margin: 0 0 10px; }
 .panel h2 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
-/* 操作領域（チケット詳細）は 1 枚のパネルの中を h3 で「実行 / 状態 / 項目」に分ける。h2 より一段小さく、上の塊との間を空ける（377） */
-.panel h3 { font-size: 13px; margin: 18px 0 8px; }
-.panel h3:first-of-type { margin-top: 0; }
-.panel h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
-.panel.ops > h3 { border-top: 1px solid var(--line-soft); padding-top: 14px; }
-.panel.ops > h3:first-of-type { border-top: 0; padding-top: 0; }
+/* 操作領域（チケット詳細）は 1 枚のパネルの中を h3 で「実行 / 状態 / 項目」に分ける。h2 より一段小さく、上の塊との間を空ける（377）。
+   素の .panel h3 は実行記録画面のファイル見出しが前から使っているので、ここは .panel.ops > h3 に限って書く */
+.panel.ops > h3 { font-size: 13px; font-weight: 600; color: var(--ink); margin: 18px 0 8px; border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.panel.ops > h3:first-of-type { margin-top: 0; border-top: 0; padding-top: 0; }
+.panel.ops > h3 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
 details.runopts { margin: 10px 0 0; }
 details.runopts > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
