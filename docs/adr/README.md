@@ -66,4 +66,5 @@
 - [0052: PJ 定義は MCP から読み書きする。書き先は workspace 側だけで、`examples/projects/` は読むだけ](0052-mcp-project-definition-read-write.md)
 - [0053: 軽微な FAIL は `severity: minor` で 1 周だけ延長する。再開に渡す review.md は FAIL のときだけ、二重再開は断る](0053-review-severity-and-resume-guard.md)
 - [0054: ボードのカードは div + 題名リンク + 工程リンクの兄弟構成にし、突き合わせ用の稼働中 run（`runs_live`）には上限を掛けない](0054-board-card-live-step.md)
-- [0055: チケット詳細は「読む → 状況 → 操作 → 記録」の順に DOM を並べ、操作領域の強いボタンは 1 つにする](0055-ticket-detail-reading-order.md)
+- [0055: 統計の日別は工程の時刻を「見る側の時間帯」に直した日付で切る（run 名の日付は変えない）](0055-stats-by-day-in-the-viewers-timezone.md)
+- [0056: チケット詳細は「読む → 状況 → 操作 → 記録」の順に DOM を並べ、操作領域の強いボタンは 1 つにする](0056-ticket-detail-reading-order.md)

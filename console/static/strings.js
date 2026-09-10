@@ -72,7 +72,8 @@ const T = {
     "period": { "1": "今日", "7": "7 日", "30": "30 日", "all": "全部" },
     "tile": { "steps": "工程", "turns": "ターン", "cacheRead": "キャッシュ読出", "output": "出力", "cost": "費用換算", "thinking": "thinking のある工程" },
     "thinkingCell": "{n} 回", "thinkingVisible": "本文あり {v} 回 / {c} 字", "visibleChars": "見える文字 {c}", "share": "全体の {p}", "maxOf": "最大 {cost}", "noResult": "result なし {n}", "rateLimited": "利用枠で拒否 {n}",
-    "scope": "{sel} 工程（記録は全部で {all}）"
+    "scope": "{sel} 工程（記録は全部で {all}）",
+    "dayTz": "日付は {tz} 基準で数えます。"
   },
 
   "keys": { "count": "{n} 本", "never": "まだ起動していません", "assigned": "割り当てた回数: {n}（チケットの実行に鍵を渡した回数。起動回数とは別です）" },
@@ -229,6 +230,7 @@ const T = {
     "statsCost": "費用換算は claude CLI が API 料金で計算した total_cost_usd の合計です。サブスクの利用枠（5 時間・7 日）がどの重みで数えるかは、ここからは分かりません。",
     "statsThinking": "thinking は assistant の thinking ブロックの数です。Opus は本文が記録に出ず署名だけなので回数しか分かりません。Fable は要約の本文が見えるので、その回数と文字数も出します。thinking のトークンは出力に含まれていて、別には数えられません。出力トークンと「見える文字」の差が、隠れた thinking の目安です。",
     "statsScope": "code の工程（gates・pr など）はモデルを使わないので載せません。dry-run は既定で除きます。実行中の工程は result がまだ無いので 0 のまま出ます。",
+    "statsDay": "日別と期間の絞り込みは、工程の記録ファイルの更新時刻をブラウザーの時間帯に直した日付で数えます。run 名の日付は run を始めた制御系（UTC）の日付なので、run 名の日付と集計日が違う行があります。",
     "noTodo": "未着手のチケットがありません。先に起票してください。",
     "noProjectYml": "{pj} に project.yml が無いため、runner は動かせません。$AIFACTORY_WORKSPACE/projects/{pj}/project.yml を書いてください。",
     "pjReady": "{pj} には project.yml があります。配車すると runner が動きます。",
