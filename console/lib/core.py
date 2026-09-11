@@ -1990,5 +1990,5 @@ def config_view():
     # CLAUDE_MODEL はここ（console）の環境変数ではなく run を起こす側のプロセスのものなので、値は読まない（読むと嘘になる）。
     # 上書きが起こりうるという事実だけを返し、実際に使われたモデルは統計（stats_view）で見る
     return {"workflows": wfs, "routes": routes, "role_defaults": dict(wfdef.ROLE_CLASS), "env_override_possible": True,
-            "timeout_default": timeout_default, "roles": rs, "templates": sandbox_view()["templates"],
+            "timeout_min_default": timeout_default, "roles": rs, "templates": sandbox_view()["templates"],
             "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}

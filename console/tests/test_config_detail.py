@@ -239,7 +239,7 @@ class ConfigApiTest(unittest.TestCase):
         self.assertTrue(step_of(w, "design")["brief"])
         self.assertEqual(d["role_defaults"], {"planner": "judgment", "reviewer": "judgment", "researcher": "research", "implementer": "coding"})
         self.assertTrue(d["env_override_possible"])
-        self.assertEqual(d["timeout_default"], 60)
+        self.assertEqual(d["timeout_min_default"], 60)
 
     def test_the_console_environment_does_not_leak_into_the_resolved_model(self):
         _, d = self.get("/api/config")
