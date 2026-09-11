@@ -51,7 +51,36 @@ flowchart LR
 | Stats | What each agent step consumed, taken from the raw run events (`usage` on the `result` event and the model name on `init` in `agent-<step>-<n>.jsonl`). Filter by period (today / 7 days / 30 days / all) and project. Tiles on top: steps, turns, cache reads, output, cost estimate, steps with thinking. Below: tables by model, by step (step × model), by day and by project (steps, average turns, average minutes, input, cache writes, cache reads, output with visible characters, thinking blocks and how many have visible text and how long, tool calls, cost estimate with its share, cost per step and the most expensive step), the 20 most expensive steps (linking to the run and the log), and how to read it. The cost estimate is the sum of the CLI's `total_cost_usd`, not the weight the subscription windows (5 hours / 7 days) use. Opus thinking blocks carry only a signature in the record, so only their count is known. Parsed results are cached in `stats-cache.json` next to the job records and only changed files are re-read (ticket 382). **The by-day table and the period filter count each step by its own timestamp, converted to the viewer's time zone** (a run directory name carries the date of the control plane, which runs on UTC, at the time `kb run` started, so some rows fall on a different day than their run name says; the table states which zone it counted in. ADR-0055) | Filter by period, project and whether to include dry runs. Open the run or the log from the top-20 rows |
 | Keys | The Claude key pool (`keys.json` on the control plane): name, the *use for fable* / *use for everything else* flags, whether the key is used, the last 4 characters of the token, issue date, last launch, launch count (how many times the runner actually started `claude` with the key; the assignment count shows on hover), and the lent tickets holding it. The token value never appears | Add a key (name, token, flags, note; the token is not shown again after it is sent), toggle the flags and *use*, replace the value, delete (danger dialog; typing the name is required while a ticket holds it). Turning a key off or deleting it starts a `sandbox reinject` job for every lease that holds it — a running `claude` is left alone and the next start uses another key |
 | Logs | The intake and dispatch records in one table (time, action, project, ticket, result, reason; newest first), with column names and plain wording instead of `rc=` and unlabelled numbers. *Show the raw log* below the table keeps the original `workspace/logs/intake.log` / `workspace/logs/dispatch.log` text. The log format itself is unchanged; the console derives the columns (ADR-0026) | Narrow by ticket number, project and kind (intake / dispatch), all ANDed, with the filter kept in the URL. The ticket number is a link to that ticket |
-| Settings | Workflow steps, the model routes (`routes.env`), `git status` | — |
+| Settings | The workflow list (name, the path taken when everything goes well, and the steps that only run when something does not), the model routes (`routes.env`), `git status`. Workflow names and steps are real links; opening one shows the step detail (who runs it, its instruction, what it reads and writes, its limit, its branches, and the effective model) | Open a workflow, open a step, read the raw definition |
+
+## Reading the steps of a workflow
+
+In Settings the workflow list is made of real links, for both names and steps. Tab reaches them, Enter opens them, and the
+breadcrumb takes you back to the list.
+
+The *Flow* column shows **the path taken when everything goes well**. Steps that only run when something does not — such as
+`resolve` in `feature` — are listed separately below it (laying them out in definition order reads as if they always run).
+
+Opening a workflow shows its description, the success path, the conditional steps, the list of steps, and the definition
+(how the branch is made, where the PR goes, the workflow inputs, and where the yml lives). *Read the raw definition* opens the
+yml itself.
+
+Opening a step shows:
+
+- **Who runs it**: a role (`planner` / `implementer` / `reviewer` / `researcher`), or a machine (the `code` script)
+- **The instruction for this workflow** (`brief` in the yml), and the files it reads and writes (`inputs` / `outputs`)
+- **The time limit** (`timeout_min`; when the definition does not set one, it says the schema default is being used)
+- **Branches**: where it goes when it works and when it does not. A step it goes back to carries the maximum number of loops
+  and where it goes once that is exceeded. The review step also notes that a minor finding can add one more loop (ADR-0053)
+- **The model**: class (the role default, or the step's own `model_class`) → route (`MODEL_<class>` in `routes.env`) → model
+  name. A `code` step says a machine runs it and that no model is used, and no model name is shown
+
+The model is resolved **only as far as the configuration allows**. `CLAUDE_MODEL` can override it when a run starts, so the
+model actually used cannot be known from the configuration. For what was actually used, see the Statistics screen (by model,
+by step).
+
+Workflows whose definition cannot be read, keys the schema does not know, and misspelled `role` values are not hidden either:
+they are listed as unreadable items. This screen only reads — opening it starts no job, no runner, and changes no settings.
 
 ## Following a running run
 
