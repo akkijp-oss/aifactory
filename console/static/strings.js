@@ -264,7 +264,7 @@ const T = {
     "configModelInherit": "この工程の指定を消して、クラスの共通の値に戻します。",
     "configModelUncommitted": "保存しても git には commit しません。制御系で git pull すると元に戻ることがあります。",
     "configModelWhen": "次に始める run から効きます。動いている run と、その run の途中の工程は変わりません。",
-    "configModelKeys": "モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。分からない名前は保存できません。",
+    "configModelKeys": "モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。分からない名前は、その系統の鍵ではなく共通の鍵で走ることになるので、画面からは保存できません。",
     "configModelChanges": "書けたときだけ記録しています。元に戻すには、退避した控えの内容を入れ直してください。",
     "configUnknownKeys": "schema にないキーです。定義の書き間違いか、schema の更新漏れかもしれません。",
     "configParseError": "この workflow の定義を読めませんでした: {why}。",

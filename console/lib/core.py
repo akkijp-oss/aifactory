@@ -2023,13 +2023,15 @@ def workflow_path(name):
 
 
 def check_model_name(v):
-    """入れてよいモデル名か。形と、鍵の系統が分かること（系統が分からないと runner は VM の鍵を選べず、工程の手前で止まる）。
+    """入れてよいモデル名か。形と、鍵の系統（token_family）が分かることを見る。
+    系統が分からないと runner は系統別の鍵を選べず、共通の CLAUDE_CODE_OAUTH_TOKEN に落ちる（workflow/bin/run の run_agent）。
+    止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0063）。
     候補を固定の一覧に縛らないので、新しいモデル名でも同じ系統の語を含んでいれば通る"""
     s = str(v or "").strip()
     if not wfdef.MODEL_NAME_RE.match(s):
         raise ApiError("モデル名は英数字と . _ - だけ、64 文字までで入れてください")
     if not wfdef.token_family(s):
-        raise ApiError(f"{s} はどの鍵の系統（fable / opus / sonnet / haiku）か分からないので入れられません。系統が分かる名前にしてください")
+        raise ApiError(f"{s} はどの鍵の系統（fable / opus / sonnet / haiku）か分からないので入れられません。系統が分からないと、その工程は系統別の鍵ではなく共通の鍵で走ります。系統が分かる名前にしてください")
     return s
 
 
@@ -2123,13 +2125,16 @@ def yaml_step_edit(text, step_id, key, value):
     lines = text.splitlines(keepends=True)
     top = next((i for i, l in enumerate(lines) if re.match(r"^steps:\s*(#.*)?$", l)), None)
     if top is None: raise ApiError("この定義には steps: がありません")
-    item, key_ind, end = None, None, len(lines)
+    item, key_ind, end, dash_ind = None, None, len(lines), None
     for i in range(top + 1, len(lines)):
         l = lines[i]
         if not l.strip() or l.lstrip().startswith("#"): continue
         if not l[:1].isspace(): end = i; break                       # steps: の並びが終わった
         m = re.match(r"^(\s*-\s+)(\S.*)$", l)
         if not m: continue
+        ind = len(l) - len(l.lstrip())
+        if dash_ind is None: dash_ind = ind                          # 最初の工程の "-" の深さを工程の深さとする
+        if ind != dash_ind: continue                                 # brief などの中の入れ子の箇条書き。工程の境目ではない
         if item is not None: end = i; break                          # 次の工程が始まった
         if re.match(rf"id:\s*{re.escape(str(step_id))}\s*$", m.group(2)):
             item, key_ind = i, len(m.group(1))
@@ -2154,6 +2159,7 @@ def _write_atomic(p, text, backup=True):
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix="." + p.name + ".")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f: f.write(text)
+        if p.exists(): shutil.copymode(p, tmp)                       # mkstemp は 0600。元の permission を保つ
         os.replace(tmp, p)
     except Exception:
         with contextlib.suppress(OSError): os.unlink(tmp)

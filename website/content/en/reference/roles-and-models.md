@@ -117,8 +117,10 @@ Saving keeps the previous content next to the file as `.bak-<timestamp>` and app
     the work tree, so a `git pull` on the control host can undo the change. Commit it to make it permanent (ADR-0063).
 
 !!! note "Which model names are accepted"
-    The name must reveal its key family (fable / opus / sonnet / haiku); otherwise the runner cannot pick the key to hand to
-    the VM, so the value is refused. Suggestions come from the values currently in use, and new names can be typed in directly.
+    The name must reveal its key family (fable / opus / sonnet / haiku). Without a family the runner does not pick a
+    per-family key and falls back to the shared `CLAUDE_CODE_OAUTH_TOKEN`; the step still runs, but not necessarily on the
+    key you meant, so the console refuses the value (editing the file directly still accepts it). Suggestions come from the
+    values currently in use, and new names can be typed in directly.
 
 ## Adding a role
 

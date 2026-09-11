@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,34 @@ class SaveTest(KitTestCase):
         self.assertFalse(d["written"])
         self.assertEqual(sha(self.routes), before)
         self.assertIn("いまと同じ設定", d["warning"])
+
+    def test_the_permission_of_the_target_file_is_kept(self):
+        """mkstemp は 0600 で作る。置き換えで元の permission を狭めない（他の人・他のプロセスが読めなくなる）"""
+        self.routes.chmod(0o644)
+        self.feature.chmod(0o664)
+        self.save(target="routes", key="MODEL_judgment", value="claude-sonnet-5")
+        self.save(target="step", workflow="feature", step="design", key="model", value="claude-sonnet-5")
+        self.assertEqual(stat.S_IMODE(self.routes.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(self.feature.stat().st_mode), 0o664)
+
+    def test_a_step_whose_brief_has_bullets_can_still_be_changed(self):
+        """brief の中の "- " 行は工程の境目ではない。そこより後ろにある model: も差し替え・削除できる"""
+        p = core.WORKFLOWS / "merge-pr.yml"
+        text = p.read_text(encoding="utf-8")
+        self.assertIn("\n      - ", text)                               # brief の中に入れ子の箇条書きがある
+        p.write_text(text.replace("    inputs: [report.md, gates.txt]\n",
+                                  "    model: claude-sonnet-5\n    inputs: [report.md, gates.txt]\n"), encoding="utf-8")
+        d = self.save(target="step", workflow="merge-pr", step="review", key="model", value="claude-fable-5-1")
+        self.assertTrue(d["written"], d.get("warning"))
+        after = p.read_text(encoding="utf-8")
+        self.assertEqual(after.count("    model: "), 1)                  # 重複して挿し込まれていない
+        self.assertIn("    model: claude-fable-5-1\n", after)
+        row = next(r for r in core.model_rows() if (r["workflow"], r["step"]) == ("merge-pr", "review"))
+        self.assertEqual((row["model"], row["model_from"]), ("claude-fable-5-1", "step"))
+        d = self.save(target="step", workflow="merge-pr", step="review", key="model", value=None)
+        self.assertTrue(d["written"], d.get("warning"))
+        self.assertNotIn("    model: ", p.read_text(encoding="utf-8"))   # 継承に戻せる
+        self.assertIn("      - 解消で", p.read_text(encoding="utf-8"))   # brief はそのまま
 
     def test_the_backup_holds_the_previous_content(self):
         before = self.routes.read_text(encoding="utf-8")
