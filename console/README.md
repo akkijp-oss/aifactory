@@ -49,7 +49,7 @@ journalctl -u aifactory-console -f
 | 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0044） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
-| 設定 | workflow の流れ・モデルの経路（routes.env）・PJ 定義の置き場・git status | — |
+| 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`）、PJ 定義の置き場、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める | workflow を開く、工程を開く、定義の原文を読む |
 
 ## MCP（AI セッションからの読み書き）
 

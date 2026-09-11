@@ -132,7 +132,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 details.runopts { margin: 10px 0 0; }
 details.runopts > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-/* 起票は「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道（チケット 413。ADR-0062）。
+/* 起票は「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道（チケット 413。ADR-0063）。
    段の順は DOM の順そのまま（CSS order で並べ替えない。ADR-0056）。選んでいる方式は枠と背景の両方で示し、色だけに頼らない */
 h2.step, legend.step { font-size: 13px; font-weight: 600; color: var(--muted); margin: 18px 0 8px; padding: 0; }
 .intake > h2.step:first-child, .modes legend.step { margin-top: 0; }
@@ -305,3 +305,13 @@ button.x { padding: 0 .35em; line-height: 1.4; margin-left: auto; }
 table.stats th.num, table.stats td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.stats td, table.stats th { vertical-align: top; }
 .btns button { margin-right: 4px; }
+
+/* 設定の workflow 詳細・工程詳細（チケット 415）: 横に広い表を作らず、縦並びと dl.kv で組む。
+   狭い幅では dl.kv を 1 列に落とし、工程の並びは折り返す */
+.flowline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.flowline .arrow { color: var(--muted); }
+ul.wflist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+ul.wflist .tag { margin: 0 2px; }
+ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
+@media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
