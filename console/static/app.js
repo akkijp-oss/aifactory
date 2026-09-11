@@ -1025,6 +1025,44 @@ const cfgModel = m => !m ? `<div class="help">${esc(T.help.configNoModel)}</div>
 const cfgFiles = s => `<ul class="help plain"><li>${esc(tt(T.run.planReads, { files: (s.inputs || []).join(', ') || T.config.none }))}</li><li>${esc(tt(T.run.planWrites, { files: (s.outputs || []).join(', ') || T.config.none }))}</li></ul>`;
 const cfgBroken = w => `${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}${(w.errors || []).length ? `<div class="panel"><h2>${esc(T.config.schemaErrors)}</h2><div class="help">${esc(T.help.configSchemaErrors)}</div><ul class="help">${w.errors.map(e => `<li><span class="mono">${esc(e.path)}</span> ${esc(e.message)}</li>`).join('')}</ul></div>` : ''}`;
 const cfgUnknown = s => !(s.unknown_keys || []).length ? '' : `<div class="panel"><h2>${esc(T.config.unknownKeys)}</h2><div class="help">${esc(T.help.configUnknownKeys)}</div><ul class="help">${s.unknown_keys.map(k => `<li class="mono">${esc(k)}</li>`).join('')}</ul></div>`;
+/* モデルの変更（agent 工程だけ）。(a) この工程のモデル (b) この工程のクラス (c) 共通の経路 の 3 つだけを出す。
+   実効値・影響する工程は API（lib/aifactory_workflow.py）が解いたものをそのまま出し、画面では計算しない */
+const cfgOpts = (vals, cur) => vals.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+const cfgAffectedRows = p => (p.affected || []).map(a => `<tr><td>${esc(a.workflow)}</td><td class="mono">${esc(a.step)}</td><td class="mono">${esc(a.before || '-')}</td><td class="mono"><b>${esc(a.after || '-')}</b></td></tr>`).join('');
+/* 下見の中身: 前後の実効モデル・影響する工程・動いている run・反映時点・退避と未コミットの注意 */
+function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p.file }))}</p>
+  ${(p.affected || []).length ? `<div class="k">${esc(T.config.modelAffected)}</div><div class="scroll"><table><tr><th>workflow</th><th>${esc(T.th.step)}</th><th>${esc(T.config.modelNow)}</th><th>${esc(T.config.model)}</th></tr>${cfgAffectedRows(p)}</table></div>` : `<p class="help">${esc(T.config.modelNoChange)}</p>`}
+  ${p.target === 'routes' && (p.affected || []).length > 1 ? `<div class="warn">${esc(tt(T.dialog.model.common, { n: p.affected.length }))}</div>` : ''}
+  ${p.warning ? `<div class="warn">${esc(p.warning)}</div>` : ''}
+  <dl class="kv"><dt>${esc(T.config.modelWhen)}</dt><dd>${esc(T.help.configModelWhen)}</dd>
+  <dt>${esc(T.config.modelRunning)}</dt><dd>${(p.running_runs || []).length ? `${(p.running_runs || []).map(esc).join(' / ')}<div class="help">${esc(T.dialog.model.runningNote)}</div>` : `<span class="help">${esc(T.dialog.model.runningNote)}</span>`}</dd>
+  <dt>${esc(T.config.modelFile)}</dt><dd class="mono">${esc(p.file)}${p.git ? `<div class="help mono">${esc(p.git)}</div>` : ''}</dd>
+  <dt>${esc(T.config.modelBackup)}</dt><dd class="help">${esc(T.dialog.model.backupNote)}</dd></dl>
+  <div class="help">${esc(T.help.configModelUncommitted)}</div>`;
+}
+/* 編集の欄。値は API が返した保存値（s.model / s.model_class）と経路表（d.routes）をそのまま入れる */
+function cfgModelEdit(w, s, d) {
+  const m = s.model_resolved, e = d.model_edit || {}, ch = e.choices || [], route = m.route_key || 'MODEL_default';
+  const at = { wf: `data-wf="${esc(w.name)}" data-step="${esc(s.id)}"` };
+  return `<div class="panel"><h2>${esc(T.config.modelEdit)}</h2><div class="help">${esc(T.help.configModelEdit)}</div>
+    <div class="field"><label for="cm-model">${esc(T.config.modelStep)}</label>
+      <input id="cm-model" list="cm-choices" class="mono" value="${esc(s.model || '')}" placeholder="${esc(T.config.modelInherited)}" autocomplete="off">
+      <datalist id="cm-choices">${ch.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>
+      <div class="help">${esc(T.help.configModelStep)} ${esc(T.help.configModelKeys)}</div>
+      <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model" data-input="cm-model" ${at.wf}>${esc(T.btn.modelPreview)}</button>
+      ${s.model ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
+    <div class="field"><label for="cm-class">${esc(T.config.modelStepClass)}</label>
+      <select id="cm-class">${cfgOpts(e.classes || [], s.model_class || m.model_class)}</select>
+      <div class="help">${esc(T.help.configModelStepClass)}</div>
+      <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model_class" data-input="cm-class" ${at.wf}>${esc(T.btn.modelPreview)}</button>
+      ${s.model_class ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model_class" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
+    <div class="field"><label for="cm-route">${esc(tt(T.config.modelRoutes, { key: route }))}</label>
+      <input id="cm-route" list="cm-choices" class="mono" value="${esc((d.routes || {})[route] || '')}" autocomplete="off">
+      <div class="help warn">${esc(T.help.configModelRoutes)}</div>
+      <div class="actions"><button type="button" class="danger" data-act="config-model" data-target="routes" data-key="${esc(route)}" data-input="cm-route" ${at.wf}>${esc(T.btn.modelPreview)}</button></div></div>
+    <div class="help top">${esc(T.help.configModelInherit)} ${esc(T.help.configModelUncommitted)}</div></div>
+    ${(e.changes || []).length ? `<div class="panel"><h2>${esc(T.config.modelChanges)}</h2><div class="help">${esc(T.help.configModelChanges)}</div><ul class="help plain">${e.changes.map(c => `<li>${esc(fmtT(c.at))} <span class="mono">${esc(c.key)}</span> ${esc(c.before || T.config.none)} <span class="arrow">→</span> ${esc(c.after || T.config.modelInherited)}${c.step ? ` <span class="help">${esc(c.workflow)} / ${esc(c.step)}</span>` : ''}</li>`).join('')}</ul></div>` : ''}`;
+}
 
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
@@ -1064,6 +1102,7 @@ async function viewConfigStep(name, id) {
       </div>
       <div>
         <div class="panel"><h2>${esc(T.config.model)}</h2>${cfgModel(s.model_resolved)}</div>
+        ${s.model_resolved ? cfgModelEdit(w, s, d) : ''}
         <div class="panel"><h2>${esc(T.h.files)}</h2>${cfgFiles(s)}</div>
         <div class="panel"><h2>${esc(T.config.limit)}</h2><div>${esc(tt(T.config.limitMin, { n: s.timeout_min }))}${s.timeout_default ? ` <span class="help">${esc(T.config.limitDefaultNote)}</span>` : ''}</div></div>
       </div>
@@ -1078,6 +1117,18 @@ async function viewFile(q) {
 /* ---------- 操作 */
 const TO = { start: 'in_progress', review: 'review', done: 'done', reopen: 'todo', block: 'blocked' };
 const actions = {
+  /* モデルの変更: 下見（書かない）→ 前後と影響を見せて確認 → その版で保存。失敗しても入力欄は消さない（画面を描き直さない） */
+  'config-model': async el => {
+    const body = { target: el.dataset.target, key: el.dataset.key, workflow: el.dataset.wf, step: el.dataset.step,
+                   value: el.dataset.inherit ? null : ($(el.dataset.input) || {}).value.trim() };
+    const p = await api('config/model', body);
+    const where = body.target === 'routes' ? body.key : `${body.workflow} / ${body.step}`;
+    const ok = await ask({ title: tt(T.dialog.model.title, { where }), ok: T.btn.save, danger: body.target === 'routes', body: cfgModelPreview(p) });
+    if (!ok) return;
+    const r = await api('config/model', { ...body, dry_run: false, base_sha256: p.base_sha256 });
+    toast(esc(r.written ? tt(T.msg.modelSaved, { file: r.file }) : T.msg.modelSame));
+    await viewConfigStep(body.workflow, body.step);
+  },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },

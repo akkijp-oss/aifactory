@@ -44,3 +44,6 @@ __pycache__/
 # MkDocs のビルド生成物
 website/site/
 .playwright-mcp/
+
+# console のモデルの変更が書く前に残す控え（作業ツリーにだけ置く。チケット 416 / ADR-0063）
+*.bak-20*

@@ -61,7 +61,7 @@ flowchart LR
 
 | What | Weak → strong |
 |---|---|
-| Model | Role default class → the step's `model_class` → environment variable `CLAUDE_MODEL` (one-off) |
+| Model | Role default class → the step's `model_class` → the step's `model` (a pinned model name) → environment variable `CLAUDE_MODEL` (one-off) |
 | PR target | `base_branch` in `project.yml` → `base_branch: hotfix_base` in the workflow → `workflow_overrides.<wf>.base_branch` in `project.yml` |
 | Claude key | The key pool (`~/.config/sandbox/keys.json`) only: per purpose, the key this ticket used before, otherwise the enabled one that has gone longest without use. A `CLAUDE_CODE_OAUTH_TOKEN` in `env`, `pj/<pj>.env` or the shell is **ignored**; no key in the pool means the run pauses (ADR-0060 / ADR-0046) |
 | GitHub token | Static `GH_TOKEN` (fallback) → GitHub App installation token → `SANDBOX_GH_TOKEN` (one-off) |
@@ -77,7 +77,7 @@ flowchart LR
 | What must not be done in this project / what the reviewer must always check | `forbidden` / `review_points` in `project.yml` | That project |
 | The procedure itself (add a step, retry counts) | `workflow/kit/workflows/<wf>.yml` | Every project |
 | A role's behaviour (how the reviewer looks, how the implementer works) | `workflow/kit/roles/<role>.md`; `_common.md` for every role | Every project |
-| The model | `workflow/kit/routes.env` (per class). One step: `model_class` in the yml. One run: `CLAUDE_MODEL` | As specified |
+| The model | `workflow/kit/routes.env` (per class). One step: `model_class` / `model` in the yml. One run: `CLAUDE_MODEL`. The console (Settings → workflow → step) can save the same changes after showing which steps they affect (ADR-0065) | As specified |
 | The PR target branch | `base_branch` / `hotfix_base` / `workflow_overrides` in `project.yml` | That project |
 | intake's classification habits | The prompt text in `glue/bin/intake`, or a `kind:` line at the top of the request | At filing |
 | Pool size (actual) | `sandbox/proxmox/40-pool.sh <pj> <count>` (what you create is the actual size) | That project's parallelism |
@@ -95,7 +95,7 @@ flowchart LR
 
 | Changed | Takes effect |
 |---|---|
-| workflow yml / roles / routes.env / project.yml / gates.sh | **From the next run.** Running runs are unaffected (the runner reads them at start) |
+| workflow yml / roles / routes.env / project.yml / gates.sh | **From the next run.** Running runs are unaffected (the runner reads them at start), including changes saved from the console |
 | `sandbox/bin/sandbox` | After running `sandbox/bin/install.sh` (updates the copy on PATH) |
 | Claude keys | From the next take after `sandbox keys add` / `set`. `reinject` while lent |
 | `kb` / `intake` / `dispatch` | Immediately (called by repository path) |

@@ -713,10 +713,9 @@ class Run:
 
     @staticmethod
     def token_family(model):
-        """モデル名 → 鍵の系統（FABLE / OPUS / SONNET / HAIKU）。分からなければ空。
-        take が鍵プールから用途ごとに選んだ鍵は VM の /run/sandbox/env に CLAUDE_CODE_OAUTH_TOKEN_<系統> で入っている（ADR-0044 / ADR-0060）"""
-        m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
-        return m.group(1).upper() if m else ""
+        """モデル名 → 鍵の系統。規則は lib/aifactory_workflow.py が正本（設定画面が「その系統の鍵があるか」を
+        同じ答えで言うため。ADR-0062 / ADR-0065）"""
+        return wf.token_family(model)
 
     NO_KEY_IN_VM = "none"   # key_probe_command が「その系統の鍵が VM に無い」と言うときの 1 語
 

@@ -80,7 +80,7 @@ model actually used cannot be known from the configuration. For what was actuall
 by step).
 
 Workflows whose definition cannot be read, keys the schema does not know, and misspelled `role` values are not hidden either:
-they are listed as unreadable items. This screen only reads — opening it starts no job, no runner, and changes no settings.
+they are listed as unreadable items. Opening it starts no job, no runner, and changes no settings by itself. The only thing you can change here is the model of a step (workflow → step → "Change model"), after seeing which steps it affects.
 
 ## Following a running run
 
@@ -141,6 +141,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/jobs` / `GET /api/jobs/<id>?offset=` / `POST /api/jobs/<id>/stop` | Job list, follow output, stop |
 | `GET /api/keys` / `POST /api/keys` | The Claude key pool (masked list / `{action, name, …}` to add, change, replace or remove) |
 | `GET /api/logs` / `GET /api/config` | intake / dispatch logs / workflows, routes and git |
+| `POST /api/config/model` | change the model of a step or of a shared route `{target, workflow, step, key, value, dry_run, base_sha256}`. A preview by default (writes nothing). It writes only with an explicit `dry_run: false`, and `base_sha256` (the version you read) is required; if the file changed since, it answers 409 and writes nothing |
 | `GET /api/stats?days=7&pj=&dry=&tz=` | per-step consumption statistics (`total` / `by_model` / `by_step` / `by_day` / `by_pj` / `top`). `tz` is the time zone the by-day table and the period are cut in (an offset such as `+09:00`, or an IANA name; the server's zone when omitted. An unreadable value falls back to the server's zone, and the `tz` field of the response says which zone was actually used) |
 
 ## Using it from an AI session (MCP)

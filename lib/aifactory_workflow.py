@@ -6,18 +6,37 @@ runner（workflow/bin/run）と console（console/lib/core.py）が同じ規則�
 
 - ROLE_CLASS: 役割 → 既定のモデルクラス（routes.env 冒頭のコメントと kit/roles/<role>.md の「クラス:」は説明で、正本はここ）
 - resolve_model(step, routes, env_model): 実効モデルと、どこから決まったか
+- token_family(model): モデル名 → 鍵の系統（runner が VM の鍵を選ぶのと、設定画面が「その鍵があるか」を言うのに同じ答えを使う）
 - transition_of(step, ok): 合否ごとの行き先と、どのキーから決まったか
 """
+import re
 
 ROLE_CLASS = {"planner": "judgment", "reviewer": "judgment", "researcher": "research", "implementer": "coding"}
+
+MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def route_keys():
+    """routes.env で意味のあるキー（クラスごとの経路 + 既定）。設定を書くときの許可リストはここから作る"""
+    return sorted({f"MODEL_{c}" for c in ROLE_CLASS.values()} | {"MODEL_default"})
+
+
+def token_family(model):
+    """モデル名 → 鍵の系統（FABLE / OPUS / SONNET / HAIKU）。分からなければ空。
+    take が鍵プールから用途ごとに選んだ鍵は VM の /run/sandbox/env に CLAUDE_CODE_OAUTH_TOKEN_<系統> で入っている（ADR-0044 / ADR-0060）"""
+    m = re.search(r"(fable|opus|sonnet|haiku)", str(model).lower())
+    return m.group(1).upper() if m else ""
 
 
 def resolve_model(step, routes, env_model=None):
     """step 1 つの実効モデル。code 工程（role が無い）は None（モデルを使わない）。
 
-    優先順: env_model（run 起動時の CLAUDE_MODEL）> MODEL_<クラス> > MODEL_default。
+    優先順: env_model（run 起動時の CLAUDE_MODEL）> step の model > MODEL_<クラス> > MODEL_default。
     クラスは step の model_class があればそれ、無ければ役割の既定。未知の役割は例外にせず
     model_class=None で返す（呼ぶ側が「解決できません」と言えるように）。
+
+    step の model は「同じクラスの他の工程を動かさずに、この工程だけ別のモデルにする」ための上書き
+    （model_class では同じクラスの全工程が道連れになる。チケット 416 / ADR-0065）。
     """
     step = step or {}
     role = step.get("role")
@@ -31,6 +50,8 @@ def resolve_model(step, routes, env_model=None):
     routes = routes or {}
     if env_model:
         r["model"], r["model_from"] = env_model, "env"
+    elif step.get("model"):
+        r["model"], r["model_from"] = step["model"], "step"
     elif routes.get(r["route_key"]):
         r["model"], r["model_from"] = routes[r["route_key"]], "routes"
     elif routes.get("MODEL_default"):

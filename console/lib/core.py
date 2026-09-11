@@ -4,7 +4,7 @@
 - 動かす: kb / intake / dispatch / sandbox を子プロセスで。長いものは JobStore（console/jobs/）。判定（二重起動・入力検査）はここに 1 つ
 - 置き場は lib/aifactory_paths.py（AIFACTORY_WORKSPACE。KB_ROOT / CONSOLE_JOBS で個別に差し替え可）
 """
-import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time, zoneinfo
+import base64, contextlib, datetime, fcntl, hashlib, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, threading, time, zoneinfo
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
@@ -2004,8 +2004,8 @@ def workflow_detail(name, routes=None, props=None, timeout_default=None):
     if routes is None: routes = model_routes()
     if props is None: props, timeout_default = step_props()
     p = WORKFLOWS / f"{name}.yml"
-    d = {"name": name, "path": rel(p), "description": "", "start": None, "base_branch": None, "inputs": [],
-         "steps": [], "main_path": [], "errors": [], "parse_error": None}
+    d = {"name": name, "path": rel(p), "sha256": file_version(p)["sha256"], "description": "", "start": None,
+         "base_branch": None, "inputs": [], "steps": [], "main_path": [], "errors": [], "parse_error": None}
     y = load_yaml(p)
     if not isinstance(y, dict) or y.get("_error"):
         d["parse_error"] = y.get("_error") if isinstance(y, dict) else "steps の並びが「キー: 値」になっていません"
@@ -2034,4 +2034,339 @@ def config_view():
     # 上書きが起こりうるという事実だけを返し、実際に使われたモデルは統計（stats_view）で見る
     return {"workflows": wfs, "routes": routes, "role_defaults": dict(wfdef.ROLE_CLASS), "env_override_possible": True,
             "timeout_min_default": timeout_default, "roles": rs, "templates": sandbox_view()["templates"],
+            "model_edit": model_edit_view(routes),
             "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
+
+
+# ---------- モデルの変更（設定の書き込み。チケット 416 / ADR-0065）
+# 書き先は制御系の作業ツリーの workflow/kit/（runner が読むのと同じファイル）。git には commit しないので、
+# 変更は未コミットの差分として残る。危ないところは隠さず出す: 前後の実効値・影響する工程・退避（.bak-<時刻>）・
+# git status の当該行・変更記録（logs/config-changes.jsonl）。実効値は必ず wfdef.resolve_model を呼び直して作る（式を写さない）。
+CONFIG_CHANGES = "config-changes.jsonl"
+STEP_MODEL_KEYS = ("model", "model_class")
+
+
+def file_version(p):
+    """ファイルの版。保存のときに「読んだときから変わっていないか」を見るのに使う（外の編集との衝突検知）"""
+    p = pathlib.Path(p)
+    if not p.is_file(): return {"path": rel(p), "exists": False, "sha256": None, "bytes": 0}
+    data = p.read_bytes()
+    return {"path": rel(p), "exists": True, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
+
+def routes_env_path():
+    return KIT / "routes.env"
+
+
+def workflow_path(name):
+    """workflow の定義ファイル。名前は kit にあるものだけ（パスの部品になるので、ここで落とす）"""
+    n = str(name or "").strip()
+    if n not in kinds(): raise ApiError(f"workflow {n} はありません（{' / '.join(kinds())} のどれかを指定してください）", 404)
+    return WORKFLOWS / f"{n}.yml"
+
+
+def check_model_name(v):
+    """入れてよいモデル名か。形と、鍵の系統（token_family）が分かることを見る。
+    系統が分からないと runner は系統別の鍵を選べず、共通の CLAUDE_CODE_OAUTH_TOKEN に落ちる（workflow/bin/run の run_agent）。
+    止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0065）。
+    候補を固定の一覧に縛らないので、新しいモデル名でも同じ系統の語を含んでいれば通る"""
+    s = str(v or "").strip()
+    if not wfdef.MODEL_NAME_RE.match(s):
+        raise ApiError("モデル名は英数字と . _ - だけ、64 文字までで入れてください")
+    if not wfdef.token_family(s):
+        raise ApiError(f"{s} はどの鍵の系統（fable / opus / sonnet / haiku）か分からないので入れられません。系統が分からないと、その工程は系統別の鍵ではなく共通の鍵で走ります。系統が分かる名前にしてください")
+    return s
+
+
+def model_rows(routes=None, override=None):
+    """全 workflow の agent 工程の実効モデル。override は {(workflow, 工程 id): {キー: 値 or None}}（まだ書いていない変更の当て込み）。
+
+    値は wfdef.resolve_model が決める（閲覧・下見・保存後で同じ関数を通す。ADR-0062）。
+    """
+    routes = model_routes() if routes is None else routes
+    rows = []
+    for name in kinds():
+        y = load_yaml(WORKFLOWS / f"{name}.yml")
+        if not isinstance(y, dict): continue
+        for st in (y.get("steps") or []):
+            if not isinstance(st, dict) or not st.get("role"): continue
+            s = dict(st)
+            for k, v in ((override or {}).get((name, st.get("id"))) or {}).items():
+                if v is None: s.pop(k, None)
+                else: s[k] = v
+            rows.append({"workflow": name, "step": st.get("id"), **(wfdef.resolve_model(s, routes) or {})})
+    return rows
+
+
+def model_diff(before, after):
+    """実効モデル（またはクラス）が動く工程だけを、前後つきで返す。1 工程の変更が他へ波及していないかは、ここを見れば分かる"""
+    b = {(r["workflow"], r["step"]): r for r in before}
+    out = []
+    for r in after:
+        o = b.get((r["workflow"], r["step"]))
+        if not o or (o["model"], o["model_from"], o["model_class"]) == (r["model"], r["model_from"], r["model_class"]): continue
+        out.append({"workflow": r["workflow"], "step": r["step"], "role": r["role"],
+                    "before": o["model"], "after": r["model"], "before_from": o["model_from"], "after_from": r["model_from"],
+                    "before_class": o["model_class"], "after_class": r["model_class"]})
+    return out
+
+
+def model_choices(rows=None, routes=None):
+    """候補にするモデル名。今この設定で使われている値から作る（最新のモデル名を固定で埋め込まない。未知の既存値も候補に残る）"""
+    routes = model_routes() if routes is None else routes
+    vals = {v for k, v in routes.items() if k.startswith("MODEL_") and v}
+    vals |= {r["model"] for r in (rows if rows is not None else model_rows(routes)) if r.get("model")}
+    return sorted(vals)
+
+
+def config_changes(limit=5):
+    """モデルの変更の記録（新しい順）。書けたときだけ 1 行足している。読めないときは空（画面を落とさない）"""
+    p = LOGS / CONFIG_CHANGES
+    if not p.is_file(): return []
+    out = []
+    for l in p.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]:
+        try: out.append(json.loads(l))
+        except Exception: pass
+    return list(reversed(out))[:limit]
+
+
+def model_edit_view(routes=None):
+    """モデルの変更に要る材料（対象ファイルの版・候補・鍵プールの空き・直近の変更）。値そのものの解決はしない"""
+    routes = model_routes() if routes is None else routes
+    rows = model_rows(routes)
+    try: pool = key_pool_counts()
+    except Exception: pool = {"fable": 0, "other": 0, "total": 0}
+    return {"route_keys": wfdef.route_keys(), "step_keys": list(STEP_MODEL_KEYS),
+            "classes": sorted(set(wfdef.ROLE_CLASS.values())), "choices": model_choices(rows, routes),
+            "routes_file": file_version(routes_env_path()), "key_pool": pool, "changes": config_changes()}
+
+
+def routes_env_lines(text, key):
+    """routes.env の中で当該キーを定めている行の番号（0 始まり、現れた順）"""
+    pat = re.compile(rf"^{re.escape(key)}\s*=")
+    return [i for i, l in enumerate(text.splitlines()) if pat.match(l)]
+
+
+def routes_env_edit(text, key, value):
+    """routes.env の当該 1 行だけを差し替えた本文を返す（無ければ末尾に足す）。コメントと未知の行はそのまま残す。
+
+    同じキーの行が 2 つ以上あるときは「最後の行」を差し替える。読み手（model_routes と runner の
+    どちらも dict(...) に畳む）が後の行を採るので、最初の行を書き換えると「保存したのに実効値が
+    変わらない」ことになる。書き手と読み手で同じ規則にする。
+    """
+    lines = text.splitlines(keepends=True)
+    pat = re.compile(rf"^{re.escape(key)}\s*=")
+    hit = [i for i, l in enumerate(lines) if pat.match(l)]
+    out = list(lines)
+    if hit:
+        i = hit[-1]
+        out[i] = f"{key}={value}" + ("\n" if lines[i].endswith("\n") else "")
+    else:
+        if out and not out[-1].endswith("\n"): out[-1] += "\n"
+        out.append(f"{key}={value}\n")
+    new = "".join(out)
+    kept = lambda s: [l for l in s.splitlines() if not pat.match(l)]
+    want = routes_env_lines(text, key) or [len(new.splitlines()) - 1]   # 無かったときは末尾に 1 行増えるのが正しい
+    if kept(new) != kept(text) or routes_env_lines(new, key) != want:
+        raise ApiError("経路表の他の行が変わってしまうので書きませんでした")
+    return new
+
+
+def yaml_step_edit(text, step_id, key, value):
+    """workflow yml の当該工程の当該キーだけを差し替えた本文を返す（value が None なら行を消す＝継承に戻す）。
+
+    pyyaml で書き戻すとコメント・並び・引用が失われるので、行単位の外科手術にする（ADR-0052 と同じ理由）。
+    書く前に、編集後の本文を読み直して「当該工程の当該キー以外は 1 つも変わっていない」ことを確かめる（呼ぶ側）。
+    """
+    lines = text.splitlines(keepends=True)
+    top = next((i for i, l in enumerate(lines) if re.match(r"^steps:\s*(#.*)?$", l)), None)
+    if top is None: raise ApiError("この定義には steps: がありません")
+    item, key_ind, end, dash_ind = None, None, len(lines), None
+    for i in range(top + 1, len(lines)):
+        l = lines[i]
+        if not l.strip() or l.lstrip().startswith("#"): continue
+        if not l[:1].isspace(): end = i; break                       # steps: の並びが終わった
+        m = re.match(r"^(\s*-\s+)(\S.*)$", l)
+        if not m: continue
+        ind = len(l) - len(l.lstrip())
+        if dash_ind is None: dash_ind = ind                          # 最初の工程の "-" の深さを工程の深さとする
+        if ind != dash_ind: continue                                 # brief などの中の入れ子の箇条書き。工程の境目ではない
+        if item is not None: end = i; break                          # 次の工程が始まった
+        if re.match(rf"id:\s*{re.escape(str(step_id))}\s*$", m.group(2)):
+            item, key_ind = i, len(m.group(1))
+    if item is None: raise ApiError(f"工程 {step_id} がこの定義に見つかりません", 404)
+    pat = re.compile(rf"^\s{{{key_ind}}}{re.escape(key)}:\s")
+    out, hit = list(lines), None
+    for i in range(item, end):
+        if pat.match(lines[i]): hit = i; break
+    if hit is not None:
+        if value is None: out.pop(hit)
+        else: out[hit] = " " * key_ind + f"{key}: {value}\n"
+    elif value is not None:
+        out.insert(item + 1, " " * key_ind + f"{key}: {value}\n")
+    return "".join(out)
+
+
+def _write_atomic(p, text, backup=True):
+    """退避 → 同じディレクトリの一時ファイル → 置き換え。途中で落ちても半端な本文が残らない"""
+    bak = None
+    if backup and p.exists():
+        bak = project_backup_path(p); shutil.copy2(p, bak)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix="." + p.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f: f.write(text)
+        if p.exists(): shutil.copymode(p, tmp)                       # mkstemp は 0600。元の permission を保つ
+        os.replace(tmp, p)
+    except Exception:
+        with contextlib.suppress(OSError): os.unlink(tmp)
+        raise
+    return bak
+
+
+def git_status_line(p):
+    """git status の当該ファイルの行（commit していないことを画面で見せるため）。git が無くても落ちない"""
+    try:
+        r = subprocess.run(["git", "status", "--short", "--", str(p)], cwd=str(REPO), text=True, capture_output=True, errors="replace")
+        return (r.stdout or "").strip() or None
+    except Exception:
+        return None
+
+
+def running_run_names():
+    try: return [r["name"] for r in list_runs() if r.get("status") == "running"][:20]
+    except Exception: return []
+
+
+def _model_change_request(b):
+    """要求（どのファイルの・どのキーを・何にするか）を検査して組み立てる。ここを通ったものしか書かない"""
+    target = str(b.get("target") or "").strip()
+    if target == "routes":
+        key = str(b.get("key") or "").strip()
+        if key not in wfdef.route_keys():
+            raise ApiError(f"経路表で変えられるのは {' / '.join(wfdef.route_keys())} だけです")
+        if b.get("value") in (None, ""): raise ApiError("経路表の行は空にできません（消すのではなく値を入れてください）")
+        return {"target": "routes", "path": routes_env_path(), "key": key, "value": check_model_name(b.get("value")),
+                "workflow": None, "step": None}
+    if target == "step":
+        key = str(b.get("key") or "").strip()
+        if key not in STEP_MODEL_KEYS:
+            raise ApiError(f"工程で変えられるのは {' / '.join(STEP_MODEL_KEYS)} だけです")
+        path = workflow_path(b.get("workflow"))
+        sid = str(b.get("step") or "").strip()
+        st = next((s for s in (load_yaml(path).get("steps") or []) if isinstance(s, dict) and s.get("id") == sid), None)
+        if st is None: raise ApiError(f"工程 {sid} は {b.get('workflow')} にありません", 404)
+        if not st.get("role"): raise ApiError("機械が実行する工程（code）はモデルを使わないので変えられません")
+        v = b.get("value")
+        if v in (None, ""): v = None                                  # 継承に戻す（キーを消す）
+        elif key == "model": v = check_model_name(v)
+        elif v not in sorted(set(wfdef.ROLE_CLASS.values())):
+            raise ApiError(f"クラスは {' / '.join(sorted(set(wfdef.ROLE_CLASS.values())))} のどれかで指定してください")
+        return {"target": "step", "path": path, "key": key, "value": v,
+                "workflow": str(b.get("workflow")), "step": sid}
+    raise ApiError("target は routes（共通の経路表）か step（この工程だけ）のどちらかを指定してください")
+
+
+def _model_after(req, routes):
+    """書いたあとの実効モデル（まだ書かずに当て込んだもの）。resolve_model を呼び直して作る"""
+    if req["target"] == "routes":
+        return model_rows({**routes, req["key"]: req["value"]})
+    return model_rows(routes, {(req["workflow"], req["step"]): {req["key"]: req["value"]}})
+
+
+def _model_new_text(req, text):
+    """編集後の本文。step 側は読み直して「当該工程の当該キー以外が変わっていない」ことを確かめる"""
+    if req["target"] == "routes":
+        return routes_env_edit(text, req["key"], req["value"])
+    new = yaml_step_edit(text, req["step"], req["key"], req["value"])
+    import copy
+    want = copy.deepcopy(parse_yaml_text(text))
+    for s in (want.get("steps") or []):
+        if isinstance(s, dict) and s.get("id") == req["step"]:
+            s.pop(req["key"], None) if req["value"] is None else s.update({req["key"]: req["value"]})
+    got = parse_yaml_text(new)
+    if got != want: raise ApiError("この変更では定義の他の場所まで動いてしまうので書きませんでした")
+    errs = workflow_errors(got)
+    if errs: raise ApiError("変更後の定義が schema に合わないので書きませんでした: "
+                            + " / ".join(f"{e['path']}: {e['message']}" for e in errs[:5]))
+    return new
+
+
+def parse_yaml_text(text):
+    import yaml
+    try: return yaml.safe_load(text) or {}
+    except Exception as e: raise ApiError(f"定義を読み直せなかったので書きませんでした: {e}")
+
+
+def config_model_apply(b):
+    """工程・共通経路のモデルを変える。半可逆（ファイルを書き換える）なので、既定は書かずに前後と影響を返す（下見）。
+
+    書くのは dry_run に false を明示したときだけ。書くときは base_sha256（下見のときの版）と突き合わせ、
+    その間に誰かが・何かが同じファイルを変えていたら何も書かない。
+    """
+    req = _model_change_request(b)
+    dry = b.get("dry_run"); dry = True if dry is None else bool(dry)
+    p = req["path"]
+    routes = model_routes()
+    before_rows = model_rows(routes)
+    ver = file_version(p)
+    if not ver["exists"]: raise ApiError(f"{rel(p)} がありません", 404)
+    current = (routes.get(req["key"]) if req["target"] == "routes"
+               else next((s.get(req["key"]) for s in (load_yaml(p).get("steps") or [])
+                          if isinstance(s, dict) and s.get("id") == req["step"]), None))
+    after_rows = _model_after(req, routes)
+    warn, pool = [], key_pool_counts()
+    same = (current or None) == (req["value"] or None)
+    affected = model_diff(before_rows, after_rows)
+    fams = sorted({wfdef.token_family(r["after"]) for r in affected if r.get("after")})
+    for f in fams:
+        need = "fable" if f == "FABLE" else "other"
+        if not pool.get(need):
+            warn.append(f"鍵プールに「{'Fable に使う' if need == 'fable' else 'Opus・Sonnet・Haiku に使う'}」鍵がありません。"
+                        "この設定にはできますが、次の run は鍵待ちで止まります。")
+    if req["target"] == "routes":
+        dup = routes_env_lines(p.read_text(encoding="utf-8"), req["key"])
+        if len(dup) > 1:
+            warn.append(f"経路表に {req['key']} の行が {len(dup)} つあります。効くのは最後の 1 行なので、そこを書き換えます。")
+    if req["target"] == "routes" and len(affected) > 1:
+        warn.append(f"これは共通の設定です。{len(affected)} 件の工程の実効モデルが変わります。")
+    if same: warn.append("いまと同じ設定なので、書くものがありません。")
+    out = {"target": req["target"], "workflow": req["workflow"], "step": req["step"], "key": req["key"],
+           "value": req["value"], "current": current, "file": rel(p), "base_sha256": ver["sha256"],
+           "dry_run": dry, "written": False, "backup": None, "sha_after": None,
+           "before": before_rows, "after": after_rows, "affected": affected,
+           "running_runs": running_run_names(), "git": git_status_line(p),
+           "applies_to": "next_run", "key_pool": pool}
+    if dry:
+        warn.append("まだ書き込んでいません。書くには dry_run に false を指定してください。")
+        out["warning"] = " ".join(warn) or None
+        return out
+    if same:
+        out["warning"] = " ".join(warn) or None
+        return out
+    base = b.get("base_sha256")
+    if not base: raise ApiError("base_sha256（読んだときの版）が要ります。画面を読み直してからもう一度試してください")
+    with _flock():                                  # 読み直し → 検査 → 書き込みを直列化する（console と mcp は別プロセス）
+        text = p.read_text(encoding="utf-8")
+        sha_now = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if sha_now != base:
+            raise ApiError(f"{rel(p)} は、この画面を開いたあとに変わっています。何も書いていません。画面を読み直してからもう一度試してください", 409)
+        new = _model_new_text(req, text)            # ここで落ちたら 1 バイトも書かない
+        try:
+            bak = _write_atomic(p, new)
+        except OSError as e:                          # 権限不足・ディスク満杯など。生の例外を画面に出さず、何が起きたかとどうするかを言う
+            raise ApiError(f"{rel(p)} を書けませんでした（{e.strerror or e}）。何も書いていません。制御系でこのファイルとディレクトリの書き込み権限を確かめてください", 500)
+    after_routes = model_routes()
+    out.update({"written": True, "backup": rel(bak) if bak else None, "base_sha256": sha_now,
+                "sha_after": file_version(p)["sha256"], "after": model_rows(after_routes),
+                "git": git_status_line(p)})
+    out["affected"] = model_diff(before_rows, out["after"])
+    audit = {"at": now(), "target": req["target"], "file": rel(p), "workflow": req["workflow"], "step": req["step"],
+             "key": req["key"], "before": current, "after": req["value"],
+             "sha_before": sha_now, "sha_after": out["sha_after"], "backup": out["backup"]}
+    with contextlib.suppress(OSError):
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / CONFIG_CHANGES, "a", encoding="utf-8") as f: f.write(json.dumps(audit, ensure_ascii=False) + "\n")
+    out["audit"] = audit
+    warn.append("この変更は commit していません。制御系で git pull すると元に戻ることがあります。")
+    out["warning"] = " ".join(warn) or None
+    return out

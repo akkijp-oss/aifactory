@@ -221,6 +221,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "sandbox/ls": return op_sandbox_ls()
         if ep == "sandbox/release": return op_sandbox_release(b)
         if ep == "keys": return keys_apply(b)
+        if ep == "config/model": return config_model_apply(b)   # 既定は下見（書くのは dry_run: false のときだけ）
         m = re.match(r"^jobs/([\w.-]+)/stop$", ep)
         if m: return op_job_stop(m.group(1))
         raise ApiError("not found", 404)
