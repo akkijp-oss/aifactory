@@ -8,7 +8,7 @@ import base64, contextlib, datetime, fcntl, json, os, pathlib, re, shutil, signa
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_workflow as wfdef
 STATIC = HERE / "static"
 JOBS = paths.JOBS                                              # テストでは CONSOLE_JOBS で差し替える
 KB = REPO / "kanban" / "bin" / "kb"
@@ -1912,12 +1912,83 @@ def stats_view(days=None, pj=None, include_dry=False, tz=None):
             "top": top, "files": len(rows), "selected": len(sel), "cache_file": str(STATS_CACHE)}
 
 
+WORKFLOW_SCHEMA = KIT / "schema" / "workflow.schema.json"
+
+
+def workflow_errors(obj):
+    """workflow の定義を schema で検査して違反の一覧を返す（空なら適合）。project_errors と同じ書き方。
+
+    workflow/bin/run の validate() は失敗すると die()（sys.exit）するので関数は使えない。schema ファイルだけ共有する。
+    """
+    import jsonschema
+    schema = json.loads(WORKFLOW_SCHEMA.read_text(encoding="utf-8"))
+    errs = sorted(jsonschema.Draft202012Validator(schema).iter_errors(obj), key=lambda e: list(e.absolute_path))
+    return [{"path": e.json_path, "message": e.message} for e in errs]
+
+
+def step_props():
+    """schema が認めている step のキー（これに無いものは画面で「読めない項目」として出す）と timeout_min の既定値"""
+    st = json.loads(WORKFLOW_SCHEMA.read_text(encoding="utf-8"))["$defs"]["step"]
+    return st["properties"], st["properties"]["timeout_min"].get("default")
+
+
+def step_detail(st, routes, props, timeout_default):
+    """step の生の定義に、定義から解ける値だけを足して返す（未知のキーも消さない）。
+
+    - model_resolved: 実効モデル（規則は lib/aifactory_workflow.py）。code 工程は None（モデルを使わない）
+    - transitions: 成功・失敗それぞれの行き先。runner の transition() と同じ規則で、`next` だけの step が
+      失敗したときは人間待ち（schema の説明にある「結果に関係なく次へ」ではない。実装が正）
+    - timeout_min / timeout_default: 値と、それが schema の既定かどうか
+    - unknown_keys: schema に無いキー
+    """
+    raw = st if isinstance(st, dict) else {}
+    d = dict(raw)
+    for k in ("id", "role", "code"): d.setdefault(k, None)          # 既存の形（MCP の config も使う）を崩さない
+    d["unknown_keys"] = sorted(k for k in raw if k not in props)
+    d["timeout_min"] = raw.get("timeout_min", timeout_default)
+    d["timeout_default"] = "timeout_min" not in raw
+    d["model_resolved"] = wfdef.resolve_model(raw, routes)
+    d["transitions"] = [{"when": w, **wfdef.transition_of(raw, w == "pass")} for w in ("pass", "fail")]
+    return d
+
+
+def workflow_detail(name, routes=None, props=None, timeout_default=None):
+    """workflow 1 件を、工程ごとの詳細（入出力・brief・上限・分岐・実効モデル）つきで返す。
+
+    読むのは定義（yml と routes.env と schema）だけ。ジョブも runner も動かさない。
+    1 件が壊れていても呼ぶ側を落とさないので、parse_error / errors に入れて残りを返す。
+    """
+    if routes is None: routes = model_routes()
+    if props is None: props, timeout_default = step_props()
+    p = WORKFLOWS / f"{name}.yml"
+    d = {"name": name, "path": rel(p), "description": "", "start": None, "base_branch": None, "inputs": [],
+         "steps": [], "main_path": [], "errors": [], "parse_error": None}
+    y = load_yaml(p)
+    if not isinstance(y, dict) or y.get("_error"):
+        d["parse_error"] = y.get("_error") if isinstance(y, dict) else "steps の並びが「キー: 値」になっていません"
+        return d
+    steps = y.get("steps") if isinstance(y.get("steps"), list) else []
+    d.update({"description": y.get("description", ""), "start": y.get("start"), "base_branch": y.get("base_branch"),
+              "inputs": y.get("inputs") or [],
+              "steps": [step_detail(st, routes, props, timeout_default) for st in steps],
+              "main_path": wfdef.main_path([st for st in steps if isinstance(st, dict)]),
+              "errors": workflow_errors(y)})
+    return d
+
+
+def model_routes():
+    """作業クラス → モデルの経路表（workflow/kit/routes.env）。runner が読むのと同じファイル"""
+    return dict(l.split("=", 1) for l in (KIT / "routes.env").read_text().splitlines() if l and not l.startswith("#") and "=" in l)
+
+
 def config_view():
-    wfs = []
-    for k in kinds():
-        y = load_yaml(WORKFLOWS / f"{k}.yml")
-        wfs.append({"name": k, "description": y.get("description", ""), "steps": [{"id": s.get("id"), "role": s.get("role"), "code": s.get("code")} for s in y.get("steps", [])], "start": y.get("start")})
-    routes = dict(l.split("=", 1) for l in (KIT / "routes.env").read_text().splitlines() if l and not l.startswith("#") and "=" in l)
+    routes = model_routes()
+    props, timeout_default = step_props()
+    wfs = [workflow_detail(k, routes, props, timeout_default) for k in kinds()]
     rs = roles()
     git = subprocess.run(["git", "status", "--short", "--branch"], cwd=str(REPO), text=True, capture_output=True, errors="replace").stdout
-    return {"workflows": wfs, "routes": routes, "roles": rs, "templates": sandbox_view()["templates"], "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
+    # CLAUDE_MODEL はここ（console）の環境変数ではなく run を起こす側のプロセスのものなので、値は読まない（読むと嘘になる）。
+    # 上書きが起こりうるという事実だけを返し、実際に使われたモデルは統計（stats_view）で見る
+    return {"workflows": wfs, "routes": routes, "role_defaults": dict(wfdef.ROLE_CLASS), "env_override_possible": True,
+            "timeout_min_default": timeout_default, "roles": rs, "templates": sandbox_view()["templates"],
+            "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}

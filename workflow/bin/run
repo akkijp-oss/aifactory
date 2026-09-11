@@ -43,7 +43,7 @@ import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
 KIT = HERE / "kit"
-sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_workflow as wf
 
 def die(msg, code=1):
     print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
@@ -662,8 +662,12 @@ class Run:
         return sorted(need) or ["other"]
 
     def model_for(self, step):
-        cls = step.get("model_class") or {"planner": "judgment", "reviewer": "judgment", "researcher": "research", "implementer": "coding"}[step["role"]]
-        return os.environ.get("CLAUDE_MODEL") or self.routes.get(f"MODEL_{cls}") or self.routes["MODEL_default"], cls
+        """実効モデルとクラス。規則は lib/aifactory_workflow.py が正本（設定画面が同じ答えを出すため。ADR-0062）"""
+        r = wf.resolve_model(step, self.routes, os.environ.get("CLAUDE_MODEL"))
+        if r is None: raise KeyError("role")                     # code 工程（従来も step["role"] で落ちていた）
+        if not r["model_class"]: raise KeyError(step["role"])    # 未知の役割
+        if not r["model"]: raise KeyError("MODEL_default")       # 経路表に既定が無い
+        return r["model"], r["model_class"]
 
     def build_prompt(self, step, retry_note=""):
         p = self.project
@@ -978,14 +982,14 @@ class Run:
             return ""
 
     def transition(self, step, ok):
-        if "on_pass" in step or "on_fail" in step: t = step.get("on_pass" if ok else "on_fail")
-        else: t = step.get("next") if ok else "human"   # 合否の分岐が無い step が失敗したら人間へ（end に抜けない）
-        if t is None: return "end" if ok else "human"
-        if isinstance(t, str): return t
-        key = f"{step['id']}->{t['goto']}"; n = self.state["loops"].get(key, 0)
-        if n < t.get("max_loops", 1) + self.severity_bonus(step, t, key):
-            self.state["loops"][key] = n + 1; return t["goto"]
-        return t.get("else", "human")
+        """次の行き先。どこへ向かうかの規則は lib/aifactory_workflow.py が正本で、
+        戻れる回数の数え上げ（state.json の loops）と severity の加点（ADR-0053）はここに残す（状態を持つため）"""
+        t = wf.transition_of(step, ok)
+        if t["max_loops"] is None: return t["to"]
+        key = f"{step['id']}->{t['to']}"; n = self.state["loops"].get(key, 0)
+        if n < t["max_loops"] + self.severity_bonus(step, {"goto": t["to"], "max_loops": t["max_loops"]}, key):
+            self.state["loops"][key] = n + 1; return t["to"]
+        return t["else"]
 
     def severity_bonus(self, step, t, key):
         """reviewer が `severity: minor` と書いた FAIL に限り、戻せる回数を 1 回だけ足す（ADR-0053）。

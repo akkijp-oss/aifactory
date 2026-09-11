@@ -957,14 +957,66 @@ async function viewStats(q) {
 }
 
 /* ---------- 設定 */
+/* workflow の詳細は API（core.workflow_detail）が定義から解いた値をそのまま出す。実効モデルと分岐の規則は
+   lib/aifactory_workflow.py が正本で、ここでは計算し直さない（画面に写しを作らない。ADR-0062）。
+   表示の部品は 1 行の関数にして、node のテストから直に呼べるようにしてある */
+const cfgWfLink = (name, label) => `<a href="#/config/workflow/${encodeURIComponent(name)}">${esc(label == null ? name : label)}</a>`;
+const cfgStepLink = (name, id) => `<a href="#/config/workflow/${encodeURIComponent(name)}/${encodeURIComponent(id)}">${esc(id)}</a>`;
+/* 工程の並び。resolve のように「うまくいかなかったときだけ回る」工程を成功の道に混ぜると、常に回るように読める（チケット 415 の症状） */
+const cfgFlow = (w, ids, sep) => `<span class="flowline">${ids.map(id => `<span class="tag" title="${esc((((w.steps || []).find(s => s.id === id) || {}).role) || (((w.steps || []).find(s => s.id === id) || {}).code) || '')}">${cfgStepLink(w.name, id)}</span>`).join(sep == null ? ' <span class="arrow">→</span> ' : sep)}</span>`;
+const cfgCond = w => (w.steps || []).filter(s => s.id && !(w.main_path || []).includes(s.id));
+const cfgTarget = to => to === 'human' ? T.config.human : to === 'end' ? T.config.end : to;
+const cfgTrans = t => t.source === 'default' ? (t.when === 'pass' ? T.help.configPassDefault : T.help.configFailDefault) : t.kind === 'human' ? T.help.configGoHuman : t.kind === 'end' ? T.help.configGoEnd : t.max_loops != null ? tt(T.help.configGoBack, { step: t.to, n: t.max_loops, to: cfgTarget(t['else']) }) : tt(T.help.configGoStep, { step: t.to });
+/* 実効モデル。code 工程（model_resolved が null）は「モデルを使わない」を必ず出し、モデル名は 1 つも出さない */
+const cfgModel = m => !m ? `<div class="help">${esc(T.help.configNoModel)}</div>` : `<dl class="kv wf"><dt>${esc(T.config.modelClass)}</dt><dd>${m.model_class ? `${esc(m.model_class)} <span class="help">${esc(m.class_from === 'step' ? T.config.classFromStep : tt(T.config.classFromRole, { role: m.role }))}</span>` : `<span class="help">${esc(T.help.configModelUnknown)}</span>`}</dd><dt>${esc(T.config.modelRoute)}</dt><dd class="mono">${m.route_key ? esc(m.model_from === 'default' ? 'MODEL_default' : m.route_key) : esc(T.config.none)}</dd><dt>${esc(T.config.model)}</dt><dd class="mono">${m.model ? esc(m.model) : `<span class="help">${esc(T.help.configModelNoRoute)}</span>`}</dd></dl>${m.model_from === 'default' ? `<div class="help top">${esc(T.help.configModelFallback)}</div>` : ''}<div class="help top">${esc(T.help.configEnvOverride)} <a href="#/stats">${esc(T.config.seeStats)}</a></div>`;
+const cfgFiles = s => `<ul class="help plain"><li>${esc(tt(T.run.planReads, { files: (s.inputs || []).join(', ') || T.config.none }))}</li><li>${esc(tt(T.run.planWrites, { files: (s.outputs || []).join(', ') || T.config.none }))}</li></ul>`;
+const cfgBroken = w => `${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}${(w.errors || []).length ? `<div class="panel"><h2>${esc(T.config.schemaErrors)}</h2><div class="help">${esc(T.help.configSchemaErrors)}</div><ul class="help">${w.errors.map(e => `<li><span class="mono">${esc(e.path)}</span> ${esc(e.message)}</li>`).join('')}</ul></div>` : ''}`;
+const cfgUnknown = s => !(s.unknown_keys || []).length ? '' : `<div class="panel"><h2>${esc(T.config.unknownKeys)}</h2><div class="help">${esc(T.help.configUnknownKeys)}</div><ul class="help">${s.unknown_keys.map(k => `<li class="mono">${esc(k)}</li>`).join('')}</ul></div>`;
+
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
   render(head(esc(T.nav.config), T.sub.config) + `
-    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${esc(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${w.steps.map(s => `<span class="tag" title="${esc(s.role || s.code || '')}">${esc(s.id)}</span>`).join(' → ')}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}</td></tr>`).join('')}</table></div>
+    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><div class="help">${esc(T.help.configDetail)}</div><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${cfgWfLink(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${cfgFlow(w, w.main_path || [])}${cfgCond(w).length ? `<div class="help top">${esc(T.config.flowCond)}: ${cfgFlow(w, cfgCond(w).map(s => s.id), ' ')}</div>` : ''}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}</td></tr>`).join('')}</table></div>
     <div><div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2><dl class="kv">${Object.entries(d.routes).map(([k, v]) => `<dt>${esc(k.replace('MODEL_', ''))}</dt><dd class="mono">${esc(v)}</dd>`).join('')}</dl><div class="help top">${esc(T.config.roles)} ${d.roles.map(esc).join(' / ')}</div></div>
     <div class="panel"><h2>${esc(T.h.thisConsole)}</h2><dl class="kv"><dt>repo</dt><dd class="mono">${esc(d.repo)}</dd><dt>kb_root</dt><dd class="mono">${esc(d.kb_root)}</dd></dl></div>
     <div class="panel"><h2>git<small>status --short --branch</small></h2><pre class="log small">${esc(d.git)}</pre></div></div></div>`);
 }
+/* workflow 詳細: うまくいったときの道（main_path）と、そこに載らない「うまくいかなかったときだけ回る工程」を分けて出す */
+async function viewConfigWorkflow(name) {
+  clearInterval(timer); const d = await api('config');
+  const w = (d.workflows || []).find(x => x.name === name);
+  if (!w) return render(crumb('#/config', T.nav.config, name) + `<div class="err">${esc(tt(T.err.noRoute, { h: location.hash }))}</div>`);
+  const main = w.main_path || [], cond = cfgCond(w);
+  render(crumb('#/config', T.nav.config, w.name) + head(esc(w.name), w.description, link(`#/file?path=${encodeURIComponent(w.path)}`, T.btn.openDefinition)) + `
+    ${cfgBroken(w)}
+    <div class="panel"><h2>${esc(T.config.flowMain)}</h2>${cfgFlow(w, main)}<div class="help top">${esc(T.help.configMainPath)}</div></div>
+    ${cond.length ? `<div class="panel"><h2>${esc(T.config.flowCond)}</h2><div class="help">${esc(T.help.configCondSteps)}</div><ul class="wflist">${cond.map(s => `<li>${cfgStepLink(w.name, s.id)} <span class="tag">${esc(s.role || s.code || T.run.planCode)}</span> <span class="help">${esc(stepDesc(s))}</span></li>`).join('')}</ul></div>` : ''}
+    <div class="panel"><h2>${esc(T.h.track)}</h2><ul class="wflist">${(w.steps || []).map(s => `<li>${s.id ? cfgStepLink(w.name, s.id) : ''} <span class="tag">${esc(s.role || s.code || T.run.planCode)}</span> <span class="help">${esc(stepDesc(s))}</span></li>`).join('')}</ul></div>
+    <div class="panel"><h2>${esc(T.config.definition)}</h2><dl class="kv wf"><dt>${esc(T.config.start)}</dt><dd class="mono">${esc(w.start || T.config.none)}</dd><dt>${esc(T.config.baseBranch)}</dt><dd class="mono">${esc(w.base_branch || T.config.none)}</dd><dt>${esc(T.config.inputs)}</dt><dd class="mono">${esc((w.inputs || []).join(', ') || T.config.none)}</dd><dt>${esc(T.h.files)}</dt><dd class="mono">${esc(w.path)}</dd></dl></div>`);
+}
+
+/* 工程詳細: 担い手・指示・読み書き・上限・分岐・実効モデル。値はすべて API が定義から解いたものをそのまま出す */
+async function viewConfigStep(name, id) {
+  clearInterval(timer); const d = await api('config');
+  const w = (d.workflows || []).find(x => x.name === name);
+  const s = w && (w.steps || []).find(x => x.id === id);
+  if (!s) return render(crumb(`#/config/workflow/${encodeURIComponent(name)}`, name, id) + `<div class="err">${esc(tt(T.err.noRoute, { h: location.hash }))}</div>`);
+  const cond = !(w.main_path || []).includes(s.id);
+  render(crumb(`#/config/workflow/${encodeURIComponent(name)}`, name, s.id) + head(esc(s.id), stepDesc(s), link(`#/file?path=${encodeURIComponent(w.path)}`, T.btn.openDefinition)) + `
+    <div class="grid2">
+      <div>
+        <div class="panel"><h2>${esc(T.config.who)}</h2><div>${esc(s.role ? tt(T.config.roleIs, { role: s.role }) : tt(T.config.machineIs, { code: s.code || T.config.none }))}</div>${cond ? `<div class="help top">${esc(T.help.configCondSteps)}</div>` : ''}${s.brief ? `<div class="wfbrief">${esc(tt(T.run.planBrief, { brief: String(s.brief).replace(/\*\*|`/g, '').trim() }))}</div>` : ''}</div>
+        <div class="panel"><h2>${esc(T.config.branch)}</h2><dl class="kv wf">${(s.transitions || []).map(t => `<dt>${esc(t.when === 'pass' ? T.config.pass : T.config.fail)}</dt><dd>${esc(cfgTrans(t))}${t.when === 'fail' && s.role === 'reviewer' ? `<div class="help">${esc(T.help.configSeverity)}</div>` : ''}</dd>`).join('')}</dl></div>
+        ${cfgUnknown(s)}
+      </div>
+      <div>
+        <div class="panel"><h2>${esc(T.config.model)}</h2>${cfgModel(s.model_resolved)}</div>
+        <div class="panel"><h2>${esc(T.h.files)}</h2>${cfgFiles(s)}</div>
+        <div class="panel"><h2>${esc(T.config.limit)}</h2><div>${esc(tt(T.config.limitMin, { n: s.timeout_min }))}${s.timeout_default ? ` <span class="help">${esc(T.config.limitDefaultNote)}</span>` : ''}</div></div>
+      </div>
+    </div>`);
+}
+
 async function viewFile(q) {
   clearInterval(timer); const p = new URLSearchParams(q).get('path'); const f = await api(`file?path=${encodeURIComponent(p)}&tail=300000`);
   render(`<div class="head"><h1 class="mono">${esc(f.path)}</h1></div><div class="panel">${f.base64 ? `<img class="filepic" src="data:${esc(f.type)};base64,${esc(f.base64)}" alt="${esc(f.path)}">` : `<pre class="log">${esc(f.text)}</pre>`}</div>`);
@@ -1214,7 +1266,7 @@ async function route() {
     else if (seg[0] === 'job') await viewJob(seg[1], true);
     else if (seg[0] === 'stats') await viewStats(q);
     else if (seg[0] === 'logs') await viewLogs(q);
-    else if (seg[0] === 'config') await viewConfig();
+    else if (seg[0] === 'config') await (seg[2] == null ? viewConfig() : seg[3] == null ? viewConfigWorkflow(decodeURIComponent(seg[2])) : viewConfigStep(decodeURIComponent(seg[2]), decodeURIComponent(seg[3])));
     else if (seg[0] === 'file') await viewFile(q);
     else render(`<div class="err">${esc(tt(T.err.noRoute, { h }))}</div>`);
   } catch (e) { render(`<div class="err">${esc(e.message)}</div>`); }
