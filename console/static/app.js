@@ -962,6 +962,9 @@ async function viewStats(q) {
    表示の部品は 1 行の関数にして、node のテストから直に呼べるようにしてある */
 const cfgWfLink = (name, label) => `<a href="#/config/workflow/${encodeURIComponent(name)}">${esc(label == null ? name : label)}</a>`;
 const cfgStepLink = (name, id) => `<a href="#/config/workflow/${encodeURIComponent(name)}/${encodeURIComponent(id)}">${esc(id)}</a>`;
+/* 工程の並び。resolve のように「うまくいかなかったときだけ回る」工程を成功の道に混ぜると、常に回るように読める（チケット 415 の症状） */
+const cfgFlow = (w, ids, sep) => `<span class="flowline">${ids.map(id => `<span class="tag" title="${esc((((w.steps || []).find(s => s.id === id) || {}).role) || (((w.steps || []).find(s => s.id === id) || {}).code) || '')}">${cfgStepLink(w.name, id)}</span>`).join(sep == null ? ' <span class="arrow">→</span> ' : sep)}</span>`;
+const cfgCond = w => (w.steps || []).filter(s => s.id && !(w.main_path || []).includes(s.id));
 const cfgTarget = to => to === 'human' ? T.config.human : to === 'end' ? T.config.end : to;
 const cfgTrans = t => t.source === 'default' ? (t.when === 'pass' ? T.help.configPassDefault : T.help.configFailDefault) : t.kind === 'human' ? T.help.configGoHuman : t.kind === 'end' ? T.help.configGoEnd : t.max_loops != null ? tt(T.help.configGoBack, { step: t.to, n: t.max_loops, to: cfgTarget(t['else']) }) : tt(T.help.configGoStep, { step: t.to });
 /* 実効モデル。code 工程（model_resolved が null）は「モデルを使わない」を必ず出し、モデル名は 1 つも出さない */
@@ -973,7 +976,7 @@ const cfgUnknown = s => !(s.unknown_keys || []).length ? '' : `<div class="panel
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
   render(head(esc(T.nav.config), T.sub.config) + `
-    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><div class="help">${esc(T.help.configDetail)}</div><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${cfgWfLink(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${(w.steps || []).map(s => `<span class="tag" title="${esc(s.role || s.code || '')}">${s.id ? cfgStepLink(w.name, s.id) : ''}</span>`).join(' → ')}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}</td></tr>`).join('')}</table></div>
+    <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><div class="help">${esc(T.help.configDetail)}</div><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${cfgWfLink(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${cfgFlow(w, w.main_path || [])}${cfgCond(w).length ? `<div class="help top">${esc(T.config.flowCond)}: ${cfgFlow(w, cfgCond(w).map(s => s.id), ' ')}</div>` : ''}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}</td></tr>`).join('')}</table></div>
     <div><div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2><dl class="kv">${Object.entries(d.routes).map(([k, v]) => `<dt>${esc(k.replace('MODEL_', ''))}</dt><dd class="mono">${esc(v)}</dd>`).join('')}</dl><div class="help top">${esc(T.config.roles)} ${d.roles.map(esc).join(' / ')}</div></div>
     <div class="panel"><h2>${esc(T.h.thisConsole)}</h2><dl class="kv"><dt>repo</dt><dd class="mono">${esc(d.repo)}</dd><dt>kb_root</dt><dd class="mono">${esc(d.kb_root)}</dd></dl></div>
     <div class="panel"><h2>git<small>status --short --branch</small></h2><pre class="log small">${esc(d.git)}</pre></div></div></div>`);
@@ -983,11 +986,10 @@ async function viewConfigWorkflow(name) {
   clearInterval(timer); const d = await api('config');
   const w = (d.workflows || []).find(x => x.name === name);
   if (!w) return render(crumb('#/config', T.nav.config, name) + `<div class="err">${esc(tt(T.err.noRoute, { h: location.hash }))}</div>`);
-  const main = w.main_path || [];
-  const cond = (w.steps || []).filter(s => s.id && !main.includes(s.id));
+  const main = w.main_path || [], cond = cfgCond(w);
   render(crumb('#/config', T.nav.config, w.name) + head(esc(w.name), w.description, link(`#/file?path=${encodeURIComponent(w.path)}`, T.btn.openDefinition)) + `
     ${cfgBroken(w)}
-    <div class="panel"><h2>${esc(T.config.flowMain)}</h2><div class="flowline">${main.map(id => cfgStepLink(w.name, id)).join(' <span class="arrow">→</span> ')}</div><div class="help top">${esc(T.help.configMainPath)}</div></div>
+    <div class="panel"><h2>${esc(T.config.flowMain)}</h2>${cfgFlow(w, main)}<div class="help top">${esc(T.help.configMainPath)}</div></div>
     ${cond.length ? `<div class="panel"><h2>${esc(T.config.flowCond)}</h2><div class="help">${esc(T.help.configCondSteps)}</div><ul class="wflist">${cond.map(s => `<li>${cfgStepLink(w.name, s.id)} <span class="tag">${esc(s.role || s.code || T.run.planCode)}</span> <span class="help">${esc(stepDesc(s))}</span></li>`).join('')}</ul></div>` : ''}
     <div class="panel"><h2>${esc(T.h.track)}</h2><ul class="wflist">${(w.steps || []).map(s => `<li>${s.id ? cfgStepLink(w.name, s.id) : ''} <span class="tag">${esc(s.role || s.code || T.run.planCode)}</span> <span class="help">${esc(stepDesc(s))}</span></li>`).join('')}</ul></div>
     <div class="panel"><h2>${esc(T.config.definition)}</h2><dl class="kv wf"><dt>${esc(T.config.start)}</dt><dd class="mono">${esc(w.start || T.config.none)}</dd><dt>${esc(T.config.baseBranch)}</dt><dd class="mono">${esc(w.base_branch || T.config.none)}</dd><dt>${esc(T.config.inputs)}</dt><dd class="mono">${esc((w.inputs || []).join(', ') || T.config.none)}</dd><dt>${esc(T.h.files)}</dt><dd class="mono">${esc(w.path)}</dd></dl></div>`);

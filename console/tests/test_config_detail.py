@@ -269,5 +269,111 @@ class ConfigApiTest(unittest.TestCase):
         self.assertTrue(all(not k.startswith((".", "_")) for k in [x["name"] for x in d["workflows"]]))   # #218 の除外は維持
 
 
+@unittest.skipUnless(shutil.which("node"), "node が無い")
+class ConfigRenderTest(unittest.TestCase):
+    """設定の詳細の描画（app.js の 1 行の部品を node で直に動かす）。
+    一覧と詳細が本物のリンクを出すこと、code 工程にモデル名を出さないこと"""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from test_console import js_line
+        static = REPO / "console" / "static"
+        app = (static / "app.js").read_text(encoding="utf-8")
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-config-render-"))
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
+        w = core.workflow_detail("feature")
+        probe = {
+            "wfLink": "cfgWfLink('feature')",
+            "stepLink": "cfgStepLink('feature', 'implement')",
+            "quoted": "cfgStepLink('a b', '<x>')",
+            "modelAgent": "cfgModel(steps.implement.model_resolved)",
+            "modelCode": "cfgModel(steps.gates.model_resolved)",
+            "modelUnknownRole": "cfgModel({role: 'wizard', model_class: null, class_from: null, route_key: null, model: null, model_from: null})",
+            "modelStepClass": "cfgModel({role: 'implementer', model_class: 'research', class_from: 'step', route_key: 'MODEL_research', model: 'claude-sonnet-5', model_from: 'routes'})",
+            "modelFallback": "cfgModel({role: 'planner', model_class: 'judgment', class_from: 'role', route_key: 'MODEL_judgment', model: 'd', model_from: 'default'})",
+            "flowMain": "cfgFlow(wf, wf.main_path)",
+            "cond": "JSON.stringify(cfgCond(wf).map(s => s.id))",
+            "gatesFail": "cfgTrans(trans(steps.gates, 'fail'))",
+            "syncPass": "cfgTrans(trans(steps.sync, 'pass'))",
+            "researchFail": "cfgTrans(trans(steps.research, 'fail'))",
+            "automergePass": "cfgTrans(trans(steps.automerge, 'pass'))",
+            "automergeFail": "cfgTrans(trans(steps.automerge, 'fail'))",
+            "files": "cfgFiles(steps.implement)",
+            "filesNone": "cfgFiles({})",
+            "broken": "cfgBroken({parse_error: '字下げが揃っていません', errors: []})",
+            "schemaErr": "cfgBroken({parse_error: null, errors: [{path: '$.steps[0].role', message: 'wizard is not one of ...'}]})",
+            "clean": "cfgBroken({parse_error: null, errors: []})",
+            "unknown": "cfgUnknown({unknown_keys: ['whatever']})",
+            "unknownNone": "cfgUnknown({unknown_keys: []})",
+        }
+        src = cls.tmp / "cfg.js"
+        src.write_text("\n".join([
+            (static / "strings.js").read_text(encoding="utf-8"),
+            *[js_line(app, n) for n in ("esc", "tt", "cfgWfLink", "cfgStepLink", "cfgFlow", "cfgCond", "cfgTarget", "cfgTrans", "cfgModel", "cfgFiles", "cfgBroken", "cfgUnknown")],
+            f"const wf = {json.dumps(w, ensure_ascii=False)};",
+            "const steps = {}; wf.steps.forEach(s => steps[s.id] = s);",
+            "const trans = (s, when) => s.transitions.find(t => t.when === when);",
+            "const out = {};",
+            *[f"out[{k!r}] = {v};" for k, v in probe.items()],
+            "console.log(JSON.stringify(out));"]), encoding="utf-8")
+        r = subprocess.run(["node", str(src)], text=True, capture_output=True)
+        assert r.returncode == 0, r.stderr
+        cls.html = json.loads(r.stdout)
+        cls.T = __import__("test_strings").load()
+
+    def test_the_list_and_the_flow_use_real_links(self):
+        self.assertEqual(self.html["wfLink"], '<a href="#/config/workflow/feature">feature</a>')
+        self.assertEqual(self.html["stepLink"], '<a href="#/config/workflow/feature/implement">implement</a>')
+        self.assertIn("#/config/workflow/a%20b/%3Cx%3E", self.html["quoted"])      # href も本文も逃がしてある
+        self.assertIn("&lt;x&gt;", self.html["quoted"])
+
+    def test_the_success_path_does_not_include_the_conditional_step(self):
+        """一覧でも詳細でも、resolve を成功の道に混ぜない（混ぜると常に回るように読める）"""
+        self.assertNotIn(">resolve<", self.html["flowMain"])
+        self.assertIn(">sync<", self.html["flowMain"]); self.assertIn(">pr<", self.html["flowMain"])
+        self.assertEqual(json.loads(self.html["cond"]), ["resolve"])
+
+    def test_a_code_step_says_it_uses_no_model_and_shows_no_model_name(self):
+        h = self.html["modelCode"]
+        self.assertIn(self.T["help"]["configNoModel"], h)
+        self.assertNotIn("claude", h)
+        self.assertNotIn("MODEL_", h)
+
+    def test_an_agent_step_shows_the_chain_from_the_class_to_the_model(self):
+        h = self.html["modelAgent"]
+        self.assertIn("coding", h); self.assertIn("MODEL_coding", h); self.assertIn("claude-opus-5", h)
+        self.assertIn("implementer", h)                                          # 役割の既定であることが読める
+        self.assertIn(self.T["help"]["configEnvOverride"], h)                    # 実行時上書きは「分からない」と書く
+        self.assertIn('href="#/stats"', h)                                       # 実績は統計で見る
+        self.assertIn(self.T["config"]["classFromStep"], self.html["modelStepClass"])
+        self.assertIn("MODEL_research", self.html["modelStepClass"])
+        self.assertIn("MODEL_default", self.html["modelFallback"])
+        self.assertIn(self.T["help"]["configModelFallback"], self.html["modelFallback"])
+        self.assertIn(self.T["help"]["configModelUnknown"], self.html["modelUnknownRole"])
+        self.assertIn(self.T["help"]["configModelNoRoute"], self.html["modelUnknownRole"])
+
+    def test_the_branches_read_as_the_definition_says(self):
+        self.assertEqual(self.html["gatesFail"], self.T["help"]["configGoBack"].replace("{step}", "implement").replace("{n}", "2").replace("{to}", self.T["config"]["human"]))
+        self.assertEqual(self.html["syncPass"], self.T["help"]["configGoStep"].replace("{step}", "pr"))
+        self.assertEqual(self.html["researchFail"], self.T["help"]["configFailDefault"])
+        self.assertEqual(self.html["automergePass"], self.T["help"]["configGoEnd"])
+        self.assertEqual(self.html["automergeFail"], self.T["help"]["configGoHuman"])
+
+    def test_a_definition_that_cannot_be_read_is_shown_not_hidden(self):
+        self.assertIn("字下げが揃っていません", self.html["broken"])
+        self.assertIn("$.steps[0].role", self.html["schemaErr"])
+        self.assertIn(self.T["help"]["configSchemaErrors"], self.html["schemaErr"])
+        self.assertEqual(self.html["clean"], "")
+
+    def test_files_and_unknown_keys_are_shown_or_said_to_be_unset(self):
+        self.assertIn("plan.md, research.md", self.html["files"])
+        self.assertIn("report.md", self.html["files"])
+        self.assertIn(self.T["config"]["none"], self.html["filesNone"])
+        self.assertIn("whatever", self.html["unknown"])
+        self.assertIn(self.T["help"]["configUnknownKeys"], self.html["unknown"])
+        self.assertEqual(self.html["unknownNone"], "")
+
+
 if __name__ == "__main__":
     unittest.main()
