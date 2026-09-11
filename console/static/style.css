@@ -132,8 +132,25 @@ button, select, input, textarea { font: inherit; color: inherit; }
 details.runopts { margin: 10px 0 0; }
 details.runopts > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* 起票は「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道（チケット 413。ADR-0063）。
+   段の順は DOM の順そのまま（CSS order で並べ替えない。ADR-0056）。選んでいる方式は枠と背景の両方で示し、色だけに頼らない */
+h2.step, legend.step { font-size: 13px; font-weight: 600; color: var(--muted); margin: 18px 0 8px; padding: 0; }
+.intake > h2.step:first-child, .modes legend.step { margin-top: 0; }
+.modes { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 12px 14px; cursor: pointer; }
+.mode:hover { background: var(--ground); }
+.mode.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--ground); }
+.mode:focus-within { border-color: var(--accent); }
+.mode input { margin: 3px 0 0; flex: none; }
+.mode-body { display: flex; flex-direction: column; gap: 3px; }
+#mode-keep { margin: 8px 0 0; }
+/* 長文を読み書きする行長は本文（.md）と同じ 78ch を上限にする。2 列をやめたぶんを行長に流し込まない */
+.intake .field textarea, .intake .field input[type=text], .intake > .panel > .help { max-width: 78ch; }
+.intake .field { margin-bottom: 14px; }
+.intake .actions.preview { margin: -6px 0 12px; }
+#new-preview-box { border: 1px solid var(--line-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 14px; background: var(--ground); }
 @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .board { grid-template-columns: repeat(2, 1fr); } .flow { grid-template-columns: 1fr 1fr; } .flow .gap { display: none; } }
-@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } .modes { grid-template-columns: 1fr; } }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12.5px; }
@@ -161,7 +178,6 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .top { margin-top: 8px; }
 .w100 { width: 100px; }
 .w220 { width: 220px; }
-.h140 { min-height: 140px; }
 .h80 { min-height: 80px; }   /* 操作パネルのメモ欄。textarea の既定 200px は縦が伸びすぎる */
 .grow { flex: 1; min-width: 220px; }
 .check { display: inline-flex; align-items: center; gap: 6px; }

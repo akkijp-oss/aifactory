@@ -560,7 +560,7 @@ class ApiTest(unittest.TestCase):
         self.assertRegex(css, r"\.panel\.ops > h3 \{", "操作領域の小見出しの指定が無い")
 
     def test_intake_keeps_draft_across_navigation(self):
-        """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
+        """起票の下書き（自由文・直接起票の 8 項目と選んだ方式）が画面往復・方式の切り替えで消えない。
 
         `route()` は hash が変わるたび `viewIntake()` を呼び、`render()` が main を作り直す。
         入力をどこにも保持しないと、起票 → ログ → 起票の往復・再読み込み・戻るで必ず空になる。
@@ -580,19 +580,36 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
         self.assertTrue(re.search(r"(?:d|draft)\s*=\s*\w*[Dd]raft\w*\(", view), "viewIntake が保存済みの下書きを読んでいない")
 
-        # 9 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
-        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"), ("in-dry", "dry"),
+        # 8 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
+        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"),
                          ("new-pj", "newPj"), ("new-kind", "newKind"), ("new-pr", "newPr"),
                          ("new-title", "title"), ("new-body", "body")):
             self.assertIn(f'id="{eid}"', view, f"{eid} が起票画面に無い")
             self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} が下書きの対応表に無い（保存されない）")
             self.assertTrue(re.search(rf"\b(?:d|draft)\.{key}\b", view), f"{eid} の下書き {key} を描画で復元していない")
 
+        # 選んだ方式も下書きに乗る。送信が通っても消さない（DRAFT_FREE / DRAFT_NEW に入れない）
+        self.assertTrue(re.search(r"'intake-mode':\s*'mode'", app), "選んだ方式が下書きの対応表に無い")
+        self.assertTrue(re.search(r"\b(?:d|draft)\.mode\b", view), "選んだ方式を描画で復元していない")
+        free = re.search(r"const DRAFT_FREE = \[([^\]]*)\]", app).group(1)
+        new_ = re.search(r"const DRAFT_NEW = \[([^\]]*)\]", app).group(1)
+        self.assertNotIn("intake-mode", free + new_, "送信が通ると方式まで既定に戻ってしまう")
+        self.assertNotIn("in-dry", free, "「判定だけ見る」はボタンにしたので、下書きに持たない")
+
+        # 方式を切り替える前に、今出ている欄を下書きへ移す（切り替えで打った内容を落とさない）
+        b = action("intake-mode")
+        self.assertIn("draftSave()", b, "方式の切り替えが今の入力を保存していない")
+        self.assertLess(b.index("draftSave()"), b.index("draftPut"), "方式を書いてから保存すると、直前の入力が落ちる")
+        self.assertIn("viewIntake", b, "方式を切り替えても描き直していない")
+
         # 破棄の規則: 送信が成功したときだけ、そのパネルの分を消す（失敗したら直して送り直せる）
-        for name in ("intake", "new"):
-            b = action(name)
-            self.assertIn("draftDrop", b, f"actions['{name}'] が送信後に下書きを消していない")
-            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"actions['{name}'] が送信の前に下書きを消している")
+        i2 = app.index("async function intakeSend")
+        send = app[i2:app.index("\n}", i2)]
+        for name, b in (("intakeSend", send), ("new", action("new"))):
+            self.assertIn("draftDrop", b, f"{name} が送信後に下書きを消していない")
+            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"{name} が送信の前に下書きを消している")
+        # 判定だけ見たときは捨てない（T.next.intakeDry が「起票へ戻って取り込んでください」と言う先に依頼文が残る）
+        self.assertTrue(re.search(r"if \(!dry\) draftDrop\(DRAFT_FREE\)", send), "判定だけ見たときにも依頼文を捨てている")
 
         # 破棄は明示操作（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
         for act in ("intake-clear", "new-clear"):
@@ -600,6 +617,103 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+
+    def test_intake_is_one_mode_at_a_time(self):
+        """起票が「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道になっている（チケット 413。ADR-0063）。
+
+        2 つのフォームを等幅で並べると、PJ・種別・添付・主操作が左右で重複し、押すべきボタンが 2 つになる。
+        選んだ方式のフォームだけを主領域に出し、段の見出しで順を示す。JS を動かす基盤が無いのでソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+
+        # 段 1: 素のラジオ 2 つ（Tab・矢印キー・読み上げが何も足さずに効く）。tab の ARIA パターンは使わない
+        self.assertEqual(view.count('name="intake-mode"'), 1, "方式のラジオが 1 つの群になっていない")
+        self.assertIn('type="radio"', view, "方式の選択がラジオになっていない")
+        self.assertIn('id="${id}"', view, "方式のラジオに id が無い（label と読み上げが結び付かない）")
+        for eid in ("mode-free", "mode-new"):
+            self.assertIn(f"'{eid}'", view, f"{eid} が無い（選べる方式が 2 つそろっていない）")
+        self.assertIn('data-act="intake-mode"', view, "方式を切り替える手が無い")
+        self.assertIn("'intake-mode':", app, "actions に intake-mode が無い")
+        # 描き直すと今のラジオの節点は捨てられる。同じ id へ focus を戻さないと body に落ち、矢印キーの続きが効かない
+        j = app.index("  'intake-mode':")
+        sw = app[j:app.index("\n  '", j + 1)]
+        self.assertTrue(re.search(r"viewIntake\(\);[\s\S]*\.focus\(\)", sw),
+                        "方式を切り替えたあとに focus を戻していない（キーボードだけで切り替えて続けられない）")
+        self.assertNotIn('role="tab"', view, "roving tabindex の要る tab パターンを、前例の無い画面に持ち込んでいる")
+        for key in ("T.h.intakeStep1", "T.h.intakeStep2", "T.h.intakeStep3"):
+            self.assertIn(key, view, f"{key} が無い（段の順が画面に出ていない）")
+        for key in ("T.help.modeFree", "T.help.modeNew", "T.help.modeKeep"):
+            self.assertIn(key, view, f"{key} が無い（方式の違いと、切り替えても残ることを言っていない）")
+
+        # 段 2: 出るのは選んだ方式のフォームだけ。2 列の並置をやめる
+        self.assertNotIn("grid2", view, "起票が等幅 2 列のままになっている")
+        self.assertTrue(re.search(r"mode === 'new' \? formNew : formFree", view), "選んだ方式だけを出す分岐が無い")
+        # 添付欄の id は据え置き（picked は id 別のメモリなので、変えると方式の切り替えで選んだファイルが消える）
+        for zone in ("in-attach", "new-attach"):
+            self.assertIn(f"attachZone('{zone}')", view, f"{zone} の落とす領域が消えている")
+        self.assertIn("T.help.attachKeptOnSwitch", view, "添付が方式の切り替えで残ることを言っていない")
+        self.assertIn("T.help.attachNotDraft", view, "添付が画面を離れると消えることを言っていない")
+
+        # 段 3: 主操作（primary）はどちらの方式でも 1 つだけ
+        for acts in ("const actsFree = ", "const actsNew = "):
+            j = view.index(acts)
+            block = view[j:view.index("\n", j)]
+            self.assertEqual(block.count('class="primary"'), 1, f"{acts.strip()} の主操作が 1 つではない")
+
+    def test_intake_pr_field_only_for_merge_pr(self):
+        """PR 番号は merge-pr のときだけ出し、そのときは何に使うかを言う。他の種別では要求も送信もしない。"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        # DOM からは消さず hidden にする（下書きの保存が生き、hidden なので Tab も読み上げも飛ばす）
+        self.assertTrue(re.search(r"id=\"new-pr-field\"[^\n]*newKind === 'merge-pr' \? '' : 'hidden'", view),
+                        "PR 欄が種別と結び付いていない（既定の bug でも出る）")
+        self.assertIn("T.help.prForMerge", view, "merge-pr で PR 番号が要る理由を言っていない")
+        # 出し分けは種別を選び直した時点で効く
+        j = app.index("  'kind-help':")
+        kh = app[j:app.index("\n  '", j + 1)]
+        self.assertIn("new-pr-field", kh, "種別を変えても PR 欄の出し分けが変わらない")
+        self.assertIn("merge-pr", kh, "PR 欄の出し分けの条件が merge-pr になっていない")
+        # 隠れている値を黙って送らない
+        k = app.index("  'new': ")
+        nw = app[k:app.index("\n  '", k + 1)]
+        self.assertTrue(re.search(r"pr:\s*kind === 'merge-pr' \?", nw), "merge-pr 以外でも PR 番号を送っている")
+
+    def test_intake_dry_run_is_a_button_and_body_can_be_previewed(self):
+        """「判定だけ見る」は主操作と別のボタンにし、自分で書く方式は送る前に Markdown の見え方を確かめられる。
+
+        チェックボックスは押しても何も起きず、入れっぱなしに気づけない（「起票したつもりで起票できていない」が起きる）。
+        表示の確認はチケット本文と同じ `md()` を使う（新しいパーサを増やさない）。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        self.assertNotIn('id="in-dry"', view, "dry-run がチェックボックスのまま残っている")
+        self.assertIn('data-act="intake-dry"', view, "「判定だけ見る」のボタンが無い")
+        self.assertIn("T.btn.intakeDry", view, "「判定だけ見る」の文言が strings.js から来ていない")
+        for act in ("'intake':", "'intake-dry':"):
+            self.assertIn(act, app, f"actions に {act} が無い")
+        self.assertTrue(re.search(r"'intake':[^\n]*intakeSend\(false\)", app), "「取り込む」が dry で送っている")
+        self.assertTrue(re.search(r"'intake-dry':[^\n]*intakeSend\(true\)", app), "「判定だけ見る」が本当に起票してしまう")
+        self.assertIn("dry_run: dry", app, "送る値が押したボタンで決まっていない")
+
+        self.assertIn('data-act="new-preview"', view, "本文の表示を確かめる手が無い")
+        self.assertIn('id="new-preview-box"', view, "表示を確かめた結果を出す場所が無い")
+        j = app.index("  'new-preview':")
+        pv = app[j:app.index("\n  '", j + 1)]
+        self.assertIn("md(", pv, "表示の確認が md() を使っていない（別の Markdown 解釈を増やしている）")
+        self.assertIn("$('new-body').value", pv, "表示の確認が今の本文を読んでいない")
+
+    def test_intake_job_leads_back_to_intake(self):
+        """起票から始まったジョブは、同じ作業文脈（起票）へ戻れる。他のジョブは今までどおりジョブの一覧へ戻す。"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewJob(")
+        view = app[i:app.index("\n}", i)]
+        self.assertTrue(re.search(r"crumb\([^\n]*j\.kind === 'intake'[^\n]*'#/intake'", view),
+                        "起票のジョブから起票へ戻るパンくずが無い")
+        self.assertIn("'#/jobs'", view, "起票以外のジョブの戻り先が消えている")
 
     def test_ticket_edit_keeps_draft_per_ticket(self):
         """チケット詳細の「項目を直す」（種別・PR・メモ）の未保存値が、画面往復・戻る・再読み込み・自動更新で消えない。
