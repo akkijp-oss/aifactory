@@ -344,6 +344,26 @@ async function viewTickets(q) {
 }
 
 /* ---------- チケット */
+/* 成果物: チケットの pr 列と実行記録に残った PR を core が 1 つに解決した結果（ticket_detail の d.pr、ADR-0064）を、そのまま出すだけ。
+   番号も URL もここで組み立て直さない（推し量った番号を別の repo に結び付けないため）。
+   外部リンクには data-act を付けない＝開いても内部の状態は変わらない。読むだけの表示なので「項目を直す」の PR 番号欄には触らない */
+function prRow(p, note) {
+  const link = p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(tt(T.btn.openPr, { pr: p.number }))}</a>`
+                     : `<b>${esc(tt(T.ticket.prNumber, { pr: p.number }))}</b>`;
+  return `<div class="line">${link} <span class="help">${esc(note)}${p.url ? '' : ' ' + esc(T.help.prNoUrl)}</span></div>`;
+}
+function prPanel(d) {
+  const p = d.pr; if (!p) return '';
+  const rn = p.run ? runName(p.run.run) : '';
+  const body = p.state === 'none' ? `<div class="help">${esc(T.help.prNone)}</div>`
+    : p.state === 'run' ? prRow(p.run, tt(T.help.prFromRun, { run: rn }))
+    : p.state === 'same' ? prRow(p.ticket, tt(T.help.prSame, { run: rn }))
+    : p.state === 'mismatch' ? prRow(p.ticket, T.help.prFromTicket) + prRow(p.run, tt(T.help.prRunOrigin, { run: rn }))
+        + `<div class="warn">${esc(tt(T.help.prMismatch, { run: rn }))}</div>`
+    : prRow(p.ticket, T.help.prFromTicket);
+  return `<div class="panel"><h2>${esc(T.h.artifacts)}</h2>${body}</div>`;
+}
+
 async function viewTicket(id, flash) {
   const d = await api(`tickets/${id}`); const t = d.ticket;
   /* この回のサーバー値を控え、「項目を直す」の 3 欄は下書きがあればそれを優先して描く（自動更新に未保存の入力を消させない） */
@@ -384,6 +404,7 @@ async function viewTicket(id, flash) {
     <div class="head"><h1><span class="mono muted">${t.id}</span> ${esc(t.title)}</h1><span id="t-status" class="${flash ? 'flash' : ''}">${st(t.status)}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span>${t.pr ? `<span>PR ${prLink(t)}</span>` : ''}</div>
     ${t.note ? `<div class="panel note"><b>${esc(T.label.note)}</b> ${esc(t.note)}</div>` : ''}
     ${nowPanel}
+    ${prPanel(d)}
     <div class="grid2">
       <div>
         <div class="panel"><h2>${esc(T.h.body)}<small class="mono" title="${esc(d.file)}">${esc(String(d.file).split('/').pop())}</small></h2>${d.body != null ? md(d.body) : `<div class="err">${esc(T.err.noBody)}</div>`}</div>
@@ -672,8 +693,10 @@ async function viewKeys() {
    保存先は sessionStorage: 同じタブの往復・再読み込み・戻るでは残り、タブを閉じれば消える（localStorage だと別タブ同士で上書きし合う）。
    離脱時の警告は出さない（ブラウザー標準のダイアログは UX.md の文言規則の外に出る）。保持で守る。 */
 const DRAFT_KEY = 'intake-draft';
-const DRAFT = { 'in-text': 'text', 'in-pj': 'pj', 'in-kind': 'kind', 'in-dry': 'dry', 'new-pj': 'newPj', 'new-kind': 'newKind', 'new-pr': 'newPr', 'new-title': 'title', 'new-body': 'body' };
-const DRAFT_FREE = ['in-text', 'in-pj', 'in-kind', 'in-dry'];              /* 自由文の側 */
+/* 'intake-mode' は選んでいる方式。ラジオの群には値を持つ 1 個の id が無いので draftSave() では拾えず、切り替えの handler が draftPut で書く。
+   DRAFT_FREE / DRAFT_NEW のどちらにも入れない（送信が通っても、方式まで既定に戻さない） */
+const DRAFT = { 'in-text': 'text', 'in-pj': 'pj', 'in-kind': 'kind', 'new-pj': 'newPj', 'new-kind': 'newKind', 'new-pr': 'newPr', 'new-title': 'title', 'new-body': 'body', 'intake-mode': 'mode' };
+const DRAFT_FREE = ['in-text', 'in-pj', 'in-kind'];                        /* 自由文の側 */
 const DRAFT_NEW = ['new-pj', 'new-kind', 'new-pr', 'new-title', 'new-body'];   /* 直接起票の側 */
 function draftRead() { try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY)) || {}; } catch (e) { return {}; } }
 function draftWrite(d) { try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (e) { /* 保存できなくても起票は動く */ } }
@@ -747,6 +770,7 @@ async function viewIntake() {
   clearInterval(timer);
   const t = await api('tickets');
   const d = draftRead();
+  const mode = d.mode === 'new' ? 'new' : 'free';                                         /* 1 画面 1 方式。選んだ方式も下書きと一緒に持つ（ADR-0063） */
   const lost = [];                                                                        /* 下書きにあったが、今は一覧に無い PJ・種別（黙って別の値で起票させない） */
   const pick = (list, v) => { if (!v) return ''; if (list.includes(v)) return v; lost.push(v); return ''; };
   const opt = (list, blank, sel) => (blank != null ? `<option value="">${esc(blank)}</option>` : '') + list.map(x => `<option ${x === sel ? 'selected' : ''}>${esc(x)}</option>`).join('');
@@ -760,28 +784,57 @@ async function viewIntake() {
   if (draftHas(d, DRAFT_FREE) || draftHas(d, DRAFT_NEW)) notes.push(esc(T.msg.draftRestored));
   if (lost.length) notes.push(tt(T.help.draftLost, { v: esc(lost.join('、')) }));
   const clearBtn = (act, ids) => draftHas(d, ids) ? `<button data-act="${act}">${esc(T.btn.draftClear)}</button>` : '';
-  render(head(esc(T.nav.intake), T.sub.intake) + (notes.length ? `<div class="help" id="draft-note">${notes.join(' ')}</div>` : '') + `
-    <div class="grid2">
-      <div class="panel"><h2>${esc(T.h.intakeFree)}<small>glue/bin/intake</small></h2>
+  /* 段 1: 方式を選ぶ。素のラジオにするので、Tab・矢印キー・読み上げは何も足さずに効く（ARIA の tab パターンは使わない） */
+  const modeCard = (v, id, title, help, cli) => `<label class="mode${mode === v ? ' on' : ''}">
+        <input type="radio" name="intake-mode" id="${id}" value="${v}" data-act="intake-mode" ${mode === v ? 'checked' : ''}>
+        <span class="mode-body"><b>${esc(title)}</b><span class="help">${esc(help)}</span><span class="help mono">${cli}</span></span></label>`;
+  /* 段 2: 選んだ方式のフォームだけを主領域に出す。並びは 依頼内容 → PJ → 種別 → 準備状態 → 種別ごとの追加項目 → 添付 で両方式そろえる */
+  const formFree = `
         <div class="field"><label for="in-text">${esc(T.label.request)}</label><textarea id="in-text" placeholder="${esc(T.label.requestPlaceholder)}">${esc(d.text || '')}</textarea></div>
-        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj" data-act="pj-help">${opt(t.pjs, T.label.letLlm, inPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind" data-act="kind-help">${opt(t.kinds, T.label.letLlm, inKind)}</select></label>
-          <label class="help check"><input type="checkbox" id="in-dry" ${d.dry ? 'checked' : ''}> ${esc(T.label.intakeDry)}</label></div>
+        <div class="row"><label class="field">${esc(T.label.pjIfKnown)}<select id="in-pj" data-act="pj-help">${opt(t.pjs, T.label.letLlm, inPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="in-kind" data-act="kind-help">${opt(t.kinds, T.label.letLlm, inKind)}</select></label></div>
         <div class="${pjHelpClass(inPj)}" id="in-pj-help">${pjHelpHtml(inPj)}</div>
         <div class="help" id="in-kind-help">${esc(kindHelp(inKind))}</div>
-        <div class="field"><label for="in-attach-input">${esc(T.label.attachments)}</label>${attachZone('in-attach')}</div>
-        <div class="help">${esc(T.help.attachNotDraft)} ${esc(T.help.attach)}</div>
-        <div class="actions"><button class="primary" data-act="intake">${esc(T.btn.intake)}</button>${clearBtn('intake-clear', DRAFT_FREE)}<span class="help">${esc(T.help.intake)}</span></div></div>
-      <div class="panel"><h2>${esc(T.h.intakeNew)}<small>kb new</small></h2>
-        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj" data-act="pj-help">${opt(t.pjs, null, newPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(newKind)}</select></label><label class="field">${esc(T.label.prForMerge)}<input type="number" id="new-pr" class="w100" value="${esc(d.newPr || '')}"></label></div>
+        <div class="field top"><label for="in-attach-input">${esc(T.label.attachments)}</label>${attachZone('in-attach')}</div>
+        <div class="help">${esc(T.help.attachKeptOnSwitch)} ${esc(T.help.attachNotDraft)} ${esc(T.help.attach)}</div>`;
+  const formNew = `
+        <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}" value="${esc(d.title || '')}"></div>
+        <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" placeholder="${esc(T.label.bodyPlaceholder)}">${esc(d.body || '')}</textarea></div>
+        <div class="actions preview"><button data-act="new-preview" id="new-preview-btn">${esc(T.btn.preview)}</button><span class="help">${esc(T.help.preview)}</span></div>
+        <div id="new-preview-box" hidden></div>
+        <div class="row"><label class="field">${esc(T.label.pj)}<select id="new-pj" data-act="pj-help">${opt(t.pjs, null, newPj)}</select></label><label class="field">${esc(T.label.kind)}<select id="new-kind" data-act="kind-help">${kindOpt(newKind)}</select></label></div>
         <div class="${pjHelpClass(newPj)}" id="new-pj-help">${pjHelpHtml(newPj)}</div>
         <div class="help" id="new-kind-help">${esc(kindHelp(newKind))}</div>
-        <div class="field"><label for="new-title">${esc(T.label.title)}</label><input type="text" id="new-title" placeholder="${esc(T.label.titlePlaceholder)}" value="${esc(d.title || '')}"></div>
-        <div class="field"><label for="new-body">${esc(T.label.body)}</label><textarea id="new-body" class="h140" placeholder="${esc(T.label.bodyPlaceholder)}">${esc(d.body || '')}</textarea></div>
-        <div class="field"><label for="new-attach-input">${esc(T.label.attachments)}</label>${attachZone('new-attach')}</div>
-        <div class="help">${esc(T.help.attachNotDraft)}</div>
-        <div class="actions"><button class="primary" data-act="new">${esc(T.btn.file)}</button>${clearBtn('new-clear', DRAFT_NEW)}<span class="help">${esc(T.help.newTicket)}</span></div></div>
+        <label class="field top" id="new-pr-field" ${newKind === 'merge-pr' ? '' : 'hidden'}>${esc(T.label.pr)}<input type="number" id="new-pr" class="w100" value="${esc(d.newPr || '')}"><span class="help">${esc(T.help.prForMerge)}</span></label>
+        <div class="field top"><label for="new-attach-input">${esc(T.label.attachments)}</label>${attachZone('new-attach')}</div>
+        <div class="help">${esc(T.help.attachKeptOnSwitch)} ${esc(T.help.attachNotDraft)} ${esc(T.help.attach)}</div>`;
+  /* 段 3: 主操作は 1 つだけ。「判定だけ見る」は押した操作と結果が 1 対 1 になるよう、チェックボックスではなく別のボタンにする */
+  const actsFree = `<button class="primary" data-act="intake">${esc(T.btn.intake)}</button><button data-act="intake-dry">${esc(T.btn.intakeDry)}</button>${clearBtn('intake-clear', DRAFT_FREE)}<span class="help">${esc(T.help.intake)}</span>`;
+  const actsNew = `<button class="primary" data-act="new">${esc(T.btn.file)}</button>${clearBtn('new-clear', DRAFT_NEW)}<span class="help">${esc(T.help.newTicket)}</span>`;
+  render(head(esc(T.nav.intake), T.sub.intake) + (notes.length ? `<div class="help" id="draft-note">${notes.join(' ')}</div>` : '') + `
+    <div class="intake">
+      <fieldset class="modes"><legend class="step">${esc(T.h.intakeStep1)}</legend>
+        ${modeCard('free', 'mode-free', T.h.intakeFree, T.help.modeFree, 'glue/bin/intake')}
+        ${modeCard('new', 'mode-new', T.h.intakeNew, T.help.modeNew, 'kb new')}</fieldset>
+      <div class="help" id="mode-keep">${esc(T.help.modeKeep)}</div>
+      <h2 class="step">${esc(T.h.intakeStep2)}</h2>
+      <div class="panel" id="intake-form">${mode === 'new' ? formNew : formFree}</div>
+      <h2 class="step">${esc(T.h.intakeStep3)}</h2>
+      <div class="panel"><div class="actions">${mode === 'new' ? actsNew : actsFree}</div></div>
     </div>
-    <div class="help">${esc(T.help.dispatchMoved)} <a href="#/board">${esc(T.nav.board)}</a></div>`);
+    <div class="help top">${esc(T.help.dispatchMoved)} <a href="#/board">${esc(T.nav.board)}</a></div>`);
+}
+
+
+/* 取り込みの送信。dry のときは下書きを捨てない（T.next.intakeDry が「起票へ戻って取り込んでください」と言うので、依頼文が残っていないと成立しない） */
+async function intakeSend(dry) {
+  const text = $('in-text').value; if (!text.trim()) { toast(esc(T.err.emptyRequest), { err: true }); $('in-text').focus(); return; }
+  const fs = picked['in-attach'] || [];
+  const b = { text, pj: $('in-pj').value || undefined, kind: $('in-kind').value || undefined, dry_run: dry };
+  /* ファイルがあるときだけ multipart。無いときの経路は今までどおり JSON */
+  const r = fs.length ? await apiForm('intake', fs, { text, pj: b.pj, kind: b.kind, dry_run: dry ? '1' : '' }) : await api('intake', b);
+  takePicked('in-attach');
+  if (!dry) draftDrop(DRAFT_FREE);                           /* 送れたときだけ捨てる。失敗したときは残して、直して送り直せるようにする */
+  go(`#/job/${r.job.id}`);
 }
 
 /* ---------- ジョブ */
@@ -828,7 +881,7 @@ async function viewJob(id, first) {
   const d = await api(`jobs/${id}?offset=${buf.off}`); const j = d.job;
   if (d.log) { buf.text += d.log.text; buf.off = d.log.size; } jobBuf[id] = buf;
   const pre0 = $('joblog'); const atBottom = !pre0 || pre0.scrollHeight - pre0.scrollTop - pre0.clientHeight < 40;
-  render(crumb('#/jobs', T.nav.jobs, id) + `
+  render(crumb(...(j.kind === 'intake' ? ['#/intake', T.nav.intake] : ['#/jobs', T.nav.jobs]), id) + `
     <div class="head"><h1>${esc(j.label)}</h1>${jst(j)}${j.ticket ? `<a href="#/ticket/${j.ticket}">${esc(tt(T.ticket.crumb, { id: j.ticket }))}</a>` : ''}${j.run_hint ? runLink(j.run_hint) : ''}<span class="spacer"></span>${j.state === 'running' ? `<button class="danger" data-act="job-stop" data-id="${esc(j.id)}">${esc(T.btn.stop)}</button>` : ''}</div>
     ${j.note ? `<div class="warn">${esc(j.note)}</div>` : ''}
     ${jobNext(j, buf.text, d.ticket)}
@@ -1148,17 +1201,12 @@ const actions = {
     }
     const r = await api(`tickets/${id}/run`, { dry_run: dry, workflow: wf || undefined, keep, resume }); go(`#/job/${r.job.id}`);
   },
-  'intake': async () => {
-    const text = $('in-text').value; if (!text.trim()) { toast(esc(T.err.emptyRequest), { err: true }); $('in-text').focus(); return; }
-    const fs = picked['in-attach'] || [];
-    const b = { text, pj: $('in-pj').value || undefined, kind: $('in-kind').value || undefined, dry_run: $('in-dry').checked };
-    /* ファイルがあるときだけ multipart。無いときの経路は今までどおり JSON */
-    const r = fs.length ? await apiForm('intake', fs, { text, pj: b.pj, kind: b.kind, dry_run: b.dry_run ? '1' : '' }) : await api('intake', b);
-    takePicked('in-attach');
-    draftDrop(DRAFT_FREE); go(`#/job/${r.job.id}`);            /* 送れたときだけ捨てる。失敗したときは残して、直して送り直せるようにする */
-  },
+  /* dry_run は押したボタンで決める（チェックボックスだと、入れっぱなしに気づけないまま「起票したつもり」が起きる） */
+  'intake': el => intakeSend(false),
+  'intake-dry': el => intakeSend(true),
   'new': async () => {
-    const b = { pj: $('new-pj').value, kind: $('new-kind').value, title: $('new-title').value.trim(), body: $('new-body').value, pr: $('new-pr').value || undefined };
+    const kind = $('new-kind').value;
+    const b = { pj: $('new-pj').value, kind, title: $('new-title').value.trim(), body: $('new-body').value, pr: kind === 'merge-pr' ? ($('new-pr').value || undefined) : undefined };
     if (!b.title) { toast(esc(T.err.needTitle), { err: true }); $('new-title').focus(); return; }
     const r = await api('tickets', b);
     draftDrop(DRAFT_NEW);
@@ -1189,6 +1237,17 @@ const actions = {
   'attach-unpick': el => { (picked[el.dataset.zone] || []).splice(Number(el.dataset.i), 1); paintZone(el.dataset.zone); },
   'intake-clear': () => draftClear(DRAFT_FREE),
   'new-clear': () => draftClear(DRAFT_NEW),
+  /* 方式を切り替える前に今の欄を下書きへ移す。描き直しても両方式の入力・選んだ設定・選んだファイルが残る */
+  /* 描き直しで今のラジオの節点は捨てられるので、同じ id へ focus を戻す（戻さないと body に落ちて矢印キーの続きが効かない） */
+  'intake-mode': async el => { const id = el.id; draftSave(); draftPut({ mode: el.value }); await viewIntake(); const r = $(id); if (r) r.focus(); },
+  /* Markdown の見え方を送る前に確かめる。md() はチケット本文と同じもの（新しいパーサは作らない） */
+  'new-preview': el => {
+    const box = $('new-preview-box'); if (!box) return;
+    const open = box.hidden;
+    box.innerHTML = open ? `<div class="md">${$('new-title').value.trim() ? `<h1>${esc($('new-title').value.trim())}</h1>` : ''}${md($('new-body').value)}</div>` : '';
+    box.hidden = !open;
+    el.textContent = open ? T.btn.previewClose : T.btn.preview;
+  },
   'sandbox-ls': async () => { const r = await api('sandbox/ls', {}); toast(`${esc(T.msg.lsStarted)} <a href="#/job/${esc(r.job.id)}">${esc(T.btn.openJob)}</a>`); viewSandbox(); },
   /* 返却は不可逆・影響大: その VM で run が動いていればチケット番号を打たせる */
   'sandbox-release': async el => {
@@ -1247,12 +1306,16 @@ const actions = {
     if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
   },
   'pj-help': el => { const h = $(el.id + '-help'); if (h) { h.innerHTML = pjHelpHtml(el.value); h.className = pjHelpClass(el.value); } },
-  'kind-help': el => { const h = $(el.id + '-help'); if (h) { h.textContent = kindHelp(el.value); h.className = 'help'; } },
+  'kind-help': el => {
+    const h = $(el.id + '-help'); if (h) { h.textContent = kindHelp(el.value); h.className = 'help'; }
+    /* PR 番号が要るのは merge-pr だけ。DOM からは消さず hidden にする（下書きの保存が生き、Tab も読み上げも飛ばす） */
+    const pr = el.id === 'new-kind' && $('new-pr-field'); if (pr) pr.hidden = el.value !== 'merge-pr';
+  },
   'run-file': el => { runFile[el.dataset.run] = el.dataset.path; runPicked[el.dataset.run] = true; viewRun(el.dataset.run); },
 };
 document.addEventListener('click', async e => {
   const row = e.target.closest('tr[data-href]'); if (row && !e.target.closest('a, button')) { go(row.dataset.href); return; }
-  const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'SELECT' || el.type === 'checkbox') return;
+  const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'radio') return;
   e.preventDefault();
   try { el.disabled = true; await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } finally { el.disabled = false; }
 });
@@ -1269,7 +1332,7 @@ document.addEventListener('input', e => {
     f.set(el.value);
   }, 150);
 });
-document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'file')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
+document.addEventListener('change', async e => { const el = e.target.closest('[data-act]'); if (!el || !(el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'radio' || el.type === 'file')) return; try { await actions[el.dataset.act](el); } catch (err) { toast(esc(err.message), { err: true }); } });
 function go(h) { location.hash = h; }
 
 /* 落として添付する。render() で中身が入れ替わるので、個々の領域ではなく main に 1 度だけ付ける */

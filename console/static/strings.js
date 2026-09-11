@@ -17,7 +17,9 @@ const T = {
   "btn": {
     "cancel": "キャンセル", "close": "閉じる", "undo": "元に戻す", "draftClear": "下書きを捨てる",
     "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
-    "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
+    "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む", "intakeDry": "判定だけ見る",
+    "preview": "表示を確かめる", "previewClose": "表示の確認を閉じる",
+    "openPr": "PR #{pr} を開く",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
     "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す",
@@ -32,6 +34,7 @@ const T = {
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "keys": "登録してある鍵", "keyAdd": "鍵を登録する",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
+    "intakeStep1": "1. 方式を選ぶ", "intakeStep2": "2. 入力する", "intakeStep3": "3. 確かめて登録する",
     "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道", "rawLog": "元のログを見る",
     "byModel": "モデル別", "byStep": "工程別（工程 × モデル）", "byDay": "日別", "byPj": "PJ 別", "topSteps": "費用換算の高い工程（上位 20）", "howToRead": "読み方"
   },
@@ -52,10 +55,10 @@ const T = {
     "q": "番号・題名", "qPlaceholder": "204 や 起票 のように", "status": "状態", "allStatus": "すべて",
     "pj": "PJ", "allPj": "すべて", "pjIfKnown": "PJ（分かっていれば）", "letLlm": "LLM に決めさせる", "kind": "種別", "workflow": "workflow", "option": "オプション",
     "workflowAsKind": "{kind}（種別のまま）", "runOptions": "実行の詳細設定", "keep": "終了後も VM を返却しない（中を見る）", "resume": "貸出中の VM で続きから（--resume）",
-    "pr": "PR 番号", "prForMerge": "PR 番号（merge-pr のとき）", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
+    "pr": "PR 番号", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
     "blockNote": "何を待っていますか", "blockPlaceholder": "例: 本番 DB の権限を管理者に依頼中",
     "count": "件数", "count1": "1 件だけ", "count3": "3 件まで", "count10": "10 件まで", "countAll": "未着手が尽きるまで",
-    "dispatchDry": "dry-run（VM を触らず、状態も進めません）", "intakeDry": "起票せず、判定だけ見る",
+    "dispatchDry": "dry-run（VM を触らず、状態も進めません）",
     "attachments": "添付するファイル", "dropHere": "ここにファイルを落とすか、選んでください",
     "request": "依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）", "requestPlaceholder": "例: seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい",
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」を箇条書きで）",
@@ -86,7 +89,7 @@ const T = {
     "tickets": "番号・題名・PJ・状態で探せます。完了したチケットもすべてここに並びます。",
     "runs": "runner がチケットを 1 回回した記録です。工程ごとのログと成果物をここから読めます。記録は runs/ に残ります。",
     "sandbox": "貸出は誰がその VM を使っているか、稼働は VM の電源が入っているかです。稼働の一覧は Proxmox に ssh して取ります（数秒）。",
-    "intake": "依頼をチケットとして登録します。左は文章を LLM が題名と完了条件に整えます。右は自分で書いた題名と本文をそのまま登録します。登録するだけで、実行はまだ始まりません。",
+    "intake": "依頼をチケットとして登録します。方式を選び、必要な項目を入れ、内容を確かめてから登録します。登録するだけで、実行はまだ始まりません。",
     "jobs": "この画面から押した起票・実行・配車・返却の 1 回ごとの記録です。出力と終了コードをここから読めます。記録は console/jobs/ に残ります。",
     "logs": "起票と配車の記録です。チケット番号や PJ で絞り込めます。番号を押すとチケットへ移れます。原文は下の「元のログを見る」で読めます。",
     "config": "読むだけの画面です。変えるときはファイルを編集してください。",
@@ -111,7 +114,7 @@ const T = {
     "event": { "intake": "起票", "start": "開始", "end": "終了", "blocked": "人間待ちにした", "skip": "飛ばした", "idle": "未着手なし", "other": "その他" },
     "reason": { "worker_unavailable": "worker が空いていません", "pool_busy": "プール {n} 台すべて貸出中" }
   },
-  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
+  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}", "prNumber": "PR #{pr}" },
   "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
     "nextStep": "次は {step}（開始待ち）", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
@@ -248,6 +251,13 @@ const T = {
   },
 
   "help": {
+    "prNone": "このチケットには PR の番号がまだ登録されていません。GitHub に PR が無いとは限りません。",
+    "prNoUrl": "この PJ には repo が設定されていないので、PR へのリンクを作れません。",
+    "prFromTicket": "チケットに登録された番号です。",
+    "prFromRun": "チケットの番号欄は空です。実行記録 {run} に残った記録から出しています。",
+    "prRunOrigin": "実行記録 {run} に残った記録です。",
+    "prSame": "チケットの番号と、実行記録 {run} に残った記録が同じです。",
+    "prMismatch": "チケットの番号と実行記録 {run} の番号が違います。どちらを開くか確かめてください。",
     "configDetail": "workflow の名前と工程は本物のリンクで、Tab で届き Enter で開きます。",
     "configMainPath": "この並びは、すべての工程がうまくいったときに通る道です。",
     "configCondSteps": "ここに並ぶ工程は、ほかの工程がうまくいかなかったときだけ回ります。",
@@ -297,6 +307,11 @@ const T = {
     "moveNone": "この状態から手で進める先はありません。上の「未着手に戻す（やり直す）」でやり直せます。",
     "syncTitle": "runs/<run>/state.json を読み直して、チケットの状態を合わせます。",
     "intake": "LLM が PJ・種別・題名・完了条件を整えてから起票します。20 秒ほどかかり、結果はジョブに出ます。",
+    "modeFree": "音声の書き起こしや箇条書きを貼ると、LLM が題名と完了条件に整えます。",
+    "modeNew": "題名と本文を自分で書いて、そのまま登録します。LLM は使いません。",
+    "modeKeep": "方式を切り替えても、両方の下書きと選んだ PJ・種別は残ります。勝手に書き換えたり送ったりはしません。",
+    "prForMerge": "merge-pr は、仕上げる PR の番号で対象を決めます。他の種別では要りません。",
+    "preview": "送る前に、Markdown の見え方を同じ画面で確かめられます。",
     "newTicket": "LLM を使わず、この内容のまますぐに起票します。できたチケットの画面へ移ります。",
     "dispatchMoved": "起票しただけでは実行は始まりません。チケットの「実行する」か、ボードの「配車する」で runner が動きます。",
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
@@ -324,6 +339,7 @@ const T = {
     "editDraftServerChanged": "{v} は記録の側が変わりました。今の記録は「{now}」です。",
     "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
     "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
+    "attachKeptOnSwitch": "選んだファイルは、方式を切り替えるだけなら残ります。",
     "attachEmpty": "まだ添付はありません。"
   },
 
