@@ -17,12 +17,15 @@ const T = {
   "btn": {
     "cancel": "キャンセル", "close": "閉じる", "undo": "元に戻す", "draftClear": "下書きを捨てる",
     "file": "起票する", "attach": "添付する", "detach": "添付を消す", "dispatch": "配車する", "run": "実行する", "dryRun": "dry-run で依頼文だけ確かめる",
-    "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む",
+    "save": "保存する", "sync": "実行記録に状態を合わせる", "intake": "取り込む", "intakeDry": "判定だけ見る",
+    "preview": "表示を確かめる", "previewClose": "表示の確認を閉じる",
+    "openPr": "PR #{pr} を開く",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
+    "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
-    "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く"
+    "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く", "openDefinition": "定義の原文を読む"
   },
 
   "h": {
@@ -31,6 +34,7 @@ const T = {
     "track": "工程", "files": "ファイル", "lent": "貸出中", "pjPool": "PJ とプール", "lsResult": "sandbox ls の結果",
     "keys": "登録してある鍵", "keyAdd": "鍵を登録する",
     "intakeFree": "文章から整えて起票する", "intakeNew": "題名と完了条件を自分で書いて起票する", "next": "次にすること", "output": "出力",
+    "intakeStep1": "1. 方式を選ぶ", "intakeStep2": "2. 入力する", "intakeStep3": "3. 確かめて登録する",
     "routes": "モデルの経路", "thisConsole": "この console", "shortcuts": "キーボードの近道", "rawLog": "元のログを見る",
     "byModel": "モデル別", "byStep": "工程別（工程 × モデル）", "byDay": "日別", "byPj": "PJ 別", "topSteps": "費用換算の高い工程（上位 20）", "howToRead": "読み方"
   },
@@ -51,10 +55,10 @@ const T = {
     "q": "番号・題名", "qPlaceholder": "204 や 起票 のように", "status": "状態", "allStatus": "すべて",
     "pj": "PJ", "allPj": "すべて", "pjIfKnown": "PJ（分かっていれば）", "letLlm": "LLM に決めさせる", "kind": "種別", "workflow": "workflow", "option": "オプション",
     "workflowAsKind": "{kind}（種別のまま）", "runOptions": "実行の詳細設定", "keep": "終了後も VM を返却しない（中を見る）", "resume": "貸出中の VM で続きから（--resume）",
-    "pr": "PR 番号", "prForMerge": "PR 番号（merge-pr のとき）", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
+    "pr": "PR 番号", "note": "メモ", "notePlaceholder": "何を待っているか / 何をしたか",
     "blockNote": "何を待っていますか", "blockPlaceholder": "例: 本番 DB の権限を管理者に依頼中",
     "count": "件数", "count1": "1 件だけ", "count3": "3 件まで", "count10": "10 件まで", "countAll": "未着手が尽きるまで",
-    "dispatchDry": "dry-run（VM を触らず、状態も進めません）", "intakeDry": "起票せず、判定だけ見る",
+    "dispatchDry": "dry-run（VM を触らず、状態も進めません）",
     "attachments": "添付するファイル", "dropHere": "ここにファイルを落とすか、選んでください",
     "request": "依頼文（音声の書き起こし、チャットの貼り付け、箇条書き、何でも）", "requestPlaceholder": "例: seeds が今のモデルに合っていなくて db:seed が落ちる。直してほしい",
     "title": "題名（1 行目になり、ブランチ名と PR の題名に使います）", "titlePlaceholder": "fix: … / docs: … / feat: …", "body": "本文（Markdown。末尾に「## 完了条件」を箇条書きで）",
@@ -85,10 +89,10 @@ const T = {
     "tickets": "番号・題名・PJ・状態で探せます。完了したチケットもすべてここに並びます。",
     "runs": "runner がチケットを 1 回回した記録です。工程ごとのログと成果物をここから読めます。記録は runs/ に残ります。",
     "sandbox": "貸出は誰がその VM を使っているか、稼働は VM の電源が入っているかです。稼働の一覧は Proxmox に ssh して取ります（数秒）。",
-    "intake": "依頼をチケットとして登録します。左は文章を LLM が題名と完了条件に整えます。右は自分で書いた題名と本文をそのまま登録します。登録するだけで、実行はまだ始まりません。",
+    "intake": "依頼をチケットとして登録します。方式を選び、必要な項目を入れ、内容を確かめてから登録します。登録するだけで、実行はまだ始まりません。",
     "jobs": "この画面から押した起票・実行・配車・返却の 1 回ごとの記録です。出力と終了コードをここから読めます。記録は console/jobs/ に残ります。",
     "logs": "起票と配車の記録です。チケット番号や PJ で絞り込めます。番号を押すとチケットへ移れます。原文は下の「元のログを見る」で読めます。",
-    "config": "読むだけの画面です。変えるときはファイルを編集してください。",
+    "config": "workflow → 工程を開くと、その工程のモデルを変えられます（影響する工程を見てから保存します）。それ以外の設定はファイルを編集してください。",
     "keys": "Claude のトークン（claude setup-token で作る長期トークン）を「鍵」として登録しておく場所です。チケットを実行するとき、ここから鍵を 1 本選んで VM に渡します。鍵を何本か登録しておくと、利用枠の消費を分散できます。"
   },
 
@@ -110,7 +114,7 @@ const T = {
     "event": { "intake": "起票", "start": "開始", "end": "終了", "blocked": "人間待ちにした", "skip": "飛ばした", "idle": "未着手なし", "other": "その他" },
     "reason": { "worker_unavailable": "worker が空いていません", "pool_busy": "プール {n} 台すべて貸出中" }
   },
-  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}" },
+  "ticket": { "crumb": "チケット {id}", "dbRun": "台帳に記録された run:", "stamps": "作成 {c} / 更新 {u}", "prNumber": "PR #{pr}" },
   "intake": { "pjReadyBadge": "実行できます", "pjNotReadyBadge": "準備が必要", "checkSandbox": "sandbox で準備状態を見る" },
   "run": {
     "nextStep": "次は {step}（開始待ち）", "elapsed": "{t} 経過", "plan": "定義:", "wip": "退避", "loops": "戻し", "v0": "v0 の記録（Markdown 1 枚）です。",
@@ -193,7 +197,22 @@ const T = {
     "knownRedItem": "{name}（{run} / {at}）"
   },
   "job": { "following": "2 秒ごとに追い読みしています。" },
-  "config": { "roles": "役割:" },
+  "config": {
+    "roles": "役割:", "flowMain": "うまくいったときの流れ", "flowCond": "うまくいかなかったときだけ回る工程",
+    "who": "担い手", "roleIs": "役割 {role}", "machineIs": "機械 {code}",
+    "limit": "時間の上限", "limitMin": "{n} 分", "limitDefaultNote": "定義に無いので既定",
+    "branch": "分岐", "pass": "うまくいったとき", "fail": "うまくいかなかったとき",
+    "model": "モデル", "modelClass": "クラス", "modelRoute": "経路",
+    "classFromRole": "役割 {role} の既定", "classFromStep": "この工程の model_class",
+    "human": "人間待ち", "end": "正常終了", "none": "未指定",
+    "start": "ブランチの作り方", "baseBranch": "PR の宛先", "inputs": "workflow の入力", "definition": "定義",
+    "unknownKeys": "読めない項目", "schemaErrors": "schema との食い違い", "seeStats": "実際に使ったモデルを統計で見る",
+    "modelEdit": "モデルを変える", "modelStep": "この工程だけのモデル", "modelStepClass": "この工程のクラス",
+    "modelRoutes": "共通の経路 {key}", "modelNow": "いまの値", "modelInherited": "継承（この工程には書いていません）",
+    "modelAffected": "実効モデルが変わる工程", "modelNoChange": "実効モデルが変わる工程はありません",
+    "modelRunning": "動いている実行記録", "modelWhen": "反映", "modelChanges": "最近の変更",
+    "modelFile": "書き先", "modelBackup": "退避"
+  },
   "kind": {
     "bug": "動きが期待と違うときに選びます。再現するテストを先に書いてから直し、PR まで進みます。",
     "chore": "判断のいらない小さな作業に選びます。計画を省いて、実装から始めます。",
@@ -232,6 +251,40 @@ const T = {
   },
 
   "help": {
+    "prNone": "このチケットには PR の番号がまだ登録されていません。GitHub に PR が無いとは限りません。",
+    "prNoUrl": "この PJ には repo が設定されていないので、PR へのリンクを作れません。",
+    "prFromTicket": "チケットに登録された番号です。",
+    "prFromRun": "チケットの番号欄は空です。実行記録 {run} に残った記録から出しています。",
+    "prRunOrigin": "実行記録 {run} に残った記録です。",
+    "prSame": "チケットの番号と、実行記録 {run} に残った記録が同じです。",
+    "prMismatch": "チケットの番号と実行記録 {run} の番号が違います。どちらを開くか確かめてください。",
+    "configDetail": "workflow の名前と工程は本物のリンクで、Tab で届き Enter で開きます。",
+    "configMainPath": "この並びは、すべての工程がうまくいったときに通る道です。",
+    "configCondSteps": "ここに並ぶ工程は、ほかの工程がうまくいかなかったときだけ回ります。",
+    "configNoModel": "この工程は機械が実行します。モデルは使いません。",
+    "configEnvOverride": "run を起こすときに環境変数 CLAUDE_MODEL で上書きできるので、実際に使ったモデルは設定からは分かりません。",
+    "configModelUnknown": "この役割に既定のクラスがありません。定義を確かめてください。",
+    "configModelNoRoute": "経路表にこのクラスの行も既定の行もないので、モデルが決まりません。",
+    "configModelFallback": "このクラスの行が経路表に無いので、既定の行を使います。",
+    "configSeverity": "レビューの指摘が軽微なときは、戻せる回数が 1 回だけ増えることがあります（ADR-0053）。",
+    "configModelEdit": "変えたい欄を選んで「変更を確かめる」を押すと、変更後の実効モデルと影響する工程を見てから保存できます。",
+    "configModelStep": "この工程だけのモデルです。同じクラスを使うほかの工程は動きません。",
+    "configModelStepClass": "この工程が読む経路を、ほかのクラスに替えます。替えた先の共通の値になります。",
+    "configModelRoutes": "共通の設定です。このクラスを使う工程は、ほかの workflow の分も一緒に変わります。",
+    "configModelInherit": "この工程の指定を消して、クラスの共通の値に戻します。",
+    "configModelUncommitted": "保存しても git には commit しません。制御系で git pull すると元に戻ることがあります。",
+    "configModelWhen": "次に始める run から効きます。動いている run と、その run の途中の工程は変わりません。",
+    "configModelKeys": "モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。分からない名前は、その系統の鍵ではなく共通の鍵で走ることになるので、画面からは保存できません。",
+    "configModelChanges": "書けたときだけ記録しています。元に戻すには、退避した控えの内容を入れ直してください。",
+    "configUnknownKeys": "schema にないキーです。定義の書き間違いか、schema の更新漏れかもしれません。",
+    "configParseError": "この workflow の定義を読めませんでした: {why}。",
+    "configSchemaErrors": "定義が schema と食い違っているので、runner はこの workflow を実行できません。",
+    "configGoStep": "{step} へ進みます。",
+    "configGoBack": "{step} に戻します。最大 {n} 回で、超えたら {to} になります。",
+    "configGoHuman": "人間待ちになって終わります。",
+    "configGoEnd": "正常に終わります。",
+    "configPassDefault": "次の行き先が定義に無いので、ここで正常に終わります。",
+    "configFailDefault": "うまくいかなかったときの行き先が定義に無いので、人間待ちになります。",
     "statsSource": "数字の出どころは各工程の agent-<工程>-<n>.jsonl です。result の usage（入力・キャッシュ書込・キャッシュ読出・出力）と num_turns、system の init に書かれたモデル名を読みます。",
     "statsCache": "ターンごとに、それまでの文脈をキャッシュから読み直します。キャッシュ読出はターン数と文脈の長さの積で増えます。入力はキャッシュに乗らなかった分だけです。",
     "statsCost": "費用換算は claude CLI が API 料金で計算した total_cost_usd の合計です。サブスクの利用枠（5 時間・7 日）がどの重みで数えるかは、ここからは分かりません。",
@@ -254,6 +307,11 @@ const T = {
     "moveNone": "この状態から手で進める先はありません。上の「未着手に戻す（やり直す）」でやり直せます。",
     "syncTitle": "runs/<run>/state.json を読み直して、チケットの状態を合わせます。",
     "intake": "LLM が PJ・種別・題名・完了条件を整えてから起票します。20 秒ほどかかり、結果はジョブに出ます。",
+    "modeFree": "音声の書き起こしや箇条書きを貼ると、LLM が題名と完了条件に整えます。",
+    "modeNew": "題名と本文を自分で書いて、そのまま登録します。LLM は使いません。",
+    "modeKeep": "方式を切り替えても、両方の下書きと選んだ PJ・種別は残ります。勝手に書き換えたり送ったりはしません。",
+    "prForMerge": "merge-pr は、仕上げる PR の番号で対象を決めます。他の種別では要りません。",
+    "preview": "送る前に、Markdown の見え方を同じ画面で確かめられます。",
     "newTicket": "LLM を使わず、この内容のまますぐに起票します。できたチケットの画面へ移ります。",
     "dispatchMoved": "起票しただけでは実行は始まりません。チケットの「実行する」か、ボードの「配車する」で runner が動きます。",
     "release": "返却すると VM は snapshot clean に巻き戻ります。runner は終了時に自分で返却します。",
@@ -281,6 +339,7 @@ const T = {
     "editDraftServerChanged": "{v} は記録の側が変わりました。今の記録は「{now}」です。",
     "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
     "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
+    "attachKeptOnSwitch": "選んだファイルは、方式を切り替えるだけなら残ります。",
     "attachEmpty": "まだ添付はありません。"
   },
 
@@ -301,7 +360,9 @@ const T = {
     "keyAdded": "鍵 {name} を登録しました。次に VM を借りる run から使われます。",
     "keySaved": "鍵 {name} を保存しました。",
     "keyRemoved": "鍵 {name} を削除しました。",
-    "keyReinject": "実行中の VM {n} 台に別の鍵を入れ直すジョブを起こしました。"
+    "keyReinject": "実行中の VM {n} 台に別の鍵を入れ直すジョブを起こしました。",
+    "modelSaved": "{file} を保存しました。次に始める run から効きます。",
+    "modelSame": "いまと同じ設定なので、何も書きませんでした。"
   },
 
   "err": {
@@ -344,6 +405,13 @@ const T = {
       "runWarning": "この VM では run {run} が動いています（工程 {step}）。返却すると run は止まり、途中の作業は失われます。",
       "noRun": "この VM で動いている run はありません。",
       "sharedWarning": "この VM はチケット {others} にも貸出中です。返却すると snapshot clean に巻き戻るので、そのチケットの作業も消えます。台帳からはチケット {task} の行だけが消え、{others} の行は巻き戻った VM を指したまま残ります。"
+    },
+    "model": {
+      "title": "{where} のモデルを変える",
+      "body": "{file} を書き換えます。git には commit しないので、変更は制御系の作業ツリーに残ります。",
+      "common": "共通の設定です。ほかの workflow を含めて {n} 件の工程の実効モデルが変わります。",
+      "runningNote": "動いている run は起動のときに読んだ設定のまま進みます。途中で切り替わることはありません。",
+      "backupNote": "書く前の内容は同じ場所に控えを残すので、元の設定に戻せます。"
     },
     "sync": {
       "title": "チケット {id} の状態を実行記録に合わせる",

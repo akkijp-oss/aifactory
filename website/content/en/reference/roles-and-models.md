@@ -93,8 +93,34 @@ MODEL_default=claude-opus-5
 | Scope | Method |
 |---|---|
 | Everything | Edit `routes.env` |
-| One step | `model_class: judgment` etc. in the workflow yml |
+| One step (by class) | `model_class: judgment` etc. in the workflow yml |
+| One step (pin a model name) | `model: claude-opus-5` in the workflow yml. Other steps of the same class stay put |
 | One run | Environment variable `CLAUDE_MODEL=claude-opus-5 kb run 204` |
+
+Weakest to strongest: the role's default class → the step's `model_class` → the step's `model` → `CLAUDE_MODEL`.
+
+## Changing it from the console
+
+Console → Settings → workflow → step (agent steps only) has "change the model". Pick one of the three scopes above
+(this step's model / this step's class / the shared route), then press "check the change". Before anything is written you see:
+
+- The effective model before and after, and **every step whose effective model changes** (for a shared route, that includes
+  steps in other workflows)
+- The runs that are in flight (a running run keeps the settings it read at startup; nothing switches mid-run)
+- The file being written and its `git status` line
+
+Saving keeps the previous content next to the file as `.bak-<timestamp>` and appends a line to `logs/config-changes.jsonl`
+(also shown as "recent changes" on the page). To roll back, put the backup's content back.
+
+!!! warning "The console does not commit"
+    The files it writes (`workflow/kit/routes.env` and the workflow yml) are part of the repository. The console only writes
+    the work tree, so a `git pull` on the control host can undo the change. Commit it to make it permanent (ADR-0065).
+
+!!! note "Which model names are accepted"
+    The name must reveal its key family (fable / opus / sonnet / haiku). Without a family the runner does not pick a
+    per-family key and falls back to the shared `CLAUDE_CODE_OAUTH_TOKEN`; the step still runs, but not necessarily on the
+    key you meant, so the console refuses the value (editing the file directly still accepts it). Suggestions come from the
+    values currently in use, and new names can be typed in directly.
 
 ## Adding a role
 

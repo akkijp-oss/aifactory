@@ -526,6 +526,18 @@ class ApiTest(unittest.TestCase):
         self.assertLess(at("T.h.body"), at("T.h.attachments"), "添付が本文より前にある")
         self.assertLess(at("T.h.attachments"), at("T.h.ops"), "添付と本文の間に操作が割り込んでいる（353 / 378 の位置関係）")
         self.assertLess(at("T.h.now"), at("T.h.body"), "実行状況の 1 行が本文より後にある（今どうなっているかを先に出す）")
+        # 成果物（PR への導線）は実行状況の次・本文の前（チケット 414 / ADR-0064）
+        self.assertLess(at("T.h.now"), at("prPanel(d)"), "成果物が実行状況より前にある")
+        self.assertLess(at("prPanel(d)"), at("T.h.body"), "成果物が本文より後にある（題名と実行状況の近くに置く）")
+        pr = app[app.index("function prPanel("):app.index("\n}", app.index("function prPanel("))]
+        self.assertIn("T.h.artifacts", pr, "成果物パネルの見出しが T.h.artifacts でない")
+        self.assertIn("d.pr", pr, "成果物パネルが core の解決結果（d.pr）を読んでいない")
+        self.assertNotIn("prLink(", pr, "成果物パネルが番号から URL を組み立て直している（解決済みの URL をそのまま使う）")
+        for state in ("'none'", "'run'", "'same'", "'mismatch'"):
+            self.assertIn(state, pr, f"成果物パネルが {state} の合成状態を扱っていない")
+        row = app[app.index("function prRow("):app.index("\n}", app.index("function prRow("))]
+        self.assertIn('target="_blank" rel="noopener"', row, "PR へのリンクが別タブで開かない")
+        self.assertNotIn("data-act", row, "外部リンクに data-act が付いている（開くだけで内部の状態が変わる）")
         # 実行状況はボードの工程行と同じ判定を使い、実行記録への入口を持つ
         self.assertRegex(body, r"d\.runs\[0\][^\n]*'running'", "実行状況が最新の run の状態を見ていない")
         for key in ("stepText(live)", "T.board.liveSince"):
@@ -560,7 +572,7 @@ class ApiTest(unittest.TestCase):
         self.assertRegex(css, r"\.panel\.ops > h3 \{", "操作領域の小見出しの指定が無い")
 
     def test_intake_keeps_draft_across_navigation(self):
-        """起票の下書き（自由文・直接起票の 9 項目）が画面往復で消えない。
+        """起票の下書き（自由文・直接起票の 8 項目と選んだ方式）が画面往復・方式の切り替えで消えない。
 
         `route()` は hash が変わるたび `viewIntake()` を呼び、`render()` が main を作り直す。
         入力をどこにも保持しないと、起票 → ログ → 起票の往復・再読み込み・戻るで必ず空になる。
@@ -580,19 +592,36 @@ class ApiTest(unittest.TestCase):
         self.assertNotIn("beforeunload", app, "離脱の警告ではなく保持で守る（UX.md の文言規則の外に出る標準ダイアログを出さない）")
         self.assertTrue(re.search(r"(?:d|draft)\s*=\s*\w*[Dd]raft\w*\(", view), "viewIntake が保存済みの下書きを読んでいない")
 
-        # 9 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
-        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"), ("in-dry", "dry"),
+        # 8 項目すべてが「id → 下書きの鍵」の対応表にあり、描画で復元されている
+        for eid, key in (("in-text", "text"), ("in-pj", "pj"), ("in-kind", "kind"),
                          ("new-pj", "newPj"), ("new-kind", "newKind"), ("new-pr", "newPr"),
                          ("new-title", "title"), ("new-body", "body")):
             self.assertIn(f'id="{eid}"', view, f"{eid} が起票画面に無い")
             self.assertTrue(re.search(rf"'{eid}':\s*'{key}'", app), f"{eid} が下書きの対応表に無い（保存されない）")
             self.assertTrue(re.search(rf"\b(?:d|draft)\.{key}\b", view), f"{eid} の下書き {key} を描画で復元していない")
 
+        # 選んだ方式も下書きに乗る。送信が通っても消さない（DRAFT_FREE / DRAFT_NEW に入れない）
+        self.assertTrue(re.search(r"'intake-mode':\s*'mode'", app), "選んだ方式が下書きの対応表に無い")
+        self.assertTrue(re.search(r"\b(?:d|draft)\.mode\b", view), "選んだ方式を描画で復元していない")
+        free = re.search(r"const DRAFT_FREE = \[([^\]]*)\]", app).group(1)
+        new_ = re.search(r"const DRAFT_NEW = \[([^\]]*)\]", app).group(1)
+        self.assertNotIn("intake-mode", free + new_, "送信が通ると方式まで既定に戻ってしまう")
+        self.assertNotIn("in-dry", free, "「判定だけ見る」はボタンにしたので、下書きに持たない")
+
+        # 方式を切り替える前に、今出ている欄を下書きへ移す（切り替えで打った内容を落とさない）
+        b = action("intake-mode")
+        self.assertIn("draftSave()", b, "方式の切り替えが今の入力を保存していない")
+        self.assertLess(b.index("draftSave()"), b.index("draftPut"), "方式を書いてから保存すると、直前の入力が落ちる")
+        self.assertIn("viewIntake", b, "方式を切り替えても描き直していない")
+
         # 破棄の規則: 送信が成功したときだけ、そのパネルの分を消す（失敗したら直して送り直せる）
-        for name in ("intake", "new"):
-            b = action(name)
-            self.assertIn("draftDrop", b, f"actions['{name}'] が送信後に下書きを消していない")
-            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"actions['{name}'] が送信の前に下書きを消している")
+        i2 = app.index("async function intakeSend")
+        send = app[i2:app.index("\n}", i2)]
+        for name, b in (("intakeSend", send), ("new", action("new"))):
+            self.assertIn("draftDrop", b, f"{name} が送信後に下書きを消していない")
+            self.assertGreater(b.index("draftDrop"), b.index("await api("), f"{name} が送信の前に下書きを消している")
+        # 判定だけ見たときは捨てない（T.next.intakeDry が「起票へ戻って取り込んでください」と言う先に依頼文が残る）
+        self.assertTrue(re.search(r"if \(!dry\) draftDrop\(DRAFT_FREE\)", send), "判定だけ見たときにも依頼文を捨てている")
 
         # 破棄は明示操作（可逆なので確認なし。トーストの「元に戻す」で書き戻す）
         for act in ("intake-clear", "new-clear"):
@@ -600,6 +629,103 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{act}':", app, f"actions に {act} が無い")
         self.assertTrue(re.search(r"function draftClear[\s\S]{0,600}T\.btn\.undo", app), "下書きの破棄に「元に戻す」が無い")
 
+
+    def test_intake_is_one_mode_at_a_time(self):
+        """起票が「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道になっている（チケット 413。ADR-0063）。
+
+        2 つのフォームを等幅で並べると、PJ・種別・添付・主操作が左右で重複し、押すべきボタンが 2 つになる。
+        選んだ方式のフォームだけを主領域に出し、段の見出しで順を示す。JS を動かす基盤が無いのでソースを検査する。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+
+        # 段 1: 素のラジオ 2 つ（Tab・矢印キー・読み上げが何も足さずに効く）。tab の ARIA パターンは使わない
+        self.assertEqual(view.count('name="intake-mode"'), 1, "方式のラジオが 1 つの群になっていない")
+        self.assertIn('type="radio"', view, "方式の選択がラジオになっていない")
+        self.assertIn('id="${id}"', view, "方式のラジオに id が無い（label と読み上げが結び付かない）")
+        for eid in ("mode-free", "mode-new"):
+            self.assertIn(f"'{eid}'", view, f"{eid} が無い（選べる方式が 2 つそろっていない）")
+        self.assertIn('data-act="intake-mode"', view, "方式を切り替える手が無い")
+        self.assertIn("'intake-mode':", app, "actions に intake-mode が無い")
+        # 描き直すと今のラジオの節点は捨てられる。同じ id へ focus を戻さないと body に落ち、矢印キーの続きが効かない
+        j = app.index("  'intake-mode':")
+        sw = app[j:app.index("\n  '", j + 1)]
+        self.assertTrue(re.search(r"viewIntake\(\);[\s\S]*\.focus\(\)", sw),
+                        "方式を切り替えたあとに focus を戻していない（キーボードだけで切り替えて続けられない）")
+        self.assertNotIn('role="tab"', view, "roving tabindex の要る tab パターンを、前例の無い画面に持ち込んでいる")
+        for key in ("T.h.intakeStep1", "T.h.intakeStep2", "T.h.intakeStep3"):
+            self.assertIn(key, view, f"{key} が無い（段の順が画面に出ていない）")
+        for key in ("T.help.modeFree", "T.help.modeNew", "T.help.modeKeep"):
+            self.assertIn(key, view, f"{key} が無い（方式の違いと、切り替えても残ることを言っていない）")
+
+        # 段 2: 出るのは選んだ方式のフォームだけ。2 列の並置をやめる
+        self.assertNotIn("grid2", view, "起票が等幅 2 列のままになっている")
+        self.assertTrue(re.search(r"mode === 'new' \? formNew : formFree", view), "選んだ方式だけを出す分岐が無い")
+        # 添付欄の id は据え置き（picked は id 別のメモリなので、変えると方式の切り替えで選んだファイルが消える）
+        for zone in ("in-attach", "new-attach"):
+            self.assertIn(f"attachZone('{zone}')", view, f"{zone} の落とす領域が消えている")
+        self.assertIn("T.help.attachKeptOnSwitch", view, "添付が方式の切り替えで残ることを言っていない")
+        self.assertIn("T.help.attachNotDraft", view, "添付が画面を離れると消えることを言っていない")
+
+        # 段 3: 主操作（primary）はどちらの方式でも 1 つだけ
+        for acts in ("const actsFree = ", "const actsNew = "):
+            j = view.index(acts)
+            block = view[j:view.index("\n", j)]
+            self.assertEqual(block.count('class="primary"'), 1, f"{acts.strip()} の主操作が 1 つではない")
+
+    def test_intake_pr_field_only_for_merge_pr(self):
+        """PR 番号は merge-pr のときだけ出し、そのときは何に使うかを言う。他の種別では要求も送信もしない。"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        # DOM からは消さず hidden にする（下書きの保存が生き、hidden なので Tab も読み上げも飛ばす）
+        self.assertTrue(re.search(r"id=\"new-pr-field\"[^\n]*newKind === 'merge-pr' \? '' : 'hidden'", view),
+                        "PR 欄が種別と結び付いていない（既定の bug でも出る）")
+        self.assertIn("T.help.prForMerge", view, "merge-pr で PR 番号が要る理由を言っていない")
+        # 出し分けは種別を選び直した時点で効く
+        j = app.index("  'kind-help':")
+        kh = app[j:app.index("\n  '", j + 1)]
+        self.assertIn("new-pr-field", kh, "種別を変えても PR 欄の出し分けが変わらない")
+        self.assertIn("merge-pr", kh, "PR 欄の出し分けの条件が merge-pr になっていない")
+        # 隠れている値を黙って送らない
+        k = app.index("  'new': ")
+        nw = app[k:app.index("\n  '", k + 1)]
+        self.assertTrue(re.search(r"pr:\s*kind === 'merge-pr' \?", nw), "merge-pr 以外でも PR 番号を送っている")
+
+    def test_intake_dry_run_is_a_button_and_body_can_be_previewed(self):
+        """「判定だけ見る」は主操作と別のボタンにし、自分で書く方式は送る前に Markdown の見え方を確かめられる。
+
+        チェックボックスは押しても何も起きず、入れっぱなしに気づけない（「起票したつもりで起票できていない」が起きる）。
+        表示の確認はチケット本文と同じ `md()` を使う（新しいパーサを増やさない）。
+        """
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewIntake")
+        view = app[i:app.index("\n}", i)]
+        self.assertNotIn('id="in-dry"', view, "dry-run がチェックボックスのまま残っている")
+        self.assertIn('data-act="intake-dry"', view, "「判定だけ見る」のボタンが無い")
+        self.assertIn("T.btn.intakeDry", view, "「判定だけ見る」の文言が strings.js から来ていない")
+        for act in ("'intake':", "'intake-dry':"):
+            self.assertIn(act, app, f"actions に {act} が無い")
+        self.assertTrue(re.search(r"'intake':[^\n]*intakeSend\(false\)", app), "「取り込む」が dry で送っている")
+        self.assertTrue(re.search(r"'intake-dry':[^\n]*intakeSend\(true\)", app), "「判定だけ見る」が本当に起票してしまう")
+        self.assertIn("dry_run: dry", app, "送る値が押したボタンで決まっていない")
+
+        self.assertIn('data-act="new-preview"', view, "本文の表示を確かめる手が無い")
+        self.assertIn('id="new-preview-box"', view, "表示を確かめた結果を出す場所が無い")
+        j = app.index("  'new-preview':")
+        pv = app[j:app.index("\n  '", j + 1)]
+        self.assertIn("md(", pv, "表示の確認が md() を使っていない（別の Markdown 解釈を増やしている）")
+        self.assertIn("$('new-body').value", pv, "表示の確認が今の本文を読んでいない")
+
+    def test_intake_job_leads_back_to_intake(self):
+        """起票から始まったジョブは、同じ作業文脈（起票）へ戻れる。他のジョブは今までどおりジョブの一覧へ戻す。"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        i = app.index("async function viewJob(")
+        view = app[i:app.index("\n}", i)]
+        self.assertTrue(re.search(r"crumb\([^\n]*j\.kind === 'intake'[^\n]*'#/intake'", view),
+                        "起票のジョブから起票へ戻るパンくずが無い")
+        self.assertIn("'#/jobs'", view, "起票以外のジョブの戻り先が消えている")
 
     def test_ticket_edit_keeps_draft_per_ticket(self):
         """チケット詳細の「項目を直す」（種別・PR・メモ）の未保存値が、画面往復・戻る・再読み込み・自動更新で消えない。
@@ -875,6 +1001,31 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(all(not k.startswith((".", "_")) for k in d["kinds"]), d["kinds"]); self.assertIn(d["ticket"]["kind"], d["kind_desc"])
         with self.assertRaises(urllib.error.HTTPError) as cm: self.http.get("/api/tickets/999999")
         self.assertEqual(cm.exception.code, 404)
+
+    def test_ticket_detail_resolves_the_pr(self):
+        """チケット詳細（と MCP の ticket_show）が、解決済みの PR を 1 つ返す（チケット 414）。
+           種のチケットは dry-run しかしていないので、番号はどこにも無く state は none。
+           GitHub には問い合わせないので、ここで「PR が存在しない」とは言わない（ADR-0050）"""
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws)}
+        r = subprocess.run([sys.executable, str(KB), "new", PJ, "research", "調査: PR のまだ無いチケット", "--body", "-"],
+                           input="x\n\n## 完了条件\n- y\n", text=True, capture_output=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        _, d = self.http.get(f"/api/tickets/{int(r.stdout.split()[0])}")
+        self.assertEqual(d["pr"], {"ticket": None, "run": None, "state": "none"})
+        self.assertIn("pr", d["ticket"])                          # 既存の pr 列はそのまま残る（トップレベルの pr とは別物）
+
+    def test_ticket_detail_reads_the_pr_left_in_a_run(self):
+        """チケットに未転記でも、実行記録に残った PR へ 1 回のリンク操作で進める（チケット 414）"""
+        name = "2020-01-04-kumitate-%d" % self.seed
+        self.addCleanup(shutil.rmtree, self.ws / "runs" / name, True)   # 他の検査に PR 入りの run を持ち越さない
+        self._fixture_run(name, {
+            "pj": PJ, "task": self.seed, "workflow": "feature", "started": "2020-01-04T09:00:00",
+            "finished": "2020-01-04T10:00:00", "result": "pr", "pr_url": "https://github.com/akkijp/kumitate/pull/341",
+            "history": [{"step": "pr", "ok": True, "at": "2020-01-04T09:50:00"}]})
+        _, d = self.http.get(f"/api/tickets/{self.seed}")
+        self.assertEqual(d["pr"]["state"], "run")
+        self.assertEqual(d["pr"]["run"]["url"], "https://github.com/akkijp/kumitate/pull/341")
+        self.assertEqual(d["pr"]["run"]["run"], name)
 
     def test_ticket_detail_lists_attachments(self):
         """kb attach で入れた添付が、そのままチケット画面（と MCP の ticket_show）に出る（チケット 353）"""
@@ -2346,6 +2497,93 @@ class JobStoreTest(unittest.TestCase):
         dead = {"id": "20000101-000000-x", "kind": "x", "label": "x", "cmd": ["x"], "pid": 2**22 - 1, "started": "2000-01-01T00:00:00", "finished": None, "rc": None, "state": "running"}
         self.JS.save(dead); self.JS.reconcile()
         self.assertEqual(self.JS.get(dead["id"])["state"], "lost")
+
+
+class TicketPrTest(unittest.TestCase):
+    """チケットの pr 列と実行記録に残った PR の解決（チケット 414 / ADR-0064）。
+
+    画面は解決済みの値をそのまま出すだけなので、合成状態の分岐はここで守る。
+    console は GitHub に問い合わせない（ADR-0050）ので、番号が無い状態は none どまりで「PR が存在しない」とは言わない"""
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-pr-test-"))
+        self.core = load_module(self.tmp / "jobs").core
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, name, started, **kw):
+        return {"name": name, "started": started, "pr_url": None, "human": None, "merged": None, **kw}
+
+    def test_ticket_number_only(self):
+        got = self.core.ticket_pr({"pr": 300, "repo": "akkijp/kumitate"}, [])
+        self.assertEqual(got["state"], "ticket")
+        self.assertIsNone(got["run"])
+        self.assertEqual(got["ticket"], {"number": 300, "url": "https://github.com/akkijp/kumitate/pull/300"})
+
+    def test_ticket_number_without_repo_has_no_url(self):
+        """repo の無い PJ では番号だけ出す（推し量った repo に番号を結び付けない）"""
+        got = self.core.ticket_pr({"pr": 300, "repo": None}, [])
+        self.assertEqual(got["state"], "ticket")
+        self.assertEqual(got["ticket"], {"number": 300, "url": None})
+
+    def test_run_url_only(self):
+        """チケットに未転記でも、実行記録の PR へ進める。由来として run の名前を添える"""
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/301")]
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "run")
+        self.assertIsNone(got["ticket"])
+        self.assertEqual(got["run"]["number"], 301)
+        self.assertEqual(got["run"]["url"], "https://github.com/akkijp/kumitate/pull/301")
+        self.assertEqual(got["run"]["source"], "run")
+        self.assertEqual(got["run"]["run"], "2020-01-02-kumitate-9")
+
+    def test_same_number_on_both_sides(self):
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/302")]
+        got = self.core.ticket_pr({"pr": 302, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "same")
+        self.assertEqual((got["ticket"]["number"], got["run"]["number"]), (302, 302))
+
+    def test_mismatch_keeps_both_sides(self):
+        """転記が古いまま残っている場合。どちらかを消さず、両方を由来つきで出す"""
+        runs = [self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/303")]
+        got = self.core.ticket_pr({"pr": 302, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "mismatch")
+        self.assertEqual(got["ticket"]["number"], 302)
+        self.assertEqual(got["run"]["number"], 303)
+
+    def test_nothing_registered(self):
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, [])
+        self.assertEqual(got, {"ticket": None, "run": None, "state": "none"})
+
+    def test_human_closeout_wins_over_the_raw_pr_url(self):
+        """人間の後始末（ADR-0039）→ 自動マージ（ADR-0042）→ pr ステップの生の値、の順"""
+        r = self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00",
+                      pr_url="https://github.com/akkijp/kumitate/pull/310",
+                      merged={"at": "2020-01-02T10:00:00", "pr_url": "https://github.com/akkijp/kumitate/pull/311"},
+                      human={"at": "2020-01-02T11:00:00", "pr_url": "https://github.com/akkijp/kumitate/pull/312"})
+        self.assertEqual(self.core.run_pr(r), {"url": "https://github.com/akkijp/kumitate/pull/312", "number": 312, "source": "human"})
+        del r["human"]
+        self.assertEqual(self.core.run_pr(r)["source"], "merged")
+        del r["merged"]
+        self.assertEqual(self.core.run_pr(r)["source"], "run")
+        r["pr_url"] = ""
+        self.assertIsNone(self.core.run_pr(r))
+
+    def test_run_pr_without_repo_keeps_the_number(self):
+        """kb の pr_url_for は repo が無いと #N を書く。開ける URL でないので url は落として番号だけ残す"""
+        r = self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="#320")
+        self.assertEqual(self.core.run_pr(r), {"url": None, "number": 320, "source": "run"})
+
+    def test_multiple_runs_take_the_newest_with_a_pr(self):
+        """list_runs() は started の降順。PR の無い新しい run は飛ばし、採った run の名前で由来が分かる"""
+        runs = [self._run("2020-01-05-kumitate-9", "2020-01-05T09:00:00+09:00"),
+                self._run("2020-01-03-kumitate-9", "2020-01-03T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/330"),
+                self._run("2020-01-02-kumitate-9", "2020-01-02T09:00:00+09:00", pr_url="https://github.com/akkijp/kumitate/pull/329")]
+        got = self.core.ticket_pr({"pr": None, "repo": "akkijp/kumitate"}, runs)
+        self.assertEqual(got["state"], "run")
+        self.assertEqual(got["run"]["number"], 330)
+        self.assertEqual(got["run"]["run"], "2020-01-03-kumitate-9")
+        self.assertEqual(got["run"]["started"], "2020-01-03T09:00:00+09:00")
 
 
 class TimestampTest(unittest.TestCase):

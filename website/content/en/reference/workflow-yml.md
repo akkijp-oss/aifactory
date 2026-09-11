@@ -21,7 +21,8 @@
 | `role` | planner / implementer / reviewer / researcher | Agent step. Constitution in `roles/<role>.md`, model from the role's default class |
 | `code` | string | Code step. Path relative to `kit/steps/`. Runs on the control plane and enters the VM with `sandbox ssh`. The special value `sync-base` (merging the latest base right before the PR) is built into the runner and has no file in `kit/steps/` |
 | `brief` | string (Markdown) | Extra instruction for this step, appended after the role constitution |
-| `model_class` | judgment / research / coding | Overrides the role's default class |
+| `model_class` | judgment / research / coding | Overrides the role's default class (every step of that class moves together with one line in `routes.env`) |
+| `model` | string (`^[A-Za-z0-9._-]{1,64}$`) | Pins the model name for this step only. Beats `routes.env`; `CLAUDE_MODEL` still wins. Other steps of the same class stay put |
 | `inputs` | array of artifact | Read from `~/work/<id>/` in the VM and attached to the prompt. The reviewer also gets the diff automatically |
 | `outputs` | array of artifact | Artifacts the step must produce. Agent steps are told "write here". Missing means failure |
 | `next` | transition | Unconditional next step. A step without branching that fails goes to human |

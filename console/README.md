@@ -49,7 +49,7 @@ journalctl -u aifactory-console -f
 | 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0044） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
-| 設定 | workflow の流れ・モデルの経路（routes.env）・PJ 定義の置き場・git status | — |
+| 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`）、PJ 定義の置き場、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める | workflow を開く、工程を開く、定義の原文を読む |
 
 ## MCP（AI セッションからの読み書き）
 
@@ -99,7 +99,7 @@ resources: `aifactory://board`（BOARD.md）、`aifactory://ledger`（台帳）�
 
 ## 設計の約束
 
-- **状態を変えるのは必ず既存の CLI**（`kb` / `intake` / `dispatch` / `sandbox`）。コンソールは `kanban.db` を読み取り専用で開き、`state.json` にも書かない。他の AI セッションが同じ CLI を使っている前提（ルート README「同時に別の AI セッションが動いている前提」）を、コンソールも守る
+- **状態を変えるのは必ず既存の CLI**（`kb` / `intake` / `dispatch` / `sandbox`）。コンソールは `kanban.db` を読み取り専用で開き、`state.json` にも書かない。ただし**モデルの設定だけは例外**で、console が作業ツリーの `workflow/kit/`（`routes.env` と workflow yml の `model` / `model_class`）を直接書く（commit はしない。ADR-0065）。他の AI セッションが同じ CLI を使っている前提（ルート README「同時に別の AI セッションが動いている前提」）を、コンソールも守る
 - **長いものはジョブ**。`kb run`（60 分超）や `sandbox ls`（ssh）は `subprocess.Popen` で切り離し、標準出力を `console/jobs/<id>/log` に流す。画面はバイト位置を持って追い読みする。HTTP の応答を待たせない
 - **二重起動を防ぐ**。同じチケットの `kb run`、2 本目の `dispatch`（直列の約束）、貸出中 task への `release` はロックの中で弾く（409）
 - **読めるファイルを限る**。`$AIFACTORY_WORKSPACE/runs/`・`$AIFACTORY_WORKSPACE/kanban/tickets/`・`$AIFACTORY_WORKSPACE/logs/`・`workflow/kit/`・PJ 定義のディレクトリ（`$AIFACTORY_WORKSPACE/projects/` と `examples/projects/`）・`console/jobs/` だけ。トークンの中身は表示しない（ファイルの有無だけ）
@@ -149,6 +149,7 @@ POST /api/intake {text, pj, kind, dry_run}   POST /api/dispatch {pj, once, max, 
 GET  /api/jobs  /api/jobs/<id>?offset=       POST /api/jobs/<id>/stop
 GET  /api/keys                     POST /api/keys {action: add|set|rm|token, name, token, fable, other, enabled, note, force}
 GET  /api/logs  /api/config
+POST /api/config/model {target, workflow, step, key, value, dry_run, base_sha256}   既定は下見（1 バイトも書かない）。書くのは dry_run: false を明示したときだけで base_sha256 が必須。読んだときから変わっていれば 409 で何も書かない
 ```
 
 ## テスト
