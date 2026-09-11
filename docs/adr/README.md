@@ -73,3 +73,4 @@
 - [0059: pull backend の code step は kit の script を guest の中で走らせる（`SB_LOCAL`）。対応表はテストで固定する](0059-pull-backend-code-steps-run-in-the-guest.md)
 - [0060: VM に渡す Claude の鍵の出どころは鍵プールだけにし、`sandbox` の env ファイル経路（`token set claude` と空プール時のフォールバック）を廃止する](0060-claude-keys-come-only-from-the-pool.md)
 - [0061: チケットの `note` は複数行を正本とし、画面の編集欄は textarea・保存は無変換にする](0061-ticket-note-is-multiline-and-saved-verbatim.md)
+- [0062: 起票は「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道にし、1 画面 1 方式にする](0062-intake-is-one-mode-at-a-time.md)
