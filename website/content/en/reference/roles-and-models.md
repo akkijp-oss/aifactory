@@ -114,7 +114,7 @@ Saving keeps the previous content next to the file as `.bak-<timestamp>` and app
 
 !!! warning "The console does not commit"
     The files it writes (`workflow/kit/routes.env` and the workflow yml) are part of the repository. The console only writes
-    the work tree, so a `git pull` on the control host can undo the change. Commit it to make it permanent (ADR-0063).
+    the work tree, so a `git pull` on the control host can undo the change. Commit it to make it permanent (ADR-0065).
 
 !!! note "Which model names are accepted"
     The name must reveal its key family (fable / opus / sonnet / haiku). Without a family the runner does not pick a

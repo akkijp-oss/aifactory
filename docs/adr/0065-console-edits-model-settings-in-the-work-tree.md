@@ -1,4 +1,4 @@
-# ADR 0063: モデルの設定は console が作業ツリーの `workflow/kit/` を直接書き、工程単位の `model` を新設する
+# ADR 0065: モデルの設定は console が作業ツリーの `workflow/kit/` を直接書き、工程単位の `model` を新設する
 
 - 状態: Accepted
 - 日付: 2026-09-11

@@ -2038,7 +2038,7 @@ def config_view():
             "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
 
 
-# ---------- モデルの変更（設定の書き込み。チケット 416 / ADR-0063）
+# ---------- モデルの変更（設定の書き込み。チケット 416 / ADR-0065）
 # 書き先は制御系の作業ツリーの workflow/kit/（runner が読むのと同じファイル）。git には commit しないので、
 # 変更は未コミットの差分として残る。危ないところは隠さず出す: 前後の実効値・影響する工程・退避（.bak-<時刻>）・
 # git status の当該行・変更記録（logs/config-changes.jsonl）。実効値は必ず wfdef.resolve_model を呼び直して作る（式を写さない）。
@@ -2068,7 +2068,7 @@ def workflow_path(name):
 def check_model_name(v):
     """入れてよいモデル名か。形と、鍵の系統（token_family）が分かることを見る。
     系統が分からないと runner は系統別の鍵を選べず、共通の CLAUDE_CODE_OAUTH_TOKEN に落ちる（workflow/bin/run の run_agent）。
-    止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0063）。
+    止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0065）。
     候補を固定の一覧に縛らないので、新しいモデル名でも同じ系統の語を含んでいれば通る"""
     s = str(v or "").strip()
     if not wfdef.MODEL_NAME_RE.match(s):
@@ -2351,7 +2351,10 @@ def config_model_apply(b):
         if sha_now != base:
             raise ApiError(f"{rel(p)} は、この画面を開いたあとに変わっています。何も書いていません。画面を読み直してからもう一度試してください", 409)
         new = _model_new_text(req, text)            # ここで落ちたら 1 バイトも書かない
-        bak = _write_atomic(p, new)
+        try:
+            bak = _write_atomic(p, new)
+        except OSError as e:                          # 権限不足・ディスク満杯など。生の例外を画面に出さず、何が起きたかとどうするかを言う
+            raise ApiError(f"{rel(p)} を書けませんでした（{e.strerror or e}）。何も書いていません。制御系でこのファイルとディレクトリの書き込み権限を確かめてください", 500)
     after_routes = model_routes()
     out.update({"written": True, "backup": rel(bak) if bak else None, "base_sha256": sha_now,
                 "sha_after": file_version(p)["sha256"], "after": model_rows(after_routes),

@@ -77,7 +77,7 @@ workflow を開くと、説明・うまくいったときの流れ・うまく�
 実際に使われたモデルは設定からは分かりません。実績は「統計」の画面（モデル別・工程別）で見てください。
 
 定義が読めない workflow、schema に無いキー、`role` の綴り違いも隠さず「読めない項目」として並びます。
-この画面は読むだけで、開いてもジョブ・runner・設定は動きません。
+開いただけではジョブ・runner・設定は動きません。変えられるのは workflow → 工程から開く「使用モデル」だけで、影響する工程を見てから保存します（下の「モデルを変える」）。
 
 ## 実行中の run を追う
 
@@ -138,6 +138,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/jobs` / `GET /api/jobs/<id>?offset=` / `POST /api/jobs/<id>/stop` | ジョブ一覧、出力の継続的な読み取り、停止 |
 | `GET /api/keys` / `POST /api/keys` | Claude の鍵プール（マスク済みの一覧 / `{action, name, …}` で追加・変更・差し替え・削除） |
 | `GET /api/logs` / `GET /api/config` | intake / dispatch のログ / ワークフローと routes と git |
+| `POST /api/config/model` | 工程または共通経路の使用モデルを変える `{target, workflow, step, key, value, dry_run, base_sha256}`。既定は下見（1 バイトも書かない）。書くのは `dry_run: false` を明示したときだけで、`base_sha256`（読んだときの版）が必須。読んだときから変わっていれば 409 で何も書かない |
 | `GET /api/stats?days=7&pj=&dry=&tz=` | 工程ごとの消費統計（`total` / `by_model` / `by_step` / `by_day` / `by_pj` / `top`）。`tz` は日別と期間を切る時間帯（`+09:00` のようなオフセットか IANA 名。省略でサーバーの時間帯。読めない値はサーバーの時間帯に落ち、応答の `tz` に実際に使った時間帯が入る） |
 
 ## AI セッションから使う（MCP）

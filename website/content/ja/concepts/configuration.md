@@ -77,7 +77,7 @@ flowchart LR
 | このプロジェクトでやってはいけないこと / reviewer が必ず見ること | `project.yml` の `forbidden` / `review_points` | そのプロジェクト |
 | 手順そのもの（工程を足す、差し戻し回数） | `workflow/kit/workflows/<wf>.yml` | 全プロジェクト |
 | 役割の振る舞い（reviewer の見方、implementer の作法） | `workflow/kit/roles/<role>.md`。全役割共通なら `_common.md` | 全プロジェクト |
-| 使うモデル | `workflow/kit/routes.env`（クラス単位）。1 工程なら yml の `model_class` / `model`、1 回なら `CLAUDE_MODEL`。コンソールの「設定」→ workflow → 工程からも、影響する工程を見てから保存できる（ADR-0063） | 指定した範囲 |
+| 使うモデル | `workflow/kit/routes.env`（クラス単位）。1 工程なら yml の `model_class` / `model`、1 回なら `CLAUDE_MODEL`。コンソールの「設定」→ workflow → 工程からも、影響する工程を見てから保存できる（ADR-0065） | 指定した範囲 |
 | PR の宛先ブランチ | `project.yml` の `base_branch` / `hotfix_base` / `workflow_overrides` | そのプロジェクト |
 | チケットの分類基準 | `glue/bin/intake` のプロンプト、または依頼文の先頭に `kind:` 行 | チケット作成時 |
 | プール台数（実体） | `sandbox/proxmox/40-pool.sh <pj> <台数>`（作った台数がそのまま実体） | そのプロジェクトの並列数 |

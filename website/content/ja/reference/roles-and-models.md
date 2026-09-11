@@ -113,7 +113,7 @@ MODEL_default=claude-opus-5
 
 !!! warning "コンソールの保存は commit しません"
     書き先（`workflow/kit/routes.env` とワークフローの YAML）はリポジトリの一部です。コンソールは作業ツリーを書くだけで
-    commit しないので、制御系で `git pull` すると設定が元に戻ることがあります。恒久的な変更は commit してください（ADR-0063）。
+    commit しないので、制御系で `git pull` すると設定が元に戻ることがあります。恒久的な変更は commit してください（ADR-0065）。
 
 !!! note "入れられるモデル名"
     モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。系統が分からないと、runner は系統別の鍵を

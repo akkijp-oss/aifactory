@@ -99,7 +99,7 @@ resources: `aifactory://board`（BOARD.md）、`aifactory://ledger`（台帳）�
 
 ## 設計の約束
 
-- **状態を変えるのは必ず既存の CLI**（`kb` / `intake` / `dispatch` / `sandbox`）。コンソールは `kanban.db` を読み取り専用で開き、`state.json` にも書かない。他の AI セッションが同じ CLI を使っている前提（ルート README「同時に別の AI セッションが動いている前提」）を、コンソールも守る
+- **状態を変えるのは必ず既存の CLI**（`kb` / `intake` / `dispatch` / `sandbox`）。コンソールは `kanban.db` を読み取り専用で開き、`state.json` にも書かない。ただし**モデルの設定だけは例外**で、console が作業ツリーの `workflow/kit/`（`routes.env` と workflow yml の `model` / `model_class`）を直接書く（commit はしない。ADR-0065）。他の AI セッションが同じ CLI を使っている前提（ルート README「同時に別の AI セッションが動いている前提」）を、コンソールも守る
 - **長いものはジョブ**。`kb run`（60 分超）や `sandbox ls`（ssh）は `subprocess.Popen` で切り離し、標準出力を `console/jobs/<id>/log` に流す。画面はバイト位置を持って追い読みする。HTTP の応答を待たせない
 - **二重起動を防ぐ**。同じチケットの `kb run`、2 本目の `dispatch`（直列の約束）、貸出中 task への `release` はロックの中で弾く（409）
 - **読めるファイルを限る**。`$AIFACTORY_WORKSPACE/runs/`・`$AIFACTORY_WORKSPACE/kanban/tickets/`・`$AIFACTORY_WORKSPACE/logs/`・`workflow/kit/`・PJ 定義のディレクトリ（`$AIFACTORY_WORKSPACE/projects/` と `examples/projects/`）・`console/jobs/` だけ。トークンの中身は表示しない（ファイルの有無だけ）
@@ -149,6 +149,7 @@ POST /api/intake {text, pj, kind, dry_run}   POST /api/dispatch {pj, once, max, 
 GET  /api/jobs  /api/jobs/<id>?offset=       POST /api/jobs/<id>/stop
 GET  /api/keys                     POST /api/keys {action: add|set|rm|token, name, token, fable, other, enabled, note, force}
 GET  /api/logs  /api/config
+POST /api/config/model {target, workflow, step, key, value, dry_run, base_sha256}   既定は下見（1 バイトも書かない）。書くのは dry_run: false を明示したときだけで base_sha256 が必須。読んだときから変わっていれば 409 で何も書かない
 ```
 
 ## テスト

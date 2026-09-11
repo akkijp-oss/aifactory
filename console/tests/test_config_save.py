@@ -1,4 +1,4 @@
-"""設定画面からのモデルの変更（チケット 416 / ADR-0063）。下見・保存・競合・検証を検査する。
+"""設定画面からのモデルの変更（チケット 416 / ADR-0065）。下見・保存・競合・検証を検査する。
 
   python3 -m unittest discover -s console/tests -p 'test_config_save.py' -v
 
@@ -285,6 +285,22 @@ class RefusalTest(KitTestCase):
         self.assertEqual(cm.exception.code, 409)
         self.assertEqual(sha(self.routes), outside)                    # 他の人の変更を上書きしていない
         self.assertEqual(core.model_routes()["MODEL_research"], "claude-haiku-4-5-20251001")
+
+    def test_a_directory_that_cannot_be_written_gives_a_readable_error_and_changes_nothing(self):
+        if os.geteuid() == 0: self.skipTest("root は permission を無視する")
+        pre = self.apply(target="routes", key="MODEL_judgment", value="claude-opus-5")
+        before = sha(self.routes)
+        os.chmod(core.KIT, 0o555)                                       # 控えも一時ファイルも作れない
+        self.addCleanup(os.chmod, core.KIT, 0o755)
+        with self.assertRaises(core.ApiError) as cm:
+            self.apply(target="routes", key="MODEL_judgment", value="claude-opus-5", dry_run=False, base_sha256=pre["base_sha256"])
+        self.assertEqual(cm.exception.code, 500)
+        self.assertNotIn("Errno", str(cm.exception))                    # 生の例外文ではなく、何が起きたかとどうするか
+        self.assertIn("書けませんでした", str(cm.exception))
+        os.chmod(core.KIT, 0o755)
+        self.assertEqual(sha(self.routes), before)                      # 1 バイトも書いていない
+        self.assertFalse(list(core.KIT.glob("routes.env.bak-*")))       # 控えも残っていない
+        self.assertFalse((core.LOGS / "config-changes.jsonl").exists())  # 監査にも書いていない
 
     def test_saving_without_a_version_is_refused(self):
         with self.assertRaises(core.ApiError):

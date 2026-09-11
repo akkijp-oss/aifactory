@@ -36,7 +36,7 @@ def resolve_model(step, routes, env_model=None):
     model_class=None で返す（呼ぶ側が「解決できません」と言えるように）。
 
     step の model は「同じクラスの他の工程を動かさずに、この工程だけ別のモデルにする」ための上書き
-    （model_class では同じクラスの全工程が道連れになる。チケット 416 / ADR-0063）。
+    （model_class では同じクラスの全工程が道連れになる。チケット 416 / ADR-0065）。
     """
     step = step or {}
     role = step.get("role")
