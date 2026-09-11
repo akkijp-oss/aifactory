@@ -1106,6 +1106,48 @@ def ticket_next(pj=None):
     return {"next": json.loads(out) if out else None}
 
 
+PR_NUMBER = re.compile(r"(?:/pull/|#)(\d+)")   # kb の pr_url_for は repo があれば .../pull/N、無ければ #N を書く（kanban/bin/kb）
+
+
+def pr_number(u):
+    m = PR_NUMBER.search(str(u or ""))
+    return int(m.group(1)) if m else None
+
+
+def run_pr(r):
+    """run 要約 1 件（run_summary の戻り）から、記録に残っている PR を 1 つ出す（チケット 414）。
+
+    優先順位は人間の後始末（ADR-0039）→ runner の自動マージ（ADR-0042）→ pr ステップが書いた生の pr_url。
+    run_outcome() も同じ 3 つを見るが、あちらは reason ごとに順を変える別の用途なので共通化しない（ADR-0064）。
+    repo の無い PJ では url が #N になるので、開ける URL でないものは url を落として番号だけ残す"""
+    for src in ("human", "merged"):
+        v = r.get(src)
+        u = v.get("pr_url") if isinstance(v, dict) else None
+        if u: return {"url": u if str(u).startswith("http") else None, "number": pr_number(u), "source": src}
+    u = r.get("pr_url")
+    if not u: return None
+    return {"url": u if str(u).startswith("http") else None, "number": pr_number(u), "source": "run"}
+
+
+def ticket_pr(t, runs):
+    """チケットの pr 列と、実行記録に残った PR を 1 つに解決する（チケット 414）。
+
+    転記は kb run の終了時と kb sync のときだけ（kanban/bin/kb の apply_result）なので、run に PR があってもチケットの
+    pr 列は空のままになり得る。両方を出して由来を添え、画面が番号や URL を組み立て直さなくて済む形にする。
+    console は GitHub に問い合わせない（ADR-0050）ので、番号が無いことを「PR が存在しない」とは言わない（state は none どまり）。
+    runs は list_runs() が started の降順に並べたものなので、先頭から見て最初に番号の取れた run が最新"""
+    num, repo = t.get("pr"), t.get("repo")
+    tk = {"number": int(num), "url": f"https://github.com/{repo}/pull/{num}" if repo else None} if num else None
+    rn = None
+    for r in runs or []:
+        p = run_pr(r)
+        if p and p["number"]:
+            rn = {**p, "run": r.get("name"), "started": r.get("started")}
+            break
+    state = "same" if tk and rn and tk["number"] == rn["number"] else "mismatch" if tk and rn else "ticket" if tk else "run" if rn else "none"
+    return {"ticket": tk, "run": rn, "state": state}
+
+
 def ticket_detail(tid):
     t = rows("SELECT * FROM tickets WHERE id = ?", (tid,))
     if not t: raise ApiError(f"チケット {tid} は見つかりません", 404)
@@ -1120,7 +1162,8 @@ def ticket_detail(tid):
     return {"ticket": t, "body": body, "file": str(f.relative_to(REPO)) if f.exists() and f.resolve().is_relative_to(REPO.resolve()) else str(f),
             "attachments": [{**a, "path": rel(attachments.dir_for(tid) / a["name"]), "image": attachments.is_image(a["name"])}
                             for a in attachments.listing(tid)],
-            "history": hist, "runs": runs, "jobs": jobs, "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL, "project_yml": py.exists()}
+            "history": hist, "runs": runs, "jobs": jobs, "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL, "project_yml": py.exists(),
+            "pr": ticket_pr(t, runs)}
 
 
 def ticket_action(tid, b):
