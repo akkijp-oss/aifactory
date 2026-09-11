@@ -990,7 +990,7 @@ function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p
 /* 編集の欄。値は API が返した保存値（s.model / s.model_class）と経路表（d.routes）をそのまま入れる */
 function cfgModelEdit(w, s, d) {
   const m = s.model_resolved, e = d.model_edit || {}, ch = e.choices || [], route = m.route_key || 'MODEL_default';
-  const at = { wf: `data-wf="${esc(w.name)}" data-step="${esc(s.id)}" data-file="${esc(w.sha256 || '')}"` };
+  const at = { wf: `data-wf="${esc(w.name)}" data-step="${esc(s.id)}"` };
   return `<div class="panel"><h2>${esc(T.config.modelEdit)}</h2><div class="help">${esc(T.help.configModelEdit)}</div>
     <div class="field"><label for="cm-model">${esc(T.config.modelStep)}</label>
       <input id="cm-model" list="cm-choices" class="mono" value="${esc(s.model || '')}" placeholder="${esc(T.config.modelInherited)}" autocomplete="off">

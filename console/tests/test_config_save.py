@@ -125,6 +125,27 @@ class SaveTest(KitTestCase):
         self.assertEqual(d["sha_after"], sha(self.routes))
         self.assertTrue(pathlib.Path(core.REPO / d["backup"]).is_file() or pathlib.Path(d["backup"]).is_file())
 
+    def test_the_last_line_wins_when_the_same_key_appears_twice(self):
+        """配備先で暫定変更が末尾に足されている形。読み手（model_routes / runner）は後の行を採るので、
+        書き手も後の行を差し替える。前の行を書いて「保存しました」と言うと実効値が動かない"""
+        text = self.routes.read_text(encoding="utf-8")
+        self.routes.write_text(text + "# 2026-09-10 暫定: 判断を厚くする。戻すときはこの 2 行を消す\n"
+                                      "MODEL_judgment=claude-opus-5\n", encoding="utf-8")
+        self.assertEqual(core.model_routes()["MODEL_judgment"], "claude-opus-5")   # 読み手は後の行
+        pre = self.apply(target="routes", key="MODEL_judgment", value="claude-sonnet-5")
+        self.assertIn("行が 2 つあります", pre["warning"])
+        d = self.apply(target="routes", key="MODEL_judgment", value="claude-sonnet-5",
+                       dry_run=False, base_sha256=pre["base_sha256"])
+        self.assertTrue(d["written"])
+        self.assertEqual(core.model_routes()["MODEL_judgment"], "claude-sonnet-5")  # 保存値と実効値が一致する
+        self.assertTrue(d["affected"])                                             # 下見で挙げた工程が実際に動いた
+        after = self.routes.read_text(encoding="utf-8")
+        self.assertIn("# 2026-09-10 暫定: 判断を厚くする。戻すときはこの 2 行を消す", after)
+        self.assertEqual(after.count("MODEL_judgment="), 2)                        # 行数は増えも減りもしない
+        self.assertEqual(after.splitlines()[-1], "MODEL_judgment=claude-sonnet-5")
+        self.assertEqual(after.splitlines()[0], text.splitlines()[0])              # 先頭のコメントはそのまま
+        self.assertIn("MODEL_judgment=claude-fable-5-1", after)                    # 前の行は触らない（未知の行を消さない）
+
     def test_the_saved_value_and_the_effective_value_agree_after_saving(self):
         d = self.save(target="step", workflow="feature", step="design", key="model", value="claude-sonnet-5")
         row = next(r for r in core.model_rows() if (r["workflow"], r["step"]) == ("feature", "design"))

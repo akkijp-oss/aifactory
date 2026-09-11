@@ -1991,7 +1991,7 @@ def config_view():
     # 上書きが起こりうるという事実だけを返し、実際に使われたモデルは統計（stats_view）で見る
     return {"workflows": wfs, "routes": routes, "role_defaults": dict(wfdef.ROLE_CLASS), "env_override_possible": True,
             "timeout_min_default": timeout_default, "roles": rs, "templates": sandbox_view()["templates"],
-            "model_edit": model_edit_view(wfs, routes),
+            "model_edit": model_edit_view(routes),
             "kb_root": str(KB_ROOT), "repo": str(REPO), "paths": paths.describe(), "git": git}
 
 
@@ -2087,7 +2087,7 @@ def config_changes(limit=5):
     return list(reversed(out))[:limit]
 
 
-def model_edit_view(wfs=None, routes=None):
+def model_edit_view(routes=None):
     """モデルの変更に要る材料（対象ファイルの版・候補・鍵プールの空き・直近の変更）。値そのものの解決はしない"""
     routes = model_routes() if routes is None else routes
     rows = model_rows(routes)
@@ -2098,21 +2098,34 @@ def model_edit_view(wfs=None, routes=None):
             "routes_file": file_version(routes_env_path()), "key_pool": pool, "changes": config_changes()}
 
 
+def routes_env_lines(text, key):
+    """routes.env の中で当該キーを定めている行の番号（0 始まり、現れた順）"""
+    pat = re.compile(rf"^{re.escape(key)}\s*=")
+    return [i for i, l in enumerate(text.splitlines()) if pat.match(l)]
+
+
 def routes_env_edit(text, key, value):
-    """routes.env の当該 1 行だけを差し替えた本文を返す（無ければ末尾に足す）。コメントと未知の行はそのまま残す"""
+    """routes.env の当該 1 行だけを差し替えた本文を返す（無ければ末尾に足す）。コメントと未知の行はそのまま残す。
+
+    同じキーの行が 2 つ以上あるときは「最後の行」を差し替える。読み手（model_routes と runner の
+    どちらも dict(...) に畳む）が後の行を採るので、最初の行を書き換えると「保存したのに実効値が
+    変わらない」ことになる。書き手と読み手で同じ規則にする。
+    """
     lines = text.splitlines(keepends=True)
     pat = re.compile(rf"^{re.escape(key)}\s*=")
-    out, done = [], False
-    for l in lines:
-        if not done and pat.match(l):
-            out.append(f"{key}={value}" + ("\n" if l.endswith("\n") else "")); done = True
-        else: out.append(l)
-    if not done:
+    hit = [i for i, l in enumerate(lines) if pat.match(l)]
+    out = list(lines)
+    if hit:
+        i = hit[-1]
+        out[i] = f"{key}={value}" + ("\n" if lines[i].endswith("\n") else "")
+    else:
         if out and not out[-1].endswith("\n"): out[-1] += "\n"
         out.append(f"{key}={value}\n")
     new = "".join(out)
     kept = lambda s: [l for l in s.splitlines() if not pat.match(l)]
-    if kept(new) != kept(text): raise ApiError("経路表の他の行が変わってしまうので書きませんでした")
+    want = routes_env_lines(text, key) or [len(new.splitlines()) - 1]   # 無かったときは末尾に 1 行増えるのが正しい
+    if kept(new) != kept(text) or routes_env_lines(new, key) != want:
+        raise ApiError("経路表の他の行が変わってしまうので書きませんでした")
     return new
 
 
@@ -2267,6 +2280,10 @@ def config_model_apply(b):
         if not pool.get(need):
             warn.append(f"鍵プールに「{'Fable に使う' if need == 'fable' else 'Opus・Sonnet・Haiku に使う'}」鍵がありません。"
                         "この設定にはできますが、次の run は鍵待ちで止まります。")
+    if req["target"] == "routes":
+        dup = routes_env_lines(p.read_text(encoding="utf-8"), req["key"])
+        if len(dup) > 1:
+            warn.append(f"経路表に {req['key']} の行が {len(dup)} つあります。効くのは最後の 1 行なので、そこを書き換えます。")
     if req["target"] == "routes" and len(affected) > 1:
         warn.append(f"これは共通の設定です。{len(affected)} 件の工程の実効モデルが変わります。")
     if same: warn.append("いまと同じ設定なので、書くものがありません。")
