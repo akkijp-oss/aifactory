@@ -178,7 +178,6 @@ button:disabled { opacity: .5; cursor: default; filter: none; }
 .top { margin-top: 8px; }
 .w100 { width: 100px; }
 .w220 { width: 220px; }
-.h140 { min-height: 140px; }
 .h80 { min-height: 80px; }   /* 操作パネルのメモ欄。textarea の既定 200px は縦が伸びすぎる */
 .grow { flex: 1; min-width: 220px; }
 .check { display: inline-flex; align-items: center; gap: 6px; }

@@ -636,6 +636,11 @@ class ApiTest(unittest.TestCase):
             self.assertIn(f"'{eid}'", view, f"{eid} が無い（選べる方式が 2 つそろっていない）")
         self.assertIn('data-act="intake-mode"', view, "方式を切り替える手が無い")
         self.assertIn("'intake-mode':", app, "actions に intake-mode が無い")
+        # 描き直すと今のラジオの節点は捨てられる。同じ id へ focus を戻さないと body に落ち、矢印キーの続きが効かない
+        j = app.index("  'intake-mode':")
+        sw = app[j:app.index("\n  '", j + 1)]
+        self.assertTrue(re.search(r"viewIntake\(\);[\s\S]*\.focus\(\)", sw),
+                        "方式を切り替えたあとに focus を戻していない（キーボードだけで切り替えて続けられない）")
         self.assertNotIn('role="tab"', view, "roving tabindex の要る tab パターンを、前例の無い画面に持ち込んでいる")
         for key in ("T.h.intakeStep1", "T.h.intakeStep2", "T.h.intakeStep3"):
             self.assertIn(key, view, f"{key} が無い（段の順が画面に出ていない）")

@@ -1114,7 +1114,8 @@ const actions = {
   'intake-clear': () => draftClear(DRAFT_FREE),
   'new-clear': () => draftClear(DRAFT_NEW),
   /* 方式を切り替える前に今の欄を下書きへ移す。描き直しても両方式の入力・選んだ設定・選んだファイルが残る */
-  'intake-mode': async el => { draftSave(); draftPut({ mode: el.value }); await viewIntake(); },
+  /* 描き直しで今のラジオの節点は捨てられるので、同じ id へ focus を戻す（戻さないと body に落ちて矢印キーの続きが効かない） */
+  'intake-mode': async el => { const id = el.id; draftSave(); draftPut({ mode: el.value }); await viewIntake(); const r = $(id); if (r) r.focus(); },
   /* Markdown の見え方を送る前に確かめる。md() はチケット本文と同じもの（新しいパーサは作らない） */
   'new-preview': el => {
     const box = $('new-preview-box'); if (!box) return;
