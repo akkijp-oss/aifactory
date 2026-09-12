@@ -38,9 +38,18 @@ def sha(p):
 class KitTestCase(unittest.TestCase):
     """kit の一時コピーに core の書き先を差し替える（本体の workflow/kit/ は触らない）"""
 
+    #: 検査の出発点にする judgment の経路。同梱の routes.env の実値を借りると、経路表を変えた日に
+    #: 「変更 → 同じ値なので書かない」に化けて、保存・競合・拒否の検査がまとめて無言で通らなくなる
+    #: （2026-09-12 実測: MODEL_judgment を Opus 既定にしたら、この理由で 8 件が赤）。出発点はここで明示する。
+    JUDGMENT_AT_START = "claude-fable-5-1"
+
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="cfgsave-"))
         shutil.copytree(REPO / "workflow" / "kit", self.tmp / "kit")
+        _r = self.tmp / "kit" / "routes.env"
+        _r.write_text("".join(
+            f"MODEL_judgment={self.JUDGMENT_AT_START}\n" if ln.startswith("MODEL_judgment=") else ln
+            for ln in _r.read_text(encoding="utf-8").splitlines(keepends=True)), encoding="utf-8")
         self.saved = {k: getattr(core, k) for k in ("KIT", "WORKFLOWS", "WORKFLOW_SCHEMA", "LOGS", "RUNS")}
         core.KIT = self.tmp / "kit"
         core.WORKFLOWS = core.KIT / "workflows"
@@ -358,12 +367,15 @@ class RenderTest(KitTestCase):
         return _json.loads(r.stdout)
 
     def test_the_panel_offers_the_three_scopes_and_going_back_to_inheritance(self):
-        html = self.js({"edit": "cfgModelEdit(wf, steps.design, d)"})["edit"]
+        # 「継承のまま（工程に model が無い）」の工程で見る。design は計画工程なので同梱の定義では
+        # model が入っている（計画は Fable 固定）。review は judgment クラスを経路から継承したままなので、
+        # この検査（継承へ戻すボタンを出さない）の題材になる
+        html = self.js({"edit": "cfgModelEdit(wf, steps.review, d)"})["edit"]
         self.assertIn('data-target="step" data-key="model"', html)
         self.assertIn('data-target="step" data-key="model_class"', html)
         self.assertIn('data-target="routes" data-key="MODEL_judgment"', html)
         self.assertNotIn("data-inherit", html)                      # 指定が無いので「継承へ戻す」は出さない
-        self.assertIn("claude-fable-5-1", html)                     # 共通の経路のいまの値
+        self.assertIn(self.JUDGMENT_AT_START, html)                 # 共通の経路のいまの値
         self.assertIn(self.T()["config"]["modelEdit"], html)          # 見出しは文言の集約から出す
 
     def test_the_inherit_button_appears_once_the_step_has_its_own_value(self):
@@ -375,7 +387,7 @@ class RenderTest(KitTestCase):
     def test_the_preview_shows_the_affected_steps_and_says_it_is_a_shared_setting(self):
         p = self.apply(target="routes", key="MODEL_judgment", value="claude-opus-5")
         html = self.js({"pre": f"cfgModelPreview({json.dumps(p, ensure_ascii=False)})"})["pre"]
-        self.assertIn("claude-fable-5-1", html)
+        self.assertIn(self.JUDGMENT_AT_START, html)                 # 変更前の値
         self.assertIn("claude-opus-5", html)
         for a in p["affected"]: self.assertIn(f">{a['step']}<", html)
         self.assertIn("共通の設定です", html)

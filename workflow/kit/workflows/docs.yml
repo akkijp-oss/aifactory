@@ -4,6 +4,7 @@ inputs: [ticket.md]
 steps:
   - id: plan
     role: planner
+    model: claude-fable-5-1   # 計画は Fable で丁寧に（メンテナの判断 2026-09-12）。judgment クラスの既定は Opus なのでこの工程だけ上書き
     brief: |
       対象読者と読後にできることを決め、現在の実装・設定・関連文書を確認して構成を計画する。
       履歴上の記述と現行の仕様を区別する。文書変更のための不要な製品改修や実装を模倣するテストは計画しない。

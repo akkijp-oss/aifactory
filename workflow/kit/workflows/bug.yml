@@ -5,6 +5,7 @@ inputs: [ticket.md]
 steps:
   - id: plan
     role: planner
+    model: claude-fable-5-1   # 計画は Fable で丁寧に（メンテナの判断 2026-09-12）。judgment クラスの既定は Opus なのでこの工程だけ上書き
     brief: |
       再現条件を最初に確定させる。再現テストをどこに（どのテストファイルに）書くかまで計画に含める。
     outputs: [plan.md]
