@@ -18,6 +18,7 @@ steps:
 
   - id: design
     role: planner
+    model: claude-fable-5-1   # 計画は Fable で丁寧に（メンテナの判断 2026-09-12）。judgment クラスの既定は Opus なのでこの工程だけ上書き
     brief: |
       research.md を踏まえて設計する。UI があるなら導線（誰が・どこから・何をして・どうなる）を先に書く。
       大きければ段階に分け、この PR で入れる段階だけを計画にする。
