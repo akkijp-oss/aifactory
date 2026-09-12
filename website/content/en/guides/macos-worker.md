@@ -33,7 +33,7 @@ The control plane owns the ticket ledger and run records. It does not initiate S
 
 Follow the [worker control plane instructions](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#制御系) to configure the HTTPS service, SQLite database, TLS certificate, and per-worker token. Allow the Mac to reach the endpoint, normally TCP 8766. Worker authentication is separate from console authentication; keep TLS verification enabled.
 
-The service and runner must use the same operation database. The runner reads `AIFACTORY_WORKER_DB`, defaulting to `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`. Enroll workers through the control plane's local administrator CLI and distribute tokens and any required CA certificate through a trusted management channel.
+The service and runner must use the same operation database. The runner reads `AIFACTORY_WORKER_DB`, defaulting to `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`. Enroll workers through the control plane's local administrator CLI and distribute tokens and any required CA certificate through a trusted management channel. The operation database is opened in WAL mode, so `queue.sqlite3-wal` and `-shm` sit next to it; move or back them up together with the database. Transactions rejected by a lock are retried automatically, so a single `database is locked` no longer fails a run no matter how many runs are in flight (ADR-0066).
 
 ### 2. Prepare the Mac host and base VM
 

@@ -77,3 +77,4 @@
 - [0063: 起票は「方式を選ぶ → 入力する → 確かめて登録する」の 1 本道にし、1 画面 1 方式にする](0063-intake-is-one-mode-at-a-time.md)
 - [0064: チケットの PR は console 側で「チケットの `pr` 列 + 実行記録の `pr_url`」から解決し、未登録を「存在しない」と言わない](0064-ticket-pr-resolved-in-console.md)
 - [0065: モデルの設定は console が作業ツリーの `workflow/kit/` を直接書き、工程単位の `model` を新設する](0065-console-edits-model-settings-in-the-work-tree.md)
+- [0066: 制御系 sqlite のロックは「長く待つ」のではなく「トランザクションをやり直す」（WAL 併用。runner の poll は op を取り消さない）](0066-control-sqlite-retries-the-transaction.md)

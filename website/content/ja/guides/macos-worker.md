@@ -33,7 +33,7 @@ flowchart LR
 
 [workersの制御系手順](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#制御系)に従って、ワーカー用HTTPSサービス、SQLite DB、TLS証明書、ワーカーごとのトークンを用意する。Macから受信口（既定8766/TCP）へ到達できるようにする。consoleの認証とは別で、TLS検証を無効にしない。
 
-サービスとrunnerは同じ操作DBを参照する。runnerの指定は `AIFACTORY_WORKER_DB`、既定は `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`。ワーカー登録は制御系の管理CLIで行い、トークンと必要なCA証明書を信頼できる管理経路でMacへ配布する。
+サービスとrunnerは同じ操作DBを参照する。runnerの指定は `AIFACTORY_WORKER_DB`、既定は `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`。ワーカー登録は制御系の管理CLIで行い、トークンと必要なCA証明書を信頼できる管理経路でMacへ配布する。操作DBはWALで開くので、横に `queue.sqlite3-wal` と `-shm` が出る。DBを移す・控えを取るときはこの2つも一緒に扱う。ロックで弾かれた処理は自動でやり直すため、runが同時に何本走っていても `database is locked` 1回でrunは落ちない（ADR-0066）。
 
 ### 2. Macホストと基準VMを準備する
 
