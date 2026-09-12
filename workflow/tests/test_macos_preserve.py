@@ -12,6 +12,7 @@ main() の遷移、git は実物を動かす。
 - worker が落ちて sb が例外: preserve は例外を外に出さず、release は呼ばれる
 - step の途中で制御系 sqlite が locked（チケット 446）: human に落ちる前に wip を push する。lease と
   ゲストは人の検査用に残したいので release は呼ばない
+- release（成果物回収）の途中で落ちた: 正常経路が push 済みの `wip_branch` の名前を消さない（446）
 """
 import importlib.machinery
 import importlib.util
@@ -184,6 +185,27 @@ class MacPreserveTest(unittest.TestCase):
         self.assertEqual(json.loads((r.run_dir / "state.json").read_text())["wip_branch"], "sandbox/274-bug-wip")
         # lease は人が停まったゲストを検査できるよう残す（既存の意図。release で消さない）
         self.assertEqual(self.released, [])
+
+    def test_a_release_failure_after_the_push_keeps_the_recorded_wip_branch(self):
+        """release が制御系で落ちても、正常経路で push 済みの wip ブランチ名を state から消さない（446）"""
+        r = self.build(281)
+
+        def release():
+            # guest-release が通った後に release_lease が制御系 DB で落ちる形（macos.py の release の最後）。
+            # 以降ゲストは無いので、ここから preserve をやり直しても押せない
+            self.released.append(True)
+            r.sb = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("worker is gone"))
+            raise sqlite3.OperationalError("database is locked")
+
+        r.release = release
+        self.assertEqual(r.main(), 2)
+        self.assertEqual(r.state["result"], "human")
+        self.assertEqual(self.released, [True])
+        # 正常経路の preserve はもう押してある。復旧（kb run --from / --branch の既定値）が読む名前を消さないこと
+        head = git_out(self.app, "rev-parse", "HEAD").strip()
+        self.assertEqual(git_out(self.origin, "rev-parse", "sandbox/281-bug-wip").strip(), head)
+        self.assertEqual(r.state["wip_branch"], "sandbox/281-bug-wip")
+        self.assertEqual(json.loads((r.run_dir / "state.json").read_text())["wip_branch"], "sandbox/281-bug-wip")
 
     def test_a_preserve_that_fails_after_a_control_database_failure_is_not_fatal(self):
         """保全そのものが落ちても（ゲストが既に止まっている）、human の記録まで進む"""
