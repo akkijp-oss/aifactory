@@ -124,9 +124,13 @@ class WorkflowDetailTest(unittest.TestCase):
         w = core.workflow_detail("feature")
         for sid in ("gates", "sync", "pr", "automerge"):
             self.assertIsNone(step_of(w, sid)["model_resolved"], sid)
-        d = step_of(w, "design")["model_resolved"]
+        # 経路から継承したままの judgment 工程で見る（design は計画工程なので同梱の定義では model が入っている）
+        d = step_of(w, "review")["model_resolved"]
         self.assertEqual((d["model_class"], d["class_from"], d["route_key"], d["model_from"]), ("judgment", "role", "MODEL_judgment", "routes"))
         self.assertEqual(d["model"], core.model_routes()["MODEL_judgment"])
+        # 工程に model がある計画工程は step から決まる（クラスの表示は役割の既定のまま）
+        g = step_of(w, "design")["model_resolved"]
+        self.assertEqual((g["model_class"], g["model_from"]), ("judgment", "step"))
         i = step_of(w, "implement")["model_resolved"]
         self.assertEqual((i["model_class"], i["model"]), ("coding", core.model_routes()["MODEL_coding"]))
 

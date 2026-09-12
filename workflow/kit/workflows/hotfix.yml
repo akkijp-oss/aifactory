@@ -6,6 +6,7 @@ inputs: [ticket.md]
 steps:
   - id: plan
     role: planner
+    model: claude-fable-5-1   # 計画は Fable で丁寧に（メンテナの判断 2026-09-12）。judgment クラスの既定は Opus なのでこの工程だけ上書き
     brief: |
       hotfix である。**最小の変更で症状を止める**ことを最優先にし、根本対処は「後続タスク」として計画の末尾に分けて書く。
       変更範囲は 3 ファイル以内を目安にし、それを超えるなら STOP を検討する。
