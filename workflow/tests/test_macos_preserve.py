@@ -10,12 +10,15 @@ main() の遷移、git は実物を動かす。
   `state.json` の `wip_branch` に名前が残る（Proxmox backend と同じ）
 - push できない: `wip_branch` は空、`wip.patch` に差分が残り、release（成果物回収）は続く
 - worker が落ちて sb が例外: preserve は例外を外に出さず、release は呼ばれる
+- step の途中で制御系 sqlite が locked（チケット 446）: human に落ちる前に wip を push する。lease と
+  ゲストは人の検査用に残したいので release は呼ばない
 """
 import importlib.machinery
 import importlib.util
 import json
 import os
 import pathlib
+import sqlite3
 import subprocess
 import tempfile
 import types
@@ -158,6 +161,44 @@ class MacPreserveTest(unittest.TestCase):
         self.assertEqual(r.state["result"], "human")
         self.assertEqual(r.state["wip_branch"], "")
         self.assertEqual(self.released, [True])
+
+    def test_a_control_database_failure_preserves_the_work_and_keeps_the_lease(self):
+        """制御系 sqlite が落ちて run が human になるときも、コミット済みの実装を wip に残す（446）"""
+        r = self.build(274)
+
+        def boom(step, retry_note=""):
+            self.done.append(step["id"])
+            if step["id"] != "implement": return True, ""
+            (self.app / "fix.py").write_text("# 実装した直し\n", encoding="utf-8")
+            git(self.app, "add", "fix.py"); git(self.app, "commit", "-q", "-m", "再現テストを直した")
+            raise sqlite3.OperationalError("database is locked")
+
+        r.run_agent = boom
+        self.assertEqual(r.main(), 2)
+        self.assertEqual(self.done, ["plan", "implement"])
+        self.assertEqual(r.state["result"], "human")
+        self.assertEqual(r.state["error"], "database is locked")
+        head = git_out(self.app, "rev-parse", "HEAD").strip()
+        self.assertEqual(git_out(self.origin, "rev-parse", "sandbox/274-bug-wip").strip(), head)
+        self.assertEqual(r.state["wip_branch"], "sandbox/274-bug-wip")
+        self.assertEqual(json.loads((r.run_dir / "state.json").read_text())["wip_branch"], "sandbox/274-bug-wip")
+        # lease は人が停まったゲストを検査できるよう残す（既存の意図。release で消さない）
+        self.assertEqual(self.released, [])
+
+    def test_a_preserve_that_fails_after_a_control_database_failure_is_not_fatal(self):
+        """保全そのものが落ちても（ゲストが既に止まっている）、human の記録まで進む"""
+        r = self.build(275)
+
+        def boom(step, retry_note=""):
+            self.done.append(step["id"])
+            raise sqlite3.OperationalError("database is locked")
+
+        r.run_agent = boom
+        r.sb = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("worker is gone"))
+        self.assertEqual(r.main(), 2)
+        self.assertEqual(r.state["result"], "human")
+        self.assertEqual(r.state["error"], "database is locked")
+        self.assertEqual(r.state["wip_branch"], "")
 
 
 if __name__ == "__main__":

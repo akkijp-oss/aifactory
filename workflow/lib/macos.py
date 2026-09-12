@@ -150,10 +150,17 @@ def backend(Run):
                 return super().main()
             except Exception as e:
                 import datetime
-                self.state.update(result="human", error=str(e),
+                self.state.update(result="human", error=str(e), wip_branch="",
                                   finished=datetime.datetime.now().isoformat(timespec="seconds"))
                 self.save()
                 self.log(f"{self.backend_label} execution failed: {e}; existing lease retained for inspection")
+                # 正常な終わり（bin/run の main）と同じく、コミット済みで未 push の実装を wip ブランチへ逃がす。
+                # ここを通るのは制御系が落ちた回（例: queue の database is locked）で、worker は operation の
+                # 取り消しでゲストごと止めることがある（チケット 446）。止まる前に押せれば実装は残る。
+                # ゲストが既に止まっていれば preserve は失敗するが、例外は飲むので human の記録は残る。
+                # release（成果物回収・ゲスト削除）は従来どおり呼ばない: lease は人の検査用に残す
+                self.state["wip_branch"] = self.preserve()
+                self.save()
                 return 2
 
         def run_agent(self, step, retry_note=""):
