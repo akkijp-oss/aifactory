@@ -22,6 +22,22 @@ MAX_BODY = 1024 * 1024
 MAX_LOG = 16 * 1024 * 1024
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\Z")
 
+# 制御系 DB のロックの待ち方（チケット 446）。run が何本も同時に回ると同じ sqlite を 6 本以上の接続が叩く。
+# sqlite の busy 待ちには公平性が無いので、運の悪い 1 本が待ち切れず database is locked を食う。
+# 1 文を長く待たせるのではなく、トランザクションごと短くやり直す（待ち直しの間に他が commit する）。
+# BUSY_TIMEOUT_MS を worker の HTTP client の待ち（10 秒。cmd/aifactory-worker/main.go）より短く、
+# LOCK_RETRY_BUDGET_S をその待ちに収めること。長く抱えると worker が見切って叩き直し、競合が増える
+BUSY_TIMEOUT_MS = 3000            # 1 文がロックの解放を待つ上限
+LOCK_RETRY_ATTEMPTS = 6           # トランザクションを何回までやり直すか
+LOCK_RETRY_BUDGET_S = 8.0         # やり直しを含めた 1 回の呼び出しの総時間の上限
+LOCK_RETRY_DELAY_S = 0.05         # 最初の待ち（以降倍々）
+LOCK_RETRY_MAX_DELAY_S = 1.0
+
+
+def locked(exc):
+    """sqlite が「他が握っているので今は無理」と言っているだけか（= やり直せば通る）"""
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in str(exc) or "busy" in str(exc))
+
 
 class Error(Exception):
     def __init__(self, message, status=400):
@@ -41,8 +57,7 @@ class Store:
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self.db() as db:
-            db.executescript("""
+        self.tx(lambda db: db.executescript("""
             CREATE TABLE IF NOT EXISTS workers (
               id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
               last_seen REAL NOT NULL DEFAULT 0, info TEXT NOT NULL DEFAULT '{}');
@@ -59,43 +74,71 @@ class Store:
             DROP INDEX IF EXISTS one_active_operation;
             CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_worker
               ON operations(worker) WHERE state IN ('queued', 'running', 'uncertain');
-            """)
+            """))
         self.path.chmod(0o600)
+        # 読みと書きの排他を減らす（WAL なら Client が毎秒叩く operation() が worker の書きとぶつからない。446）。
+        # rollback journal の既存 DB はここで移行する。chmod の後に打つこと: 横に出る -wal / -shm は
+        # 作られた時点の主 DB の権限を継ぐので、先に打つと 0600 になる前の権限で作られる。
+        # 移行できない置き場（journal_mode を変えられない）なら黙って従来のまま続ける（やり直しだけで凌ぐ）
+        with contextlib.closing(sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_MS / 1000)) as db:
+            with contextlib.suppress(sqlite3.DatabaseError):
+                db.execute("PRAGMA journal_mode=WAL")
 
     @contextlib.contextmanager
-    def db(self):
-        db = sqlite3.connect(self.path, timeout=10)
+    def db(self, busy_ms=None):
+        busy = BUSY_TIMEOUT_MS if busy_ms is None else busy_ms
+        db = sqlite3.connect(self.path, timeout=busy / 1000)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
+        db.execute(f"PRAGMA busy_timeout={int(busy)}")     # connect(timeout=) と同じものを明示する
         try:
             with db:
                 yield db
         finally:
             db.close()
 
+    def tx(self, fn):
+        """fn(db) を 1 つのトランザクションで回す。ロックで弾かれたら予算内で丸ごとやり直す（446）。
+
+        commit まで行けなかった回は rollback されているので、同じ fn をもう一度回しても
+        DB には何も残っていない。業務エラー（Error）や壊れた DB はそのまま外へ出す。
+        fn は DB 以外の副作用を持ってよいが、何度回しても同じ結果になること（submit の spool 参照）
+        """
+        deadline = time.monotonic() + LOCK_RETRY_BUDGET_S
+        delay = LOCK_RETRY_DELAY_S
+        for attempt in range(1, LOCK_RETRY_ATTEMPTS + 1):
+            left = deadline - time.monotonic()
+            try:
+                # 1 文の待ちも残り予算で頭を押さえる。押さえないと総時間が予算 + busy_timeout になる
+                with self.db(max(1, min(BUSY_TIMEOUT_MS, int(left * 1000)))) as db:
+                    return fn(db)
+            except sqlite3.OperationalError as e:
+                # ロック以外（DB が壊れた等）と、予算・回数を使い切った回はそのまま外へ
+                if not locked(e) or attempt == LOCK_RETRY_ATTEMPTS or time.monotonic() + delay >= deadline:
+                    raise
+            time.sleep(delay)
+            delay = min(delay * 2, LOCK_RETRY_MAX_DELAY_S)
+
     def enroll(self, worker):
         if not NAME.fullmatch(worker):
             raise Error("invalid worker name")
         token = secrets.token_urlsafe(32)
         try:
-            with self.db() as db:
-                db.execute("INSERT INTO workers(id,token_hash) VALUES (?,?)", (worker, digest(token)))
+            self.tx(lambda db: db.execute("INSERT INTO workers(id,token_hash) VALUES (?,?)", (worker, digest(token))))
         except sqlite3.IntegrityError:
             raise Error("worker already registered", 409)
         return token
 
     def authenticate(self, worker, token):
-        with self.db() as db:
-            row = db.execute("SELECT * FROM workers WHERE id=?", (worker,)).fetchone()
+        row = self.tx(lambda db: db.execute("SELECT * FROM workers WHERE id=?", (worker,)).fetchone())
         if not row or not row["enabled"] or not hmac.compare_digest(row["token_hash"], digest(token)):
             raise Error("unauthorized", 401)
 
     def disable(self, worker):
-        with self.db() as db:
-            db.execute("UPDATE workers SET enabled=0 WHERE id=?", (worker,))
+        self.tx(lambda db: db.execute("UPDATE workers SET enabled=0 WHERE id=?", (worker,)))
 
     def workers(self):
-        with self.db() as db:
+        def work(db):
             rows = db.execute("SELECT id,enabled,last_seen,info FROM workers ORDER BY id").fetchall()
             result = []
             for r in rows:
@@ -108,11 +151,13 @@ class Store:
                 d["lease"] = dict(lease) if lease else None
                 result.append(d)
             return result
+        return self.tx(work)
 
     def acquire(self, worker, lease):
         if not NAME.fullmatch(lease):
             raise Error("invalid lease ID")
-        with self.db() as db:
+
+        def work(db):
             db.execute("BEGIN IMMEDIATE")
             w = db.execute("SELECT * FROM workers WHERE id=? AND enabled=1", (worker,)).fetchone()
             if not w or time.time() - w["last_seen"] > 45:
@@ -130,13 +175,16 @@ class Store:
             if db.execute("SELECT 1 FROM operations WHERE worker=? AND state IN ('queued','running','uncertain')", (worker,)).fetchone():
                 raise Error("worker busy", 409)
             db.execute("INSERT INTO leases VALUES (?,?,?)", (worker, lease, time.time()))
+        return self.tx(work)
 
     def release_lease(self, worker, lease, operation):
-        with self.db() as db:
+        def work(db):
+            db.execute("BEGIN IMMEDIATE")      # 読んでから書くので、他の書き手より先に取る（後から昇格すると即 BUSY）
             op = self.owned(db, worker, operation)
             if op["kind"] != "guest-release" or op["state"] != "succeeded" or json.loads(op["payload"]).get("lease") != lease:
                 raise Error("successful guest release required", 409)
             db.execute("DELETE FROM leases WHERE worker=? AND id=?", (worker, lease))
+        return self.tx(work)
 
     def input_path(self, operation):
         if not NAME.fullmatch(operation): raise Error("invalid operation ID")
@@ -176,7 +224,8 @@ class Store:
         body = encode(payload)
         if len(body.encode()) > 128 * 1024:
             raise Error("operation too large")
-        with self.db() as db:
+
+        def work(db):
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT * FROM operations WHERE id=?", (operation,)).fetchone()
             if old:
@@ -204,23 +253,35 @@ class Store:
             except sqlite3.IntegrityError:
                 raise Error("worker is busy; operation not queued", 409)
             if stdin is not None:
-                p = self.input_path(operation)
-                p.parent.mkdir(mode=0o700, exist_ok=True)
-                fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(stdin); f.flush(); os.fsync(f.fileno())
-        return operation
+                self.spool(operation, stdin, payload["stdin_sha256"])
+            return operation
+        return self.tx(work)
+
+    def spool(self, operation, stdin, sha256):
+        """operation の stdin を私有の spool に落とす。ロックでやり直した 2 回目は、前の試行が書いた
+        同じ中身をそのまま受け入れる（O_EXCL のままだと FileExistsError で submit が落ちる。446）"""
+        p = self.input_path(operation)
+        p.parent.mkdir(mode=0o700, exist_ok=True)
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            if digest(p.read_text(encoding="utf-8")) != sha256:
+                raise Error("operation input already spooled with different contents", 409)
+            return
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(stdin); f.flush(); os.fsync(f.fileno())
 
     def heartbeat(self, worker, info):
         if not isinstance(info, dict) or len(encode(info)) > 8192:
             raise Error("invalid worker info")
-        with self.db() as db:
+
+        def work(db):
             db.execute("UPDATE workers SET last_seen=?,info=? WHERE id=?", (time.time(), encode(info), worker))
-            rows = db.execute("SELECT id FROM operations WHERE worker=? AND state IN ('queued','running') AND cancelled=1", (worker,)).fetchall()
-        return {"cancel": [r["id"] for r in rows]}
+            return db.execute("SELECT id FROM operations WHERE worker=? AND state IN ('queued','running') AND cancelled=1", (worker,)).fetchall()
+        return {"cancel": [r["id"] for r in self.tx(work)]}
 
     def poll(self, worker):
-        with self.db() as db:
+        def work(db):
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM operations WHERE worker=? AND state IN ('queued','running') ORDER BY created LIMIT 1", (worker,)).fetchone()
             if not row:
@@ -234,6 +295,7 @@ class Store:
                     raise Error("operation input checksum mismatch", 409)
             op["state"] = "running"
             return {"operation": op}
+        return self.tx(work)
 
     @staticmethod
     def owned(db, worker, operation):
@@ -245,7 +307,8 @@ class Store:
     def event(self, worker, operation, seq, text):
         if type(seq) is not int or seq < 0 or not isinstance(text, str) or len(text.encode()) > 65536:
             raise Error("invalid event")
-        with self.db() as db:
+
+        def work(db):
             db.execute("BEGIN IMMEDIATE")
             op = self.owned(db, worker, operation)
             old = db.execute("SELECT text FROM events WHERE op=? AND seq=?", (operation, seq)).fetchone()
@@ -261,7 +324,8 @@ class Store:
             if row["size"] + len(text.encode()) > MAX_LOG:
                 raise Error("operation log limit exceeded", 413)
             db.execute("INSERT INTO events VALUES (?,?,?)", (operation, seq, text))
-        return {"ack": seq}
+            return {"ack": seq}
+        return self.tx(work)
 
     def complete(self, worker, operation, result):
         # "truncated" is optional so an older worker's result stays valid.
@@ -280,7 +344,8 @@ class Store:
         if result["status"] == "failed" and (result["exit_code"] is None or result["exit_code"] == 0):
             raise Error("failure requires a nonzero exit code")
         body = encode(result)
-        with self.db() as db:
+
+        def work(db):
             db.execute("BEGIN IMMEDIATE")
             op = self.owned(db, worker, operation)
             if op["result"]:
@@ -293,29 +358,31 @@ class Store:
                 if count != result["events"]:
                     raise Error("logs not fully received", 409)
                 db.execute("UPDATE operations SET state=?,result=? WHERE id=?", (result["status"], body, operation))
+        self.tx(work)
         self.input_path(operation).unlink(missing_ok=True)
         return {"accepted": True}
 
     def cancel(self, operation):
-        with self.db() as db:
-            db.execute("UPDATE operations SET cancelled=1 WHERE id=? AND state IN ('queued','running')", (operation,))
+        self.tx(lambda db: db.execute("UPDATE operations SET cancelled=1 WHERE id=? AND state IN ('queued','running')", (operation,)))
 
     def resolve(self, operation):
         """Admin has verified the guest stopped; preserve the uncertain result."""
-        with self.db() as db:
+        def work(db):
             if not db.execute("UPDATE operations SET state='resolved' WHERE id=? AND state='uncertain'", (operation,)).rowcount:
                 raise Error("operation is not uncertain", 409)
+        self.tx(work)
 
     def operation(self, operation):
-        with self.db() as db:
+        def work(db):
             row = db.execute("SELECT * FROM operations WHERE id=?", (operation,)).fetchone()
             if not row:
                 raise Error("operation not found", 404)
             d = dict(row)
             d["payload"] = json.loads(d["payload"])
             d["result"] = json.loads(d["result"]) if d["result"] else None
-            d["log"] = "".join(r[0] for r in db.execute("SELECT text FROM events WHERE op=? ORDER BY seq", (operation,)))
+            d["log"] = "".join(r[0] for r in db.execute("SELECT text FROM events WHERE op=? ORDER BY seq", (operation,)).fetchall())
             return d
+        return self.tx(work)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

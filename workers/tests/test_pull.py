@@ -1,14 +1,19 @@
 import concurrent.futures
+import contextlib
 import json
 import pathlib
+import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+import pull
 from pull import Error, Store, server
 
 
@@ -216,6 +221,101 @@ class QueueTest(unittest.TestCase):
         self.store.acquire("mac1", "run-one")
         op = self.store.submit("mac1", "guest-prepare", {"lease": "run-one"})
         self.assertEqual(self.store.operation(op)["payload"], {"lease": "run-one"})
+
+
+class LockRetryTest(unittest.TestCase):
+    """制御系 sqlite の database is locked で run を落とさない（チケット 446）。
+
+    run が 3 本同時に回ると queue.sqlite3 を開く接続が 6 本以上になり、sqlite の busy 待ちには公平性が
+    無いので、運の悪い 1 本が待ち切れずに OperationalError を食う。ここでは「別接続がロックを握っている
+    間に Store を呼ぶ」を busy_timeout を小さくして再現し、トランザクションのやり直しが吸収することを固定する。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = pathlib.Path(self.tmp.name) / "queue.db"
+        self.store = Store(self.path)
+        self.store.enroll("mac1")
+        self.store.heartbeat("mac1", {"mode": "guest"})
+
+    def sql(self, query):
+        with contextlib.closing(sqlite3.connect(self.path, timeout=30)) as db:
+            return db.execute(query).fetchone()
+
+    def hold(self, seconds, mode="EXCLUSIVE"):
+        """別接続が seconds 秒だけロックを握る（= 他の run が書いている最中）。返ったスレッドを join して解放を待つ"""
+        started = threading.Event()
+
+        def block():
+            with contextlib.closing(sqlite3.connect(self.path, timeout=30)) as db:
+                db.execute(f"BEGIN {mode}")
+                db.execute("UPDATE workers SET last_seen=last_seen WHERE id='mac1'")
+                started.set()
+                time.sleep(seconds)
+                db.rollback()
+
+        t = threading.Thread(target=block)
+        t.start()
+        self.addCleanup(t.join)
+        self.assertTrue(started.wait(10))
+        return t
+
+    def test_a_single_lock_does_not_fail_the_submit(self):
+        """ロック 1 回で submit が落ちない。やり直しを 1 回に戻すと従来どおり落ちる"""
+        with unittest.mock.patch.object(pull, "BUSY_TIMEOUT_MS", 20):
+            t = self.hold(0.4)
+            with unittest.mock.patch.object(pull, "LOCK_RETRY_ATTEMPTS", 1):
+                with self.assertRaises(sqlite3.OperationalError):
+                    self.store.submit("mac1", "probe", {}, "before")
+            t.join()
+            self.hold(0.4)
+            op = self.store.submit("mac1", "probe", {}, "after")
+        self.assertEqual(self.store.operation(op)["state"], "queued")
+
+    def test_a_retried_submit_does_not_queue_the_operation_twice(self):
+        """やり直しで operation を二重に作らない（one_reserved_worker で「worker is busy」にならない）"""
+        with unittest.mock.patch.object(pull, "BUSY_TIMEOUT_MS", 20):
+            self.hold(0.4)
+            op = self.store.submit("mac1", "guest-exec", {"command": "true"}, stdin="secret input\n")
+        self.assertEqual(self.sql("SELECT COUNT(*) FROM operations")[0], 1)
+        # 冪等な再送（同じ ID・同じ stdin）は従来どおり通り、spool も残っている
+        self.assertEqual(op, self.store.submit("mac1", "guest-exec", {"command": "true"}, op, stdin="secret input\n"))
+        self.assertEqual(self.store.poll("mac1")["operation"]["stdin"], "secret input\n")
+
+    def test_a_read_under_an_exclusive_lock_is_retried(self):
+        """読み（Client の poll が毎秒叩く operation()）もやり直す。
+
+        WAL では読みが書きと競合しないので、既存の queue.sqlite3 が rollback journal のまま
+        （WAL への移行に失敗した場合）を再現するため journal_mode を戻してから試す。
+        """
+        op = self.store.submit("mac1", "probe", {})
+        self.sql("PRAGMA journal_mode=DELETE")
+        with unittest.mock.patch.object(pull, "BUSY_TIMEOUT_MS", 20):
+            t = self.hold(0.4)
+            with unittest.mock.patch.object(pull, "LOCK_RETRY_ATTEMPTS", 1):
+                with self.assertRaises(sqlite3.OperationalError): self.store.operation(op)
+            t.join()
+            self.hold(0.4)
+            self.assertEqual(self.store.operation(op)["id"], op)
+
+    def test_a_business_error_is_not_retried(self):
+        """Error（業務エラー）はやり直さない。何度叩いても答えは変わらず、待ち時間を捨てるだけ"""
+        started = time.monotonic()
+        with self.assertRaises(Error): self.store.operation("no-such-op")
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_the_journal_mode_is_wal_and_the_side_files_stay_private(self):
+        """WAL にして読みと書きの排他を減らす。横に出る -wal / -shm も主 DB と同じく他人に見せない"""
+        self.assertEqual(self.sql("PRAGMA journal_mode")[0], "wal")
+        with contextlib.closing(sqlite3.connect(self.path, timeout=30)) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE workers SET last_seen=last_seen WHERE id='mac1'")
+            db.commit()
+            for name in (self.path.name + "-wal", self.path.name + "-shm"):
+                f = self.path.parent / name
+                self.assertTrue(f.exists(), name)
+                self.assertEqual(f.stat().st_mode & 0o077, 0, name)
 
 
 if __name__ == "__main__": unittest.main()
