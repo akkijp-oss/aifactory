@@ -17,6 +17,7 @@ gate py-compile py_compile
 gate paths-workspace paths_workspace
 gate unittest-workflow python3 -m unittest discover -s workflow/tests
 gate unittest-console python3 -m unittest discover -s console/tests
+gate unittest-pull python3 -m unittest discover -s workers/tests   # 制御系 queue（pull.py / client.py）。CI では走るがゲートに無く、実装役が自分で確かめられなかった（446）
 gate mkdocs-strict website/.venv/bin/mkdocs build --strict -f website/mkdocs.yml
 gate changelog-d bin/changelog-release check --base "origin/${BASE:-main}"
 gate oss-check bin/oss-check.sh

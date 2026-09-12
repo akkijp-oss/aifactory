@@ -33,7 +33,7 @@ flowchart LR
 
 [workersの制御系手順](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#制御系)に従って、ワーカー用HTTPSサービス、SQLite DB、TLS証明書、ワーカーごとのトークンを用意する。Macから受信口（既定8766/TCP）へ到達できるようにする。consoleの認証とは別で、TLS検証を無効にしない。
 
-サービスとrunnerは同じ操作DBを参照する。runnerの指定は `AIFACTORY_WORKER_DB`、既定は `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`。ワーカー登録は制御系の管理CLIで行い、トークンと必要なCA証明書を信頼できる管理経路でMacへ配布する。
+サービスとrunnerは同じ操作DBを参照する。runnerの指定は `AIFACTORY_WORKER_DB`、既定は `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`。ワーカー登録は制御系の管理CLIで行い、トークンと必要なCA証明書を信頼できる管理経路でMacへ配布する。操作DBはWALで開くので、横に `queue.sqlite3-wal` と `-shm` が出る。DBを移す・控えを取るときはこの2つも一緒に扱う。ロックで弾かれた処理は自動でやり直すため、runが同時に何本走っていても `database is locked` 1回でrunは落ちない（ADR-0066）。
 
 ### 2. Macホストと基準VMを準備する
 
@@ -241,7 +241,7 @@ MCPでは同じチケットに `ticket_run` を呼び、返されたjob IDを `j
 
 PR後の `result: human` は人間によるレビュー待ちを表す。これだけで失敗と判断せず、工程履歴とPRを確認する。通常終了ではゲストがTartの一覧から消え、制御系のleaseが空になる。`--keep` を付けた場合は成果物回収後もゲストとleaseを保持する。
 
-PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切った、工程が失敗したなど）は、成果物回収の前に作業ブランチのHEADを `sandbox/<チケット番号>-<workflow名>-wip` へforce pushし、そのブランチ名を `state.json` の `wip_branch` に記録する。人はこのブランチを取り出して続きを引き取れる。pushできなかった場合は `wip_branch` を空にし、代わりに差分を `wip.patch`（`git am` で当てられる）としてrunディレクトリに残す。保全が成功しても失敗しても、成果物回収とゲスト削除は続行する。
+PRを作る前にhumanへ落ちたrun（ゲートの戻せる回数を使い切った、工程が失敗したなど）は、成果物回収の前に作業ブランチのHEADを `sandbox/<チケット番号>-<workflow名>-wip` へforce pushし、そのブランチ名を `state.json` の `wip_branch` に記録する。人はこのブランチを取り出して続きを引き取れる。pushできなかった場合は `wip_branch` を空にし、代わりに差分を `wip.patch`（`git am` で当てられる）としてrunディレクトリに残す。保全が成功しても失敗しても、成果物回収とゲスト削除は続行する。制御系（操作DBや受信口）の失敗でrunが人へ返る回は、同じ保全を試してからleaseとゲストを検査用に残す（成果物回収とゲスト削除はしない）。このときすでに記録済みの `wip_branch` があれば消さない。
 
 成果物はゲスト作業ディレクトリ直下の通常ファイル、合計4 MiBまで。入力転送は1ファイル350,000バイトまで。認証用 `runtime.env` は除外する。ディレクトリ・symlink・合計4 MiBを超える分は回収せず飛ばし、その名前と理由を `state.json` の `artifacts_skipped` に残す。回収対象外があってもrunは止めず、VMは返却する。大きなビルド成果物や `.xcresult` の回収は、この経路では扱えない。
 
