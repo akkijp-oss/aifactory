@@ -47,7 +47,9 @@ busy 待ちを使い切った要求は worker から見れば必ず時間切れ�
    取り消し自体が失敗しても元の例外を隠さない。
 6. **Mac backend は制御系の失敗で human に落ちるときも `preserve()` を試す**。コミット済み・未 push の実装を
    wip ブランチへ push し、`state.json` の `wip_branch` に残す。`release()` は従来どおり呼ばない
-   （lease とゲストは人が検査できるように残す。チケット 282 の意図）。
+   （lease とゲストは人が検査できるように残す。チケット 282 の意図）。ここでの保全は **記録済みの
+   `wip_branch` を上書きしない**: 正常経路（`bin/run` の main）が push した後で `release()` が落ちる回もあり
+   （`guest-release` が通った後の `release_lease` など）、そこで名前を消すと `kb run --from` の既定ブランチが失われる。
 7. **worker（Go）は今回触らない**。「ゲストを止める前に worker が wip を push する」「停止ゲストを起こす
    `guest-start`」は Go の変更が要り、この作業環境では 1 度も動かせない。別のチケットに切る。
 
