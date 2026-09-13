@@ -184,7 +184,10 @@ class ClockSkewTest(unittest.TestCase):
         t = {l.split(" ", 1)[0]: l.split(" ", 1)[1].strip() for l in head if l.strip()}
         self.assertEqual(t["status"], "blocked", t)
         self.assertIn("時計", t["note"])
-        self.assertIn("sandbox reset", t["note"])        # 次の一手（VM を巻き戻して合わせ直す）
+        # 次の一手。この run の VM は fail_before_start が返しているので、巻き戻す相手はもう居ない。
+        # 回し直せば次の take が sync_clock を通って合わせる（レビュー #491）
+        self.assertIn("kb run", t["note"])
+        self.assertNotIn("sandbox reset", t["note"])
         self.assertNotIn("VM を取得できず", t["note"])   # VM は取れている
 
 

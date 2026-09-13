@@ -37,7 +37,7 @@ flowchart TD
 | `reset` / `release` が失敗 | `qm listsnapshot 92NN` に `clean` があるか | なければ `qm destroy` → `40-pool.sh`。rollback のロック競合は CLI が待ってリトライする |
 | VM から GitHub に出られない | `ssh $PVE_HOST 'iptables -t nat -S \| grep 10.77'` | SDN 再適用 `pvesh set /cluster/sdn` |
 | Mac から VM に届かない（ファイアウォール有効化後） | `qm config <vmid> \| grep firewall`、`/etc/pve/firewall/<vmid>.fw` | `50-firewall.sh` を再実行。`clean` にファイアウォール=1 が含まれている必要がある |
-| run が「ゲストの時計がずれている」で止まる / コミットや ADR の日付が数日前 | 実行記録の `clock_offset_s`、`sandbox take` のログの `[clock]` 行 | 巻き戻した VM は snapshot を取った時刻から時計が再開します（[ADR-0069](decisions/index.md)）。`sandbox reset <task>` で貸し直すと合わせ直します。直らなければ VM の中で `sudo systemctl restart systemd-timesyncd`、それでも駄目なら NTP（udp/123）が外に出られるかを確認 |
+| run が「ゲストの時計がずれている」で止まる / コミットや ADR の日付が数日前 | 実行記録の `clock_offset_s`、`sandbox take` のログの `[clock]` 行 | 巻き戻した VM は snapshot を取った時刻から時計が再開します（[ADR-0069](decisions/index.md)）。止まった run は VM を返しているので `kb reopen` → `kb run` で回し直すだけです（次の貸出で合わせ直します）。貸出中のまま日付がずれているなら `sandbox reset <task>` で貸し直します。直らなければ VM の中で `sudo systemctl restart systemd-timesyncd`、それでも駄目なら NTP（udp/123）が外に出られるかを確認 |
 | `sandbox` コマンドが古い動きをする | `diff ~/.local/bin/sandbox sandbox/bin/sandbox` | `sandbox/bin/install.sh` を再実行 |
 
 ## エージェントが担当する工程

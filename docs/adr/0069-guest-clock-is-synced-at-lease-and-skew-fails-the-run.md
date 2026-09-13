@@ -47,7 +47,8 @@ systemd-timesyncd が有効（`System clock synchronized: yes` / `NTP service: a
    `failed` / `failure: "clock"` で終える。probe が数字を返さなければ同じく止める（測れなかったものを
    「ずれていない」と読み替えない）。ssh 自体が通らないときは従来どおりの失敗として上げ、「時計が測れない」と言い換えない。
    測れた値は成否に関わらず `state.json` の `clock_offset_s` に残す（どの run がどれだけずれていたかを後から数えられる）。
-   `kb` はチケットを `blocked` にし、次の一手（`sandbox reset` してから回し直す）を note に書く。console は `clock_skew` として見せる。
+   `kb` はチケットを `blocked` にし、次の一手（VM は開始前の失敗として返してあるので、`kb reopen` → `kb run` で
+   回し直すだけ。次の貸出が決定 1 で合わせる）を note に書く。console は `clock_skew` として見せる。
 
 3. **テンプレートのポーリング間隔を縮める**。`31-provision-base.sh` に `timedatectl set-ntp true`（既定に依存しない明示）と
    `/etc/systemd/timesyncd.conf.d/aifactory.conf`（`PollIntervalMaxSec=64`）を足し、復元後の自己回復を

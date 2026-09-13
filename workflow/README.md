@@ -114,7 +114,8 @@ prepare: prepare.sh       # 例: pnpm install --frozen-lockfile && pnpm --filter
 ずれたまま回すと、コミットの author date も agent が書く ADR の日付も嘘になり、後から直せない。
 `sandbox take` / `sandbox reset` が env を注入する前に合わせ（`[clock] guest offset …`）、runner は take の直後・
 checkout の前に必ず測り直す。`AIFACTORY_CLOCK_TOLERANCE_S`（既定 120）秒を超えていたら、agent を起動せずに
-`result: failed` / `failure: "clock"` で終わる（kb はチケットを `blocked` にし、`sandbox reset <id>` を促す）。
+`result: failed` / `failure: "clock"` で終わる（kb はチケットを `blocked` にする。この失敗は VM を返すので、
+`kb reopen` → `kb run` で回し直せば次の貸出が合わせ直す）。
 測った値は成否に関わらず `state.json` の `clock_offset_s` に残る（ADR-0069）。
 
 **準備では直らない赤（base 自身が赤い）は、runner が base で回して確かめる。** gates が赤いと、`kit/steps/gates.sh` が

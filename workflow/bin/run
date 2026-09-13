@@ -565,7 +565,7 @@ class Run:
         if abs(off) > tol:
             raise ClockSkew(f"ゲストの時計が制御系と {off} 秒ずれている（許容 {tol} 秒）: "
                             f"guest={iso(guest)} control={iso(control)}。"
-                            f"VM を `sandbox reset {self.task}` で巻き戻してから回し直す")
+                            f"そのまま回し直してよい（次の貸出が時計を合わせ直す）")
 
     def take(self):
         if self.dry:
@@ -1067,7 +1067,7 @@ class Run:
         failure は「同じ failed でも扱いが違う終わり方」の目印。kb と console がこれを見て見せ方と次の一手を変える。
         今あるのは "wait_timeout"（VM の空き待ちが上限。チケットは todo に戻す。242）と
         "prepare"（貸出直後の準備が失敗。VM か prepare.sh を直してから回し直す。330）と
-        "clock"（ゲストの時計が制御系とずれていた。巻き戻して合わせ直してから回す。491）"""
+        "clock"（ゲストの時計が制御系とずれていた。VM は返すので、回し直せば次の貸出が合わせ直す。491）"""
         err = scrub(str(e))[-1500:]
         self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
                            "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
