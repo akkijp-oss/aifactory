@@ -2132,6 +2132,24 @@ def config_view():
 CONFIG_CHANGES = "config-changes.jsonl"
 STEP_MODEL_KEYS = ("model", "model_class")
 
+# 画面で表示名から選べるモデルの表。ここが唯一の正本（画面にも文書にも ID を写さない。ADR-0072 が ADR-0065 の決定 4 を
+# 置き換える）。1 段目は Agent（実行する CLI）で、今は claude だけ。claude 以外を足せる器として形だけ 2 段にしてある。
+# これは「画面で選べる既定の候補」であって、保存の許可一覧ではない。表に無い ID も自由入力で入れられ（check_model_name
+# が形と鍵の系統だけを見る）、設定に既に入っている表に無い値もそのまま候補に残る（model_choices）。
+MODEL_CATALOG = [
+    {"id": "claude", "label": "Claude", "models": [
+        {"id": "claude-opus-5", "label": "Opus 5"},
+        {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+        {"id": "claude-fable-5-1", "label": "Fable 5.1"},
+        {"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
+    ]},
+]
+
+
+def model_catalog():
+    """MODEL_CATALOG の複製。画面に渡す前に必ずここを通す（呼び手が定数を書き換えても本体に響かせない）"""
+    return [{**a, "models": [dict(m) for m in a["models"]]} for a in MODEL_CATALOG]
+
 
 def file_version(p):
     """ファイルの版。保存のときに「読んだときから変わっていないか」を見るのに使う（外の編集との衝突検知）"""
@@ -2156,7 +2174,8 @@ def check_model_name(v):
     """入れてよいモデル名か。形と、鍵の系統（token_family）が分かることを見る。
     系統が分からないと runner は系統別の鍵を選べず、共通の CLAUDE_CODE_OAUTH_TOKEN に落ちる（workflow/bin/run の run_agent）。
     止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0065）。
-    候補を固定の一覧に縛らないので、新しいモデル名でも同じ系統の語を含んでいれば通る"""
+    画面には表示名から選べる固定の表（MODEL_CATALOG）があるが、それは選ぶための候補で、ここの許可一覧ではない。
+    表に無い新しいモデル名でも、同じ系統の語を含んでいれば通る（ADR-0072）"""
     s = str(v or "").strip()
     if not wfdef.MODEL_NAME_RE.match(s):
         raise ApiError("モデル名は英数字と . _ - だけ、64 文字までで入れてください")
@@ -2199,7 +2218,9 @@ def model_diff(before, after):
 
 
 def model_choices(rows=None, routes=None):
-    """候補にするモデル名。今この設定で使われている値から作る（最新のモデル名を固定で埋め込まない。未知の既存値も候補に残る）"""
+    """自由入力の候補にするモデル名。今この設定で使われている値から作る（表に無い既存値も候補に残る）。
+    表示名から選ぶ固定の表は MODEL_CATALOG が持つ。両方が要る: 表は「覚えずに選べる」ため、こちらは
+    「表に無い既存値・新しい名前を失わない」ため（ADR-0072）"""
     routes = model_routes() if routes is None else routes
     vals = {v for k, v in routes.items() if k.startswith("MODEL_") and v}
     vals |= {r["model"] for r in (rows if rows is not None else model_rows(routes)) if r.get("model")}
@@ -2225,6 +2246,7 @@ def model_edit_view(routes=None):
     except Exception: pool = {"fable": 0, "other": 0, "total": 0}
     return {"route_keys": wfdef.route_keys(), "step_keys": list(STEP_MODEL_KEYS),
             "classes": sorted(set(wfdef.ROLE_CLASS.values())), "choices": model_choices(rows, routes),
+            "agents": model_catalog(),
             "routes_file": file_version(routes_env_path()), "key_pool": pool, "changes": config_changes()}
 
 

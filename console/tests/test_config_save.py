@@ -343,6 +343,44 @@ class RefusalTest(KitTestCase):
         self.assertEqual(sha(self.routes), before)
 
 
+class CatalogTest(KitTestCase):
+    """表示名から選べる固定の表（core.MODEL_CATALOG / ADR-0072）。表は画面の候補であって許可一覧ではない"""
+
+    def test_the_catalog_offers_claude_and_the_four_models_by_display_name(self):
+        agents = core.model_edit_view()["agents"]
+        self.assertEqual([a["id"] for a in agents], ["claude"])          # 器は 2 段だが、今は claude だけ
+        models = agents[0]["models"]
+        ids = [m["id"] for m in models]
+        self.assertEqual(len(ids), len(set(ids)), "表に同じ ID が 2 つある")
+        for want in ("claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"):
+            self.assertIn(want, ids)                                     # 現行の routes.env と yml の値 + Haiku
+        for m in models:
+            self.assertTrue(m["label"].strip(), m)                       # 表示名が空だと選べない
+            self.assertNotEqual(m["label"], m["id"])                     # ID を表示名として写さない
+
+    def test_every_id_in_the_catalog_can_actually_be_saved(self):
+        """表から選んだ値がそのまま保存の検証を通ること（選べるのに保存できない行を作らない）"""
+        for a in core.model_edit_view()["agents"]:
+            for m in a["models"]:
+                self.assertEqual(core.check_model_name(m["id"]), m["id"])
+                self.assertTrue(wfdef.token_family(m["id"]), m["id"])     # 鍵の系統が分かる
+
+    def test_the_free_input_choices_still_come_from_the_current_settings(self):
+        """動的な候補は表の影響を受けない（表に無い既存値を失わないための層。ADR-0065 の model_choices はそのまま）"""
+        e = core.model_edit_view()
+        self.assertIn(self.JUDGMENT_AT_START, e["choices"])               # 今この設定で使われている値
+        self.assertEqual(e["choices"], core.model_choices())              # 表を混ぜ込まない
+        self.assertNotIn("claude-haiku-4-5-20251001", e["choices"])        # 使っていないモデルは動的候補には出ない
+
+    def test_a_value_outside_the_catalog_is_still_offered_and_kept(self):
+        """設定に表に無い ID が入っていても、候補に残り、保存の検証も通る（完了条件）"""
+        self.save(target="routes", key="MODEL_default", value="claude-opus-5-test")
+        e = core.model_edit_view()
+        self.assertIn("claude-opus-5-test", e["choices"])
+        self.assertNotIn("claude-opus-5-test", [m["id"] for a in e["agents"] for m in a["models"]])
+        self.assertEqual(core.model_routes()["MODEL_default"], "claude-opus-5-test")
+
+
 class RunningRunTest(KitTestCase):
     """実行中の run は起動時に読んだ経路表で動く（保存しても途中で変わらない）"""
 
@@ -375,8 +413,8 @@ class RenderTest(KitTestCase):
         src = self.tmp / "cfg.js"
         src.write_text("\n".join([
             (static / "strings.js").read_text(encoding="utf-8"),
-            *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgOpts", "cfgAffectedRows", "cfgModelChanges")],
-            *[js_block(app, n) for n in ("cfgModelPreview", "cfgModelEdit", "cfgRoutesEdit")],
+            *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgOpts", "MODEL_OTHER", "cfgAffectedRows", "cfgModelChanges")],
+            *[js_block(app, n) for n in ("cfgModelPick", "cfgModelPreview", "cfgModelEdit", "cfgRoutesEdit")],
             f"const wf = {_json.dumps(w, ensure_ascii=False)};",
             f"const d = {_json.dumps(d, ensure_ascii=False)};",
             "const steps = {}; wf.steps.forEach(s => steps[s.id] = s);",
@@ -433,6 +471,38 @@ class RenderTest(KitTestCase):
         self.assertIn("danger", html)                                        # 共通の設定なので危険色
         self.assertNotIn("data-wf", html)                                    # 工程を指さない（保存後はトップへ戻す）
         self.assertIn(self.T()["help"]["configRoutesEdit"], html)
+
+    def test_the_step_panel_offers_the_two_steps_and_keeps_the_id_field(self):
+        """Agent → モデル名の 2 段で選べて、保存が読む ID の欄（cm-model / cm-choices）は今までどおり残る"""
+        html = self.js({"edit": "cfgModelEdit(wf, steps.review, d)"})["edit"]
+        self.assertIn('id="cm-model-agent"', html)                      # 1 段目（Agent）
+        self.assertIn('data-agent="claude"', html)
+        self.assertIn('id="cm-model-name"', html)                       # 2 段目（モデル名）
+        self.assertIn('<option value="claude-opus-5" >Opus 5</option>', html)   # 表示名で選ぶ
+        self.assertIn('id="cm-model"', html)                            # ID の欄は消えない
+        self.assertIn('list="cm-choices"', html)                        # 自由入力の候補も残る
+        self.assertIn('data-input="cm-model"', html)                    # 選んだ結果の行き先はその欄
+        self.assertIn(self.T()["config"]["modelOther"], html)           # 直接入力の逃げ道
+        self.assertIn('id="cm-route-name"', html)                       # 共通の経路の欄にも 2 段が付く
+
+    def test_a_value_outside_the_catalog_stays_visible_in_both_places(self):
+        """表に無い ID が設定されていても、選択肢にその値が残り、ID の欄の値も変わらない（完了条件）"""
+        self.save(target="step", workflow="feature", step="design", key="model", value="claude-opus-5-test")
+        html = self.js({"edit": "cfgModelEdit(wf, steps.design, d)"})["edit"]
+        self.assertIn('<option class="mono" value="claude-opus-5-test" selected>claude-opus-5-test</option>', html)
+        self.assertIn('value="claude-opus-5-test"', html)               # ID の欄にも残っている
+        self.assertIn(">Opus 5</option>", html)                         # 表の行も消えない
+
+    def test_the_top_panel_offers_the_two_steps_on_every_route_row(self):
+        """トップの経路表の 4 行すべてに 2 段が付き、保存の口（data-target / data-key）は変わらない"""
+        html = self.js({"top": "cfgRoutesEdit(d)"})["top"]
+        for k in core.model_edit_view()["route_keys"]:
+            self.assertIn(f'id="cr-{k}-agent"', html)
+            self.assertIn(f'data-input="cr-{k}"', html)
+            self.assertIn(f'data-target="routes" data-key="{k}"', html)
+            self.assertIn(f'id="cr-{k}"', html)
+        self.assertIn('>Haiku 4.5</option>', html)                      # 今どこにも使っていないモデルも選べる
+        self.assertIn(f'<option value="{self.JUDGMENT_AT_START}" selected>', html)   # いまの値が選ばれている
 
     def test_the_top_panel_shows_the_recent_changes(self):
         self.save(target="routes", key="MODEL_default", value="claude-sonnet-5")
