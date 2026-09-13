@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,7 +32,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

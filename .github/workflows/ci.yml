@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,7 +36,7 @@ jobs:
         run: python3 lib/aifactory_paths.py | tee /dev/stderr | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["legacy"] is False, d'
 
   worker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -49,7 +49,7 @@ jobs:
         working-directory: workers
 
   linux-worker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -67,7 +67,7 @@ jobs:
         working-directory: workers
 
   windows-worker:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, akki-windows-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -91,7 +91,7 @@ jobs:
         working-directory: workers
 
   mac-computer:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS, ARM64, akki-macos-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -106,7 +106,7 @@ jobs:
 
   secrets:
     # 秘密情報の漏えい検査（全履歴）。gitleaks の CLI を直接使う（gitleaks-action は org で license が要る）
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -120,7 +120,7 @@ jobs:
         run: bin/oss-check.sh
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, akki-linux-akkijp-oss-aifactory]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
