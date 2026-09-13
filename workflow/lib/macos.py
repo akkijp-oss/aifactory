@@ -190,10 +190,34 @@ def backend(Run):
             ゲストを止めるとゲスト内のコミット済み・未 push の実装は消え、制御系側の preserve は
             worker が busy で届かないことが多い。worker は guest の配置も GH_TOKEN も wip 名も
             知らないので、コマンドは制御系が組み立てて payload で運ぶ。
-            wip 名と refspec は bin/run の preserve と同じ規則にする（kb run --from の既定ブランチと一致させるため）"""
+            wip 名と refspec は bin/run の preserve と同じ規則にする（kb run --from の既定ブランチと一致させるため）
+
+            worker はこれを取り消し・payload timeout・watchdog のどの停止でも走らせるので、**まだ実装が
+            1 つも乗っていない作業ブランチ**（setup_project 直後は origin/<base> と同じ）でも走る。
+            無条件の force push だと、その回が前の run の保全した wip を base まで巻き戻して消す
+            （ADR-0053 の「取り返すには reflog が要る」事故）。押す前に「押す価値があるか」を確かめる:
+            上書きする相手（origin の wip、無ければ origin/<base>）が作業ブランチの祖先で、かつ先に
+            進んでいるときだけ押す。押さないときは理由を出して終了コード 0（停止を妨げない）"""
             wip = f"sandbox/{self.task}-{self.wf_name}-wip"
-            refspec = shlex.quote(f"refs/heads/{self.branch}:refs/heads/{wip}")
-            return self.command(f"cd $SANDBOX_APP_DIR && git push -q --force origin {refspec} 2>&1 && echo preserved")
+            branch_ref = shlex.quote(f"refs/heads/{self.branch}")
+            wip_ref = shlex.quote(f"refs/heads/{wip}")
+            base_ref = shlex.quote(f"refs/remotes/origin/{self.base}")
+            # 取得した wip の sha を --force-with-lease に渡す（確かめてから押すまでの間に wip が動いていたら
+            # 押さない。取れなかった＝空のときは「wip が無いこと」を条件にする）
+            return self.command("\n".join([
+                'cd "$SANDBOX_APP_DIR" || exit 0',
+                f'head=$(git rev-parse -q --verify {branch_ref}) || {{ echo "skipped: no work branch"; exit 0; }}',
+                'git update-ref -d refs/aifactory/preserve-target 2>/dev/null',
+                f'git fetch -q --force origin {wip_ref}:refs/aifactory/preserve-target 2>/dev/null',
+                'expect=$(git rev-parse -q --verify refs/aifactory/preserve-target) || expect=',
+                'target=$expect',
+                f'test -n "$target" || target=$(git rev-parse -q --verify {base_ref}) || target=',
+                'if test -n "$target"; then',
+                '  test "$target" != "$head" || { echo "skipped: no commits to preserve"; exit 0; }',
+                '  git merge-base --is-ancestor "$target" "$head" 2>/dev/null || { echo "skipped: pushing would rewind the wip branch"; exit 0; }',
+                'fi',
+                f'git push -q --force-with-lease={wip_ref}:"$expect" origin {branch_ref}:{wip_ref} 2>&1 && echo preserved',
+            ]))
 
         def sb(self, cmd, input_text=None, check=True):
             if self.dry: return ""

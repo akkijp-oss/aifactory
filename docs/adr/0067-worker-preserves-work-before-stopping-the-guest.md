@@ -35,6 +35,14 @@ wip 名（`sandbox/<task>-<wf>-wip`）はすべて **制御系の知識**で、o
    wip 名と refspec は `workflow/bin/run` の `preserve()` と**同じ規則**にする
    （`kb run --from` の既定ブランチと一致させるため）。`HEAD` ではなく作業ブランチを押すのも同じ理由
    （gates の base 確認で HEAD が detached のことがある）。
+   ただし **無条件の force push にはしない**。全部の guest-exec に載せた結果、まだ実装が 1 つも乗っていない
+   作業ブランチ（`setup_project` 直後は `origin/<base>` と同じ）でも保全が走るようになり、そのままだと
+   **前の run が保全した wip を base まで巻き戻して消す**（ADR-0053 の「取り返すには reflog が要る」事故）。
+   押す前に、上書きする相手（origin の wip、無ければ `origin/<base>`）が作業ブランチの**祖先で、かつ
+   作業ブランチが先に進んでいる**ことを確かめ、満たすときだけ押す。満たさない回は理由を出して
+   終了コード 0 で終わる（停止を妨げない）。push は確かめた sha を渡した `--force-with-lease` で行い、
+   確かめてから押すまでの間に wip が動いていたら押さない。
+   wip を含まない系統（PR 再開など）で取り消された回は、その回の作業ではなく **wip の側を残す**。
 3. **worker は取り消し由来の停止の直前に 1 回だけ走らせる**（`preserveWork`）。対象は `main.go` の
    guest-exec 側の 2 つの停止、すなわち `cmdCtx` が切れた回（取り消し・payload の timeout・制御系を
    60 秒見失った watchdog が混ざる）と、`tart exec` 自体が壊れた回。**どれもゲストを止めて実装を捨てる**ので
@@ -42,14 +50,17 @@ wip 名（`sandbox/<task>-<wf>-wip`）はすべて **制御系の知識**で、o
 4. **保全は停止を妨げない**。push の成否・時間切れにかかわらず `stopGuest()` へ進む。上限は
    `preserveTimeout = 120` 秒で、`lease` 待ちの他 run をそれ以上待たせない。予算は
    `context.Background()` 側に置く。取り消し済みの `ctx` に紐づけると保全は始まる前に死ぬ。
-5. **試行と結果を operation のログに残す**。`[preserve] …`（開始）と `[preserve] ok` /
-   `[preserve] failed: <出力の末尾 300 バイト>` の 1 行ずつ。今までは何も残らず、失敗した回の事後追跡ができなかった。
+5. **試行と結果を operation のログに残す**。`[preserve] …`（開始）と `[preserve] ok: <出力の末尾 300 バイト>` /
+   `[preserve] failed: <出力の末尾 300 バイト>` の 1 行ずつ。成功のときも末尾を残すのは、決定 2 の
+   「押した（`preserved`）」と「押す価値が無いので押さなかった（`skipped: …`）」を言い分けるため。今までは何も残らず、失敗した回の事後追跡ができなかった。
    **コマンド本文（payload）と stdin はログに出さない**（`pull.py` の `log_message` と同じ方針）。
 
 ## 帰結
 
 - 取り消し・timeout・watchdog でゲストが止まる回でも、コミット済みの実装は `sandbox/<task>-<wf>-wip` に残る。
   人は `kb run --from` の既定ブランチとしてそのまま拾える。
+- 実装がまだ乗っていない回・wip を含まない系統の回は何も押さない。`[preserve] ok: skipped: …` が残るので、
+  「保全できた回」と「巻き戻しを避けた回」はログで区別できる。
 - 保全が失敗しても worker は詰まらない。失敗の理由は operation のログに残るので、`operation_show` で読める。
 - **限界**: `runtime.env` の `GH_TOKEN` は 1 時間で切れる。長い agent 工程の後半で取り消されると push は
   401 で落ちうる。worker は token を発行できないので、ここは best effort のままにしてログに理由を残すだけにする

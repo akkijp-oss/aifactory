@@ -331,12 +331,23 @@ class MacLeaseWaitTest(unittest.TestCase):
         preserve = payload['preserve']
         wip = 'sandbox/477-research-wip'
         self.assertIn(f'refs/heads/{r.branch}:refs/heads/{wip}', preserve)
-        self.assertIn('--force', preserve)
+        self.assertIn('--force-with-lease', preserve)
         # prelude（PATH・SANDBOX_APP_DIR・runtime.env）を通していること。worker 側では素の bash -lc で走る
         self.assertIn('SANDBOX_APP_DIR', preserve)
         self.assertIn(r.env_file, preserve)
         # 保全コマンド自身は作業ブランチを押す。HEAD は detached のことがある（bin/run の preserve と同じ理由）
         self.assertNotIn('HEAD:refs/heads/', preserve)
+        # 無条件の force push にしない（前の run の wip を巻き戻す）。上書きする相手を確かめてから押す。
+        # 実際に巻き戻さないことは test_macos_preserve_before_stop.py が実物の git で確かめる
+        self.assertIn('merge-base --is-ancestor', preserve)
+        self.assertIn(f'refs/remotes/origin/{r.base}', preserve)
+        self.assertIn('skipped', preserve)
+        # 取り消しが実際に起きるのは agent 工程の guest-exec（run_remote）。そこにも同じ保全が載ること
+        self.executed.clear()
+        r.run_remote('true', r.run_dir / 'remote.log')
+        kind, remote_payload = self.executed[-1]
+        self.assertEqual(kind, 'guest-exec')
+        self.assertEqual(remote_payload['preserve'], preserve)
 
     def test_waiting_past_the_limit_stays_todo_with_the_holder_in_the_note(self):
         """上限まで待って空かなければ、lease は取らず wait_timeout で終わり、理由に使用中の run と開始時刻が残る（完了条件 2）"""

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -427,6 +428,37 @@ func TestCancellationWithoutPreserveSpecStopsGuest(t *testing.T) {
 	}
 	if log := journalLog(t, j, op.ID); strings.Contains(log, "[preserve]") {
 		t.Fatalf("no preserve line expected: %q", log)
+	}
+}
+
+// 保全コマンドは「押した」ときと「押す価値が無いので押さなかった」ときを言い分ける（制御系が組み立てる。
+// 実物の git での確認は workflow/tests/test_macos_preserve_before_stop.py）。どちらだったのかが
+// operation のログから読めること（読めないと、巻き戻しを避けた回と保全できた回が区別できない）。
+func TestPreserveOutcomeIsDistinguishableInTheOperationLog(t *testing.T) {
+	for _, tc := range []struct{ name, echo, want string }{
+		{"pushed", "preserved", "[preserve] ok: preserved"},
+		{"skipped", "skipped: pushing would rewind the wip branch", "[preserve] ok: skipped: pushing would rewind the wip branch"},
+		{"quiet", "", "[preserve] ok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, _ := newJournal(t.TempDir())
+			defer j.lock.Close()
+			j.begin("preserve-log")
+			w := &worker{c: config{GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+			w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+				return exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' "+strconv.Quote(tc.echo))
+			}
+			op := operation{ID: "preserve-log", Kind: "guest-exec"}
+			op.Payload.Preserve = "cd $SANDBOX_APP_DIR && git push -q --force-with-lease=refs/heads/sandbox/1-bug-wip: origin refs/heads/b:refs/heads/sandbox/1-bug-wip"
+			w.preserveWork(op, &logWriter{j: j, id: op.ID})
+			log := journalLog(t, j, op.ID)
+			if !strings.Contains(log, tc.want) {
+				t.Fatalf("want %q in the operation log: %q", tc.want, log)
+			}
+			if strings.Contains(log, "git push") {
+				t.Fatalf("preserve command must not be logged: %q", log)
+			}
+		})
 	}
 }
 

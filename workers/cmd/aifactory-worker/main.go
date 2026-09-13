@@ -455,19 +455,29 @@ func (w *worker) preserveWork(op operation, lw *logWriter) {
 	configureProcess(cmd)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		fmt.Fprintln(lw, "[preserve] ok")
+		// 成功でも出力の末尾を残す。保全コマンドは「押した（preserved）」ときと
+		// 「押す価値が無いので押さなかった（skipped: ...）」ときを言い分けるので、
+		// どちらだったのかがログから読めないと事後追跡できない（チケット 477 のレビュー指摘）。
+		if tail := preserveTail(out); tail != "" {
+			fmt.Fprintln(lw, "[preserve] ok: "+tail)
+		} else {
+			fmt.Fprintln(lw, "[preserve] ok")
+		}
 		return
 	}
-	// 出力の末尾だけを 1 行に潰して残す。コマンド本文（payload）は出さない。
-	tail := out
-	if len(tail) > 300 {
-		tail = tail[len(tail)-300:]
-	}
-	reason := strings.Join(strings.Fields(string(tail)), " ")
+	reason := preserveTail(out)
 	if reason == "" {
 		reason = err.Error()
 	}
 	fmt.Fprintln(lw, "[preserve] failed: "+reason)
+}
+
+// preserveTail は保全コマンドの出力の末尾だけを 1 行に潰す。コマンド本文（payload）は出さない。
+func preserveTail(out []byte) string {
+	if len(out) > 300 {
+		out = out[len(out)-300:]
+	}
+	return strings.Join(strings.Fields(string(out)), " ")
 }
 
 func (w *worker) execute(ctx context.Context, op operation) {
