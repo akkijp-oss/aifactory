@@ -216,6 +216,31 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(self.store.operation(op)["payload"],
                          {"lease": "run-one", "width": 1600, "height": 1000})
 
+    def test_guest_exec_carries_an_optional_preserve_command(self):
+        """チケット 477: ゲスト停止の前の保全コマンドを payload で worker へ渡す。
+        worker は guest の配置も認証も wip ブランチ名も知らないので、制御系が組み立てて運ぶしかない。"""
+        self.store.heartbeat("mac1", {"mode": "guest"})
+        done = {"status": "succeeded", "exit_code": 0, "events": 0}
+        op = self.store.submit("mac1", "guest-exec", {"command": "true", "preserve": "git push origin HEAD:refs/heads/wip"})
+        self.assertEqual(self.store.operation(op)["payload"],
+                         {"command": "true", "timeout": 300, "preserve": "git push origin HEAD:refs/heads/wip"})
+        self.store.poll("mac1"); self.store.complete("mac1", op, done)
+        # 保全なし（空文字）も許す。載せない古い制御系とも揃う
+        blank = self.store.submit("mac1", "guest-exec", {"command": "true", "preserve": ""})
+        self.assertEqual(self.store.operation(blank)["payload"], {"command": "true", "timeout": 300, "preserve": ""})
+        self.store.poll("mac1"); self.store.complete("mac1", blank, done)
+        # str 以外は拒否する。未知のキーの拒否は従来どおり
+        for value in (1, True, None, ["git", "push"], {"cmd": "x"}):
+            with self.assertRaises(Error):
+                self.store.submit("mac1", "guest-exec", {"command": "true", "preserve": value})
+        with self.assertRaises(Error):
+            self.store.submit("mac1", "guest-exec", {"command": "true", "rescue": "x"})
+        # lifecycle は preserve を受け取らない（停止の経路が別物）
+        self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
+        self.store.acquire("mac1", "run-one")
+        with self.assertRaises(Error):
+            self.store.submit("mac1", "guest-prepare", {"lease": "run-one", "preserve": "x"})
+
     def test_guest_prepare_without_a_display_keeps_the_lease_only_payload(self):
         self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
         self.store.acquire("mac1", "run-one")

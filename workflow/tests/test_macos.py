@@ -319,6 +319,25 @@ class MacLeaseWaitTest(unittest.TestCase):
         plain.take()
         self.assertEqual(self.executed, [('guest-prepare', {})])
 
+    def test_every_guest_exec_carries_the_preserve_command_for_the_wip_branch(self):
+        """チケット 477: worker が取り消しでゲストを止める前に作業を逃がせるよう、
+        guest-exec の payload に保全コマンドを載せる。wip 名と refspec は bin/run の preserve と同じ規則"""
+        r = self.build(477)
+        r.take()
+        self.executed.clear()
+        r.sb('true')
+        kind, payload = self.executed[-1]
+        self.assertEqual(kind, 'guest-exec')
+        preserve = payload['preserve']
+        wip = 'sandbox/477-research-wip'
+        self.assertIn(f'refs/heads/{r.branch}:refs/heads/{wip}', preserve)
+        self.assertIn('--force', preserve)
+        # prelude（PATH・SANDBOX_APP_DIR・runtime.env）を通していること。worker 側では素の bash -lc で走る
+        self.assertIn('SANDBOX_APP_DIR', preserve)
+        self.assertIn(r.env_file, preserve)
+        # 保全コマンド自身は作業ブランチを押す。HEAD は detached のことがある（bin/run の preserve と同じ理由）
+        self.assertNotIn('HEAD:refs/heads/', preserve)
+
     def test_waiting_past_the_limit_stays_todo_with_the_holder_in_the_note(self):
         """上限まで待って空かなければ、lease は取らず wait_timeout で終わり、理由に使用中の run と開始時刻が残る（完了条件 2）"""
         r = self.build(374, wait_s=1, busy_calls=10 ** 9)

@@ -201,8 +201,11 @@ class Store:
         if kind == "probe" and payload:
             raise Error("probe accepts no arguments")
         if kind == "guest-exec":
-            if set(payload) - {"command", "timeout", "lease"} or not isinstance(payload.get("command"), str):
+            if set(payload) - {"command", "timeout", "lease", "preserve"} or not isinstance(payload.get("command"), str):
                 raise Error("guest-exec requires command and optional timeout")
+            # preserve はゲスト停止の直前に worker が走らせる保全コマンド（チケット 477）。空文字は「保全なし」
+            if "preserve" in payload and not isinstance(payload["preserve"], str):
+                raise Error("preserve must be a string")
             payload = {"timeout": 300, **payload}
             if type(payload["timeout"]) is not int or not 1 <= payload["timeout"] <= 3600:
                 raise Error("timeout must be between 1 and 3600 seconds")

@@ -184,9 +184,21 @@ def backend(Run):
                     f"export SANDBOX_APP_DIR={shlex.quote(self.project['app_dir'])}; "
                     f"if test -f {shlex.quote(self.env_file)}; then source {shlex.quote(self.env_file)}; fi; " + cmd)
 
+        def preserve_command(self):
+            """worker が取り消しでゲストを止める直前に走らせる保全コマンド（チケット 477）。
+
+            ゲストを止めるとゲスト内のコミット済み・未 push の実装は消え、制御系側の preserve は
+            worker が busy で届かないことが多い。worker は guest の配置も GH_TOKEN も wip 名も
+            知らないので、コマンドは制御系が組み立てて payload で運ぶ。
+            wip 名と refspec は bin/run の preserve と同じ規則にする（kb run --from の既定ブランチと一致させるため）"""
+            wip = f"sandbox/{self.task}-{self.wf_name}-wip"
+            return self.command(f"cd $SANDBOX_APP_DIR && git push -q --force origin "
+                                f"refs/heads/{self.branch}:refs/heads/{wip} 2>&1 && echo preserved")
+
         def sb(self, cmd, input_text=None, check=True):
             if self.dry: return ""
-            _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": 600}, stdin=input_text)
+            _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": 600,
+                                                      "preserve": self.preserve_command()}, stdin=input_text)
             if check and r.returncode:
                 raise RuntimeError(f"guest command failed ({r.returncode}): {r.stdout[-1500:]}")
             return r.stdout
@@ -211,7 +223,8 @@ def backend(Run):
                         if value is not None:
                             value = value.rstrip("\n") + "\n"
                             f.write(value); f.flush(); out.append(value)
-                _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": min(timeout, 3600)}, emit=emit)
+                _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": min(timeout, 3600),
+                                                          "preserve": self.preserve_command()}, emit=emit)
                 if pending: emit("\n")
             return r.returncode, "".join(out)
 
