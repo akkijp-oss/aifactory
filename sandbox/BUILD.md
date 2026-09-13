@@ -228,7 +228,7 @@ ssh "$PVE_HOST" 'qm stop 9199; qm destroy 9199 --purge'
 目的: 対象 PJ のリポジトリ・依存・DB seed を入れ、アプリが起動する状態を焼く。**PJ が未決なら Step 5 の前にここで止まる**。
 
 前提:
-- PJ 定義 `$AIFACTORY_WORKSPACE/projects/{pj}/{project.yml,provision.sh,gates.sh}` がある（`templates/README.md` の雛形か、同梱サンプル `examples/projects/kumitate/` を写す。`AIFACTORY_WORKSPACE` の既定はリポジトリ直下 `workspace/`）
+- PJ 定義 `$AIFACTORY_WORKSPACE/projects/{pj}/{project.yml,provision.sh,gates.sh}`（貸出直後の準備があれば `prepare.sh` も）がある（`templates/README.md` の雛形か、同梱サンプル `examples/projects/kumitate/` を写す。`AIFACTORY_WORKSPACE` の既定はリポジトリ直下 `workspace/`）
 - Mac の `gh auth token` が対象リポジトリを読める。テンプレートには残さない
 
 ```bash
@@ -243,6 +243,7 @@ TPL_VMID=9110 sandbox/proxmox/run.sh 32-pj-template.sh finalize {pj}
 PJ 層で必ず入れるもの:
 - `/home/dev/app` にリポジトリ clone（base ブランチ）。`gh auth` の設定は **焼かない**（clone 後に `gh auth logout`、`~/.config/gh` 削除）
 - `.ruby-version` / `.node-version` に従い `mise install`
+- base に無い言語ツールチェーン（aifactory の Go など）。**版はリポジトリのマニフェストから読む**（`go.mod` の `go` 行。`bin/go-toolchain.sh` が実例）。焼いた版が base の要求に足りているかは貸出直後の `prepare` が確かめる（ADR-0071）
 - 依存（`bundle install`、`npm ci` / `pnpm install --frozen-lockfile` など PJ の流儀）
 - DB 作成、schema load、seed
 - systemd ユニット `sandbox-app.service`（PJ の起動コマンドを `0.0.0.0:3000` で。dev ユーザー、自動起動）
