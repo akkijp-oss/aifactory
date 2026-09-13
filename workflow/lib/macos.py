@@ -192,8 +192,8 @@ def backend(Run):
             知らないので、コマンドは制御系が組み立てて payload で運ぶ。
             wip 名と refspec は bin/run の preserve と同じ規則にする（kb run --from の既定ブランチと一致させるため）"""
             wip = f"sandbox/{self.task}-{self.wf_name}-wip"
-            return self.command(f"cd $SANDBOX_APP_DIR && git push -q --force origin "
-                                f"refs/heads/{self.branch}:refs/heads/{wip} 2>&1 && echo preserved")
+            refspec = shlex.quote(f"refs/heads/{self.branch}:refs/heads/{wip}")
+            return self.command(f"cd $SANDBOX_APP_DIR && git push -q --force origin {refspec} 2>&1 && echo preserved")
 
         def sb(self, cmd, input_text=None, check=True):
             if self.dry: return ""
