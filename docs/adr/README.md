@@ -84,3 +84,4 @@
 - [0070: 制御系は `main` 追従のままにし、「develop に着地したが未配備」と「配った PJ 定義と正本のズレ」を機械で見せる](0070-control-plane-tracks-main-and-shows-what-is-not-deployed.md)
 - [0071: sandbox の Go は PJ テンプレートに焼き、版は `workers/go.mod` から読む。満たせない run は prepare で止める](0071-go-toolchain-is-baked-from-go-mod.md)
 - [0072: モデルは「Agent + モデル名（表示名）」の 2 段で選ぶ。表示名と ID の固定の表を console に 1 つ持つ](0072-console-picks-a-model-by-display-name.md)
+- [0073: console から直せるのは「その工程の yml ブロック 1 つ」まで。id と担い手の種類は固定する](0073-console-edits-one-step-block-of-a-workflow.md)
