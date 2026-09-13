@@ -133,6 +133,23 @@ Saving keeps the previous content next to the file as `.bak-<timestamp>` and app
     table of display names, but that table lists what you can pick, not what you can save: a new name that is not in the
     table can still be typed in directly.
 
+## Changing the step definition itself
+
+The same screen (Settings → workflow → step) has a "this step's definition" field holding **only that step's yml block**,
+verbatim. Keys the model form does not have — `timeout_min`, the branches (`next` / `on_pass` / `on_fail`), the files it
+reads and writes, `brief` — can be changed there too.
+
+- What is shown and what can be written is **the `- id: <step>` line down to just before the next step**. The whole file is
+  never shown and can never be written (ADR-0073).
+- It syncs with the model fields above it inside the page only. Editing the yml shows up in the model fields, and editing a
+  model field rewrites that line of the yml (only the `model` and `model_class` lines are synced). Nothing is saved yet.
+- **A step's `id` and who runs it (`role` or `code`) cannot be changed.** Other steps point at that `id` as their next
+  destination, and nothing checks that those references still resolve.
+- Saving goes through the same path as changing a model (preview → confirm → `base_sha256` conflict check → backup → one
+  line in the record). Input the parser cannot read writes zero bytes; the reason appears under the field and your text stays.
+- Only that step's block is written. Every other step, the comments at the top of the file, the order of the keys and the
+  quoting are left byte for byte as they were.
+
 ## Adding a role
 
 1. Write `workflow/kit/roles/<role>.md` (class, duties, prohibitions, output shape)
