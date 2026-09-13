@@ -113,6 +113,8 @@ python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" sh
 
 ゲスト操作のコマンドは `--command '<sh>'` で直接渡せる（payloadの `timeout` 既定は60秒）。複数キーを細かく指定するときは `{"command":"sw_vers; uname -m","timeout":30}` のようなJSONを非公開ファイルへ書き、`submit mac-worker guest-exec --payload-file <file>` で指定する（`--command` はそのファイルの `command` を上書きする）。ホストVM名やホストシェルを操作のpayloadから選択することはできない。診断用payloadはDBに記録されるので、トークン・秘密情報は渡さない。
 
+`guest-exec` のpayloadには `preserve`（省略可・文字列）も載る。runnerが全部の `guest-exec` に付ける保全コマンドで、ワーカーは取り消し・timeout・watchdogなどでゲストを止める直前に1回だけ走らせる（[ADR-0067](../docs/adr/0067-worker-preserves-work-before-stopping-the-guest.md)）。`--command` からは指定しない（診断用の操作では省略してよい。空文字は「保全なし」）。文字列でない `preserve` は `preserve must be a string` で拒否する。ログの読み方は [docs/macos-worker.md の「ゲストを止める前の保全」](../docs/macos-worker.md#ゲストを止める前の保全)にある。
+
 `--lease auto` はそのworkerが現在保持しているleaseをDBから引いてpayloadに入れる。payloadファイルに `lease` があればそちらを優先し、`--lease <id>` の明示指定はpayloadを上書きする。leaseが無ければ入れないので、lifecycleワーカーでは従来どおり `lifecycle worker requires a lease` になる。`--wait <秒>` は完了まで待って `show` と同じJSONを表示する。期限内に終わらなければその時点のJSONを表示して非ゼロで終わる。
 
 - `cancel <operation-id>`: 停止要求。通信が切れている間は停止完了にはしない。
