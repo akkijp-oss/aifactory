@@ -101,7 +101,31 @@ cd ~/aifactory && git status && git reset --hard origin/main && bin/ctl-update
 
 食い違いは**コンソールのボード**が言う: `<path> が origin と食い違っています（push していないコミット N 件 …）`。
 判定は `git status --porcelain` と `git rev-list --left-right --count HEAD...@{upstream}` で、
-`console/lib/core.py` の `repo_status()` 1 か所（ADR-0015）。fetch はしないので、behind は最後に fetch した時点との差。
+`console/lib/core.py` の `repo_status()` 1 か所（ADR-0015）。コンソールは 5 分に 1 回 origin を取り込んでから比べる
+（対象のブランチだけ・HEAD も作業ツリーも動かさない）。網や認証の都合で取り込めない運用は `CONSOLE_REPO_FETCH=0` で
+止められる。そのときの件数は最後に取り込めた時点のものになる。
+
+### 着地したのにまだ効いていない変更（ADR-0070）
+
+制御系の checkout は `main` 追従で、aifactory 自身の PR は `develop` に着地する（ADR-0042）。**着地から
+`main` 昇格 + `bin/ctl-update` までのあいだ、その変更は 1 行も効かない。** runner も `sandbox` CLI も console も
+PJ 定義も、制御系のこの checkout から動く/配られるからである。上の警告は `origin/main` との比較なので、
+この状態は clean と表示される。
+
+そこでボードには別の 1 行が出る: `origin/develop に着地済みで、この制御系にまだ配備されていないコミットが N 件
+あります（PJ: aifactory）` と直近のコミット件名。比べる先は PJ の `base_branch` で、**この checkout と同じ
+`repo` を持つ PJ だけ**を見る（他 PJ の `base_branch` は別リポジトリのブランチ名なので比べない）。
+消し方は昇格して `bin/ctl-update` を通すことだけで、**制御系の追従先を `develop` に変えない**（ADR-0042）。
+
+PJ 定義については、VM へ配る直前にも同じ突き合わせをする。配った版が `origin/<base>` と違うと、run の
+`work/gates.txt` の 1 行目に出る:
+
+```
+INFO pj-drift examples/projects/aifactory/ differs from origin/develop: gates.sh (missing: unittest-pull)
+```
+
+`missing:` は **base にはあるのに配布版に無いゲート**、つまり**その run で走っていないゲート**である。
+赤ではない（INFO）ので run は止まらない。配布経路の問題であって実装役の変更ではないため、実装役へは戻さない。
 
 制御系から直接 push できるようにするなら、deploy key（write 権限）を作って remote を ssh に付け替える。
 鍵の発行と付け替えはメンテナの作業で、VM やエージェントからはやらない。
@@ -117,7 +141,7 @@ cd ~/aifactory && git remote set-url origin git@github.com:<org>/aifactory.git &
 付け替えても**制御系で直接コミットするのは緊急時だけ**にする。制御系の checkout は clean で運用する（ADR-0017）。
 
 リポジトリに載せない PJ 定義は `~/workspace/projects/<pj>/`（`AIFACTORY_WORKSPACE` の下。ADR-0016）に置く。
-そちらは git の外なので、この手順も食い違いの警告も関わらない（控えは自分で取る）。
+そちらは git の外なので、この手順も食い違いの警告も `pj-drift` も関わらない（控えは自分で取る）。
 
 ## 日常の5操作
 
