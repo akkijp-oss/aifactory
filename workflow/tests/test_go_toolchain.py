@@ -138,6 +138,45 @@ class NotHardcoded(unittest.TestCase):
                 self.assertIn("bin/go-toolchain.sh", f.read_text())
 
 
+class PrepareDoesNotStopUnrelatedRuns(unittest.TestCase):
+    """prepare.sh は **全 run** が通るので、Go を取れなかっただけで非 0 にしてはいけない（チケット 488 の PM レビュー）。
+
+    非 0 で終わると runner は agent を 1 つも起こさず failure: prepare で run を畳む。Go を 1 行も触らない票
+    （文書 / console / kanban）まで道連れになる。「取得できなかった」は握って続行、「取得したが版が足りない」は
+    ensure が入れ直して解決する、という切り分けをここで固定する。
+    """
+
+    def prepare_in(self, app, toolchain_body):
+        """偽の app dir で prepare.sh を回す。bin/go-toolchain.sh は渡した中身に差し替える"""
+        app = pathlib.Path(app)
+        (app / "bin").mkdir(parents=True, exist_ok=True)
+        (app / "workers").mkdir(parents=True, exist_ok=True)
+        (app / "bin" / "go-toolchain.sh").write_text(toolchain_body)
+        env = dict(os.environ, SANDBOX_APP_DIR=str(app), PATH=path_without_go(app))
+        return subprocess.run([BASH, str(PJ / "prepare.sh")], capture_output=True, text=True, env=env)
+
+    def test_a_failed_fetch_does_not_fail_prepare(self):
+        with tempfile.TemporaryDirectory() as d:
+            # check も ensure も非 0（= 版が足りず、入れ直しにも失敗した＝網が無い回）
+            r = self.prepare_in(d, "#!/bin/sh\nexit 1\n")
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
+        self.assertIn("Go を用意できなかった", r.stderr)
+
+    def test_a_satisfied_check_skips_the_install(self):
+        with tempfile.TemporaryDirectory() as d:
+            # check が 0（= 焼いた Go で足りる）なら ensure は呼ばれない
+            r = self.prepare_in(d, '#!/bin/sh\n[ "$1" = check ] && exit 0\necho "ensure が呼ばれた" >&2\nexit 1\n')
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
+        self.assertNotIn("ensure が呼ばれた", r.stderr)
+
+    def test_a_missing_toolchain_script_passes_quietly(self):
+        """PJ 定義は checkout と別に配られるので、script が無い版を回す run がありうる"""
+        with tempfile.TemporaryDirectory() as d:
+            env = dict(os.environ, SANDBOX_APP_DIR=str(d), PATH=path_without_go(d))
+            r = subprocess.run([BASH, str(PJ / "prepare.sh")], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout} stderr={r.stderr}")
+
+
 class ProjectDefinition(unittest.TestCase):
     def test_prepare_is_declared_and_present(self):
         yml = (PJ / "project.yml").read_text()

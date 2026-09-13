@@ -18,6 +18,17 @@ echo "[prepare:aifactory] go toolchain"
 if ! bash bin/go-toolchain.sh check; then
   echo "[prepare:aifactory] テンプレート（sb-tpl-aifactory）の Go が workers/go.mod の要求に足りない。入れ直す。" \
        "恒久対応は provision.sh でテンプレートを焼き直すこと"
-  bash bin/go-toolchain.sh ensure
+  # ★入れ直せなかったときに非 0 で終わらない（チケット 488 の PM レビュー）。この script は **全 run** が通るので、
+  #   網・ミラー・DNS の不調で Go を取れなかっただけで failure: prepare にすると、Go を 1 行も触らない票
+  #   （文書 / console / kanban）まで道連れで止まる。Go が要る run は後続の工程で `go` が無くて落ちるので、
+  #   そこで気づける。「取得できなかった」と「取得したが版が足りない」を別扱いにするのが眼目。
+  if ! bash bin/go-toolchain.sh ensure; then
+    echo "[prepare:aifactory] Go を用意できなかった（網かミラー）。workers/ を触る run はこの後の工程で落ちる。" \
+         "他の run は続行する" >&2
+    exit 0
+  fi
 fi
-(cd workers && go mod download)   # go.sum が進んだ分だけ。焼いたキャッシュに当たれば 1 秒
+# go が無い回（上で握った）はここも飛ばす。go mod download だけのために prepare を落とさない
+if command -v go >/dev/null 2>&1; then
+  (cd workers && go mod download) || echo "[prepare:aifactory] go mod download が失敗（網）。続行する" >&2
+fi
