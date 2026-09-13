@@ -124,6 +124,7 @@ VM 内で `$SANDBOX_APP_DIR`（無ければ `~/app`）に cd し、CI と同じ�
 | 焼き直しで `sudo mysql` が使えない | root を password 認証に切り替えた後は auth_socket が効かない | `mysql -uroot -p… -e "select 1"` が通れば ALTER をスキップ（冪等化） |
 | `sudo npx playwright install-deps` を root で実行 | root が dev の mise 設定を読み「config not trusted」で落ちる | dev のまま `npx playwright install-deps`（内部で sudo apt-get を呼ぶ） |
 | pnpm の版 | `packageManager` に固定されている | `corepack enable --install-directory ~/.local/bin` + `corepack prepare pnpm@<版> --activate` |
+| Go を apt の `golang-go` で入れる | 24.04 は 1.22 で、`go.mod` の要求（1.25 系）に足りず `go test` が走らない。焼いていない場合は実装役が run のたびに tarball を落とす（2026-09-13 に 2 回） | 公式 tarball を `/usr/local/go` へ。**版は PJ のマニフェスト（`go.mod` など）から読む**（`bin/go-toolchain.sh` が実例）。貸出直後に版を確かめる所まで `prepare` に入れる |
 | kicad-cli | PPA に単体パッケージが無い | `kicad` 本体（約 1GB）にフォールバック。入れると CI で一度も走っていなかったオラクルテストが動き、赤が見える（kicad を使う PJ で 6 件） |
 | Playwright の visual-regression | 基準画像が `*-darwin.png` しか無く Linux 初回は必ず赤。書き出された `*-linux.png` が未追跡で残る | 情報扱いにし、`git clean -fd -- apps/*/tests` で clone を clean に戻す |
 | 時間依存テスト（kumitate calendar 2 件） | フィクスチャが 8 月固定で、今月を描画するカレンダーが月替わりで落ちる。Mac の develop でも同じ | sandbox では直さない（リポジトリ側）。ゲートの合否判定は他のテストで見る |

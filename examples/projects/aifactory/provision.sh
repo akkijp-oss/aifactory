@@ -32,7 +32,15 @@ git config --global --add credential.https://github.com.helper '!gh auth git-cre
 git config --global credential.https://gist.github.com.helper ''
 git config --global --add credential.https://gist.github.com.helper '!gh auth git-credential'
 
-# ---------- 3. アプリ用 env
+# ---------- 3. Go ツールチェーン（workers/ は Go。版は workers/go.mod から読む。ADR-0071）
+#   ここで焼かないと、workers/ を触る run のたびに実装役が自力で Go を調達する（2026-09-13 に 2 回実測。#477 / #478）。
+#   apt の golang-go（24.04 で 1.22）は go.mod の要求に足りないので使わない。版はここに書かない（go.mod が正本）
+log "go toolchain"
+bash bin/go-toolchain.sh ensure
+(cd workers && go mod download)      # モジュールキャッシュも焼く（run 中に取りに行かせない）
+go version
+
+# ---------- 4. アプリ用 env
 log "app env"
 $SU mkdir -p /etc/sandbox
 $SU tee /etc/sandbox/app.env >/dev/null <<EOT
@@ -45,16 +53,16 @@ if [ -r /etc/sandbox/app.env ]; then set -a; . /etc/sandbox/app.env; set +a; fi
 EOT
 set -a; . /etc/sandbox/app.env; set +a
 
-# ---------- 4. website の venv（MkDocs Material）
+# ---------- 5. website の venv（MkDocs Material）
 log "website venv"
 python3 -m venv website/.venv
 website/.venv/bin/pip install -q -r website/requirements.txt
 
-# ---------- 5. 品質ゲート（一覧は gates.sh が持つ。ここで別の一覧を持たない）
+# ---------- 6. 品質ゲート（一覧は gates.sh が持つ。ここで別の一覧を持たない）
 log "quality gates"
 SANDBOX_APP_DIR="$APP_DIR" bash examples/projects/aifactory/gates.sh 2>&1 | tee "$HOME/GATES.txt" || true
 
-# ---------- 6. systemd（:3000 = ドキュメントサイト）。clean スナップショットは起動済み状態で取る
+# ---------- 7. systemd（:3000 = ドキュメントサイト）。clean スナップショットは起動済み状態で取る
 log "systemd unit"
 $SU tee /etc/systemd/system/sandbox-app.service >/dev/null <<EOT
 [Unit]
@@ -76,7 +84,7 @@ $SU systemctl enable --now sandbox-app >/dev/null
 for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ 2>/dev/null | grep -qE '^[23][0-9]{2}$' && break; sleep 3; done
 echo "app :3000 -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)"
 
-# ---------- 7. 後片付け
+# ---------- 8. 後片付け
 log "cleanup"
 unset GH_TOKEN
 gh auth logout --hostname github.com >/dev/null 2>&1 || true
