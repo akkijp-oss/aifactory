@@ -109,6 +109,10 @@ Console → Settings → workflow → step (agent steps only) has "change the mo
 - The runs that are in flight (a running run keeps the settings it read at startup; nothing switches mid-run)
 - The file being written and its `git status` line
 
+The four lines of the route table (`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`) can also be
+edited straight from the "model routes" panel on the Settings page itself, without walking down to a step. That is the
+only way to reach `MODEL_default`, which no step refers to. Saving goes through the same preview and the same checks.
+
 Saving keeps the previous content next to the file as `.bak-<timestamp>` and appends a line to `logs/config-changes.jsonl`
 (also shown as "recent changes" on the page). To roll back, put the backup's content back.
 

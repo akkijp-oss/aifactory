@@ -108,6 +108,10 @@ MODEL_default=claude-opus-5
 - 動いている実行記録（実行中の run は起動時に読んだ設定のまま進み、途中では変わりません）
 - 書き先のファイルと `git status` の行
 
+経路表（`routes.env`）の 4 行（`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`）は、
+コンソールの「設定」のトップにある「モデルの経路」からも直せます。工程を探して降りなくてよく、どの工程からも
+参照されない `MODEL_default` もここから変えられます。保存の流れと下見の中身は工程から変えるときと同じです。
+
 保存すると、書く前の内容を同じ場所の `.bak-<時刻>` に残し、変更を `logs/config-changes.jsonl` に記録します
 （画面の「最近の変更」にも出ます）。元に戻すには、控えの内容を入れ直します。
 

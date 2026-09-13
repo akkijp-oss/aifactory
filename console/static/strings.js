@@ -276,6 +276,7 @@ const T = {
     "configModelStep": "この工程だけのモデルです。同じクラスを使うほかの工程は動きません。",
     "configModelStepClass": "この工程が読む経路を、ほかのクラスに替えます。替えた先の共通の値になります。",
     "configModelRoutes": "共通の設定です。このクラスを使う工程は、ほかの workflow の分も一緒に変わります。",
+    "configRoutesEdit": "クラスごとの既定のモデルです。変えたい行の「変更を確かめる」を押すと、影響する工程を見てから保存できます。MODEL_default は、そのクラスの行が経路表に無いときだけ使われます。",
     "configModelInherit": "この工程の指定を消して、クラスの共通の値に戻します。",
     "configModelUncommitted": "保存しても git には commit しません。制御系で git pull すると元に戻ることがあります。",
     "configModelWhen": "次に始める run から効きます。動いている run と、その run の途中の工程は変わりません。",
