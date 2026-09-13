@@ -1049,6 +1049,8 @@ function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p
   <dt>${esc(T.config.modelBackup)}</dt><dd class="help">${esc(T.dialog.model.backupNote)}</dd></dl>
   <div class="help">${esc(T.help.configModelUncommitted)}</div>`;
 }
+/* 最近の変更（logs/config-changes.jsonl）。工程詳細とトップの経路パネルの両方から出す */
+const cfgModelChanges = e => (e.changes || []).length ? `<div class="panel"><h2>${esc(T.config.modelChanges)}</h2><div class="help">${esc(T.help.configModelChanges)}</div><ul class="help plain">${e.changes.map(c => `<li>${esc(fmtT(c.at))} <span class="mono">${esc(c.key)}</span> ${esc(c.before || T.config.none)} <span class="arrow">→</span> ${esc(c.after || T.config.modelInherited)}${c.step ? ` <span class="help">${esc(c.workflow)} / ${esc(c.step)}</span>` : ''}</li>`).join('')}</ul></div>` : '';
 /* 編集の欄。値は API が返した保存値（s.model / s.model_class）と経路表（d.routes）をそのまま入れる */
 function cfgModelEdit(w, s, d) {
   const m = s.model_resolved, e = d.model_edit || {}, ch = e.choices || [], route = m.route_key || 'MODEL_default';
@@ -1070,14 +1072,30 @@ function cfgModelEdit(w, s, d) {
       <div class="help warn">${esc(T.help.configModelRoutes)}</div>
       <div class="actions"><button type="button" class="danger" data-act="config-model" data-target="routes" data-key="${esc(route)}" data-input="cm-route" ${at.wf}>${esc(T.btn.modelPreview)}</button></div></div>
     <div class="help top">${esc(T.help.configModelInherit)} ${esc(T.help.configModelUncommitted)}</div></div>
-    ${(e.changes || []).length ? `<div class="panel"><h2>${esc(T.config.modelChanges)}</h2><div class="help">${esc(T.help.configModelChanges)}</div><ul class="help plain">${e.changes.map(c => `<li>${esc(fmtT(c.at))} <span class="mono">${esc(c.key)}</span> ${esc(c.before || T.config.none)} <span class="arrow">→</span> ${esc(c.after || T.config.modelInherited)}${c.step ? ` <span class="help">${esc(c.workflow)} / ${esc(c.step)}</span>` : ''}</li>`).join('')}</ul></div>` : ''}`;
+    ${cfgModelChanges(e)}`;
+}
+
+/* トップの経路パネル: routes.env の行を丸ごと直せる形で出す。鍵の一覧は API（wfdef.route_keys()）から作り、
+   画面に鍵名を写さない。保存の流れ・危険色・影響する工程の警告は工程詳細の 1 行版と同じ口を通る */
+function cfgRoutesEdit(d) {
+  const e = d.model_edit || {}, keys = e.route_keys || [], ch = e.choices || [], routes = d.routes || {};
+  return `<div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2>
+    <div class="help">${esc(T.help.configRoutesEdit)}</div>
+    <div class="help warn">${esc(T.help.configModelRoutes)}</div>
+    <datalist id="cr-choices">${ch.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>
+    ${keys.map(k => `<div class="field"><label class="mono" for="cr-${esc(k)}">${esc(k)}</label>
+      <input id="cr-${esc(k)}" list="cr-choices" class="mono" value="${esc(routes[k] || '')}" autocomplete="off">
+      <div class="actions"><button type="button" class="danger" data-act="config-model" data-target="routes" data-key="${esc(k)}" data-input="cr-${esc(k)}">${esc(T.btn.modelPreview)}</button></div></div>`).join('')}
+    <div class="help top">${esc(T.config.roles)} ${(d.roles || []).map(esc).join(' / ')}</div>
+    <div class="help">${esc(T.help.configModelUncommitted)}</div></div>`;
 }
 
 async function viewConfig() {
   clearInterval(timer); const d = await api('config');
   render(head(esc(T.nav.config), T.sub.config) + `
     <div class="grid2"><div class="panel"><h2>workflow<small>workflow/kit/workflows/</small></h2><div class="help">${esc(T.help.configDetail)}</div><table><tr><th>${esc(T.th.name)}</th><th>${esc(T.th.flow)}</th></tr>${d.workflows.map(w => `<tr><td><b>${cfgWfLink(w.name)}</b><div class="help">${esc(w.description)}</div></td><td>${cfgFlow(w, w.main_path || [])}${cfgCond(w).length ? `<div class="help top">${esc(T.config.flowCond)}: ${cfgFlow(w, cfgCond(w).map(s => s.id), ' ')}</div>` : ''}${w.start ? `<div class="help">start: ${esc(w.start)}</div>` : ''}${w.parse_error ? `<div class="err">${esc(tt(T.help.configParseError, { why: w.parse_error }))}</div>` : ''}</td></tr>`).join('')}</table></div>
-    <div><div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2><dl class="kv">${Object.entries(d.routes).map(([k, v]) => `<dt>${esc(k.replace('MODEL_', ''))}</dt><dd class="mono">${esc(v)}</dd>`).join('')}</dl><div class="help top">${esc(T.config.roles)} ${d.roles.map(esc).join(' / ')}</div></div>
+    <div>${cfgRoutesEdit(d)}
+    ${cfgModelChanges(d.model_edit || {})}
     <div class="panel"><h2>${esc(T.h.thisConsole)}</h2><dl class="kv"><dt>repo</dt><dd class="mono">${esc(d.repo)}</dd><dt>kb_root</dt><dd class="mono">${esc(d.kb_root)}</dd></dl></div>
     <div class="panel"><h2>git<small>status --short --branch</small></h2><pre class="log small">${esc(d.git)}</pre></div></div></div>`);
 }
@@ -1136,7 +1154,7 @@ const actions = {
     if (!ok) return;
     const r = await api('config/model', { ...body, dry_run: false, base_sha256: p.base_sha256 });
     toast(esc(r.written ? tt(T.msg.modelSaved, { file: r.file }) : T.msg.modelSame));
-    await viewConfigStep(body.workflow, body.step);
+    await (body.workflow ? viewConfigStep(body.workflow, body.step) : viewConfig());   /* トップからの変更は設定のトップへ戻す */
   },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },

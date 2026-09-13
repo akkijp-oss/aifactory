@@ -134,6 +134,16 @@ class SaveTest(KitTestCase):
         self.assertEqual(d["sha_after"], sha(self.routes))
         self.assertTrue(pathlib.Path(core.REPO / d["backup"]).is_file() or pathlib.Path(d["backup"]).is_file())
 
+    def test_saving_the_default_route_rewrites_only_that_line(self):
+        """設定のトップから変えられる 4 行目（MODEL_default）。工程詳細からは到達しないので、ここで保存まで見る"""
+        before = self.routes.read_text(encoding="utf-8").splitlines(keepends=True)
+        d = self.save(target="routes", key="MODEL_default", value="claude-sonnet-5")
+        self.assertTrue(d["written"])
+        after = self.routes.read_text(encoding="utf-8").splitlines(keepends=True)
+        self.assertEqual([l for l in after if not l.startswith("MODEL_default=")],
+                         [l for l in before if not l.startswith("MODEL_default=")])   # 他の行とコメントは不変
+        self.assertEqual(core.model_routes()["MODEL_default"], "claude-sonnet-5")
+
     def test_the_last_line_wins_when_the_same_key_appears_twice(self):
         """配備先で暫定変更が末尾に足されている形。読み手（model_routes / runner）は後の行を採るので、
         書き手も後の行を差し替える。前の行を書いて「保存しました」と言うと実効値が動かない"""
@@ -295,6 +305,17 @@ class RefusalTest(KitTestCase):
         self.assertEqual(sha(self.routes), outside)                    # 他の人の変更を上書きしていない
         self.assertEqual(core.model_routes()["MODEL_research"], "claude-haiku-4-5-20251001")
 
+    def test_the_default_route_is_not_overwritten_when_someone_else_wrote(self):
+        """トップの画面から MODEL_default を直している間に、ほかの人が同じファイルを書いた場合"""
+        pre = self.apply(target="routes", key="MODEL_default", value="claude-sonnet-5")
+        self.routes.write_text(self.routes.read_text(encoding="utf-8") + "# 2026-09-13 別の人の覚え書き\n", encoding="utf-8")
+        outside = sha(self.routes)
+        with self.assertRaises(core.ApiError) as cm:
+            self.apply(target="routes", key="MODEL_default", value="claude-sonnet-5", dry_run=False, base_sha256=pre["base_sha256"])
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(sha(self.routes), outside)                    # 何も書いていない
+        self.assertEqual(core.model_routes()["MODEL_default"], "claude-opus-5")
+
     def test_a_directory_that_cannot_be_written_gives_a_readable_error_and_changes_nothing(self):
         if os.geteuid() == 0: self.skipTest("root は permission を無視する")
         pre = self.apply(target="routes", key="MODEL_judgment", value="claude-opus-5")
@@ -354,8 +375,8 @@ class RenderTest(KitTestCase):
         src = self.tmp / "cfg.js"
         src.write_text("\n".join([
             (static / "strings.js").read_text(encoding="utf-8"),
-            *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgOpts", "cfgAffectedRows")],
-            *[js_block(app, n) for n in ("cfgModelPreview", "cfgModelEdit")],
+            *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgOpts", "cfgAffectedRows", "cfgModelChanges")],
+            *[js_block(app, n) for n in ("cfgModelPreview", "cfgModelEdit", "cfgRoutesEdit")],
             f"const wf = {_json.dumps(w, ensure_ascii=False)};",
             f"const d = {_json.dumps(d, ensure_ascii=False)};",
             "const steps = {}; wf.steps.forEach(s => steps[s.id] = s);",
@@ -398,6 +419,26 @@ class RenderTest(KitTestCase):
         html = self.js({"pre": f"cfgModelPreview({json.dumps(p, ensure_ascii=False)})"})["pre"]
         self.assertNotIn("共通の設定です", html)
         self.assertIn(">design<", html)
+
+    def test_the_top_panel_offers_every_route_key(self):
+        """設定のトップの経路パネル。鍵は core.model_edit_view() の一覧から作る（画面に 4 つを写さない）"""
+        keys = core.model_edit_view()["route_keys"]
+        self.assertIn("MODEL_default", keys)
+        html = self.js({"top": "cfgRoutesEdit(d)"})["top"]
+        for k in keys:
+            self.assertIn(f'data-target="routes" data-key="{k}"', html)      # 4 行それぞれに保存の口がある
+            self.assertIn(f'id="cr-{k}"', html)
+        self.assertIn(f'value="{self.JUDGMENT_AT_START}"', html)             # いまの値が入っている
+        self.assertIn(f'value="{core.model_routes()["MODEL_default"]}"', html)
+        self.assertIn("danger", html)                                        # 共通の設定なので危険色
+        self.assertNotIn("data-wf", html)                                    # 工程を指さない（保存後はトップへ戻す）
+        self.assertIn(self.T()["help"]["configRoutesEdit"], html)
+
+    def test_the_top_panel_shows_the_recent_changes(self):
+        self.save(target="routes", key="MODEL_default", value="claude-sonnet-5")
+        html = self.js({"ch": "cfgModelChanges(d.model_edit || {})"})["ch"]
+        self.assertIn("MODEL_default", html)
+        self.assertIn("claude-sonnet-5", html)
 
     def T(self):
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
