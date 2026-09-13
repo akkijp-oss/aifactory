@@ -38,6 +38,7 @@ sequenceDiagram
 |---|---|---|
 | Choose a free VM | From the lending table `~/.config/sandbox/state.json`, a free VM in the project's pool | instant |
 | Roll back | `qm rollback` to the `clean` snapshot on Proxmox. RAM is included, so no boot wait | seconds |
+| Sync the clock | A rolled-back guest **restarts its clock from the moment the snapshot was taken**, so it is set from the control plane (`[clock] guest offset …`). If it still does not match, the run stops with `failure: clock` (ADR-0069) | 1 s+ |
 | Inject tokens | The project's Claude token and a GitHub App installation token (repository-scoped, one hour) go into `/run/sandbox/env`. It is tmpfs, so rollback erases it | 1–2 s |
 | Register DNS | Adds `task-<id>` to dnsmasq on sb-gw | instant |
 
@@ -56,6 +57,7 @@ flowchart LR
 
 - **Reuse plus rollback** (ADR-0003). VMs are not created per task; they are lent from a standing pool and returned to `clean`. Because the app runs natively, the database is reset by the rollback too
 - `clean` is taken with the app already listening on :3000 and the firewall configured, so the app opens in a browser right after take
+- **The clock rolls back too.** The snapshot includes RAM, so the guest clock restarts from the moment the snapshot was taken. Every lease re-syncs it, and a run does not start while it is off (ADR-0069)
 - Templates have two layers: base (shared) and project (Ruby / Node versions, dependencies, seed). Versions differ per project, so templates are per project
 - VMs run the app natively, without Docker (ADR-0002): Rails runs as is, with fewer surprises
 

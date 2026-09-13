@@ -37,6 +37,7 @@ flowchart TD
 | `reset` / `release` fails | Does `qm listsnapshot 92NN` show `clean`? | If not, `qm destroy` → `40-pool.sh`. The CLI waits and retries on rollback lock contention |
 | VM cannot reach GitHub | `ssh $PVE_HOST 'iptables -t nat -S \| grep 10.77'` | Reapply SDN with `pvesh set /cluster/sdn` |
 | Mac cannot reach a VM (after enabling the firewall) | `qm config <vmid> \| grep firewall`, `/etc/pve/firewall/<vmid>.fw` | Rerun `50-firewall.sh`. `clean` must include firewall=1 |
+| A run stops with a skewed guest clock / commit and ADR dates are days old | `clock_offset_s` in the run record, the `[clock]` line in the `sandbox take` log | A rolled-back VM restarts its clock from the moment the snapshot was taken ([ADR-0069](decisions/index.md)). `sandbox reset <task>` lends it again and re-syncs the clock. If that does not help, run `sudo systemctl restart systemd-timesyncd` inside the VM, then check that NTP (udp/123) can leave the network |
 | The `sandbox` command behaves like an old version | `diff ~/.local/bin/sandbox sandbox/bin/sandbox` | Rerun `sandbox/bin/install.sh` |
 
 ## Agent steps

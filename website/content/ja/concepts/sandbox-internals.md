@@ -38,6 +38,7 @@ sequenceDiagram
 |---|---|---|
 | 空き VM の選択 | `~/.config/sandbox/state.json` の貸出台帳から、そのプロジェクトのプールで空いている VM | 即 |
 | 巻き戻し | Proxmox で `clean` スナップショットに `qm rollback`。RAM 込みなので起動待ちがない | 数秒 |
+| 時計合わせ | 巻き戻したゲストは **snapshot を取った時刻から時計が再開する**ので、制御系の時刻に合わせ直す（`[clock] guest offset …`）。合わなければ run 側が `failure: clock` で止める（ADR-0069） | 1 秒〜 |
 | トークン注入 | プロジェクトの Claude トークンと、GitHub App の installation token（そのリポジトリ限定・1 時間）を `/run/sandbox/env` に。tmpfs なので巻き戻しで消える | 1〜2 秒 |
 | DNS 登録 | sb-gw の dnsmasq に `task-<id>` を追加 | 即 |
 
@@ -56,6 +57,7 @@ flowchart LR
 
 - **使い回し + 巻き戻し**（ADR-0003）。タスクごとに VM を作るのではなく、常駐プールから貸し出し、返却時に `clean` へ戻す。ネイティブ実行なので DB も巻き戻しで初期化される
 - `clean` は「アプリが :3000 で起動済み」「ファイアウォール設定込み」の状態で取る。だから take 直後にブラウザで開ける
+- **戻るのは時計も同じ**。RAM 込みの巻き戻しなので、ゲストの時計は snapshot を取った時刻から再開する。貸出のたびに `sandbox` が合わせ、それでもずれていれば run が始まらない（ADR-0069）
 - テンプレートは 2 層。base（全プロジェクト共通）とプロジェクト層（Ruby / Node の版、依存、seed）。Ruby / Node の版がプロジェクトで違うのでテンプレートはプロジェクト単位
 - VM は Docker を使わずネイティブ実行（ADR-0002）。Rails をそのまま動かし、事故を減らす
 
