@@ -583,7 +583,12 @@ class Run:
             if POOL_BUSY in why: raise PoolBusy(why)
             if NO_KEY in why: raise NoKey(([l.strip() for l in why.splitlines() if NO_KEY in l] or [why])[-1])
             raise RuntimeError(f"command failed ({r.returncode}): sandbox take {self.pj} {self.task}\n{why}")
-        print(((r.stdout or "").strip().splitlines() or [""])[-1])
+        out_lines = (r.stdout or "").strip().splitlines()
+        # take の出力は最後の 1 行（[ok] …）だけ残すが、時計の是正（491）は run の記録に残す。
+        # 「どれだけずれていた VM をいつ合わせたか」は、後から日付を疑うときの唯一の手がかりになる
+        for l in out_lines[:-1]:
+            if l.startswith("[clock]"): print(l)
+        print((out_lines or [""])[-1])
         self.taken = True   # ここから先で落ちたら VM を返す（238）
         # checkout より前に時計を見る。ここから先の commit / ADR の日付が全部これに乗る（491）
         self.check_clock()

@@ -33,7 +33,7 @@ TICKET = "# 調査: 時計ずれの再現\n\n偽の VM で貸出直後の時計�
 FAKE_SANDBOX = r"""#!/usr/bin/env bash
 echo "$@" >> "$CALLS"
 case "$1" in
-  take) echo "take: sb-t-$2-01 10.77.1.1" ;;
+  take) echo "[clock] guest offset ${FAKE_TAKE_CLOCK:-0}s"; echo "take: sb-t-$2-01 10.77.1.1" ;;
   ssh)  shift 2; cmd="${1//\/home\/dev/$VMROOT}"
         if [[ "$cmd" == "date -u +%s" ]]; then
           if [[ -n "${FAKE_CLOCK_BAD+x}" ]]; then printf '%s\n' "$FAKE_CLOCK_BAD"; exit 0; fi
@@ -144,6 +144,13 @@ class ClockSkewTest(unittest.TestCase):
         self.assertTrue((self.vm / "claude-ran").exists(), p.stdout[-2000:])
         self.assertIn("clock_offset_s", s)
         self.assertLessEqual(abs(s["clock_offset_s"]), 60, s["clock_offset_s"])
+
+    # ---------- b2: take 側の是正も run の記録に残る（誰がいつ合わせたかを後から読む）
+    def test_the_take_side_correction_is_kept_in_the_run_log(self):
+        self.project("logged")
+        p, run_dir = self.run_runner("logged", "916", FAKE_CLOCK_OFFSET="10", FAKE_TAKE_CLOCK="578400s → 0")
+        self.assertIn("[clock] guest offset 578400s → 0s", p.stdout)
+        self.assertIn("clock: guest offset", p.stdout)          # runner 自身の実測も残る
 
     # ---------- c: 測れなかったものを「ずれていない」と読み替えない
     def test_a_probe_that_returns_no_number_is_not_treated_as_in_sync(self):
