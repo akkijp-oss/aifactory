@@ -34,6 +34,9 @@ const maxPendingLine = 8 * 1024 * 1024
 const truncationNotice = "\n[operation log truncated at 16 MiB; later output was discarded]\n"
 const version = "0.3.1"
 
+// 保全に与える時間。取り消し由来の停止を待たせすぎないための上限（テストから縮める）。
+var preserveTimeout = 120 * time.Second
+
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // A screenshot tool_result carries roughly a megabyte of base64 per stream-json line, which
@@ -92,9 +95,12 @@ type operation struct {
 	Payload struct {
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
-		Lease   string `json:"lease"`
-		Width   int    `json:"width"`
-		Height  int    `json:"height"`
+		// Preserve は制御系が渡す保全コマンド（ゲスト停止の直前に 1 回だけ走らせる）。worker は
+		// guest 内の配置も認証も wip ブランチ名も知らないので、コマンドは制御系が組み立てて運ぶ。
+		Preserve string `json:"preserve"`
+		Lease    string `json:"lease"`
+		Width    int    `json:"width"`
+		Height   int    `json:"height"`
 	} `json:"payload"`
 	Cancelled int `json:"cancelled"`
 }
@@ -432,6 +438,48 @@ func (w *worker) stopGuest() bool {
 	return false
 }
 
+// preserveWork は、ゲストを止める前にゲスト内の作業を wip ブランチへ逃がす（チケット 477）。
+// ゲストを止めるとゲスト内のコミット済み・未 push の実装は失われ、制御系側の保全は
+// 「worker is busy」で届かないことが多いので、止める側が最後の機会として試す。
+// best effort: 失敗・時間切れでも呼び出し元は必ず停止へ進む。
+func (w *worker) preserveWork(op operation, lw *logWriter) {
+	if op.Payload.Preserve == "" || w.c.GuestVM == "" {
+		return
+	}
+	fmt.Fprintln(lw, "[preserve] pushing the work branch to the wip branch before stopping the guest")
+	// 取り消し済みの ctx には紐づけない。紐づけると保全は始まる前に死ぬ。
+	ctx, cancel := context.WithTimeout(context.Background(), preserveTimeout)
+	defer cancel()
+	cmd := w.command(ctx, w.c.Tart, "exec", w.c.GuestVM, "/bin/bash", "-lc", op.Payload.Preserve)
+	cmd.WaitDelay = 5 * time.Second
+	configureProcess(cmd)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		// 成功でも出力の末尾を残す。保全コマンドは「押した（preserved）」ときと
+		// 「押す価値が無いので押さなかった（skipped: ...）」ときを言い分けるので、
+		// どちらだったのかがログから読めないと事後追跡できない（チケット 477 のレビュー指摘）。
+		if tail := preserveTail(out); tail != "" {
+			fmt.Fprintln(lw, "[preserve] ok: "+tail)
+		} else {
+			fmt.Fprintln(lw, "[preserve] ok")
+		}
+		return
+	}
+	reason := preserveTail(out)
+	if reason == "" {
+		reason = err.Error()
+	}
+	fmt.Fprintln(lw, "[preserve] failed: "+reason)
+}
+
+// preserveTail は保全コマンドの出力の末尾だけを 1 行に潰す。コマンド本文（payload）は出さない。
+func preserveTail(out []byte) string {
+	if len(out) > 300 {
+		out = out[len(out)-300:]
+	}
+	return strings.Join(strings.Fields(string(out)), " ")
+}
+
 func (w *worker) execute(ctx context.Context, op operation) {
 	defer close(w.done)
 	ctx, stop := context.WithCancel(ctx)
@@ -521,6 +569,7 @@ func (w *worker) execute(ctx context.Context, op operation) {
 		case err := <-finished:
 			if cmdCtx.Err() != nil {
 				// Stop the whole guest; killing tart exec does not stop guest processes.
+				w.preserveWork(op, lw)
 				if w.stopGuest() && errors.Is(ctx.Err(), context.Canceled) {
 					r.Status = "cancelled"
 				}
@@ -529,6 +578,7 @@ func (w *worker) execute(ctx context.Context, op operation) {
 			if err != nil {
 				var exit *exec.ExitError
 				if !errors.As(err, &exit) {
+					w.preserveWork(op, lw)
 					w.stopGuest()
 					return
 				}
