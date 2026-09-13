@@ -3,6 +3,7 @@
   python3 -m unittest discover -s console/tests -p 'test_strings.py' -v
 
 - strings.js の本体は厳密な JSON として読めること
+- 同じ階層に同じ鍵が 2 つ無い（json.loads は重複をエラーにせず後の 1 つを採るので、先の文言が黙って消える）
 - 表記: 補助動詞はひらがな（下さい / 出来る / 頂く）、二重敬語（〜させていただく / 〜いたします）、責める言葉（不正 / 無効）、
   開発者の語彙（セッション / バリデーション / フェッチ / レコード）、用語のゆれ（タスク / プロジェクト）、感嘆符・絵文字・全角英数字を使わない
 - ボタン（btn.* とダイアログの ok）は動詞で終わる（「実行する」）。「OK」「はい」「いいえ」は使わない。取り消しは「キャンセル」
@@ -10,7 +11,7 @@
 - app.js / index.html が参照する鍵（T.a.b / data-t="a.b"）が strings.js にあり、strings.js の鍵が全部どこかで使われている
 - kind.* が kit の種別を全部持ち、本文欄の雛形に「## 完了条件」の箇条書きがある（起票画面で用途と書き方が分かる）
 """
-import json, pathlib, re, unittest
+import collections, json, pathlib, re, unittest
 
 STATIC = pathlib.Path(__file__).resolve().parents[1] / "static"
 WORKFLOWS = pathlib.Path(__file__).resolve().parents[2] / "workflow" / "kit" / "workflows"
@@ -27,10 +28,34 @@ TERSE_END = re.compile(r"(ない|無い|要る|ある|いる|する|(?<!まし)(
 VERB_END = tuple("るすくつうむぶぐぬ")
 
 
-def load():
+def body():
+    """strings.js から const T = の中身（JSON の本体）だけを切り出す"""
     src = (STATIC / "strings.js").read_text(encoding="utf-8")
-    body = src[src.index("const T = ") + len("const T = "): src.rindex("};") + 1]
-    return json.loads(body)
+    return src[src.index("const T = ") + len("const T = "): src.rindex("};") + 1]
+
+
+def load():
+    return json.loads(body())
+
+
+def duplicate_keys(text):
+    """JSON の本文から、同じ階層に 2 つ以上ある鍵を「階層.鍵: n 個」で返す（全階層。無ければ空）
+
+    json.loads は重複鍵をエラーにせず最後の値を採るので、object_pairs_hook で読む前に数える。
+    葉が全部文字列なのは test_json_and_shape が見ているので、辿るのは辞書だけでよい。
+    """
+    class Counted(dict): pass
+    def hook(pairs):
+        obj = Counted(pairs)
+        obj.dups = sorted((k, n) for k, n in collections.Counter(k for k, _ in pairs).items() if n > 1)
+        return obj
+    found = []
+    def walk(node, prefix):
+        found.extend(f"{prefix}{k}: {n} 個" for k, n in node.dups)
+        for k, v in node.items():
+            if isinstance(v, Counted): walk(v, f"{prefix}{k}.")
+    walk(json.loads(text, object_pairs_hook=hook), "")
+    return sorted(found)
 
 
 def leaves(obj, prefix=""):
@@ -50,6 +75,14 @@ class StringsTest(unittest.TestCase):
         self.assertGreater(len(self.items), 100)
         for path, v in self.items: self.assertIsInstance(v, str, path)
         for k in ("status", "jobState", "nav", "btn", "th", "label", "msg", "err", "empty", "help", "dialog", "next"): self.assertIn(k, self.T)
+
+    def test_keys_are_unique_at_every_level(self):
+        """同じ階層に同じ鍵が 2 つあると後の 1 つが勝ち、先の文言が黙って消える（画面を見るまで誰も気づかない）"""
+        dups = duplicate_keys(body())
+        self.assertEqual(dups, [], "\n" + "\n".join(f"同じ階層に同じ鍵がある（後の 1 つが勝ち、先の文言が消える）: {d}" for d in dups))
+        # 重複を入れた本文なら見つかる（実ファイルは汚さない）
+        salted = '{"btn": {"run": "実行する", "run": "動かす"}, "dialog": {"block": {"ok": "止める"}}, "dialog": {"block": {"ok": "戻す"}}}'
+        self.assertEqual(duplicate_keys(salted), ["btn.run: 2 個", "dialog: 2 個"])
 
     def test_forbidden_words_and_characters(self):
         bad = []

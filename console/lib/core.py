@@ -2103,6 +2103,13 @@ def workflow_detail(name, routes=None, props=None, timeout_default=None):
               "steps": [step_detail(st, routes, props, timeout_default) for st in steps],
               "main_path": wfdef.main_path([st for st in steps if isinstance(st, dict)]),
               "errors": workflow_errors(y)})
+    # 工程ごとの原文（yaml_block）。画面の編集欄はこれを出す。ファイル全体は出さない（ADR-0065 決定 4 の境界）
+    text = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+    for sd in d["steps"]:
+        sd["yaml_block"] = None
+        if not sd.get("id"): continue
+        try: sd["yaml_block"] = step_block_text(text, sd["id"])
+        except Exception: pass                                       # 境界が取れない書き方の定義。読む方は今までどおり出す
     return d
 
 
@@ -2132,6 +2139,24 @@ def config_view():
 CONFIG_CHANGES = "config-changes.jsonl"
 STEP_MODEL_KEYS = ("model", "model_class")
 
+# 画面で表示名から選べるモデルの表。ここが唯一の正本（画面にも文書にも ID を写さない。ADR-0072 が ADR-0065 の決定 4 を
+# 置き換える）。1 段目は Agent（実行する CLI）で、今は claude だけ。claude 以外を足せる器として形だけ 2 段にしてある。
+# これは「画面で選べる既定の候補」であって、保存の許可一覧ではない。表に無い ID も自由入力で入れられ（check_model_name
+# が形と鍵の系統だけを見る）、設定に既に入っている表に無い値もそのまま候補に残る（model_choices）。
+MODEL_CATALOG = [
+    {"id": "claude", "label": "Claude", "models": [
+        {"id": "claude-opus-5", "label": "Opus 5"},
+        {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+        {"id": "claude-fable-5-1", "label": "Fable 5.1"},
+        {"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
+    ]},
+]
+
+
+def model_catalog():
+    """MODEL_CATALOG の複製。画面に渡す前に必ずここを通す（呼び手が定数を書き換えても本体に響かせない）"""
+    return [{**a, "models": [dict(m) for m in a["models"]]} for a in MODEL_CATALOG]
+
 
 def file_version(p):
     """ファイルの版。保存のときに「読んだときから変わっていないか」を見るのに使う（外の編集との衝突検知）"""
@@ -2156,7 +2181,8 @@ def check_model_name(v):
     """入れてよいモデル名か。形と、鍵の系統（token_family）が分かることを見る。
     系統が分からないと runner は系統別の鍵を選べず、共通の CLAUDE_CODE_OAUTH_TOKEN に落ちる（workflow/bin/run の run_agent）。
     止まりはしないが、意図した鍵で走る保証が無いので、画面からはその名前を入れさせない（安全側。ADR-0065）。
-    候補を固定の一覧に縛らないので、新しいモデル名でも同じ系統の語を含んでいれば通る"""
+    画面には表示名から選べる固定の表（MODEL_CATALOG）があるが、それは選ぶための候補で、ここの許可一覧ではない。
+    表に無い新しいモデル名でも、同じ系統の語を含んでいれば通る（ADR-0072）"""
     s = str(v or "").strip()
     if not wfdef.MODEL_NAME_RE.match(s):
         raise ApiError("モデル名は英数字と . _ - だけ、64 文字までで入れてください")
@@ -2199,7 +2225,9 @@ def model_diff(before, after):
 
 
 def model_choices(rows=None, routes=None):
-    """候補にするモデル名。今この設定で使われている値から作る（最新のモデル名を固定で埋め込まない。未知の既存値も候補に残る）"""
+    """自由入力の候補にするモデル名。今この設定で使われている値から作る（表に無い既存値も候補に残る）。
+    表示名から選ぶ固定の表は MODEL_CATALOG が持つ。両方が要る: 表は「覚えずに選べる」ため、こちらは
+    「表に無い既存値・新しい名前を失わない」ため（ADR-0072）"""
     routes = model_routes() if routes is None else routes
     vals = {v for k, v in routes.items() if k.startswith("MODEL_") and v}
     vals |= {r["model"] for r in (rows if rows is not None else model_rows(routes)) if r.get("model")}
@@ -2225,6 +2253,7 @@ def model_edit_view(routes=None):
     except Exception: pool = {"fable": 0, "other": 0, "total": 0}
     return {"route_keys": wfdef.route_keys(), "step_keys": list(STEP_MODEL_KEYS),
             "classes": sorted(set(wfdef.ROLE_CLASS.values())), "choices": model_choices(rows, routes),
+            "agents": model_catalog(),
             "routes_file": file_version(routes_env_path()), "key_pool": pool, "changes": config_changes()}
 
 
@@ -2259,13 +2288,13 @@ def routes_env_edit(text, key, value):
     return new
 
 
-def yaml_step_edit(text, step_id, key, value):
-    """workflow yml の当該工程の当該キーだけを差し替えた本文を返す（value が None なら行を消す＝継承に戻す）。
+def step_block_bounds(lines, step_id):
+    """workflow yml の行の並びから、当該工程のブロックの行範囲 [item, end) と、その工程のキーの深さを返す。
 
-    pyyaml で書き戻すとコメント・並び・引用が失われるので、行単位の外科手術にする（ADR-0052 と同じ理由）。
-    書く前に、編集後の本文を読み直して「当該工程の当該キー以外は 1 つも変わっていない」ことを確かめる（呼ぶ側）。
+    ブロックの定義は「`- id: <工程>` の行から、次の同じ深さの `- ` の行（無ければ steps: の並びが終わる行か EOF）の
+    直前まで」。工程のあいだの空行・コメント行は前の工程のブロックに属する。この境界は 1 キーの差し替え
+    （yaml_step_edit）とブロックごとの差し替え（yaml_step_block_replace）の両方が使うので、ここ 1 か所で決める。
     """
-    lines = text.splitlines(keepends=True)
     top = next((i for i, l in enumerate(lines) if re.match(r"^steps:\s*(#.*)?$", l)), None)
     if top is None: raise ApiError("この定義には steps: がありません")
     item, key_ind, end, dash_ind = None, None, len(lines), None
@@ -2282,6 +2311,30 @@ def yaml_step_edit(text, step_id, key, value):
         if re.match(rf"id:\s*{re.escape(str(step_id))}\s*$", m.group(2)):
             item, key_ind = i, len(m.group(1))
     if item is None: raise ApiError(f"工程 {step_id} がこの定義に見つかりません", 404)
+    return item, end, key_ind
+
+
+def step_block_text(text, step_id):
+    """当該工程のブロックの原文（コメント・並び・引用そのまま）。画面の編集欄に出すのはこれだけで、ファイル全体は出さない"""
+    lines = text.splitlines(keepends=True)
+    item, end, _ = step_block_bounds(lines, step_id)
+    return "".join(lines[item:end])
+
+
+def _nl(s):
+    """末尾の改行をそろえる（最後の工程はファイル末尾に改行が無いことがある）"""
+    s = str(s or "")
+    return s if not s or s.endswith("\n") else s + "\n"
+
+
+def yaml_step_edit(text, step_id, key, value):
+    """workflow yml の当該工程の当該キーだけを差し替えた本文を返す（value が None なら行を消す＝継承に戻す）。
+
+    pyyaml で書き戻すとコメント・並び・引用が失われるので、行単位の外科手術にする（ADR-0052 と同じ理由）。
+    書く前に、編集後の本文を読み直して「当該工程の当該キー以外は 1 つも変わっていない」ことを確かめる（呼ぶ側）。
+    """
+    lines = text.splitlines(keepends=True)
+    item, end, key_ind = step_block_bounds(lines, step_id)
     pat = re.compile(rf"^\s{{{key_ind}}}{re.escape(key)}:\s")
     out, hit = list(lines), None
     for i in range(item, end):
@@ -2292,6 +2345,71 @@ def yaml_step_edit(text, step_id, key, value):
     elif value is not None:
         out.insert(item + 1, " " * key_ind + f"{key}: {value}\n")
     return "".join(out)
+
+
+#: 編集欄から受け取る 1 工程のブロックの上限（画面の欄に貼れる量の桁。これを超えるものはブロック 1 つではない）
+STEP_BLOCK_MAX_BYTES = 64 * 1024
+
+
+def step_key_diff(before, after):
+    """工程の定義（dict）の前後で、値が変わったキーだけを前後つきで返す。画面の下見と変更記録がこれを出す"""
+    out = []
+    for k in sorted(set(before or {}) | set(after or {})):
+        b, a = (before or {}).get(k), (after or {}).get(k)
+        if b != a: out.append({"key": k, "before": b, "after": a})
+    return out
+
+
+def yaml_step_block_replace(text, step_id, block):
+    """当該工程のブロックだけを差し替えた本文を返す（チケット 503）。検査に 1 つでも落ちたら ApiError を投げ、呼ぶ側は何も書かない。
+
+    ADR-0065 決定 5 の 2 条件（schema に適合する / 当該工程の当該箇所以外が変わっていない）を、1 キーではなく
+    ブロック 1 つに広げたもの。「1 文字も変わらない」は dict の比較では言えない（yaml.safe_load がコメントを捨てる）ので、
+    本文は必ず 旧本文の前半 + 新しいブロック + 旧本文の後半 で組み立て、前半と後半がバイトで一致することを確かめる。
+    決めた線: 工程の id と担い手の種類（role / code のどちら側か）は、ここでは変えられない。
+    """
+    import copy
+    lines = text.splitlines(keepends=True)
+    item, end, _ = step_block_bounds(lines, step_id)
+    block = _nl(block)
+    if len(block.encode("utf-8")) > STEP_BLOCK_MAX_BYTES:
+        raise ApiError(f"この欄に入れられるのは {STEP_BLOCK_MAX_BYTES // 1024} KiB までです（ここで直せるのはこの工程のブロックだけです）")
+    head = re.match(r"^(\s*-\s+)id:\s*(\S+)\s*$", block.splitlines()[0] if block.splitlines() else "")
+    if not head:
+        raise ApiError(f"この工程のブロックは「- id: {step_id}」の行から始めてください")
+    if head.group(2) != str(step_id):
+        raise ApiError(f"工程の id はここでは変えられません（- id: {step_id} のままにしてください）")
+    prefix, suffix = "".join(lines[:item]), "".join(lines[end:])
+    new = prefix + block + suffix
+    if not (new.startswith(prefix) and new.endswith(suffix)):   # 組み立てを取り違えたら書かない（起こらないはずの側も見る）
+        raise ApiError("このブロック以外まで変わってしまうので書きませんでした")
+    want, got = copy.deepcopy(parse_yaml_text(text)), parse_yaml_text(new)
+    if not isinstance(want, dict) or not isinstance(got, dict):
+        raise ApiError("この変更では定義の形（workflow の設定と steps の並び）が崩れるので書きませんでした")
+    ws, gs = want.get("steps") or [], got.get("steps") or []
+    ids = lambda ss: [s.get("id") if isinstance(s, dict) else None for s in ss]
+    if ids(ws) != ids(gs):
+        raise ApiError("ここで直せるのはこの工程のブロック 1 つだけです。工程の数か並びが変わってしまうので書きませんでした")
+    idx = next(i for i, st in enumerate(ws) if isinstance(st, dict) and st.get("id") == step_id)
+    ost, nst = ws[idx], gs[idx]
+    if not isinstance(nst, dict):
+        raise ApiError("この工程の定義が「キー: 値」の形になっていません")
+    for k in ("role", "code"):
+        if bool(ost.get(k)) != bool(nst.get(k)):
+            raise ApiError("担い手の種類（role＝人が決める工程 / code＝機械が回す工程）はここでは変えられません。工程を入れ替えるときは定義そのものを直してください")
+    if any(a != b for i, (a, b) in enumerate(zip(ws, gs)) if i != idx):
+        raise ApiError("この変更では他の工程まで動いてしまうので書きませんでした")
+    if {k: v for k, v in want.items() if k != "steps"} != {k: v for k, v in got.items() if k != "steps"}:
+        raise ApiError("この変更では workflow 全体の設定まで動いてしまうので書きませんでした")
+    if nst.get("model") and nst.get("model") != ost.get("model"): check_model_name(nst["model"])
+    errs = workflow_errors(got)
+    if errs: raise ApiError("変更後の定義が schema に合わないので書きませんでした: "
+                            + " / ".join(f"{e['path']}: {e['message']}" for e in errs[:5]))
+    nl = new.splitlines(keepends=True)                          # 境界を取り直して、次に読むときも同じ 1 工程を指すことを見る
+    item2, end2, _ = step_block_bounds(nl, step_id)
+    if (item2, "".join(nl[item2:end2])) != (item, block):
+        raise ApiError("このブロックの範囲が変わってしまうので書きませんでした（工程の行の深さを元のままにしてください）")
+    return new
 
 
 def _write_atomic(p, text, backup=True):
@@ -2350,13 +2468,28 @@ def _model_change_request(b):
             raise ApiError(f"クラスは {' / '.join(sorted(set(wfdef.ROLE_CLASS.values())))} のどれかで指定してください")
         return {"target": "step", "path": path, "key": key, "value": v,
                 "workflow": str(b.get("workflow")), "step": sid}
-    raise ApiError("target は routes（共通の経路表）か step（この工程だけ）のどちらかを指定してください")
+    if target == "block":
+        path = workflow_path(b.get("workflow"))
+        sid = str(b.get("step") or "").strip()
+        block = _nl(b.get("text"))
+        if not block.strip(): raise ApiError("この工程の定義が空です。編集欄の中身を確かめてください")
+        new_text = yaml_step_block_replace(path.read_text(encoding="utf-8"), sid, block)   # 検査はここ（落ちたら書かない）
+        nst = next(st for st in (parse_yaml_text(new_text).get("steps") or [])
+                   if isinstance(st, dict) and st.get("id") == sid)
+        return {"target": "block", "path": path, "key": "block", "value": block,
+                "workflow": str(b.get("workflow")), "step": sid, "new_step": nst}
+    raise ApiError("target は routes（共通の経路表）か step（この工程のモデル）か block（この工程の定義）のどれかを指定してください")
 
 
 def _model_after(req, routes):
     """書いたあとの実効モデル（まだ書かずに当て込んだもの）。resolve_model を呼び直して作る"""
     if req["target"] == "routes":
         return model_rows({**routes, req["key"]: req["value"]})
+    if req["target"] == "block":                                     # ブロックまるごとの当て込み（消えたキーは None＝継承に戻す）
+        nst = req["new_step"]
+        old_st = next((s for s in (load_yaml(req["path"]).get("steps") or [])
+                       if isinstance(s, dict) and s.get("id") == req["step"]), {})
+        return model_rows(routes, {(req["workflow"], req["step"]): {k: nst.get(k) for k in set(old_st) | set(nst)}})
     return model_rows(routes, {(req["workflow"], req["step"]): {req["key"]: req["value"]}})
 
 
@@ -2364,6 +2497,8 @@ def _model_new_text(req, text):
     """編集後の本文。step 側は読み直して「当該工程の当該キー以外が変わっていない」ことを確かめる"""
     if req["target"] == "routes":
         return routes_env_edit(text, req["key"], req["value"])
+    if req["target"] == "block":                                     # 検査は全部 yaml_step_block_replace の中（落ちたら 1 バイトも書かない）
+        return yaml_step_block_replace(text, req["step"], req["value"])
     new = yaml_step_edit(text, req["step"], req["key"], req["value"])
     import copy
     want = copy.deepcopy(parse_yaml_text(text))
@@ -2376,6 +2511,12 @@ def _model_new_text(req, text):
     if errs: raise ApiError("変更後の定義が schema に合わないので書きませんでした: "
                             + " / ".join(f"{e['path']}: {e['message']}" for e in errs[:5]))
     return new
+
+
+def _audit_keys(diff, side):
+    """変更記録の 1 行に出す「キー: 値」の並び。長い値（brief など）は頭だけ残す"""
+    short = lambda v: (v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))[:80] if v is not None else "-"
+    return ", ".join(f"{c['key']}: {short(c[side])}" for c in diff) or None
 
 
 def parse_yaml_text(text):
@@ -2397,12 +2538,16 @@ def config_model_apply(b):
     before_rows = model_rows(routes)
     ver = file_version(p)
     if not ver["exists"]: raise ApiError(f"{rel(p)} がありません", 404)
+    old_step = next((s for s in (load_yaml(p).get("steps") or [])
+                     if isinstance(s, dict) and s.get("id") == req["step"]), {}) if req["step"] else {}
     current = (routes.get(req["key"]) if req["target"] == "routes"
-               else next((s.get(req["key"]) for s in (load_yaml(p).get("steps") or [])
-                          if isinstance(s, dict) and s.get("id") == req["step"]), None))
+               else step_block_text(p.read_text(encoding="utf-8"), req["step"]) if req["target"] == "block"
+               else old_step.get(req["key"]))
     after_rows = _model_after(req, routes)
     warn, pool = [], key_pool_counts()
-    same = (current or None) == (req["value"] or None)
+    # ブロックの編集は「同じか」を原文で見る（末尾の改行だけをそろえる。それ以外は 1 文字も直さない）
+    same = (_nl(current) == _nl(req["value"])) if req["target"] == "block" else (current or None) == (req["value"] or None)
+    step_diff = step_key_diff(old_step, req["new_step"]) if req["target"] == "block" else []
     affected = model_diff(before_rows, after_rows)
     fams = sorted({wfdef.token_family(r["after"]) for r in affected if r.get("after")})
     for f in fams:
@@ -2418,7 +2563,8 @@ def config_model_apply(b):
         warn.append(f"これは共通の設定です。{len(affected)} 件の工程の実効モデルが変わります。")
     if same: warn.append("いまと同じ設定なので、書くものがありません。")
     out = {"target": req["target"], "workflow": req["workflow"], "step": req["step"], "key": req["key"],
-           "value": req["value"], "current": current, "file": rel(p), "base_sha256": ver["sha256"],
+           "value": req["value"], "current": current, "step_diff": step_diff,
+           "file": rel(p), "base_sha256": ver["sha256"],
            "dry_run": dry, "written": False, "backup": None, "sha_after": None,
            "before": before_rows, "after": after_rows, "affected": affected,
            "running_runs": running_run_names(), "git": git_status_line(p),
@@ -2450,6 +2596,9 @@ def config_model_apply(b):
     audit = {"at": now(), "target": req["target"], "file": rel(p), "workflow": req["workflow"], "step": req["step"],
              "key": req["key"], "before": current, "after": req["value"],
              "sha_before": sha_now, "sha_after": out["sha_after"], "backup": out["backup"]}
+    if req["target"] == "block":     # ブロックは原文を丸ごと記録に残さず、変わったキーだけを前後つきで残す（読めるように）
+        audit.update({"before": _audit_keys(step_diff, "before"), "after": _audit_keys(step_diff, "after"),
+                      "changes": step_diff})
     with contextlib.suppress(OSError):
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / CONFIG_CHANGES, "a", encoding="utf-8") as f: f.write(json.dumps(audit, ensure_ascii=False) + "\n")

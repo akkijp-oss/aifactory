@@ -74,7 +74,7 @@ Every role is preceded by `_common.md` (shared rules).
 ## routes.env
 
 ```
-MODEL_judgment=claude-fable-5-1
+MODEL_judgment=claude-opus-5
 MODEL_research=claude-sonnet-5
 MODEL_coding=claude-opus-5
 MODEL_default=claude-opus-5
@@ -86,7 +86,7 @@ MODEL_default=claude-opus-5
 | research | Web research | researcher |
 | coding | Coding | implementer |
 
-"Judgement on Fable, web research on Sonnet, everything else on Opus" is the maintainer's decision (2026-09-06). Edit `routes.env` to use other models.
+"Web research on Sonnet, everything else on Opus" is the maintainer's decision (2026-09-12); the judgment class defaults to Opus. Planning is done carefully on Fable, so only the planning steps of each workflow (`plan` in `bug` / `docs` / `hotfix`, `design` in `feature` / `feature-long`, `judge` in `research` — all with `role: planner`) pin their model with `model: claude-fable-5-1` in the YAML. Other judgment-class steps such as reviewer and intake run on the Opus default. Edit `routes.env` and the `model:` lines in the workflow YAML to use other models.
 
 ## Overrides
 
@@ -109,6 +109,16 @@ Console → Settings → workflow → step (agent steps only) has "change the mo
 - The runs that are in flight (a running run keeps the settings it read at startup; nothing switches mid-run)
 - The file being written and its `git status` line
 
+The model is picked in two steps: **the agent (the CLI that runs it — only claude for now) → the model name (a display
+name such as `Opus 5`)**. Picking one fills in the model ID field below it, and what gets saved is still a single model
+ID. The display-name-to-ID table lives in `console/lib/core.py` as `MODEL_CATALOG` and is not copied into this page.
+A model that is not in the table can be typed into the ID field directly, and a value already in the settings that the
+table does not know stays in the list (ADR-0072).
+
+The four lines of the route table (`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`) can also be
+edited straight from the "model routes" panel on the Settings page itself, without walking down to a step. That is the
+only way to reach `MODEL_default`, which no step refers to. Saving goes through the same preview and the same checks.
+
 Saving keeps the previous content next to the file as `.bak-<timestamp>` and appends a line to `logs/config-changes.jsonl`
 (also shown as "recent changes" on the page). To roll back, put the backup's content back.
 
@@ -119,8 +129,26 @@ Saving keeps the previous content next to the file as `.bak-<timestamp>` and app
 !!! note "Which model names are accepted"
     The name must reveal its key family (fable / opus / sonnet / haiku). Without a family the runner does not pick a
     per-family key and falls back to the shared `CLAUDE_CODE_OAUTH_TOKEN`; the step still runs, but not necessarily on the
-    key you meant, so the console refuses the value (editing the file directly still accepts it). Suggestions come from the
-    values currently in use, and new names can be typed in directly.
+    key you meant, so the console refuses the value (editing the file directly still accepts it). Model names are picked from a
+    table of display names, but that table lists what you can pick, not what you can save: a new name that is not in the
+    table can still be typed in directly.
+
+## Changing the step definition itself
+
+The same screen (Settings → workflow → step) has a "this step's definition" field holding **only that step's yml block**,
+verbatim. Keys the model form does not have — `timeout_min`, the branches (`next` / `on_pass` / `on_fail`), the files it
+reads and writes, `brief` — can be changed there too.
+
+- What is shown and what can be written is **the `- id: <step>` line down to just before the next step**. The whole file is
+  never shown and can never be written (ADR-0073).
+- It syncs with the model fields above it inside the page only. Editing the yml shows up in the model fields, and editing a
+  model field rewrites that line of the yml (only the `model` and `model_class` lines are synced). Nothing is saved yet.
+- **A step's `id` and who runs it (`role` or `code`) cannot be changed.** Other steps point at that `id` as their next
+  destination, and nothing checks that those references still resolve.
+- Saving goes through the same path as changing a model (preview → confirm → `base_sha256` conflict check → backup → one
+  line in the record). Input the parser cannot read writes zero bytes; the reason appears under the field and your text stays.
+- Only that step's block is written. Every other step, the comments at the top of the file, the order of the keys and the
+  quoting are left byte for byte as they were.
 
 ## Adding a role
 
