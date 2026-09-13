@@ -1069,6 +1069,46 @@ function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p
 }
 /* 最近の変更（logs/config-changes.jsonl）。工程詳細とトップの経路パネルの両方から出す */
 const cfgModelChanges = e => (e.changes || []).length ? `<div class="panel"><h2>${esc(T.config.modelChanges)}</h2><div class="help">${esc(T.help.configModelChanges)}</div><ul class="help plain">${e.changes.map(c => `<li>${esc(fmtT(c.at))} <span class="mono">${esc(c.key)}</span> ${esc(c.before || T.config.none)} <span class="arrow">→</span> ${esc(c.after || T.config.modelInherited)}${c.step ? ` <span class="help">${esc(c.workflow)} / ${esc(c.step)}</span>` : ''}</li>`).join('')}</ul></div>` : '';
+/* ---------- 工程の yml ブロックの編集（チケット 503）
+   出すのはその工程のブロックだけで、ファイル全体は出さない（ADR-0065 決定 4 の境界）。上のモデルの欄とは画面の中だけで
+   同期する（サーバー往復なし）。何を書いてよいかの検査は API（core.yaml_step_block_replace）が正本で、ここでは見ない。
+   行の深さは「- id:」の行の "- " の次に合わせる（brief の中の同じ語を拾わないため。core の yaml_step_edit と同じ規則） */
+const cfgYamlInd = block => (/^(\s*-\s+)/.exec(block) || [null, '  - '])[1].length;
+const cfgYamlGetKey = (block, key) => { const m = new RegExp(`^ {${cfgYamlInd(block)}}${key}:[ \t]*(.*?)\\s*$`, 'm').exec(block); return m ? (m[1].replace(/\s+#.*$/, '').trim().replace(/^(['"])([\s\S]*)\1$/, '$2') || null) : null; };
+const cfgYamlSetKey = (block, key, value) => { const ind = cfgYamlInd(block), re = new RegExp(`^ {${ind}}${key}:(?=[ \t]|$).*\\n?`, 'm'), line = `${' '.repeat(ind)}${key}: ${value}\n`; return re.test(block) ? block.replace(re, value ? line : '') : value ? block.replace(/^[^\n]*\n?/, m => m + line) : block; };
+/* 下見に出す値。brief のような長い値は 1 行に畳んで頭だけ出す（前後が並んで読めることが目的） */
+const cfgVal = v => v == null ? '-' : (typeof v === 'object' ? JSON.stringify(v) : String(v)).replace(/\s+/g, ' ').trim().slice(0, 160);
+const cfgStepDiffRows = p => (p.step_diff || []).map(c => `<tr><td class="mono">${esc(c.key)}</td><td class="mono">${esc(cfgVal(c.before))}</td><td class="mono"><b>${esc(cfgVal(c.after))}</b></td></tr>`).join('');
+/* 下見: 変わる項目（モデル以外も出る）を先に出し、そのあとは 1 キーの変更と同じ中身（影響する工程・動いている run・書き先・退避） */
+function cfgBlockPreview(p) { return `<div class="help">${esc(T.dialog.stepYaml.scope)}</div>
+  ${(p.step_diff || []).length ? `<div class="k">${esc(T.config.stepDiff)}</div><div class="scroll"><table><tr><th>${esc(T.th.field)}</th><th>${esc(T.th.before)}</th><th>${esc(T.th.after)}</th></tr>${cfgStepDiffRows(p)}</table></div>` : ''}
+  ${cfgModelPreview(p)}`;
+}
+/* 編集の欄。原文は API（core.step_block_text）が切り出したものをそのまま出す（画面で組み立て直さない） */
+function cfgStepYaml(w, s) {
+  if (!s.yaml_block) return '';
+  return `<div class="panel"><h2>${esc(T.config.stepYaml)}<small>${esc(w.path)}</small></h2>
+    <div class="help">${esc(T.help.configStepYaml)} ${esc(T.help.configStepYamlScope)}</div>
+    <div class="help warn">${esc(T.help.configStepYamlFixed)}</div>
+    <div class="field"><label for="cs-yaml">${esc(T.config.stepYamlLabel)}</label>
+      <textarea id="cs-yaml" class="mono" rows="${Math.min(30, Math.max(6, s.yaml_block.split('\n').length))}" spellcheck="false" autocomplete="off" wrap="off">${esc(s.yaml_block)}</textarea>
+      <div class="help">${esc(T.help.configStepYamlError)} ${esc(T.help.configModelUncommitted)}</div>
+      <div class="err" id="cs-yaml-err" hidden></div>
+      <div class="actions"><button type="button" data-act="config-block" data-wf="${esc(w.name)}" data-step="${esc(s.id)}">${esc(T.btn.blockPreview)}</button></div>
+    </div></div>`;
+}
+/* yml → フォーム。打っている最中の値が ID の欄と 2 段選択に出る（まだ保存はしていない） */
+function cfgYamlToForm() {
+  const ta = $('cs-yaml'); if (!ta) return;
+  const mi = $('cm-model'); if (mi) { mi.value = cfgYamlGetKey(ta.value, 'model') || ''; cfgModelSync(mi); }
+  const cl = $('cm-class'), c = cfgYamlGetKey(ta.value, 'model_class');
+  if (cl && c && [...cl.options].some(o => o.value === c)) cl.value = c;
+}
+/* フォーム → yml。書き換えるのは打った 1 行だけ（無ければ id の行の下に足し、空にすれば行を消す＝継承に戻す） */
+function cfgFormToYaml(key) {
+  const ta = $('cs-yaml'), el = $(key === 'model' ? 'cm-model' : 'cm-class'); if (!ta || !el) return;
+  ta.value = cfgYamlSetKey(ta.value, key, (el.value || '').trim());
+}
 /* 編集の欄。値は API が返した保存値（s.model / s.model_class）と経路表（d.routes）をそのまま入れる */
 function cfgModelEdit(w, s, d) {
   const m = s.model_resolved, e = d.model_edit || {}, ch = e.choices || [], route = m.route_key || 'MODEL_default';
@@ -1082,7 +1122,7 @@ function cfgModelEdit(w, s, d) {
       <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model" data-input="cm-model" ${at.wf}>${esc(T.btn.modelPreview)}</button>
       ${s.model ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
     <div class="field"><label for="cm-class">${esc(T.config.modelStepClass)}</label>
-      <select id="cm-class">${cfgOpts(e.classes || [], s.model_class || m.model_class)}</select>
+      <select id="cm-class" data-act="model-class">${cfgOpts(e.classes || [], s.model_class || m.model_class)}</select>
       <div class="help">${esc(T.help.configModelStepClass)}</div>
       <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model_class" data-input="cm-class" ${at.wf}>${esc(T.btn.modelPreview)}</button>
       ${s.model_class ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model_class" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
@@ -1151,6 +1191,7 @@ async function viewConfigStep(name, id) {
       <div>
         <div class="panel"><h2>${esc(T.config.model)}</h2>${cfgModel(s.model_resolved)}</div>
         ${s.model_resolved ? cfgModelEdit(w, s, d) : ''}
+        ${cfgStepYaml(w, s)}
         <div class="panel"><h2>${esc(T.h.files)}</h2>${cfgFiles(s)}</div>
         <div class="panel"><h2>${esc(T.config.limit)}</h2><div>${esc(tt(T.config.limitMin, { n: s.timeout_min }))}${s.timeout_default ? ` <span class="help">${esc(T.config.limitDefaultNote)}</span>` : ''}</div></div>
       </div>
@@ -1177,8 +1218,23 @@ const actions = {
     toast(esc(r.written ? tt(T.msg.modelSaved, { file: r.file }) : T.msg.modelSame));
     await (body.workflow ? viewConfigStep(body.workflow, body.step) : viewConfig());   /* トップからの変更は設定のトップへ戻す */
   },
+  /* 工程の定義（yml ブロック）の変更: 下見 → 変わる項目と影響を見せて確認 → その版で保存。1 キーの変更と同じ口（config/model）を通る。
+     落ちたときは画面を描き直さず（入力を消さず）、理由を欄の下に出す。書くかどうかを決めるのは API（1 バイトも書かずに落ちる） */
+  'config-block': async el => {
+    const body = { target: 'block', workflow: el.dataset.wf, step: el.dataset.step, text: ($('cs-yaml') || {}).value };
+    const err = $('cs-yaml-err'); if (err) { err.textContent = ''; err.hidden = true; }
+    const show = e => { if (err) { err.textContent = e.message; err.hidden = false; } throw e; };
+    const p = await api('config/model', body).catch(show);
+    const ok = await ask({ title: tt(T.dialog.stepYaml.title, { where: `${body.workflow} / ${body.step}` }), ok: T.btn.save, body: cfgBlockPreview(p) });
+    if (!ok) return;
+    const r = await api('config/model', { ...body, dry_run: false, base_sha256: p.base_sha256 }).catch(show);
+    toast(esc(r.written ? tt(T.msg.modelSaved, { file: r.file }) : T.msg.modelSame));
+    await viewConfigStep(body.workflow, body.step);
+  },
   /* 2 段の選択 → ID の欄。「その他」は欄を空にせず、直接入力へ入ってもらう（選び直しで打った値を消さない） */
-  'model-pick': el => { const to = $(el.dataset.input); if (!to) return; if (el.value === MODEL_OTHER) { to.focus(); return; } to.value = el.value; },
+  'model-pick': el => { const to = $(el.dataset.input); if (!to) return; if (el.value === MODEL_OTHER) { to.focus(); return; } to.value = el.value; if (el.dataset.input === 'cm-model') cfgFormToYaml('model'); },
+  /* この工程のクラスを替えたら yml の欄にも写す（同期するのは model と model_class の 2 行だけ） */
+  'model-class': () => cfgFormToYaml('model_class'),
   /* Agent を替えたら、モデル名の一覧をその Agent の分だけにする（今は claude だけなので見た目は変わらない） */
   'model-agent': el => { const sel = $(el.dataset.pick); if (!sel) return; sel.querySelectorAll('optgroup').forEach(g => { g.hidden = g.dataset.agent !== el.value; }); },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
@@ -1377,7 +1433,8 @@ const Q_FIELDS = {
   'lg-q': { route: '#/logs', set: v => { lgFilter.q = v; lgSync(); lgRender(); } },
 };
 document.addEventListener('input', e => {
-  const pick = e.target.closest('input[data-pick]'); if (pick) cfgModelSync(pick);
+  if (e.target.id === 'cs-yaml') { cfgYamlToForm(); return; }                               /* yml の欄 → モデルの欄（画面の中だけで同期する） */
+  const pick = e.target.closest('input[data-pick]'); if (pick) { cfgModelSync(pick); if (pick.id === 'cm-model') cfgFormToYaml('model'); }
   const el = e.target.closest('#tk-q, #lg-q'); if (!el) return;
   const f = Q_FIELDS[el.id];
   clearTimeout(qDebounce); qDebounce = setTimeout(() => {

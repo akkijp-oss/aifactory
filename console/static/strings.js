@@ -22,7 +22,7 @@ const T = {
     "openPr": "PR #{pr} を開く",
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
-    "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す",
+    "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す", "blockPreview": "この定義の変更を確かめる",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く", "openDefinition": "定義の原文を読む"
@@ -217,7 +217,8 @@ const T = {
     "modelRoutes": "共通の経路 {key}", "modelNow": "いまの値", "modelInherited": "継承（この工程には書いていません）",
     "modelAffected": "実効モデルが変わる工程", "modelNoChange": "実効モデルが変わる工程はありません",
     "modelRunning": "動いている実行記録", "modelWhen": "反映", "modelChanges": "最近の変更",
-    "modelFile": "書き先", "modelBackup": "退避"
+    "modelFile": "書き先", "modelBackup": "退避",
+    "stepYaml": "この工程の定義", "stepYamlLabel": "この工程のブロック", "stepDiff": "変わる項目"
   },
   "kind": {
     "bug": "動きが期待と違うときに選びます。再現するテストを先に書いてから直し、PR まで進みます。",
@@ -283,6 +284,10 @@ const T = {
     "configModelUncommitted": "保存しても git には commit しません。制御系で git pull すると元に戻ることがあります。",
     "configModelWhen": "次に始める run から効きます。動いている run と、その run の途中の工程は変わりません。",
     "configModelKeys": "モデル名から鍵の系統（fable / opus / sonnet / haiku）が分かる必要があります。分からない名前は、その系統の鍵ではなく共通の鍵で走ることになるので、画面からは保存できません。",
+    "configStepYaml": "この工程のブロックだけを、定義の原文のまま直せます。上のモデルの欄と中身は同じものなので、どちらを直してももう片方に出ます。",
+    "configStepYamlScope": "ここで直せるのはこの工程のブロックだけです。ほかの工程・ファイルの先頭のコメント・並び・引用はそのまま残ります。",
+    "configStepYamlFixed": "工程の id と担い手の種類（role と code のどちら側か）は、ここでは変えられません。ほかの工程からの行き先が迷子になるからです。",
+    "configStepYamlError": "読めない書き方のときは何も書きません。理由を欄の下に出すので、直してもう一度押してください。",
     "configModelChanges": "書けたときだけ記録しています。元に戻すには、退避した控えの内容を入れ直してください。",
     "configUnknownKeys": "schema にないキーです。定義の書き間違いか、schema の更新漏れかもしれません。",
     "configParseError": "この workflow の定義を読めませんでした: {why}。",
@@ -420,6 +425,10 @@ const T = {
       "common": "共通の設定です。ほかの workflow を含めて {n} 件の工程の実効モデルが変わります。",
       "runningNote": "動いている run は起動のときに読んだ設定のまま進みます。途中で切り替わることはありません。",
       "backupNote": "書く前の内容は同じ場所に控えを残すので、元の設定に戻せます。"
+    },
+    "stepYaml": {
+      "title": "{where} の定義を変える",
+      "scope": "この工程のブロックだけを書き換えます。ほかの工程とファイルの先頭は 1 文字も変わりません。"
     },
     "sync": {
       "title": "チケット {id} の状態を実行記録に合わせる",
