@@ -1037,6 +1037,24 @@ const cfgUnknown = s => !(s.unknown_keys || []).length ? '' : `<div class="panel
 /* モデルの変更（agent 工程だけ）。(a) この工程のモデル (b) この工程のクラス (c) 共通の経路 の 3 つだけを出す。
    実効値・影響する工程は API（lib/aifactory_workflow.py）が解いたものをそのまま出し、画面では計算しない */
 const cfgOpts = (vals, cur) => vals.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+/* 「その他（直接入力）」の値。モデル名に使えない文字（core の MODEL_NAME_RE は英数字と . _ -）なので、本物の ID と当たらない */
+const MODEL_OTHER = '*';
+/* ID を手で打ったら、上の 2 段をその値に合わせる（表に無い値を打ったら「その他」へ寄せる） */
+const cfgModelSync = el => { const sel = $(el.dataset.pick); if (!sel) return; const v = el.value.trim(); sel.value = [...sel.options].some(o => o.value === v) ? v : MODEL_OTHER; };
+/* モデルの ID の欄に、表示名から入れるための 2 段（Agent → モデル名）。表は API（core.MODEL_CATALOG）から来る。
+   選ぶと data-input の欄に ID が入るだけで、保存が読むのは今までどおりその欄 1 つ（ADR-0072）。
+   表に無い値が入っているときは、その ID の行を足して選んだ状態にする（画面が壊れず、値も候補も失わない） */
+function cfgModelPick(inputId, cur, e, opts) {
+  const agents = e.agents || [], o = opts || {};
+  if (!agents.length) return '';
+  const mine = agents.find(a => (a.models || []).some(m => m.id === cur)) || agents[0];
+  const known = agents.some(a => (a.models || []).some(m => m.id === cur));
+  const groups = agents.map(a => `<optgroup label="${esc(a.label)}" data-agent="${esc(a.id)}" ${a.id === mine.id ? '' : 'hidden'}>${(a.models || []).map(m => `<option value="${esc(m.id)}" ${m.id === cur ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}</optgroup>`).join('');
+  return `<div class="row">
+    <select id="${esc(inputId)}-agent" data-act="model-agent" data-pick="${esc(inputId)}-name" aria-label="${esc(T.config.modelAgent)}">${agents.map(a => `<option value="${esc(a.id)}" ${a.id === mine.id ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select>
+    <select id="${esc(inputId)}-name" class="grow" data-act="model-pick" data-input="${esc(inputId)}" aria-label="${esc(T.config.modelName)}">${o.inherit ? `<option value="" ${cur ? '' : 'selected'}>${esc(T.config.modelInherited)}</option>` : ''}${!known && cur ? `<option class="mono" value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}${groups}<option value="${esc(MODEL_OTHER)}" ${!cur && !o.inherit ? 'selected' : ''}>${esc(T.config.modelOther)}</option></select>
+  </div>`;
+}
 const cfgAffectedRows = p => (p.affected || []).map(a => `<tr><td>${esc(a.workflow)}</td><td class="mono">${esc(a.step)}</td><td class="mono">${esc(a.before || '-')}</td><td class="mono"><b>${esc(a.after || '-')}</b></td></tr>`).join('');
 /* 下見の中身: 前後の実効モデル・影響する工程・動いている run・反映時点・退避と未コミットの注意 */
 function cfgModelPreview(p) { return `<p>${esc(tt(T.dialog.model.body, { file: p.file }))}</p>
@@ -1057,9 +1075,10 @@ function cfgModelEdit(w, s, d) {
   const at = { wf: `data-wf="${esc(w.name)}" data-step="${esc(s.id)}"` };
   return `<div class="panel"><h2>${esc(T.config.modelEdit)}</h2><div class="help">${esc(T.help.configModelEdit)}</div>
     <div class="field"><label for="cm-model">${esc(T.config.modelStep)}</label>
-      <input id="cm-model" list="cm-choices" class="mono" value="${esc(s.model || '')}" placeholder="${esc(T.config.modelInherited)}" autocomplete="off">
+      ${cfgModelPick('cm-model', s.model || '', e, { inherit: true })}
+      <input id="cm-model" list="cm-choices" class="mono" data-pick="cm-model-name" value="${esc(s.model || '')}" placeholder="${esc(T.config.modelInherited)}" autocomplete="off">
       <datalist id="cm-choices">${ch.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>
-      <div class="help">${esc(T.help.configModelStep)} ${esc(T.help.configModelKeys)}</div>
+      <div class="help">${esc(T.help.configModelPick)} ${esc(T.help.configModelStep)} ${esc(T.help.configModelKeys)}</div>
       <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model" data-input="cm-model" ${at.wf}>${esc(T.btn.modelPreview)}</button>
       ${s.model ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
     <div class="field"><label for="cm-class">${esc(T.config.modelStepClass)}</label>
@@ -1068,7 +1087,8 @@ function cfgModelEdit(w, s, d) {
       <div class="actions"><button type="button" data-act="config-model" data-target="step" data-key="model_class" data-input="cm-class" ${at.wf}>${esc(T.btn.modelPreview)}</button>
       ${s.model_class ? `<button type="button" class="ghost" data-act="config-model" data-target="step" data-key="model_class" data-inherit="1" ${at.wf}>${esc(T.btn.modelInherit)}</button>` : ''}</div></div>
     <div class="field"><label for="cm-route">${esc(tt(T.config.modelRoutes, { key: route }))}</label>
-      <input id="cm-route" list="cm-choices" class="mono" value="${esc((d.routes || {})[route] || '')}" autocomplete="off">
+      ${cfgModelPick('cm-route', (d.routes || {})[route] || '', e)}
+      <input id="cm-route" list="cm-choices" class="mono" data-pick="cm-route-name" value="${esc((d.routes || {})[route] || '')}" autocomplete="off">
       <div class="help warn">${esc(T.help.configModelRoutes)}</div>
       <div class="actions"><button type="button" class="danger" data-act="config-model" data-target="routes" data-key="${esc(route)}" data-input="cm-route" ${at.wf}>${esc(T.btn.modelPreview)}</button></div></div>
     <div class="help top">${esc(T.help.configModelInherit)} ${esc(T.help.configModelUncommitted)}</div></div>
@@ -1080,11 +1100,12 @@ function cfgModelEdit(w, s, d) {
 function cfgRoutesEdit(d) {
   const e = d.model_edit || {}, keys = e.route_keys || [], ch = e.choices || [], routes = d.routes || {};
   return `<div class="panel"><h2>${esc(T.h.routes)}<small>workflow/kit/routes.env</small></h2>
-    <div class="help">${esc(T.help.configRoutesEdit)}</div>
+    <div class="help">${esc(T.help.configRoutesEdit)} ${esc(T.help.configModelPick)}</div>
     <div class="help warn">${esc(T.help.configModelRoutes)}</div>
     <datalist id="cr-choices">${ch.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>
     ${keys.map(k => `<div class="field"><label class="mono" for="cr-${esc(k)}">${esc(k)}</label>
-      <input id="cr-${esc(k)}" list="cr-choices" class="mono" value="${esc(routes[k] || '')}" autocomplete="off">
+      ${cfgModelPick(`cr-${k}`, routes[k] || '', e)}
+      <input id="cr-${esc(k)}" list="cr-choices" class="mono" data-pick="cr-${esc(k)}-name" value="${esc(routes[k] || '')}" autocomplete="off">
       <div class="actions"><button type="button" class="danger" data-act="config-model" data-target="routes" data-key="${esc(k)}" data-input="cr-${esc(k)}">${esc(T.btn.modelPreview)}</button></div></div>`).join('')}
     <div class="help top">${esc(T.config.roles)} ${(d.roles || []).map(esc).join(' / ')}</div>
     <div class="help">${esc(T.help.configModelUncommitted)}</div></div>`;
@@ -1156,6 +1177,10 @@ const actions = {
     toast(esc(r.written ? tt(T.msg.modelSaved, { file: r.file }) : T.msg.modelSame));
     await (body.workflow ? viewConfigStep(body.workflow, body.step) : viewConfig());   /* トップからの変更は設定のトップへ戻す */
   },
+  /* 2 段の選択 → ID の欄。「その他」は欄を空にせず、直接入力へ入ってもらう（選び直しで打った値を消さない） */
+  'model-pick': el => { const to = $(el.dataset.input); if (!to) return; if (el.value === MODEL_OTHER) { to.focus(); return; } to.value = el.value; },
+  /* Agent を替えたら、モデル名の一覧をその Agent の分だけにする（今は claude だけなので見た目は変わらない） */
+  'model-agent': el => { const sel = $(el.dataset.pick); if (!sel) return; sel.querySelectorAll('optgroup').forEach(g => { g.hidden = g.dataset.agent !== el.value; }); },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
@@ -1352,6 +1377,7 @@ const Q_FIELDS = {
   'lg-q': { route: '#/logs', set: v => { lgFilter.q = v; lgSync(); lgRender(); } },
 };
 document.addEventListener('input', e => {
+  const pick = e.target.closest('input[data-pick]'); if (pick) cfgModelSync(pick);
   const el = e.target.closest('#tk-q, #lg-q'); if (!el) return;
   const f = Q_FIELDS[el.id];
   clearTimeout(qDebounce); qDebounce = setTimeout(() => {

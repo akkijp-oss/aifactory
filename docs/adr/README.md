@@ -83,3 +83,4 @@
 - [0069: ゲストの時計は貸出のたびに合わせ、それでもずれていたら run を止める（記録の日付は「合っている」を前提にしない）](0069-guest-clock-is-synced-at-lease-and-skew-fails-the-run.md)
 - [0070: 制御系は `main` 追従のままにし、「develop に着地したが未配備」と「配った PJ 定義と正本のズレ」を機械で見せる](0070-control-plane-tracks-main-and-shows-what-is-not-deployed.md)
 - [0071: sandbox の Go は PJ テンプレートに焼き、版は `workers/go.mod` から読む。満たせない run は prepare で止める](0071-go-toolchain-is-baked-from-go-mod.md)
+- [0072: モデルは「Agent + モデル名（表示名）」の 2 段で選ぶ。表示名と ID の固定の表を console に 1 つ持つ](0072-console-picks-a-model-by-display-name.md)
