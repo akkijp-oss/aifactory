@@ -241,6 +241,26 @@ class QueueTest(unittest.TestCase):
         with self.assertRaises(Error):
             self.store.submit("mac1", "guest-prepare", {"lease": "run-one", "preserve": "x"})
 
+    def test_guest_start_needs_a_lease_only_payload_and_a_capable_worker(self):
+        # 停止ゲストの起動し直し（チケット 478）。能力を広告しない worker には届かせない
+        self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
+        self.store.acquire("mac1", "run-one")
+        with self.assertRaisesRegex(Error, "guest-start"):
+            self.store.submit("mac1", "guest-start", {"lease": "run-one"})
+        self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True, "guest_start": True})
+        for payload in ({}, {"lease": "other"}, {"lease": "run-one", "width": 1600, "height": 1000},
+                        {"lease": "run-one", "preserve": "x"}, {"lease": "run-one", "command": "true"}):
+            with self.assertRaises(Error): self.store.submit("mac1", "guest-start", payload)
+        op = self.store.submit("mac1", "guest-start", {"lease": "run-one"})
+        self.assertEqual(self.store.operation(op)["payload"], {"lease": "run-one"})
+
+    def test_guest_start_is_refused_on_a_worker_without_lifecycle(self):
+        # lifecycle でない worker は lease を取れないので、guest-start はそもそも lease の段で弾かれる
+        self.store.heartbeat("mac1", {"mode": "guest", "guest_start": True})
+        with self.assertRaises(Error): self.store.acquire("mac1", "run-one")
+        with self.assertRaises(Error): self.store.submit("mac1", "guest-start", {"lease": "run-one"})
+        with self.assertRaises(Error): self.store.submit("mac1", "guest-start", {})
+
     def test_guest_prepare_without_a_display_keeps_the_lease_only_payload(self):
         self.store.heartbeat("mac1", {"mode": "guest", "lifecycle": True})
         self.store.acquire("mac1", "run-one")

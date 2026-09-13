@@ -200,6 +200,35 @@ class MacBackendTest(unittest.TestCase):
             run.setup_project=lambda:self.fail('recreated an unverified guest')
             with self.assertRaises(RuntimeError):run.resume_guest('lease-1')
 
+    def test_resume_starts_a_stopped_guest_before_inspecting_it(self):
+        # 止まっているだけのゲストは guest-start で起動し直してから中を見る（チケット 478）
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'guest_start':True}}])
+        started=[];run.client.execute=lambda kind,*a,**k:(started.append(kind),('op-1',types.SimpleNamespace(returncode=0)))[1]
+        replies=iter(['prepared']);run.sb=lambda *a,**k:next(replies)
+        refreshed=[];run.refresh_token=lambda:refreshed.append(True)
+        run.resume_guest('lease-1')
+        self.assertEqual(started,['guest-start'])
+        self.assertEqual(refreshed,[True])
+
+    def test_resume_stops_when_the_guest_cannot_be_restarted(self):
+        # ゲストが無い・壊れている回。黙って作り直さず、lease を持ったまま止まる
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'guest_start':True}}])
+        run.client.execute=lambda kind,*a,**k:('op-1',types.SimpleNamespace(returncode=1))
+        run.sb=lambda *a,**k:self.fail('inspected a guest that could not be started')
+        run.setup_project=lambda:self.fail('recreated a guest that could not be started')
+        with self.assertRaisesRegex(RuntimeError,'cannot be restarted'):run.resume_guest('lease-1')
+
+    def test_resume_does_not_send_guest_start_to_a_worker_without_it(self):
+        # guest_start を広告しない古い worker には投げない（届いても uncertain で worker が塞がる）
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'lifecycle':True}}])
+        run.client.execute=lambda *a,**k:self.fail('sent guest-start to a worker without support')
+        replies=iter(['','']);run.sb=lambda *a,**k:next(replies)
+        run.state['history']=['plan']
+        with self.assertRaisesRegex(RuntimeError,'does not advertise guest-start'):run.resume_guest('lease-1')
+
     def test_builtin_sync_base_step_is_accepted_but_unknown_scripts_are_not(self):
         # sync-base は runner 内蔵（kit/steps/ にファイルが無い）ので、pull worker でも拒否しない（チケット 239）
         class Base:
