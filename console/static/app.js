@@ -261,10 +261,18 @@ async function viewBoard() {
                     repo.dirty ? tt(T.board.repoDirty, { n: repo.dirty }) : ''].filter(Boolean);
   const repoWarn = repo.diverged && repoBits.length
     ? `<div class="warn">${tt(T.board.repoDiverged, { path: esc(repo.path), what: esc(repoBits.join('・')) })}<br>${esc(T.board.repoHow)}</div>` : '';
+  /* 制御系は main 追従（ADR-0042）。base が develop の PJ では、develop に着地した変更は昇格まで 1 行も効かない。
+     上の警告は origin/main（@{upstream}）との比較なのでこの状態を clean と言ってしまう（487 の穴）。別の行で出す */
+  const undep = (repo.bases || []).filter(b => b.undeployed);
+  const repoUndeployedWarn = repo.undeployed
+    ? `<div class="warn">${undep.map(b => esc(tt(T.board.repoUndeployed, { branch: b.branch, n: b.undeployed, pjs: b.pjs.join('・') }))
+        + (b.latest.length ? `<ul>${b.latest.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : '<br>')
+        + (b.only_here ? esc(tt(T.board.repoOnlyHere, { n: b.only_here, branch: b.branch })) + '<br>' : '')).join('')}${esc(T.board.repoUndeployedHow)}</div>` : '';
+  const repoFetchWarn = repo.fetch_error ? `<div class="warn">${esc(tt(T.board.repoFetchError, { what: repo.fetch_error }))}</div>` : '';
   render(head(esc(T.nav.board), T.sub.board, `
       <label class="help">${esc(T.label.pj)} <select data-act="pj-filter"><option value="">${esc(T.label.allPj)}</option>${t.pjs.map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <a class="btn" href="${tickets()}">${esc(T.btn.openTickets)}</a><a class="btn" href="#/intake">${esc(T.btn.file)}</a><button class="primary" data-act="dispatch" ${canDispatch ? '' : `disabled title="${esc(T.help.noTodo)}"`}>${esc(T.btn.dispatch)}</button>`)
-    + repoWarn
+    + repoWarn + repoUndeployedWarn + repoFetchWarn
     + `<div class="help">${pj ? tt(T.board.scopePj, { pj: esc(pj) }) : esc(T.board.scopeAll)}</div>
     <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
     <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);

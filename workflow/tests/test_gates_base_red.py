@@ -138,6 +138,33 @@ class GatesBaseRedTest(unittest.TestCase):
     def identify(self, d):
         git(d, "config", "user.name", "aifactory test"); git(d, "config", "user.email", "test@example.invalid")
 
+    def make_ctl_checkout(self, branch="main", repo="example/basered"):
+        """PJ 定義を「ctl の checkout」として作る（チケット 487）。
+
+        本物の ctl は main 追従（ADR-0042）で、gates.sh はそこから VM へ配られる。base が develop の PJ では、
+        develop に着地したゲートが昇格まで配られない（#446 の unittest-pull）。その形をそのまま作る:
+        origin に main と develop、develop 側の gates.sh にだけ `gate unittest-pull` があり、checkout は main"""
+        origin = self.ws / "ctl-origin" / "example" / "basered.git"
+        origin.parent.mkdir(parents=True, exist_ok=True)
+        git(self.ws, "init", "-q", "--bare", "-b", "main", str(origin))
+        seed = self.ws / "ctl-seed"; (seed / "projects" / "basered").mkdir(parents=True)
+        git(seed, "init", "-q", "-b", "main"); self.identify(seed)
+        d = seed / "projects" / "basered"
+        (d / "project.yml").write_text(PROJECT.format(app=self.app).replace("repo: example/basered", f"repo: {repo}"), encoding="utf-8")
+        (d / "gates.sh").write_text(PJ_GATES, encoding="utf-8")
+        git(seed, "add", "-A"); git(seed, "commit", "-q", "-m", "PJ 定義（main）")
+        git(seed, "remote", "add", "origin", str(origin)); git(seed, "push", "-q", "-u", "origin", "main")
+        # develop にだけ足したゲートと provision.sh（= 昇格まで配られない分）
+        git(seed, "checkout", "-q", "-b", "develop")
+        (d / "gates.sh").write_text(PJ_GATES.replace("exit $rc", "gate unittest-pull check pull-ok.txt\nexit $rc"), encoding="utf-8")
+        (d / "provision.sh").write_text("#!/usr/bin/env bash\necho provision\n", encoding="utf-8")
+        git(seed, "add", "-A"); git(seed, "commit", "-q", "-m", "unittest-pull をゲートに足す")
+        git(seed, "push", "-q", "-u", "origin", "develop")
+        ctl = self.ws / "ctl"
+        git(self.ws, "clone", "-q", "-b", branch, str(origin), str(ctl)); self.identify(ctl)
+        run.paths.PROJECT_DIRS = [ctl / "projects"]
+        return ctl / "projects" / "basered"
+
     def make_project(self, prepare=False):
         d = self.ws / "projects" / "basered"; d.mkdir(parents=True)
         y = PROJECT.format(app=self.app)
@@ -149,8 +176,8 @@ class GatesBaseRedTest(unittest.TestCase):
         return d
 
     # ---------- 偽 VM（sb / run_remote / agent 工程だけ差し替え。gates は本物を回す）
-    def build(self, task, implement, prepare=False):
-        self.make_project(prepare=prepare)
+    def build(self, task, implement, prepare=False, ctl=None):
+        self.make_ctl_checkout(**ctl) if ctl is not None else self.make_project(prepare=prepare)
         r = run.Run("basered", str(task), "feature", str(self.ticket))
         self.assertEqual(r.base, "develop")
         work = self.ws / f"work-{task}"; work.mkdir()
@@ -415,6 +442,51 @@ class GatesBaseRedTest(unittest.TestCase):
         wip = run.Run.preserve(r)
         self.assertTrue(wip, "退避ブランチへ push できていない")
         self.assertEqual(git_out(self.origin, "rev-parse", wip).strip(), head)
+
+
+    # ---------- 配るのは ctl の作業ツリー、正本は origin/<base>（チケット 487）
+    def test_a_pj_definition_older_than_the_base_is_reported_as_drift(self):
+        """#446 で develop に足した unittest-pull が、main 追従の ctl から配られる版に無いまま run が全緑になっていた。
+        行が黙って減るので誰も気づけない。配布版と origin/<base> を比べて 1 行言う（FAIL にはしない）"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        def implement(n):
+            (self.app / "impl.txt").write_text("実装\n", encoding="utf-8"); self.commit("実装した")
+        r = self.build(910, implement, ctl={})
+        r.main()
+        v = self.verdict(r)
+        self.assertTrue(v.splitlines()[0].startswith("INFO pj-drift "), v)
+        self.assertIn("origin/develop", v.splitlines()[0])
+        self.assertIn("gates.sh (missing: unittest-pull)", v)
+        self.assertIn("provision.sh", v.splitlines()[0])
+        # 配布経路の問題であって実装役の変更ではないので、FAIL にはしない（implement へ戻さない）
+        self.assertNotIn("FAIL", v)
+        self.assertEqual(self.steps(r), ["research", "design", "implement", "gates", "review", "sync", "pr"])
+        self.assertNotIn("gates->implement", r.state["loops"])
+        self.assertIn("PASS feature", v)
+
+    def test_no_drift_line_when_the_distributed_definition_matches_the_base(self):
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        r = self.build(911, lambda n: None, ctl={"branch": "develop"})
+        r.main()
+        self.assertNotIn("pj-drift", self.gates_txt(r))
+
+    def test_no_drift_line_when_the_pj_definition_belongs_to_another_repo(self):
+        """他 PJ の base_branch は別リポジトリのブランチ名。この checkout の origin/<base> と比べると嘘になる"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        r = self.build(912, lambda n: None, ctl={"repo": "example/elsewhere"})
+        r.main()
+        self.assertNotIn("pj-drift", self.gates_txt(r))
+
+    def test_no_drift_line_when_the_pj_definition_is_not_in_git(self):
+        """workspace/projects に置いた PJ には git の正本が無い。何も言わない（黙るのが正しい）"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        r = self.build(913, lambda n: None)
+        r.main()
+        self.assertNotIn("pj-drift", self.gates_txt(r))
 
 
 if __name__ == "__main__":

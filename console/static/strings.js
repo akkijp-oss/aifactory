@@ -104,7 +104,11 @@ const T = {
     "scopeAll": "集計と列の対象: すべての PJ", "scopePj": "集計と列の対象: PJ {pj}（左のナビの数字はすべての PJ）",
     "repoDiverged": "{path} が origin と食い違っています（{what}）。", "repoAhead": "push していないコミット {n} 件",
     "repoBehind": "取り込んでいないコミット {n} 件", "repoDirty": "未コミットの変更 {n} 件",
-    "repoHow": "PJ 定義はこの作業ツリーから読むので、直したときは sandbox/OPERATIONS.md の「PJ 定義の変更手順」で origin に反映してください。"
+    "repoHow": "PJ 定義はこの作業ツリーから読むので、直したときは sandbox/OPERATIONS.md の「PJ 定義の変更手順」で origin に反映してください。",
+    "repoUndeployed": "origin/{branch} に着地済みで、この制御系にまだ配備されていないコミットが {n} 件あります（PJ: {pjs}）。",
+    "repoUndeployedHow": "制御系は main 追従なので、develop から main への昇格と bin/ctl-update までは、着地した変更は効きません。",
+    "repoOnlyHere": "この制御系にだけあるコミットが {n} 件あります（origin/{branch} には入っていません）。",
+    "repoFetchError": "origin の取り込みができませんでした（{what}）。件数は最後に取り込めた時点のものです。"
   },
   "tickets": { "count": "{n} 件（全 {m} 件）", "link": "チケット {id}: {title}" },
   "logs": {

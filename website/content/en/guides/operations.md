@@ -111,7 +111,15 @@ The project definitions the runner reads (`project.yml` / `gates.sh` / `provisio
 
 The rule is: **edit and push from your own (Mac) checkout, and only deploy on the control plane with `bin/ctl-update`.** If you did edit on the control plane in a hurry, carry the commits out with `git format-patch origin/main --stdout`, push them from your machine, then bring the control plane back in line with `git reset --hard origin/main`.
 
-Any difference (unpushed commits, commits not pulled in, uncommitted changes) is shown as a warning on the console board. The full procedure, including the deploy key swap that lets the control plane push directly, is in `sandbox/OPERATIONS.md` under 「PJ 定義の変更手順」.
+Any difference (unpushed commits, commits not pulled in, uncommitted changes) is shown as a warning on the console board. The console fetches from origin at most once every five minutes before comparing (only the branches it needs; it never moves HEAD or the working tree). If the network or credentials make that impossible, turn it off with `CONSOLE_REPO_FETCH=0`; the counts then reflect the last successful fetch. The full procedure, including the deploy key swap that lets the control plane push directly, is in `sandbox/OPERATIONS.md` under 「PJ 定義の変更手順」.
+
+### Changes that landed but are not deployed yet
+
+The control plane's checkout follows `main`, so a change that landed on `develop` **does nothing at all until it is promoted and `bin/ctl-update` has run**. The runner, the `sandbox` CLI, the console and the project definitions all run from (or are shipped out of) that checkout. The warning above compares against `origin/main`, so it calls this state clean (ADR-0070).
+
+That is why the board carries a second line: `origin/develop に着地済みで、この制御系にまだ配備されていないコミットが N 件あります（PJ: aifactory）` — "N commits have landed on origin/develop and are not deployed to this control plane" — with the most recent subjects. The comparison is against the project's `base_branch`, and only for projects whose `repo` matches this checkout (another project's `base_branch` is a branch of a different repository). To clear it, promote and run `bin/ctl-update`. **Do not point the control plane at `develop`** (ADR-0042).
+
+Project definitions get the same comparison just before they are copied to the VM. If the copy differs from `origin/<base>`, the first line of the run's `work/gates.txt` says `INFO pj-drift examples/projects/aifactory/ differs from origin/develop: gates.sh (missing: unittest-pull)`. `missing:` lists gates that exist on the base but not in the copy that was shipped — that is, **gates that did not run in that run**. It is informational, so the run is not stopped.
 
 ## Egress limits (firewall)
 

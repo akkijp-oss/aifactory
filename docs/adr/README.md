@@ -81,3 +81,5 @@
 - [0067: worker はゲストを止める前に作業ブランチを wip へ push する（保全コマンドは制御系が payload で渡す）](0067-worker-preserves-work-before-stopping-the-guest.md)
 - [0068: 止まったゲストは `guest-start` で起動し直し、`--resume` がそれを自動で呼ぶ（起動できない回は作り直さず止まる）](0068-guest-start-restarts-a-stopped-guest.md)
 - [0069: ゲストの時計は貸出のたびに合わせ、それでもずれていたら run を止める（記録の日付は「合っている」を前提にしない）](0069-guest-clock-is-synced-at-lease-and-skew-fails-the-run.md)
+- [0070: 制御系は `main` 追従のままにし、「develop に着地したが未配備」と「配った PJ 定義と正本のズレ」を機械で見せる](0070-control-plane-tracks-main-and-shows-what-is-not-deployed.md)
+- [0071: sandbox の Go は PJ テンプレートに焼き、版は `workers/go.mod` から読む。満たせない run は prepare で止める](0071-go-toolchain-is-baked-from-go-mod.md)

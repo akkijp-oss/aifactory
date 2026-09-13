@@ -8,6 +8,7 @@ auto_merge: true                # ゲート緑・レビュー PASS・CI 緑な�
 app_dir: /home/dev/app
 url: http://localhost:3000
 gates: gates.sh
+prepare: prepare.sh          # 貸出直後に Go が go.mod の要求を満たすか確かめる（ADR-0038 / ADR-0071）
 stack: "Python 3 標準ライブラリ + pyyaml + jsonschema / bash / MkDocs Material（website/）。VM 内の :3000 はドキュメントサイト（mkdocs serve）"
 facts:
   - "4 区画: sandbox/（VM）kanban/（bin/kb）workflow/（kit/ + bin/run）glue/（bin/intake, bin/dispatch）。その上に console/（bin/console, bin/mcp, lib/core.py）"
@@ -18,6 +19,7 @@ facts:
   - "shell スクリプトは bash -n が通ること。Python は py_compile が通ること。CI（.github/workflows/ci.yml）も同じ組を回す"
   - "秘密情報・ホスト名・私有 PJ 名をリポジトリに書かない。bin/oss-check.sh がゲートで検査する"
   - "CHANGELOG.md の [Unreleased] を直接編集しない。changelog.d/<チケット番号>-<slug>.md に 1 ファイル 1 項目で書く（書式は changelog.d/README.md。ADR-0032）"
+  - "workers/ は Go。テンプレートに go.mod の要求版が焼いてあるので `cd workers && go test -race ./...` がそのまま走る（自分で Go を落とさない。ADR-0071）"
   - "コミットメッセージは 1 行目に何を・なぜ（日本語で可）"
 review_points:
   - "置き場（パス）の判断を lib/aifactory_paths.py 以外に書いていないか"
