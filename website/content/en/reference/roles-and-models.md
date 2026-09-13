@@ -104,14 +104,14 @@ Weakest to strongest: the role's default class → the step's `model_class` → 
 Console → Settings → workflow → step (agent steps only) has "change the model". Pick one of the three scopes above
 (this step's model / this step's class / the shared route), then press "check the change". Before anything is written you see:
 
-The four lines of the route table (`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`) can also be
-edited straight from the "model routes" panel on the Settings page itself, without walking down to a step. That is the
-only way to reach `MODEL_default`, which no step refers to. Saving goes through the same preview and the same checks.
-
 - The effective model before and after, and **every step whose effective model changes** (for a shared route, that includes
   steps in other workflows)
 - The runs that are in flight (a running run keeps the settings it read at startup; nothing switches mid-run)
 - The file being written and its `git status` line
+
+The four lines of the route table (`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`) can also be
+edited straight from the "model routes" panel on the Settings page itself, without walking down to a step. That is the
+only way to reach `MODEL_default`, which no step refers to. Saving goes through the same preview and the same checks.
 
 Saving keeps the previous content next to the file as `.bak-<timestamp>` and appends a line to `logs/config-changes.jsonl`
 (also shown as "recent changes" on the page). To roll back, put the backup's content back.
