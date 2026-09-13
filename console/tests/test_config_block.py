@@ -287,7 +287,7 @@ class RepoIsNotTouchedTest(unittest.TestCase):
 class BlockRenderTest(BlockTestCase):
     """編集の欄と画面の中の同期（app.js の部品を node で直に動かす）"""
 
-    def js(self, probe):
+    def js(self, probe, pre=None):
         import json as _json
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         from test_console import js_line, js_block
@@ -298,16 +298,30 @@ class BlockRenderTest(BlockTestCase):
         src.write_text("\n".join([
             (static / "strings.js").read_text(encoding="utf-8"),
             *[js_line(app, n) for n in ("esc", "tt", "pad", "fmtT", "tzLabel", "cfgYamlInd", "cfgYamlGetKey",
-                                        "cfgYamlSetKey", "cfgVal", "cfgStepDiffRows", "cfgAffectedRows")],
-            *[js_block(app, n) for n in ("cfgModelPreview", "cfgBlockPreview", "cfgStepYaml")],
+                                        "cfgYamlSetKey", "cfgVal", "cfgStepDiffRows", "cfgAffectedRows",
+                                        "MODEL_OTHER", "cfgModelSync")],
+            *[js_block(app, n) for n in ("cfgModelPreview", "cfgBlockPreview", "cfgStepYaml",
+                                         "cfgYamlToForm", "cfgFormToYaml")],
             f"const wf = {_json.dumps(w, ensure_ascii=False)};",
             "const steps = {}; wf.steps.forEach(s => steps[s.id] = s);",
+            pre or "",
             "const out = {};",
             *[f"out[{k!r}] = {v};" for k, v in probe.items()],
             "console.log(JSON.stringify(out));"]), encoding="utf-8")
         r = subprocess.run(["node", str(src)], text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         return _json.loads(r.stdout)
+
+    #: 画面の欄の代わり。$ が返すのはこれだけで、DOM もブラウザーも要らない
+    FIELDS = """
+      const F = {
+        'cs-yaml': { value: steps.design.yaml_block },
+        'cm-model': { id: 'cm-model', value: 'claude-fable-5-1', dataset: { pick: 'cm-model-name' } },
+        'cm-model-name': { value: 'claude-fable-5-1', options: [{ value: '' }, { value: 'claude-fable-5-1' }, { value: 'claude-opus-5' }, { value: MODEL_OTHER }] },
+        'cm-class': { value: 'judgment', options: [{ value: 'judgment' }, { value: 'research' }, { value: 'coding' }] },
+      };
+      const $ = id => F[id] || null;
+    """
 
     def test_the_panel_shows_the_block_of_this_step_only(self):
         html = self.js({"y": "cfgStepYaml(wf, steps.design)"})["y"]
@@ -354,6 +368,42 @@ class BlockRenderTest(BlockTestCase):
         self.assertIn("role: reviewer", got["added"])
         self.assertNotIn("model:", got["dropped"])                         # 空にすれば行を消す（継承に戻す）
         self.assertIn("role: planner", got["dropped"])
+
+    def test_editing_the_yaml_moves_the_model_fields(self):
+        """yml の欄を直すと、ID の欄と 2 段選択とクラスの欄に出る（保存はしていない）"""
+        got = self.js({
+            "model": "F['cm-model'].value", "pick": "F['cm-model-name'].value", "cls": "F['cm-class'].value",
+        }, pre=self.FIELDS + """
+          F['cs-yaml'].value = cfgYamlSetKey(cfgYamlSetKey(steps.design.yaml_block, 'model', 'claude-opus-5'), 'model_class', 'research');
+          cfgYamlToForm();
+        """)
+        self.assertEqual((got["model"], got["pick"], got["cls"]), ("claude-opus-5", "claude-opus-5", "research"))
+
+    def test_emptying_the_model_line_in_the_yaml_shows_inheritance_in_the_form(self):
+        got = self.js({"model": "F['cm-model'].value", "pick": "F['cm-model-name'].value"}, pre=self.FIELDS + """
+          F['cs-yaml'].value = cfgYamlSetKey(steps.design.yaml_block, 'model', '');
+          cfgYamlToForm();
+        """)
+        self.assertEqual(got["model"], "")
+        self.assertEqual(got["pick"], "")                                  # 「継承」の選択肢に寄る
+
+    def test_editing_the_model_fields_moves_the_yaml(self):
+        """ID の欄とクラスの欄を直すと、yml の当該行だけが変わる（ほかの行とコメントはそのまま）"""
+        got = self.js({"yaml": "F['cs-yaml'].value"}, pre=self.FIELDS + """
+          F['cm-model'].value = 'claude-opus-5'; cfgFormToYaml('model');
+          F['cm-class'].value = 'coding'; cfgFormToYaml('model_class');
+        """)
+        self.assertIn("    model: claude-opus-5\n", got["yaml"])
+        self.assertIn("    model_class: coding\n", got["yaml"])
+        self.assertNotIn("claude-fable-5-1", got["yaml"])
+        self.assertIn("      research.md を踏まえて設計する", got["yaml"])   # brief はそのまま
+        self.assertTrue(got["yaml"].startswith("  - id: design\n"))
+        self.assertEqual(got["yaml"].count("    model:"), 1)
+
+    def test_a_screen_without_the_yaml_field_is_left_alone(self):
+        """トップの経路表のように yml の欄が無い画面では、同期は何もしない（落ちない）"""
+        got = self.js({"n": "(cfgFormToYaml('model'), cfgYamlToForm(), 1)"}, pre="const $ = () => null;")
+        self.assertEqual(got["n"], 1)
 
     def test_the_preview_lists_the_keys_that_change(self):
         p = self.apply(target="block", workflow="feature", step="design",
