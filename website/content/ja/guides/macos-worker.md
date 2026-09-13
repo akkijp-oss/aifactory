@@ -294,8 +294,9 @@ tart exec <guest> /bin/bash -lc 'pgrep -fl claude; pgrep -fl bash; uptime'
 
 **3. `resolve` してよい条件。** `resolve` はその操作を `uncertain` から `resolved` に変えるだけ。ゲストは止めないし、runのleaseも解放しない（それは6）。`uncertain` でない操作には `operation is not uncertain` を返す。次を全部満たしたときだけ使う。
 
-- そのゲストの実状態を管理者がMacホスト側で確認した。次のどちらか
-    - **止めた**: `tart list` に無い、または `tart stop <guest>` した（このrunは畳む → 5の2つめの道）
+- そのゲストの実状態を管理者がMacホスト側で確認した。次のどれか
+    - **止めた**: `tart stop <guest>` した（ゲストは `tart list` に `stopped` で残る。続けるなら5の2つめの道、畳むなら5の3つめの道）
+    - **無い**: `tart list` に無い（起動し直せないのでこのrunは畳む → 5の3つめの道）
     - **動いたまま**: ゲストは `running` のまま残すが、その操作のコマンドが走っていないことを2の `tart exec` で確認した（このrunを続ける → 5の1つめの道）
 - `cancel` を送っただけで済ませていない。`cancel` は停止要求であって停止確認ではない
 - ジャーナルを消していない。消してから同じ未完了操作を再開しない（起動済みのコマンドを二重に走らせない根拠が消える）
@@ -328,7 +329,7 @@ python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <le
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<成功したguest-releaseの操作ID>'
 ```
 
-`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは5の2つめの道で投げ直す。どの工程から再開するか、再開できない条件は「失敗時の復旧」と [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
+`guest-release` はゲストの停止・削除とワーカー側のlease記録の削除まで行い、そこまで届かなければ `uncertain` を返す。繰り返し失敗するなら、先にMac側で `tart stop` / `tart delete` して実状態を片づける。解放したrunは `--resume` の条件を満たさないので、続きは5の3つめの道で投げ直す。どの工程から再開するか、再開できない条件は「失敗時の復旧」と [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md) にある。この節では繰り返さない。
 
 ## workflowのcode step対応
 

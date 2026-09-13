@@ -294,8 +294,9 @@ tart exec <guest> /bin/bash -lc 'pgrep -fl claude; pgrep -fl bash; uptime'
 
 **3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 6). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
 
-- An administrator confirmed the guest's real state from the Mac host, in one of two ways
-    - **Stopped it**: absent from `tart list`, or stopped with `tart stop <guest>` (this run is being wound up → the second path in step 5)
+- An administrator confirmed the guest's real state from the Mac host, in one of the following ways
+    - **Stopped it**: stopped with `tart stop <guest>` (the guest stays in `tart list` as `stopped`; to continue take the second path in step 5, to wind the run up take the third path)
+    - **Gone**: absent from `tart list` (it cannot be started again, so this run is being wound up → the third path in step 5)
     - **Left it running**: the guest stays `running`, but `tart exec` in step 2 confirmed that the operation's command is not running (this run continues → the first path in step 5)
 - You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
 - You did not delete the journal. Never delete it and then rerun the same unfinished operation: that is the record that keeps an already-started command from running twice
@@ -328,7 +329,7 @@ python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <le
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<the successful guest-release operation ID>'
 ```
 
-`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
+`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the third path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
 ## Workflow code step support
 
