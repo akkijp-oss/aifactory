@@ -172,6 +172,7 @@ const T = {
     "failed_before_start": "VM の準備で止まりました: {summary}",
     "wait_timeout": "VM の空きを {n} 分待ちましたが出ませんでした。チケットは未着手に戻っています。",
     "prepare_failed": "貸出直後の準備（prepare）で止まりました: {summary}",
+    "clock_skew": "ゲストの時計が制御系と {n} 秒ずれていたので、工程を 1 つも始めずに止めました（そのまま回すとコミットと ADR の日付が嘘になります）。VM を巻き戻してから回し直してください。",
     "nokey": "Claude の鍵が無いので一時停止しました（必要: {need}）。「鍵」画面で登録すると自動で回し直します。チケットは未着手に戻っています。",
     "needFable": "Fable に使う鍵", "needOther": "Opus・Sonnet・Haiku に使う鍵",
     "lease": "VM {name} は貸出中のままです。",

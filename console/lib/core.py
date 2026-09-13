@@ -402,6 +402,11 @@ def run_outcome(d, s, state, wf, files):
         # prepare.sh か VM の側にある。「VM を取得できなかった」と混ぜない
         if state.get("failure") == "prepare":
             o["reason"] = "prepare_failed"; o["stopped_step"] = "prepare"
+        # 貸出直後のゲストの時計が制御系とずれていた run（491）。VM は取れていて、直すのは時計（巻き戻し）。
+        # 「準備が失敗した」とも「VM を取得できなかった」とも混ぜない
+        if state.get("failure") == "clock":
+            o["reason"] = "clock_skew"; o["stopped_step"] = "take"
+            o["clock_offset_s"] = state.get("clock_offset_s")
         # 要る用途の Claude の鍵が鍵プールに無く、VM を取らずに一時停止した run（ADR-0046）。チケットは todo に戻っていて、鍵が登録されると timer が回し直す
         if state.get("failure") == "nokey":
             o["reason"] = "nokey"; o["stopped_step"] = "take"; o["needed_keys"] = [k for k in (state.get("needed_keys") or []) if k in ("fable", "other")]

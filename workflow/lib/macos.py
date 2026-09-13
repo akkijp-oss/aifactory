@@ -307,6 +307,9 @@ def backend(Run):
             prepare = {"width": display["width"], "height": display["height"]} if display else {}
             _, r = self.client.execute("guest-prepare", prepare)
             if r.returncode: raise RuntimeError("Mac VM prepare failed; lease retained")
+            # 工程を始める前にゲストの時計を測る（491）。Mac ゲストは RAM snapshot を戻さないので
+            # Proxmox と同じ形ではずれない見込みだが、測らずに「ずれない」とは言えない
+            self.check_clock()
             self.setup_project()
 
         def resume_guest(self, lease):

@@ -70,6 +70,9 @@ def backend(Run):
         def refresh_token(self):
             if not self.dry: self.write_remote(self.env_file, json.dumps(self.credentials()))
 
+        # 時計の probe は OS ごとに違う（run の既定は `date -u +%s`。491）
+        clock_probe_cmd = '[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()'
+
         def take(self):
             if self.dry: return
             self.record_needed_keys()
@@ -103,6 +106,7 @@ def backend(Run):
             self.set_current('prepare', 'code', 'prepare.log')
             _, result = self.client.execute('guest-prepare')
             if result.returncode: raise RuntimeError('Windows workspace preparation failed; lease retained')
+            self.check_clock()   # 工程を始める前にゲストの時計を測る（491）
             self.setup_project()
 
         def setup_project(self):

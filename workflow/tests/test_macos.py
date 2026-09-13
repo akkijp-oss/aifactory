@@ -285,6 +285,7 @@ class MacLeaseWaitTest(unittest.TestCase):
         self.logs = []          # runner の log 行
         self.seen = []          # workers() が呼ばれた時点の state.json の写し
         self.executed = []      # client.execute に渡った (kind, payload)
+        self.clock_offset = 0   # 偽ゲストの時計のずれ（秒。491）
 
     def since(self):
         return datetime.datetime.fromtimestamp(self.LEASE_CREATED).astimezone().isoformat(timespec='seconds')
@@ -313,6 +314,9 @@ class MacLeaseWaitTest(unittest.TestCase):
         store = types.SimpleNamespace(workers=workers, acquire=lambda w, l: self.acquired.append((w, l)))
         def execute(kind, payload=None, *a, **k):
             self.executed.append((kind, payload))
+            # take が貸出直後に測る時計（491）。偽ゲストは self.clock_offset 秒ずれている
+            if kind == 'guest-exec' and 'date -u +%s' in (payload or {}).get('command', ''):
+                return ('op-1', types.SimpleNamespace(returncode=0, stdout=str(int(time.time()) + self.clock_offset)))
             return ('op-1', types.SimpleNamespace(returncode=0, stdout=''))
 
         client = types.SimpleNamespace(store=store, lease=None, execute=execute)
@@ -342,11 +346,30 @@ class MacLeaseWaitTest(unittest.TestCase):
         r = self.build(343)
         r.project = {**r.project, 'display': {'width': 1600, 'height': 1000}}
         r.take()
-        self.assertEqual(self.executed, [('guest-prepare', {'width': 1600, 'height': 1000})])
+        # take は時計の probe も投げる（491）ので、見るのは guest-prepare だけ
+        self.assertEqual([e for e in self.executed if e[0] == 'guest-prepare'],
+                         [('guest-prepare', {'width': 1600, 'height': 1000})])
         self.executed.clear()
         plain = self.build(344)
         plain.take()
-        self.assertEqual(self.executed, [('guest-prepare', {})])
+        self.assertEqual([e for e in self.executed if e[0] == 'guest-prepare'], [('guest-prepare', {})])
+
+    def test_a_mac_guest_with_a_skewed_clock_fails_the_take_and_keeps_the_lease(self):
+        """チケット 491: ゲストの時計が制御系とずれていたら、provision（setup_project）まで進まずに止める。
+        lease は残す（pull backend の約束どおり、止まったゲストを人が調べられるように）"""
+        r = self.build(491)
+        self.clock_offset = 578400          # 6 日 17 時間（Proxmox 側で実測した幅）
+        r.setup_project = lambda: self.fail('時計がずれたまま provision した')
+        with self.assertRaises(run_mod.ClockSkew) as e:
+            r.take()
+        self.assertIn('ずれている', str(e.exception))
+        self.assertAlmostEqual(r.state['clock_offset_s'], 578400, delta=5)
+        self.assertEqual(self.acquired, [('mac1', r.state['lease'])])   # lease は取ったまま残す
+        # 許容内なら今までどおり provision まで進む
+        ok = self.build(492)
+        self.clock_offset = 5
+        ok.take()
+        self.assertLessEqual(abs(ok.state['clock_offset_s']), 60)
 
     def test_every_guest_exec_carries_the_preserve_command_for_the_wip_branch(self):
         """チケット 477: worker が取り消しでゲストを止める前に作業を逃がせるよう、
