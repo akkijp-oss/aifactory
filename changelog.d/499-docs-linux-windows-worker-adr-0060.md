@@ -1,0 +1,2 @@
+### Fixed
+- **運用ガイド: `docs/linux-worker.md` と `docs/windows-worker.md` の「鍵の出どころ」が ADR-0060 で廃止された env フォールバックを説明していた**。#492 で直した `docs/macos-worker.md` と同じ誤りが 2 ファイルに残っていた。「プールが空のときだけ `pj/<pj>.env` と `env` の鍵を互換として使う」は ADR-0046 時代の挙動で、ADR-0060（鍵の出どころは鍵プールだけ）の着地時に website 版だけが直り、リポジトリ直下の `docs/` が取り残されていた。鍵が切れて run が「鍵なし」で止まったとき、運用者が先に読む `docs/` を見て廃止済みの経路（`sandbox token set claude` 自体が拒否される）に鍵を置く無駄手を踏む余地があった。3 つの `docs/*-worker.md` で言い回しを揃えた。
