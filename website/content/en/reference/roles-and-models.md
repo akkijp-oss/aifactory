@@ -109,6 +109,12 @@ Console → Settings → workflow → step (agent steps only) has "change the mo
 - The runs that are in flight (a running run keeps the settings it read at startup; nothing switches mid-run)
 - The file being written and its `git status` line
 
+The model is picked in two steps: **the agent (the CLI that runs it — only claude for now) → the model name (a display
+name such as `Opus 5`)**. Picking one fills in the model ID field below it, and what gets saved is still a single model
+ID. The display-name-to-ID table lives in `console/lib/core.py` as `MODEL_CATALOG` and is not copied into this page.
+A model that is not in the table can be typed into the ID field directly, and a value already in the settings that the
+table does not know stays in the list (ADR-0072).
+
 The four lines of the route table (`MODEL_judgment` / `MODEL_research` / `MODEL_coding` / `MODEL_default`) can also be
 edited straight from the "model routes" panel on the Settings page itself, without walking down to a step. That is the
 only way to reach `MODEL_default`, which no step refers to. Saving goes through the same preview and the same checks.
@@ -123,8 +129,9 @@ Saving keeps the previous content next to the file as `.bak-<timestamp>` and app
 !!! note "Which model names are accepted"
     The name must reveal its key family (fable / opus / sonnet / haiku). Without a family the runner does not pick a
     per-family key and falls back to the shared `CLAUDE_CODE_OAUTH_TOKEN`; the step still runs, but not necessarily on the
-    key you meant, so the console refuses the value (editing the file directly still accepts it). Suggestions come from the
-    values currently in use, and new names can be typed in directly.
+    key you meant, so the console refuses the value (editing the file directly still accepts it). Model names are picked from a
+    table of display names, but that table lists what you can pick, not what you can save: a new name that is not in the
+    table can still be typed in directly.
 
 ## Adding a role
 
