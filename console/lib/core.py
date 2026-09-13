@@ -1001,26 +1001,65 @@ class JobStore:
 
 # ---------- 枠組みの checkout（ctl の ~/aifactory）が origin と食い違っていないか
 REPO_STATUS_TTL = 30            # overview は 5 秒ごとに来る。git は 30 秒に 1 回だけ呼ぶ
+REPO_FETCH_TTL = 300            # 網（origin）を触るのは 5 分に 1 回まで
+REPO_FETCH = os.environ.get("CONSOLE_REPO_FETCH", "1") != "0"   # 網を嫌う運用の逃げ道（fetch だけを止める）
 _repo_status_cache = {}
+_repo_fetch_at = {}
 
 
-def _git_out(path, *args):
+def _git_out(path, *args, timeout=5):
     """git を読むだけで呼ぶ。戻り: (rc, stdout)。git が無い・checkout でない・応答が無いときも例外にしない"""
     try:
-        r = subprocess.run(["git", *args], cwd=str(path), text=True, capture_output=True, errors="replace", timeout=5)
+        r = subprocess.run(["git", *args], cwd=str(path), text=True, capture_output=True, errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return 1, ""
     return r.returncode, r.stdout.strip()
 
 
-def repo_status(path=None, ttl=REPO_STATUS_TTL):
-    """この checkout（runner と console が動いている枠組みそのもの）が origin と食い違っていないか（チケット 337）。
+def repo_slug(url):
+    """git の URL（https / ssh / ローカルパス）を owner/name に揃える。比べられなければ None。
+
+    project.yml の `repo`（`owner/name`）と `git remote get-url origin` を突き合わせるためだけに使う。
+    末尾の `.git` と `/` を落とし、`:`（scp 風の ssh）も区切りとして扱う"""
+    u = (url or "").strip().rstrip("/")
+    if u.endswith(".git"): u = u[:-4]
+    parts = [x for x in u.replace(":", "/").split("/") if x]
+    return "/".join(parts[-2:]).lower() if len(parts) >= 2 else None
+
+
+def _pj_bases(slug):
+    """この checkout と同じリポジトリを見ている PJ の base_branch → PJ 名（チケット 487）。
+
+    他 PJ の base_branch は別リポジトリのブランチ名なので比べない（kumitate の develop を
+    この checkout の origin/develop と比べると、嘘の「未配備」を出す）。yaml が壊れている PJ は飛ばす"""
+    out = {}
+    if not slug: return out
+    for pj in paths.projects():
+        py = project_yml(pj)
+        if not py.exists(): continue
+        y = load_yaml(py)
+        if not isinstance(y, dict) or y.get("_error"): continue
+        if repo_slug(str(y.get("repo") or "")) != slug: continue
+        b = str(y.get("base_branch") or "main").strip()
+        if b: out.setdefault(b, []).append(pj)
+    return out
+
+
+def repo_status(path=None, ttl=REPO_STATUS_TTL, fetch=False):
+    """この checkout（runner と console が動いている枠組みそのもの）が origin と食い違っていないか（チケット 337 / 487）。
 
     runner は PJ 定義（examples/projects/<pj>/ の project.yml / gates.sh / provision.sh）を作業ツリーから
     直接読むので、ctl で直して push していない変更はそのまま本番の挙動になる。origin と食い違ったまま
     動いていることに気づけるように、ahead / behind / 汚れ を overview に添える。判定はここ 1 か所（ADR-0015）。
 
-    - 網は触らない（fetch しない）。behind は最後に fetch した時点との差
+    さらに、この checkout は main 追従（ADR-0042）なので、base が develop の PJ では **develop に着地した
+    変更が main 昇格まで 1 行も効かない**（チケット 487。#446 の unittest-pull、#491 の sync_clock が実例）。
+    ahead / behind は @{upstream}（= origin/main）との比較なのでこの状態を clean と言ってしまう。
+    そこで PJ の base_branch（この checkout と同じ repo の PJ だけ）とも比べ、bases / undeployed で返す。
+
+    - 追従先は変えない。ここでやるのは「着地したのにまだ効いていない」を見せることだけ
+    - fetch=True のときだけ網を触る（REPO_FETCH_TTL 秒に 1 回・timeout つき・失敗は fetch_error に握る）。
+      HEAD も作業ツリーも動かさない。既定は今までどおり触らない
     - git が無い・checkout でないときは known=False（分からない。警告も出さない）
     - 上流が無いとき（detached や追跡なし）は ahead / behind は None。detached=True で分かる
     """
@@ -1029,7 +1068,8 @@ def repo_status(path=None, ttl=REPO_STATUS_TTL):
     hit = _repo_status_cache.get(key)
     if hit and (time.monotonic() - hit[0]) < ttl: return hit[1]
     d = {"path": key, "known": False, "branch": None, "upstream": None, "detached": False,
-         "ahead": None, "behind": None, "dirty": 0, "diverged": False}
+         "ahead": None, "behind": None, "dirty": 0, "diverged": False,
+         "bases": [], "undeployed": False, "fetched": None, "fetch_error": None}
     rc, top = _git_out(p, "rev-parse", "--show-toplevel")
     if rc == 0 and top:
         d["known"] = True
@@ -1037,16 +1077,58 @@ def repo_status(path=None, ttl=REPO_STATUS_TTL):
         d["detached"] = branch == "HEAD"
         d["branch"] = None if d["detached"] else (branch or None)
         rc, up = _git_out(p, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-        if rc == 0 and up:
-            d["upstream"] = up
+        if rc == 0 and up: d["upstream"] = up
+        _, origin_url = _git_out(p, "remote", "get-url", "origin")
+        # 上流のブランチ（origin/main）は既存の ahead / behind が担うので、base の一覧からは外す（同じ比較を 2 回出さない）
+        up_branch = (d["upstream"] or "").split("/", 1)[1] if "/" in (d["upstream"] or "") else None
+        bases = {b: pjs for b, pjs in _pj_bases(repo_slug(origin_url)).items() if b != up_branch}
+        if fetch: _repo_fetch(p, d, [b for b in ([up_branch] if up_branch else []) + sorted(bases)])
+        if d["upstream"]:
             rc, counts = _git_out(p, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
             n = counts.split()
             if rc == 0 and len(n) == 2: d["ahead"], d["behind"] = int(n[0]), int(n[1])
         rc, dirty = _git_out(p, "status", "--porcelain")
         if rc == 0: d["dirty"] = len([l for l in dirty.splitlines() if l.strip()])
-        d["diverged"] = bool(d["ahead"] or d["behind"] or d["dirty"])
+        d["diverged"] = bool(d["ahead"] or d["behind"] or d["dirty"])     # 意味は 337 のまま（未配備は別のキー）
+        for b in sorted(bases):
+            d["bases"].append(_base_status(p, b, bases[b]))
+        d["undeployed"] = any(bool(b["undeployed"]) for b in d["bases"])
     _repo_status_cache[key] = (time.monotonic(), d)
     return d
+
+
+def _repo_fetch(p, d, branches):
+    """origin の当該ブランチだけを取り込む。HEAD も作業ツリーも動かさない（読むためだけの fetch）。
+
+    console は 5 秒ごとに overview を出すので、REPO_FETCH_TTL 秒に 1 回まで。認証が無い・網が無い運用でも
+    他の機能を止めないよう、失敗は例外にせず fetch_error（画面に 1 行出す）に落とす"""
+    if not branches: return
+    last = _repo_fetch_at.get(str(p))
+    if last is not None and (time.monotonic() - last) < REPO_FETCH_TTL:
+        d["fetched"] = _repo_fetch_at.get(str(p) + ":at")
+        return
+    _repo_fetch_at[str(p)] = time.monotonic()
+    rc, _ = _git_out(p, "fetch", "-q", "origin", *branches, timeout=15)
+    if rc == 0:
+        _repo_fetch_at[str(p) + ":at"] = d["fetched"] = now()
+    else:
+        d["fetch_error"] = f"git fetch origin {' '.join(branches)} が失敗しました"
+
+
+def _base_status(p, b, pjs):
+    """HEAD（この制御系が動かしている版）と origin/<base> の差。origin/<base> が無ければ known=False"""
+    s = {"branch": b, "pjs": sorted(pjs), "known": False, "only_here": None, "undeployed": None, "latest": []}
+    rc, _ = _git_out(p, "rev-parse", "-q", "--verify", f"refs/remotes/origin/{b}")
+    if rc != 0: return s
+    rc, counts = _git_out(p, "rev-list", "--left-right", "--count", f"HEAD...origin/{b}")
+    n = counts.split()
+    if rc != 0 or len(n) != 2: return s
+    s["known"] = True
+    s["only_here"], s["undeployed"] = int(n[0]), int(n[1])
+    if s["undeployed"]:
+        rc, log = _git_out(p, "log", "--format=%h %s", "-5", f"HEAD..origin/{b}")
+        if rc == 0: s["latest"] = [l for l in log.splitlines() if l.strip()]
+    return s
 
 
 # ---------- overview
@@ -1079,7 +1161,7 @@ def overview(pj=None, limit=6):
             "lent": len([v for v in lent.values() if isinstance(v, dict)]),      # 貸出の件数（MCP の既存利用者のために残す）
             "vms_lent": len(leases_by_vmid(lent)),                                # ナビに出す台数（同じ VM の 2 件は 1 台）
             "db": DB.exists(), "kb_root": str(KB_ROOT), "paths": paths.describe(),
-            "repo": repo_status(),                                                # PJ 定義を読む checkout が origin と食い違っていないか（337）
+            "repo": repo_status(fetch=REPO_FETCH),                                # PJ 定義を読む checkout が origin と食い違っていないか（337）。base に着地済みの未配備も（487）
             "now": now(), "tz": tz_info()}
 
 
