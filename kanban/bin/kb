@@ -610,6 +610,15 @@ def apply_result(c, tid, run_dir, rc=0, dry=False):
             status = "todo"
             note = (f"Claude の鍵が無いので一時停止（必要: {key_purposes(need)}）。console の「鍵」画面か sandbox keys add で登録すると自動で再開"
                     "（dispatch --resume-paused）")
+        elif result == "failed" and s.get("failure") == "clock":
+            # 貸出直後のゲストの時計が制御系とずれていた run（491）。そのまま回すと commit の author date と
+            # ADR の日付が数日前になるので、工程を 1 つも始めずに止めてある。この run の VM は開始前の失敗として
+            # 既に返してあるので（run の fail_before_start）、巻き戻す相手は居ない。次の貸出（take）が sync_clock で合わせる
+            off = s.get("clock_offset_s")
+            how = f"{int(off)} 秒" if isinstance(off, (int, float)) else "大きく"
+            status = "blocked"
+            note = (f"ゲストの時計が制御系と{how}ずれていた（貸出直後に検知）。そのまま回すとコミットと ADR の日付が嘘になる。"
+                    "時計は次の貸出で合わせ直すので、kb reopen → kb run で回し直す")
         elif result == "failed" and s.get("failure") == "prepare":
             # 貸出直後の準備で落ちた run（330）。VM は取れているので「取得できず」ではない。直す所は prepare.sh か VM の側
             why = ([l.strip() for l in (s.get("error") or "").splitlines() if l.strip()] or ["理由不明"])[-1][:120]

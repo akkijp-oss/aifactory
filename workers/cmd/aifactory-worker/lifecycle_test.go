@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -268,5 +269,374 @@ func TestPrepareRefusesADisplayOutsideTheAllowedRange(t *testing.T) {
 			}
 		}
 		j.lock.Close()
+	}
+}
+
+// チケット 477: 取り消し由来の停止（main.go の guest-exec 側）は、ゲストを止める前に
+// 制御系が payload で渡した保全コマンドを guest 内で 1 回走らせる。ゲスト内のコミット済み・
+// 未 push の実装がゲスト停止で消えるのを防ぐため。
+func TestCancellationPreservesWorkBeforeStoppingGuest(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	j.begin("preserve-op")
+	w := &worker{c: config{GuestVM: "guest", Tart: "/approved/tart"}, j: j, done: make(chan struct{})}
+	w.lastOK.Store(time.Now().UnixNano())
+	var order []string
+	preserves := 0
+	w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		switch args[0] {
+		case "exec":
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "git push") {
+				order = append(order, "preserve")
+				preserves++
+				// 保全は取り消された ctx に紐づけてはいけない（紐づくと即死して保全できない）
+				if ctx.Err() != nil {
+					t.Fatal("preserve inherited the cancelled context")
+				}
+				return exec.CommandContext(ctx, "/bin/sh", "-c", "echo preserved")
+			}
+			order = append(order, "exec")
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 30")
+		case "stop":
+			order = append(order, "stop")
+			return exec.CommandContext(ctx, "/usr/bin/true")
+		case "list":
+			return exec.CommandContext(ctx, "/bin/sh", "-c", `printf '%s' '[{"Source":"local","Name":"guest","State":"stopped"}]'`)
+		}
+		t.Fatal(args)
+		return nil
+	}
+	op := operation{ID: "preserve-op", Kind: "guest-exec"}
+	op.Payload.Command = "sleep 30"
+	op.Payload.Preserve = "cd $SANDBOX_APP_DIR && git push -q --force origin refs/heads/b:refs/heads/sandbox/1-bug-wip"
+	op.Payload.Timeout = 10
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	w.execute(ctx, op)
+	b, _ := os.ReadFile(filepath.Join(j.dir(op.ID), "result.json"))
+	var r result
+	json.Unmarshal(b, &r)
+	if r.Status != "cancelled" {
+		t.Fatal(string(b))
+	}
+	if preserves != 1 {
+		t.Fatalf("preserve ran %d times: %v", preserves, order)
+	}
+	// 保全はゲスト停止より先に来ること（止めてからでは push できない）
+	pi, si := indexOf(order, "preserve"), indexOf(order, "stop")
+	if pi < 0 || si < 0 || pi > si {
+		t.Fatalf("preserve must come before stop: %v", order)
+	}
+	log := journalLog(t, j, op.ID)
+	if !strings.Contains(log, "[preserve]") || !strings.Contains(log, "[preserve] ok") {
+		t.Fatalf("preserve attempt and result must be in the operation log: %q", log)
+	}
+	// コマンド本文は payload なのでログに出さない（pull.py の方針と揃える）
+	if strings.Contains(log, "git push") {
+		t.Fatalf("preserve command must not be logged: %q", log)
+	}
+}
+
+// 保全が失敗しても・固まっても、ゲスト停止は必ず完了する（保全の失敗で worker が詰まらない）。
+func TestPreserveFailureStillStopsGuest(t *testing.T) {
+	for _, tc := range []struct{ name, script string }{
+		{"nonzero", "echo no-remote >&2; exit 1"},
+		{"hangs", "sleep 30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, _ := newJournal(t.TempDir())
+			defer j.lock.Close()
+			j.begin("preserve-fail")
+			w := &worker{c: config{GuestVM: "guest", Tart: "/approved/tart"}, j: j, done: make(chan struct{})}
+			w.lastOK.Store(time.Now().UnixNano())
+			defer func(d time.Duration) { preserveTimeout = d }(preserveTimeout)
+			preserveTimeout = 200 * time.Millisecond
+			stopped := false
+			w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+				switch args[0] {
+				case "exec":
+					if strings.Contains(strings.Join(args, " "), "git push") {
+						return exec.CommandContext(ctx, "/bin/sh", "-c", tc.script)
+					}
+					return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 30")
+				case "stop":
+					stopped = true
+					return exec.CommandContext(ctx, "/usr/bin/true")
+				case "list":
+					if !stopped {
+						t.Fatal("stop not requested")
+					}
+					return exec.CommandContext(ctx, "/bin/sh", "-c", `printf '%s' '[{"Source":"local","Name":"guest","State":"stopped"}]'`)
+				}
+				t.Fatal(args)
+				return nil
+			}
+			op := operation{ID: "preserve-fail", Kind: "guest-exec"}
+			op.Payload.Command = "sleep 30"
+			op.Payload.Preserve = "cd $SANDBOX_APP_DIR && git push -q --force origin refs/heads/b:refs/heads/sandbox/1-bug-wip"
+			op.Payload.Timeout = 10
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(100*time.Millisecond, cancel)
+			w.execute(ctx, op)
+			b, _ := os.ReadFile(filepath.Join(j.dir(op.ID), "result.json"))
+			var r result
+			json.Unmarshal(b, &r)
+			if !stopped || r.Status != "cancelled" {
+				t.Fatal(stopped, string(b))
+			}
+			if log := journalLog(t, j, op.ID); !strings.Contains(log, "[preserve] failed") {
+				t.Fatalf("failure reason must be in the operation log: %q", log)
+			}
+		})
+	}
+}
+
+// 保全コマンドが無い payload（古い制御系）は従来どおり: 余計な exec 無しで止める。
+func TestCancellationWithoutPreserveSpecStopsGuest(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	j.begin("no-preserve")
+	w := &worker{c: config{GuestVM: "guest", Tart: "/approved/tart"}, j: j, done: make(chan struct{})}
+	w.lastOK.Store(time.Now().UnixNano())
+	stopped, execs := false, 0
+	w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		switch args[0] {
+		case "exec":
+			execs++
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 30")
+		case "stop":
+			stopped = true
+			return exec.CommandContext(ctx, "/usr/bin/true")
+		case "list":
+			return exec.CommandContext(ctx, "/bin/sh", "-c", `printf '%s' '[{"Source":"local","Name":"guest","State":"stopped"}]'`)
+		}
+		t.Fatal(args)
+		return nil
+	}
+	op := operation{ID: "no-preserve", Kind: "guest-exec"}
+	op.Payload.Command = "sleep 30"
+	op.Payload.Timeout = 10
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	w.execute(ctx, op)
+	b, _ := os.ReadFile(filepath.Join(j.dir(op.ID), "result.json"))
+	var r result
+	json.Unmarshal(b, &r)
+	if !stopped || r.Status != "cancelled" || execs != 1 {
+		t.Fatal(stopped, execs, string(b))
+	}
+	if log := journalLog(t, j, op.ID); strings.Contains(log, "[preserve]") {
+		t.Fatalf("no preserve line expected: %q", log)
+	}
+}
+
+// 保全コマンドは「押した」ときと「押す価値が無いので押さなかった」ときを言い分ける（制御系が組み立てる。
+// 実物の git での確認は workflow/tests/test_macos_preserve_before_stop.py）。どちらだったのかが
+// operation のログから読めること（読めないと、巻き戻しを避けた回と保全できた回が区別できない）。
+func TestPreserveOutcomeIsDistinguishableInTheOperationLog(t *testing.T) {
+	for _, tc := range []struct{ name, echo, want string }{
+		{"pushed", "preserved", "[preserve] ok: preserved"},
+		{"skipped", "skipped: pushing would rewind the wip branch", "[preserve] ok: skipped: pushing would rewind the wip branch"},
+		{"quiet", "", "[preserve] ok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, _ := newJournal(t.TempDir())
+			defer j.lock.Close()
+			j.begin("preserve-log")
+			w := &worker{c: config{GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+			w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+				return exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' "+strconv.Quote(tc.echo))
+			}
+			op := operation{ID: "preserve-log", Kind: "guest-exec"}
+			op.Payload.Preserve = "cd $SANDBOX_APP_DIR && git push -q --force-with-lease=refs/heads/sandbox/1-bug-wip: origin refs/heads/b:refs/heads/sandbox/1-bug-wip"
+			w.preserveWork(op, &logWriter{j: j, id: op.ID})
+			log := journalLog(t, j, op.ID)
+			if !strings.Contains(log, tc.want) {
+				t.Fatalf("want %q in the operation log: %q", tc.want, log)
+			}
+			if strings.Contains(log, "git push") {
+				t.Fatalf("preserve command must not be logged: %q", log)
+			}
+		})
+	}
+}
+
+func indexOf(values []string, want string) int {
+	for i, v := range values {
+		if v == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func journalLog(t *testing.T, j *journal, id string) string {
+	t.Helper()
+	var sb strings.Builder
+	for seq := 0; ; seq++ {
+		b, err := os.ReadFile(j.event(id, seq))
+		if err != nil {
+			return sb.String()
+		}
+		sb.Write(b)
+	}
+}
+
+// startFake は guest-start のテスト用に tart をモックする。list が返す状態と、呼ばれた引数を記録する。
+func startFake(t *testing.T, exists, running *bool, calls *[][]string) func(context.Context, string, ...string) *exec.Cmd {
+	return func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		if path != "/approved/tart" {
+			t.Fatal(path)
+		}
+		*calls = append(*calls, append([]string{}, args...))
+		output := ""
+		switch args[0] {
+		case "list":
+			output = "[]"
+			if *exists {
+				state := "stopped"
+				if *running {
+					state = "running"
+				}
+				b, _ := json.Marshal([]map[string]string{{"Source": "local", "Name": "guest", "State": state}})
+				output = string(b)
+			}
+		case "run":
+			*running = true
+		case "clone", "delete":
+			t.Fatal("guest-start recreated or removed the retained guest", args)
+		case "stop":
+			*running = false
+		}
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "printf '%s' \"$FAKE_OUTPUT\"")
+		cmd.Env = append(os.Environ(), "FAKE_OUTPUT="+output)
+		return cmd
+	}
+}
+
+func startWorker(t *testing.T, lease string) (*worker, *journal) {
+	j, err := newJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &worker{c: config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+	if lease != "" {
+		if err := writeAtomic(w.leasePath(), []byte(lease)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w, j
+}
+
+func TestStartRestartsAStoppedOwnedGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, false
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("start")
+	op := operation{ID: "start", Kind: "guest-start"}
+	op.Payload.Lease = "lease-1"
+	r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID})
+	if r.Status != "succeeded" {
+		t.Fatal(r, calls)
+	}
+	booted, probed := false, false
+	for _, args := range calls {
+		if args[0] == "run" {
+			joined := strings.Join(args, " ")
+			for _, required := range []string{"--no-clipboard", "--no-audio", "--net-softnet-block="} {
+				if !strings.Contains(joined, required) {
+					t.Fatal(args)
+				}
+			}
+			for _, forbidden := range []string{"--dir", "--net-softnet-allow", "--net-bridged"} {
+				if strings.Contains(joined, forbidden) {
+					t.Fatal(args)
+				}
+			}
+			booted = true
+		}
+		if args[0] == "exec" && args[len(args)-1] == "/usr/bin/true" {
+			probed = true
+		}
+	}
+	if !booted || !probed || !running {
+		t.Fatal("stopped guest was not restarted", calls)
+	}
+	// 人が検査するために残した lease は、起動でも消さない。
+	if !w.ownsLease("lease-1") {
+		t.Fatal("start dropped the retained lease")
+	}
+}
+
+func TestStartIsIdempotentOnARunningGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, true
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("start")
+	op := operation{ID: "start", Kind: "guest-start"}
+	op.Payload.Lease = "lease-1"
+	if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "succeeded" {
+		t.Fatal(r, calls)
+	}
+	for _, args := range calls {
+		if args[0] == "run" {
+			t.Fatal("started an already running guest", calls)
+		}
+	}
+}
+
+func TestStartRefusesForeignLeaseOrMissingGuest(t *testing.T) {
+	w, j := startWorker(t, "lease-1")
+	defer j.lock.Close()
+	exists, running := true, false
+	var calls [][]string
+	w.command = startFake(t, &exists, &running, &calls)
+	j.begin("foreign")
+	op := operation{ID: "foreign", Kind: "guest-start"}
+	op.Payload.Lease = "lease-2"
+	if r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID}); r.Status != "uncertain" || len(calls) != 0 {
+		t.Fatal("another run's lease touched the VM", r, calls)
+	}
+
+	// ゲストが消えている＝起動し直せない。黙って作り直さず、明示的に failed で止まる。
+	exists = false
+	j.begin("missing")
+	op.ID, op.Payload.Lease = "missing", "lease-1"
+	r := w.lifecycle(context.Background(), op, &logWriter{j: j, id: op.ID})
+	if r.Status != "failed" || r.ExitCode == nil || *r.ExitCode != 1 {
+		t.Fatal(r, calls)
+	}
+	for _, args := range calls {
+		if args[0] == "run" {
+			t.Fatal("recreated a missing guest", calls)
+		}
+	}
+	if !w.ownsLease("lease-1") {
+		t.Fatal("a failed start dropped the retained lease")
+	}
+}
+
+// 制御系は info の guest_start を見て guest-start を投げるか決める（pull.py の 409 と二重のガード）。
+// ここが落ちると --resume は黙って従来の「ゲストが停止」エラーへ戻るので、広告そのものを固定する。
+func TestInfoAdvertisesGuestStartOnlyForLifecycleWorkers(t *testing.T) {
+	j, _ := newJournal(t.TempDir())
+	defer j.lock.Close()
+	w := &worker{c: config{BaseVM: "base", GuestVM: "guest", Tart: "/approved/tart"}, j: j}
+	w.command = func(ctx context.Context, path string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "printf '[]'")
+	}
+	info := w.info()
+	if info["guest_start"] != true || info["lifecycle"] != true {
+		t.Fatal(info)
+	}
+	// 基準VMを持たない probe-only のワーカーは起動し直すゲストを持たない。
+	bare := &worker{c: config{Tart: "/approved/tart"}, j: j}
+	if info = bare.info(); info["guest_start"] != false {
+		t.Fatal(info)
 	}
 }

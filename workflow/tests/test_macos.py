@@ -200,6 +200,35 @@ class MacBackendTest(unittest.TestCase):
             run.setup_project=lambda:self.fail('recreated an unverified guest')
             with self.assertRaises(RuntimeError):run.resume_guest('lease-1')
 
+    def test_resume_starts_a_stopped_guest_before_inspecting_it(self):
+        # 止まっているだけのゲストは guest-start で起動し直してから中を見る（チケット 478）
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'guest_start':True}}])
+        started=[];run.client.execute=lambda kind,*a,**k:(started.append(kind),('op-1',types.SimpleNamespace(returncode=0)))[1]
+        replies=iter(['prepared']);run.sb=lambda *a,**k:next(replies)
+        refreshed=[];run.refresh_token=lambda:refreshed.append(True)
+        run.resume_guest('lease-1')
+        self.assertEqual(started,['guest-start'])
+        self.assertEqual(refreshed,[True])
+
+    def test_resume_stops_when_the_guest_cannot_be_restarted(self):
+        # ゲストが無い・壊れている回。黙って作り直さず、lease を持ったまま止まる
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'guest_start':True}}])
+        run.client.execute=lambda kind,*a,**k:('op-1',types.SimpleNamespace(returncode=1))
+        run.sb=lambda *a,**k:self.fail('inspected a guest that could not be started')
+        run.setup_project=lambda:self.fail('recreated a guest that could not be started')
+        with self.assertRaisesRegex(RuntimeError,'cannot be restarted'):run.resume_guest('lease-1')
+
+    def test_resume_does_not_send_guest_start_to_a_worker_without_it(self):
+        # guest_start を広告しない古い worker には投げない（届いても uncertain で worker が塞がる）
+        run=self.make_run()
+        run.client.store=types.SimpleNamespace(workers=lambda:[{'id':'mac1','lease':{'id':'lease-1'},'info':{'lifecycle':True}}])
+        run.client.execute=lambda *a,**k:self.fail('sent guest-start to a worker without support')
+        replies=iter(['','']);run.sb=lambda *a,**k:next(replies)
+        run.state['history']=['plan']
+        with self.assertRaisesRegex(RuntimeError,'does not advertise guest-start'):run.resume_guest('lease-1')
+
     def test_builtin_sync_base_step_is_accepted_but_unknown_scripts_are_not(self):
         # sync-base は runner 内蔵（kit/steps/ にファイルが無い）ので、pull worker でも拒否しない（チケット 239）
         class Base:
@@ -256,6 +285,7 @@ class MacLeaseWaitTest(unittest.TestCase):
         self.logs = []          # runner の log 行
         self.seen = []          # workers() が呼ばれた時点の state.json の写し
         self.executed = []      # client.execute に渡った (kind, payload)
+        self.clock_offset = 0   # 偽ゲストの時計のずれ（秒。491）
 
     def since(self):
         return datetime.datetime.fromtimestamp(self.LEASE_CREATED).astimezone().isoformat(timespec='seconds')
@@ -284,6 +314,9 @@ class MacLeaseWaitTest(unittest.TestCase):
         store = types.SimpleNamespace(workers=workers, acquire=lambda w, l: self.acquired.append((w, l)))
         def execute(kind, payload=None, *a, **k):
             self.executed.append((kind, payload))
+            # take が貸出直後に測る時計（491）。偽ゲストは self.clock_offset 秒ずれている
+            if kind == 'guest-exec' and 'date -u +%s' in (payload or {}).get('command', ''):
+                return ('op-1', types.SimpleNamespace(returncode=0, stdout=str(int(time.time()) + self.clock_offset)))
             return ('op-1', types.SimpleNamespace(returncode=0, stdout=''))
 
         client = types.SimpleNamespace(store=store, lease=None, execute=execute)
@@ -313,11 +346,60 @@ class MacLeaseWaitTest(unittest.TestCase):
         r = self.build(343)
         r.project = {**r.project, 'display': {'width': 1600, 'height': 1000}}
         r.take()
-        self.assertEqual(self.executed, [('guest-prepare', {'width': 1600, 'height': 1000})])
+        # take は時計の probe も投げる（491）ので、見るのは guest-prepare だけ
+        self.assertEqual([e for e in self.executed if e[0] == 'guest-prepare'],
+                         [('guest-prepare', {'width': 1600, 'height': 1000})])
         self.executed.clear()
         plain = self.build(344)
         plain.take()
-        self.assertEqual(self.executed, [('guest-prepare', {})])
+        self.assertEqual([e for e in self.executed if e[0] == 'guest-prepare'], [('guest-prepare', {})])
+
+    def test_a_mac_guest_with_a_skewed_clock_fails_the_take_and_keeps_the_lease(self):
+        """チケット 491: ゲストの時計が制御系とずれていたら、provision（setup_project）まで進まずに止める。
+        lease は残す（pull backend の約束どおり、止まったゲストを人が調べられるように）"""
+        r = self.build(491)
+        self.clock_offset = 578400          # 6 日 17 時間（Proxmox 側で実測した幅）
+        r.setup_project = lambda: self.fail('時計がずれたまま provision した')
+        with self.assertRaises(run_mod.ClockSkew) as e:
+            r.take()
+        self.assertIn('ずれている', str(e.exception))
+        self.assertAlmostEqual(r.state['clock_offset_s'], 578400, delta=5)
+        self.assertEqual(self.acquired, [('mac1', r.state['lease'])])   # lease は取ったまま残す
+        # 許容内なら今までどおり provision まで進む
+        ok = self.build(492)
+        self.clock_offset = 5
+        ok.take()
+        self.assertLessEqual(abs(ok.state['clock_offset_s']), 60)
+
+    def test_every_guest_exec_carries_the_preserve_command_for_the_wip_branch(self):
+        """チケット 477: worker が取り消しでゲストを止める前に作業を逃がせるよう、
+        guest-exec の payload に保全コマンドを載せる。wip 名と refspec は bin/run の preserve と同じ規則"""
+        r = self.build(477)
+        r.take()
+        self.executed.clear()
+        r.sb('true')
+        kind, payload = self.executed[-1]
+        self.assertEqual(kind, 'guest-exec')
+        preserve = payload['preserve']
+        wip = 'sandbox/477-research-wip'
+        self.assertIn(f'refs/heads/{r.branch}:refs/heads/{wip}', preserve)
+        self.assertIn('--force-with-lease', preserve)
+        # prelude（PATH・SANDBOX_APP_DIR・runtime.env）を通していること。worker 側では素の bash -lc で走る
+        self.assertIn('SANDBOX_APP_DIR', preserve)
+        self.assertIn(r.env_file, preserve)
+        # 保全コマンド自身は作業ブランチを押す。HEAD は detached のことがある（bin/run の preserve と同じ理由）
+        self.assertNotIn('HEAD:refs/heads/', preserve)
+        # 無条件の force push にしない（前の run の wip を巻き戻す）。上書きする相手を確かめてから押す。
+        # 実際に巻き戻さないことは test_macos_preserve_before_stop.py が実物の git で確かめる
+        self.assertIn('merge-base --is-ancestor', preserve)
+        self.assertIn(f'refs/remotes/origin/{r.base}', preserve)
+        self.assertIn('skipped', preserve)
+        # 取り消しが実際に起きるのは agent 工程の guest-exec（run_remote）。そこにも同じ保全が載ること
+        self.executed.clear()
+        r.run_remote('true', r.run_dir / 'remote.log')
+        kind, remote_payload = self.executed[-1]
+        self.assertEqual(kind, 'guest-exec')
+        self.assertEqual(remote_payload['preserve'], preserve)
 
     def test_waiting_past_the_limit_stays_todo_with_the_holder_in_the_note(self):
         """上限まで待って空かなければ、lease は取らず wait_timeout で終わり、理由に使用中の run と開始時刻が残る（完了条件 2）"""

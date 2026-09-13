@@ -67,7 +67,7 @@ def main(argv=None):
     p.add_argument("worker")
     p = sub.add_parser("submit")
     p.add_argument("worker")
-    p.add_argument("kind", choices=["probe", "guest-exec", "guest-prepare", "guest-release"])
+    p.add_argument("kind", choices=["probe", "guest-exec", "guest-prepare", "guest-release", "guest-start"])
     p.add_argument("--payload-file")
     p.add_argument("--command", help="guest-exec command; overrides the payload command, timeout defaults to 60")
     p.add_argument("--lease", metavar="ID", help='payload lease ID; "auto" reads the worker\'s current lease from the database')

@@ -33,7 +33,7 @@ The control plane owns the ticket ledger and run records. It does not initiate S
 
 Follow the [worker control plane instructions](https://github.com/akkijp-oss/aifactory/blob/main/workers/README.md#制御系) to configure the HTTPS service, SQLite database, TLS certificate, and per-worker token. Allow the Mac to reach the endpoint, normally TCP 8766. Worker authentication is separate from console authentication; keep TLS verification enabled.
 
-The service and runner must use the same operation database. The runner reads `AIFACTORY_WORKER_DB`, defaulting to `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`. Enroll workers through the control plane's local administrator CLI and distribute tokens and any required CA certificate through a trusted management channel.
+The service and runner must use the same operation database. The runner reads `AIFACTORY_WORKER_DB`, defaulting to `$AIFACTORY_WORKSPACE/workers/queue.sqlite3`. Enroll workers through the control plane's local administrator CLI and distribute tokens and any required CA certificate through a trusted management channel. The operation database is opened in WAL mode, so `queue.sqlite3-wal` and `-shm` sit next to it; move or back them up together with the database. Transactions rejected by a lock are retried automatically, so a single `database is locked` no longer fails a run no matter how many runs are in flight (ADR-0066).
 
 ### 2. Prepare the Mac host and base VM
 
@@ -241,9 +241,40 @@ Records are under `$AIFACTORY_WORKSPACE/runs/<run>/`:
 
 After PR creation, `result: human` means human review is pending. It alone does not indicate failure; inspect the history and PR. Normal cleanup removes the guest from Tart's list and clears the control plane lease. `--keep` retains both after artifact collection.
 
-A run that reaches `human` before a PR exists (gate retries exhausted, a failed step) force-pushes the work branch HEAD to `sandbox/<ticket>-<workflow>-wip` before artifact collection and records that branch name in `wip_branch` in `state.json`, so a person can pick the work up from there. If the push fails, `wip_branch` stays empty and the diff is left in the run directory as `wip.patch`, which `git am` applies. Artifact collection and guest deletion continue whether or not the preservation succeeds.
+A run that reaches `human` before a PR exists (gate retries exhausted, a failed step) force-pushes the work branch HEAD to `sandbox/<ticket>-<workflow>-wip` before artifact collection and records that branch name in `wip_branch` in `state.json`, so a person can pick the work up from there. If the push fails, `wip_branch` stays empty and the diff is left in the run directory as `wip.patch`, which `git am` applies. Artifact collection and guest deletion continue whether or not the preservation succeeds. When a run is handed back to a person because the control plane failed (the operation DB or the intake endpoint), the same preservation is attempted and then the lease and the guest are retained for inspection (no artifact collection, no guest deletion); a `wip_branch` that is already recorded is never cleared.
 
 Collection accepts regular files directly under the guest working directory, up to 4 MiB total. Each transferred input is limited to 350,000 bytes; credential file `runtime.env` is excluded. Directories, symlinks, and anything beyond the 4 MiB total are skipped rather than collected, and their names and reasons are recorded in `artifacts_skipped` in `state.json`. Skipped entries do not stop the run, and the VM is still released. Large build artifacts and `.xcresult` bundles do not fit this transfer mechanism.
+
+## Preserving work before the guest is stopped
+
+Just before it stops the guest, the worker tries to push the work branch inside the guest to the work-in-progress (wip) branch ([ADR-0067](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0067-worker-preserves-work-before-stopping-the-guest.md)). Stopping the guest destroys any committed but unpushed work inside it, and the control-plane preservation described under "Artifacts and completion" cannot get through while the worker is busy with an operation (`worker is busy`), so the side that does the stopping holds the last chance.
+
+It runs only when the guest is stopped in the middle of a `guest-exec`: a cancelled operation, the payload `timeout` expiring, the watchdog that fires after 60 seconds without the control plane, and a broken `tart exec`. It does not run on the `guest-prepare` / `guest-release` stop paths. Preservation gets at most 120 seconds, and the guest is stopped afterwards whether it succeeded or not (the stop is delayed by that much, and other runs waiting for the lease wait with it). The control plane carries the preservation command in the payload's `preserve` key, so a control plane too old to send `preserve` runs nothing and logs no line at all.
+
+The attempt is recorded in the operation log. Look the operation ID up in `$AIFACTORY_WORKSPACE/runs/<run>/worker-operations.log` and read it with `python3 workers/bin/control --db "$db" show '<operation-id>'`. It starts with `[preserve] pushing the work branch to the wip branch before stopping the guest`, followed by one line for the result.
+
+| Log line | Meaning |
+|---|---|
+| `[preserve] ok: preserved` | The push to the wip branch succeeded; the work is on that branch |
+| `[preserve] ok: skipped: <reason>` | Not worth pushing, so nothing was pushed. **This is not a failure.** The three reasons are `no work branch` (the work branch does not exist yet), `no commits to preserve` (identical to what it would overwrite), and `pushing would rewind the wip branch` (pushing would roll the previous run's wip back) |
+| `[preserve] ok` | The command succeeded but produced no output: the guest working directory did not exist yet, before the clone |
+| `[preserve] failed: <reason>` | It was attempted and failed. Typical reasons are an expired `GH_TOKEN` (they last an hour), the 120-second limit, and the wip branch moving between the check and the push |
+
+Neither the command itself (the payload) nor stdin appears in the log. The target is `sandbox/<ticket>-<workflow>-wip`, the same naming rule as `wip_branch` in `state.json`, which `kb run <id> --from` uses by default. This preservation does not update the run record, though, so for a run that ended with an empty `wip_branch`, name the branch explicitly: `kb run <id> --from <step> --branch sandbox/<ticket>-<workflow>-wip`. There is one wip branch per ticket and workflow, so running the same ticket repeatedly lets a later run's preservation overwrite an earlier one. **Only committed work can be saved**; uncommitted changes are lost — which is why implementer steps are required to commit every 30 minutes.
+
+### The two preservation paths
+
+| | Preservation in `bin/run` | Preservation in the worker (ADR-0067) |
+|---|---|---|
+| Who pushes | The control-plane runner | The worker on the Mac host |
+| When | When a run ends in `human`, before artifact collection; also when a control-plane failure hands the run back to a person (ADR-0066) | Immediately before the guest is stopped during a `guest-exec` (cancel, timeout, watchdog, or a broken `tart exec`) |
+| Assumes | The guest is running and operations can still be submitted to the worker | The guest is about to be stopped; the runner cannot get in because the worker is busy |
+| Check and push | Verifies the work branch ref with `git log`, then `--force` | Pushes only when what it would overwrite (the wip branch on origin, or `origin/<base>` when there is none) is an ancestor of the work branch and the work branch is ahead, with `--force-with-lease` carrying the sha it verified |
+| On failure | Leaves the diff in the run directory as `wip.patch`, which `git am` applies | Logs the reason and proceeds to stop the guest; it cannot leave a patch |
+
+The asymmetry is deliberate. The worker knows nothing about the layout inside the guest, the `GH_TOKEN`, or the wip naming rule, so the control plane builds the command and ships it in the payload. That command rides on **every** `guest-exec`, so it also runs when the guest is stopped on a work branch that carries no implementation yet (right after the clone it equals `origin/<base>`). An unconditional force push would then roll the wip branch preserved by a previous run back to base and destroy it, which is why only the worker side checks whether pushing is worth it first (the runner's preservation runs once at the end of a run and still uses `--force`). Both sides share the wip branch name and push the work branch rather than HEAD (`refs/heads/<work branch>:refs/heads/<wip>`).
+
+How to continue from a wip branch is covered in step 5 of "[Recovering from `uncertain`](#recovering-from-uncertain)". Everything here is what can be read from the implementation (`preserveWork` in `workers/cmd/aifactory-worker/main.go` and `preserve_command` in `workflow/lib/macos.py`); none of it has been verified on real hardware.
 
 ## Recovery
 
@@ -253,12 +284,12 @@ Collection accepts regular files directly under the guest working directory, up 
 | `base_ready` is false | Verify the configured local base VM exists and image download completed |
 | CLI installation takes a long time | Inspect provisioning logs for progress or repeated downloads. An existing download is not sufficient grounds to install an unverified binary |
 | GitHub token minting fails | Check project settings and App installation permissions. The runner uses the sandbox CLI in its own repository. Never log the token |
-| Resuming after the date changed | Use `kb run <id> --resume`; it uses the run recorded on the ticket |
+| Resuming after the date changed | Use `kb run <id> --resume`; it uses the run recorded on the ticket, restarting the guest first if it is stopped |
 | An operation is `uncertain` | Have an administrator verify guest shutdown and operation state. The procedure is under "[Recovering from `uncertain`](#recovering-from-uncertain)" |
 | The log stops partway | The 16 MiB per-operation limit was reached. A truncation line is recorded and the result carries `truncated`. The operation itself ran to completion, so judge it by the exit code and the artifacts |
 | Artifact collection or guest deletion fails | Keep the lease and establish artifact and guest state before recovery |
 
-`--resume` requires ownership of the run's lease. A provisioning failure can be retried in the same running guest if credentials, repository, and step history have not been created. A partially created repository or stopped guest is not automatically recreated.
+`--resume` requires ownership of the run's lease. A provisioning failure can be retried in the same guest if credentials, repository, and step history have not been created. **A guest that is merely stopped is restarted with `guest-start` before anything looks inside it** (ADR-0068). If the guest is not in the list, or cannot be started, the run stops with `Mac guest cannot be restarted` and both the lease and the guest are left in place. A partially created repository, or a guest that cannot be started, is never recreated automatically.
 
 Which step it restarts from is decided from the step history (`history`) in `state.json`: from the first step of the workflow when the history is empty (provisioning failed before any step ran), and from the last step that ran when it is not. It never carries over `next: human` and releases the guest without running a single step. A run with nothing left to continue (the PR is already out, or `next: end`) stops before the guest is touched (ADR-0047).
 
@@ -294,8 +325,9 @@ tart exec <guest> /bin/bash -lc 'pgrep -fl claude; pgrep -fl bash; uptime'
 
 **3. When `resolve` is allowed.** `resolve` only moves the operation from `uncertain` to `resolved`. It does not stop the guest and it does not release the run's lease (that is step 6). On an operation that is not `uncertain` it returns `operation is not uncertain`. Use it only when all of the following hold.
 
-- An administrator confirmed the guest's real state from the Mac host, in one of two ways
-    - **Stopped it**: absent from `tart list`, or stopped with `tart stop <guest>` (this run is being wound up → the second path in step 5)
+- An administrator confirmed the guest's real state from the Mac host, in one of the following ways
+    - **Stopped it**: stopped with `tart stop <guest>` (the guest stays in `tart list` as `stopped`; to continue take the second path in step 5, to wind the run up take the third path)
+    - **Gone**: absent from `tart list` (it cannot be started again, so this run is being wound up → the third path in step 5)
     - **Left it running**: the guest stays `running`, but `tart exec` in step 2 confirmed that the operation's command is not running (this run continues → the first path in step 5)
 - You did not stop at sending `cancel`. `cancel` requests a stop; it does not confirm one
 - You did not delete the journal. Never delete it and then rerun the same unfinished operation: that is the record that keeps an already-started command from running twice
@@ -315,10 +347,11 @@ python3 workers/bin/control --db "$db" submit <worker> guest-exec \
 
 **Without the lease in the payload the operation is refused.** While a worker holds a lease, the control plane rejects any operation whose payload lease does not match it with HTTP 409 and `operation does not own worker lease` (`workers/lib/pull.py`). `--lease auto` adds nothing when no lease is held, and a lifecycle worker such as the Mac then reports `lifecycle worker requires a lease` instead. A `lease` in a payload file wins over `auto`, and an explicit `--lease <id>` overrides the payload. Payloads are stored in the database, so never put secrets in a diagnostic command.
 
-**5. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires both that the worker still **holds** that run's lease and that the guest is still **running** (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`). A run whose lease was released in step 6 can no longer be resumed.
+**5. Decide whether to continue or to clear the run.** The real state of the guest decides the path. `--resume` requires that the worker still **holds** that run's lease (`workflow/lib/macos.py`: a missing lease stops it with `Mac resume requires this run's retained lease`). The guest may be stopped: if it is merely stopped, `--resume` restarts it with `guest-start` and then continues (ADR-0068). A run whose lease was released in step 6 can no longer be resumed.
 
 - **The guest is alive (the "left it running" case of step 3) and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. A prepared guest (the clone is done and `work/ticket.md` is not empty) continues from the last step in the step history. Before that point, it can rerun provisioning only when the step history is empty and neither `$SANDBOX_APP_DIR` nor `work/runtime.env` exists yet. A guest that is neither stops the run with `Mac setup is incomplete or the guest is stopped`, so look inside it before deciding (how the step is chosen is under "[Recovery](#recovery)").
-- **The guest is gone, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. There are two different refusals (`kanban/bin/kb`). `--from` (and `--branch`) is refused when the board points at a run in progress **and that run's record has not finished either**; wait for it if it is still going, otherwise put the ticket back with `kb reopen <id>` or pass `--force` deliberately. A plain `kb run <id>` is refused when **the ticket is `done`**, which `kb reopen <id>` also clears.
+- **The guest is merely stopped (it is in `tart list` as `stopped`) and the lease is still held** → do not go on to step 6. Leave the lease in place and continue with `kb run <id> --resume`. The runner submits `guest-start` first to bring the guest back up, and from there the decision is the same as the case above (ADR-0068). To start it by hand and check first, use `python3 workers/bin/control --db "$db" submit <worker> guest-start --lease auto --wait 300`. A worker binary that is too old to advertise `guest_start` will not be started automatically; update the worker in that case.
+- **The guest is not in the list, cannot be started, or this run is being wound up** → clear the lease in step 6 and submit a new run instead of resuming: `kb run <id> --from` takes a fresh VM and continues from the recorded wip branch and step, `kb run <id>` starts over. There are two different refusals (`kanban/bin/kb`). `--from` (and `--branch`) is refused when the board points at a run in progress **and that run's record has not finished either**; wait for it if it is still going, otherwise put the ticket back with `kb reopen <id>` or pass `--force` deliberately. A plain `kb run <id>` is refused when **the ticket is `done`**, which `kb reopen <id>` also clears.
 
 **6. Release the lease (when clearing the run).** Marking an operation `resolved` leaves the run's reservation in place. To release it, submit a `guest-release` carrying that lease, let it **succeed**, and pass its operation ID. The control plane accepts nothing else: it requires a succeeded `guest-release` whose payload lease matches.
 
@@ -327,7 +360,7 @@ python3 workers/bin/control --db "$db" submit <worker> guest-release --lease <le
 python3 workers/bin/control --db "$db" release-lease <worker> <lease> --operation '<the successful guest-release operation ID>'
 ```
 
-`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the second path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
+`guest-release` stops the guest, deletes it, and removes the worker-side lease record; if it cannot get that far it returns `uncertain`. If it keeps failing, clear the real state on the Mac first with `tart stop` / `tart delete`. A released run no longer meets the conditions for `--resume`, so continue it through the third path in step 5. Which step it restarts from and when restarting is refused are covered under "[Recovery](#recovery)" and in [ADR-0047](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0047-resume-start-step-from-history.md); this section does not repeat them.
 
 ## Workflow code step support
 

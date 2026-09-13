@@ -13,7 +13,7 @@ Windowsは [Windowsワーカーの導入と運用](../docs/windows-worker.md) �
 
 - 制御系: Python標準ライブラリのHTTPS受信サービスとSQLite操作キュー。既存consoleから独立して起動する。
 - Mac: Go製ワーカー。HTTPSによる操作取得、heartbeat、逐次ログ送信、結果返送、永続ジャーナル。
-- 操作: `probe`、`guest-exec`、`guest-prepare`、`guest-release`。VM名と基準イメージは管理者のローカル設定で固定する。
+- 操作: `probe`、`guest-exec`、`guest-prepare`、`guest-start`、`guest-release`。VM名と基準イメージは管理者のローカル設定で固定する。
 - 同時1操作。停止・切断・異常終了で結果が不明なら `uncertain` として再割当を止める。ログ上限の超過は理由にならない（切り捨てて続行する）。クラッシュ後に同じコマンドを自動再実行しない。
 - `backend: macos-pull` のプロジェクトを通常の `ticket_run` / `kb run` から実行する。制御系がrun単位のleaseを保持し、step間も他のrunを割り込ませない。
 - `base_vm` を設定すると、prepareで専用ゲストをcloneし、成果物の受領・SHA-256照合後にreleaseでゲストを停止・削除する。失敗時はleaseと記録を保持する。既存VMは引き取らない。
@@ -113,6 +113,8 @@ python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" sh
 
 ゲスト操作のコマンドは `--command '<sh>'` で直接渡せる（payloadの `timeout` 既定は60秒）。複数キーを細かく指定するときは `{"command":"sw_vers; uname -m","timeout":30}` のようなJSONを非公開ファイルへ書き、`submit mac-worker guest-exec --payload-file <file>` で指定する（`--command` はそのファイルの `command` を上書きする）。ホストVM名やホストシェルを操作のpayloadから選択することはできない。診断用payloadはDBに記録されるので、トークン・秘密情報は渡さない。
 
+`guest-exec` のpayloadには `preserve`（省略可・文字列）も載る。runnerが全部の `guest-exec` に付ける保全コマンドで、ワーカーは取り消し・timeout・watchdogなどでゲストを止める直前に1回だけ走らせる（[ADR-0067](../docs/adr/0067-worker-preserves-work-before-stopping-the-guest.md)）。`--command` からは指定しない（診断用の操作では省略してよい。空文字は「保全なし」）。文字列でない `preserve` は `preserve must be a string` で拒否する。ログの読み方は [docs/macos-worker.md の「ゲストを止める前の保全」](../docs/macos-worker.md#ゲストを止める前の保全)にある。
+
 `--lease auto` はそのworkerが現在保持しているleaseをDBから引いてpayloadに入れる。payloadファイルに `lease` があればそちらを優先し、`--lease <id>` の明示指定はpayloadを上書きする。leaseが無ければ入れないので、lifecycleワーカーでは従来どおり `lifecycle worker requires a lease` になる。`--wait <秒>` は完了まで待って `show` と同じJSONを表示する。期限内に終わらなければその時点のJSONを表示して非ゼロで終わる。
 
 - `cancel <operation-id>`: 停止要求。通信が切れている間は停止完了にはしない。
@@ -124,6 +126,7 @@ python3 workers/bin/control --db "$AIFACTORY_WORKSPACE/workers/queue.sqlite3" sh
 - ジャーナルと制御系の操作履歴は自動削除しない。初期版には総容量の自動管理がないため、検証用の限定運用とする。
 - ジャーナルを削除してから同じ未完了操作を再開しない。起動済みコマンドの再実行を防ぐ根拠になる。
 - 制御系の完了応答が失われても同じ結果を再送できる。ログは操作IDと連番で重複排除し、全ログ受領前の完了は拒否する。
+- 制御系DBは `journal_mode=WAL` で開き、ロックで弾かれたトランザクションは短くやり直す（1文の待ちは3秒、やり直しを含めて8秒まで）。同時に走るrunが多くても `database is locked` 1回で処理を落とさない。runnerの状態読みは一時的なロックで操作を取り消さず、最大120秒読み直してから失敗する（ADR-0066）。`queue.sqlite3-wal` / `-shm` が横に出るが、権限は主DBと同じ。戻すときは `PRAGMA journal_mode=DELETE` を1回打つ。
 
 ## チケットからMac VMで実行する
 
@@ -145,7 +148,7 @@ app_dir: /Users/admin/app
 
 成果物はrunの作業ディレクトリ直下の通常ファイルに限定し、合計4 MiB、個別入力は350 KBまで。認証情報 `runtime.env` は回収しない。`runs/<run>/worker-operations.log` で操作IDを追い、`artifacts.json` に回収したファイルのハッシュ、`state.json` にbackend、worker、lease、回収・返却状態を記録する。転送失敗時にVMを削除しない。
 
-`--keep` は回収後もVMとleaseを保持する。`--resume` は記録されたleaseを所有している場合だけ継続する。認証注入・リポジトリ作成前のprovision失敗は、同じ稼働中ゲストで再試行できるため、provision.shは再実行可能にする。途中まで作られたリポジトリや停止したゲストは自動で引き取らない。`kb run --resume` は日付が変わっていてもチケットに記録されたrunを使う。失敗後の再実行で新たなVMを自動割当しない。状態不明なら既存の `control show` / `resolve` で操作を確認し、専用ゲストの状態を確定してから復旧する。成功した `guest-release` 操作を指定した `control release-lease <worker> <lease> --operation <id>` だけが制御系の予約を解放する。
+`--keep` は回収後もVMとleaseを保持する。`--resume` は記録されたleaseを所有している場合だけ継続する。認証注入・リポジトリ作成前のprovision失敗は、同じ稼働中ゲストで再試行できるため、provision.shは再実行可能にする。途中まで作られたリポジトリは自動で引き取らない。止まっているだけのゲストは `--resume` が `guest-start` で起動し直す（clone も delete もしない）が、一覧に無い・起動できないゲストは作り直さずに失敗する（ADR-0068）。`kb run --resume` は日付が変わっていてもチケットに記録されたrunを使う。失敗後の再実行で新たなVMを自動割当しない。状態不明なら既存の `control show` / `resolve` で操作を確認し、専用ゲストの状態を確定してから復旧する。成功した `guest-release` 操作を指定した `control release-lease <worker> <lease> --operation <id>` だけが制御系の予約を解放する。
 
 ## VMの画面操作
 

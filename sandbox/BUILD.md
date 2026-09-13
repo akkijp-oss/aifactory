@@ -190,7 +190,7 @@ scp -i ~/.ssh/conf.d/aifactory/sb_ed25519 sandbox/proxmox/31-provision-base.sh d
 ssh -i ~/.ssh/conf.d/aifactory/sb_ed25519 dev@10.77.0.100 'sudo bash /tmp/31-provision-base.sh' 2>&1 | tee /tmp/provision-base.log
 ```
 入れるもの（詳細はスクリプト冒頭のコメントと `templates/base/README.md`）:
-- OS: タイムゾーン Asia/Tokyo、qemu-guest-agent、unattended-upgrades 無効（再現性優先）
+- OS: タイムゾーン Asia/Tokyo、NTP 有効（`timedatectl set-ntp true` と `timesyncd.conf.d/aifactory.conf` の `PollIntervalMaxSec=64`。巻き戻した VM が snapshot 時刻から再開しても 1 分程度で戻るように。ADR-0069）、qemu-guest-agent、unattended-upgrades 無効（再現性優先）
 - ビルド依存: build-essential、libpq-dev、libyaml-dev、libssl-dev、zlib1g-dev、libffi-dev、libreadline-dev、libvips、imagemagick、git、curl、jq、unzip、ripgrep
 - DB / KVS: PostgreSQL 16（role `dev` superuser、ローカル trust）、Redis
 - ブラウザ: Google Chrome stable（system test とスクショ用。snap を避けるため .deb）

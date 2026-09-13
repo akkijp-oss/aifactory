@@ -150,10 +150,19 @@ def backend(Run):
                 return super().main()
             except Exception as e:
                 import datetime
+                # wip_branch は触らない: 正常な終わり（bin/run の main）が push 済みの名前を入れていることがある
+                # （release は guest-release が通った後にも落ちうる）。消すと `kb run --from` の既定ブランチが無くなる
                 self.state.update(result="human", error=str(e),
                                   finished=datetime.datetime.now().isoformat(timespec="seconds"))
                 self.save()
                 self.log(f"{self.backend_label} execution failed: {e}; existing lease retained for inspection")
+                # 正常な終わり（bin/run の main）と同じく、コミット済みで未 push の実装を wip ブランチへ逃がす。
+                # ここを通るのは制御系が落ちた回（例: queue の database is locked）で、worker は operation の
+                # 取り消しでゲストごと止めることがある（チケット 446）。止まる前に押せれば実装は残る。
+                # ゲストが既に止まっていれば preserve は失敗するが、例外は飲むので human の記録は残る。
+                # release（成果物回収・ゲスト削除）は従来どおり呼ばない: lease は人の検査用に残す
+                self.state["wip_branch"] = self.preserve() or self.state.get("wip_branch") or ""
+                self.save()
                 return 2
 
         def run_agent(self, step, retry_note=""):
@@ -175,9 +184,45 @@ def backend(Run):
                     f"export SANDBOX_APP_DIR={shlex.quote(self.project['app_dir'])}; "
                     f"if test -f {shlex.quote(self.env_file)}; then source {shlex.quote(self.env_file)}; fi; " + cmd)
 
+        def preserve_command(self):
+            """worker が取り消しでゲストを止める直前に走らせる保全コマンド（チケット 477）。
+
+            ゲストを止めるとゲスト内のコミット済み・未 push の実装は消え、制御系側の preserve は
+            worker が busy で届かないことが多い。worker は guest の配置も GH_TOKEN も wip 名も
+            知らないので、コマンドは制御系が組み立てて payload で運ぶ。
+            wip 名と refspec は bin/run の preserve と同じ規則にする（kb run --from の既定ブランチと一致させるため）
+
+            worker はこれを取り消し・payload timeout・watchdog のどの停止でも走らせるので、**まだ実装が
+            1 つも乗っていない作業ブランチ**（setup_project 直後は origin/<base> と同じ）でも走る。
+            無条件の force push だと、その回が前の run の保全した wip を base まで巻き戻して消す
+            （ADR-0053 の「取り返すには reflog が要る」事故）。押す前に「押す価値があるか」を確かめる:
+            上書きする相手（origin の wip、無ければ origin/<base>）が作業ブランチの祖先で、かつ先に
+            進んでいるときだけ押す。押さないときは理由を出して終了コード 0（停止を妨げない）"""
+            wip = f"sandbox/{self.task}-{self.wf_name}-wip"
+            branch_ref = shlex.quote(f"refs/heads/{self.branch}")
+            wip_ref = shlex.quote(f"refs/heads/{wip}")
+            base_ref = shlex.quote(f"refs/remotes/origin/{self.base}")
+            # 取得した wip の sha を --force-with-lease に渡す（確かめてから押すまでの間に wip が動いていたら
+            # 押さない。取れなかった＝空のときは「wip が無いこと」を条件にする）
+            return self.command("\n".join([
+                'cd "$SANDBOX_APP_DIR" || exit 0',
+                f'head=$(git rev-parse -q --verify {branch_ref}) || {{ echo "skipped: no work branch"; exit 0; }}',
+                'git update-ref -d refs/aifactory/preserve-target 2>/dev/null',
+                f'git fetch -q --force origin {wip_ref}:refs/aifactory/preserve-target 2>/dev/null',
+                'expect=$(git rev-parse -q --verify refs/aifactory/preserve-target) || expect=',
+                'target=$expect',
+                f'test -n "$target" || target=$(git rev-parse -q --verify {base_ref}) || target=',
+                'if test -n "$target"; then',
+                '  test "$target" != "$head" || { echo "skipped: no commits to preserve"; exit 0; }',
+                '  git merge-base --is-ancestor "$target" "$head" 2>/dev/null || { echo "skipped: pushing would rewind the wip branch"; exit 0; }',
+                'fi',
+                f'git push -q --force-with-lease={wip_ref}:"$expect" origin {branch_ref}:{wip_ref} 2>&1 && echo preserved',
+            ]))
+
         def sb(self, cmd, input_text=None, check=True):
             if self.dry: return ""
-            _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": 600}, stdin=input_text)
+            _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": 600,
+                                                      "preserve": self.preserve_command()}, stdin=input_text)
             if check and r.returncode:
                 raise RuntimeError(f"guest command failed ({r.returncode}): {r.stdout[-1500:]}")
             return r.stdout
@@ -202,7 +247,8 @@ def backend(Run):
                         if value is not None:
                             value = value.rstrip("\n") + "\n"
                             f.write(value); f.flush(); out.append(value)
-                _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": min(timeout, 3600)}, emit=emit)
+                _, r = self.client.execute("guest-exec", {"command": self.command(cmd), "timeout": min(timeout, 3600),
+                                                          "preserve": self.preserve_command()}, emit=emit)
                 if pending: emit("\n")
             return r.returncode, "".join(out)
 
@@ -261,12 +307,23 @@ def backend(Run):
             prepare = {"width": display["width"], "height": display["height"]} if display else {}
             _, r = self.client.execute("guest-prepare", prepare)
             if r.returncode: raise RuntimeError("Mac VM prepare failed; lease retained")
+            # 工程を始める前にゲストの時計を測る（491）。Mac ゲストは RAM snapshot を戻さないので
+            # Proxmox と同じ形ではずれない見込みだが、測らずに「ずれない」とは言えない
+            self.check_clock()
             self.setup_project()
 
         def resume_guest(self, lease):
             owned = next((w for w in self.client.store.workers() if w["id"] == self.project["worker"]), {})
             if (owned.get("lease") or {}).get("id") != lease:
                 raise RuntimeError("Mac resume requires this run's retained lease")
+            # 止まっているだけのゲストは、中を見る前に起動し直す（チケット 478）。ゲストが無い・起動できない
+            # ときは失敗で止め、lease もゲストも消さずに人の検査に残す。guest-start を広告しない古い worker
+            # には投げない（届いても uncertain で worker ごと塞がるだけ）
+            if (owned.get("info") or {}).get("guest_start"):
+                self.log("Mac guest start (resume)")
+                _, r = self.client.execute("guest-start")
+                if r.returncode:
+                    raise RuntimeError("Mac guest cannot be restarted (missing or broken); lease retained for inspection")
             ready = self.sb(f"test -d \"$SANDBOX_APP_DIR/.git\" && test -s {shlex.quote(self.work + '/ticket.md')} && printf prepared", check=False)
             if ready == "prepared":
                 self.refresh_token()
@@ -275,7 +332,8 @@ def backend(Run):
             # a repository were created, in the same running, owned guest.
             clean = self.sb(f"test ! -e \"$SANDBOX_APP_DIR\" && test ! -L \"$SANDBOX_APP_DIR\" && test ! -e {shlex.quote(self.env_file)} && printf provisionable", check=False)
             if self.state.get("history") or clean != "provisionable":
-                raise RuntimeError("Mac setup is incomplete or the guest is stopped; inspect the retained guest before recovery")
+                raise RuntimeError("Mac setup is incomplete or the guest is stopped; inspect the retained guest before recovery"
+                                   + ("" if (owned.get("info") or {}).get("guest_start") else "; this worker does not advertise guest-start, so update the worker"))
             self.log("resume provisioning in the retained Mac VM")
             self.setup_project()
 

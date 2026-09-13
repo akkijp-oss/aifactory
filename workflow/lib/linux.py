@@ -67,6 +67,7 @@ def backend(Run):
             _, result = self.client.execute('guest-prepare')
             if result.returncode:
                 raise RuntimeError('Linux workspace preparation failed; lease retained')
+            self.check_clock()   # 工程を始める前にゲストの時計を測る（491）
             self.setup_project()
 
     return LinuxRun

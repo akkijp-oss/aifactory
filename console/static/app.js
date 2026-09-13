@@ -505,6 +505,7 @@ function outcomeLead(o, s) {
   if (o.reason === 'failed_before_start') return tt(T.outcome.failed_before_start, { summary: o.error_summary || '' });
   if (o.reason === 'wait_timeout') return tt(T.outcome.wait_timeout, { n: Math.round((o.waited_s || 0) / 60) });
   if (o.reason === 'prepare_failed') return tt(T.outcome.prepare_failed, { summary: o.error_summary || '' });
+  if (o.reason === 'clock_skew') return tt(T.outcome.clock_skew, { n: o.clock_offset_s == null ? '?' : o.clock_offset_s });
   if (o.reason === 'nokey') return tt(T.outcome.nokey, { need: (o.needed_keys || []).map(k => k === 'fable' ? T.outcome.needFable : T.outcome.needOther).join('、') });
   if (o.reason === 'loop_limit') return tt(T.outcome.loop_limit, { step: o.stopped_step, n: o.fail_count });
   if (o.reason === 'step_timeout') return tt(T.outcome.step_timeout, { step: o.stopped_step, n: o.timeout_min });

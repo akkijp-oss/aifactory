@@ -109,6 +109,15 @@ prepare: prepare.sh       # 例: pnpm install --frozen-lockfile && pnpm --filter
 `code-prepare.log`）。整っていない VM で agent を起こしても直せない赤を直そうとするだけなので、人へ返す（kb はチケットを
 `blocked` にする）。pull backend（macOS / Windows / Linux）は既存の `provision.sh` を毎 take 実行していて、同じ役目を果たす。
 
+**貸出直後のゲストの時計も、工程を始める前に測る。** プール VM は RAM 込みの snapshot を巻き戻して貸すので、
+復元直後のゲストは snapshot を取った時刻から時計が再開する（NTP の次のポーリングまで数日ずれることがある）。
+ずれたまま回すと、コミットの author date も agent が書く ADR の日付も嘘になり、後から直せない。
+`sandbox take` / `sandbox reset` が env を注入する前に合わせ（`[clock] guest offset …`）、runner は take の直後・
+checkout の前に必ず測り直す。`AIFACTORY_CLOCK_TOLERANCE_S`（既定 120）秒を超えていたら、agent を起動せずに
+`result: failed` / `failure: "clock"` で終わる（kb はチケットを `blocked` にする。この失敗は VM を返すので、
+`kb reopen` → `kb run` で回し直せば次の貸出が合わせ直す）。
+測った値は成否に関わらず `state.json` の `clock_offset_s` に残る（ADR-0069）。
+
 **準備では直らない赤（base 自身が赤い）は、runner が base で回して確かめる。** gates が赤いと、`kit/steps/gates.sh` が
 その**赤いゲートだけ**を `origin/<base>` でも実行する（同じ作業コピーで checkout を差し替える。未コミットの変更は
 `git stash` で退避して必ず戻す）。base でも赤かったものは実装役に戻さない。
@@ -192,6 +201,9 @@ agent の `claude -p` が Claude の鍵の**利用枠**（5 時間 / 7 日の窓
 |---|---|---|---|
 | `quota`（利用枠。待てば戻る） | 追跡済みの変更を `wip: usage limit` でコミット → wip ブランチへ。`state.json` に `failure: "quota"` / `quota_type` / `retry_after` / `quota_hits`、`resume_step` は**その step 自身** | **todo** に戻す（メモに「一時停止」と `kb run --from`） | 制御系の `aifactory-resume.timer`（5 分ごと）が `dispatch --resume-paused` を呼び、`retry_after` を過ぎたものを `kb run <id> --from` で続きから回す |
 | `key`（鍵が無効・失効・残高不足） | 同じく `wip: token unusable` で保全。`failure: "key"` | **blocked** | 人が鍵プール（`sandbox keys token <名前>` か「鍵」画面）で鍵を直して `kb run <id> --from` |
+
+工程を 1 つも始めずに終わる `failure` は他に 3 つある。`wait_timeout`（VM の空き待ちが上限。チケットは todo）、
+`prepare`（貸出直後の準備が失敗。blocked）、`clock`（ゲストの時計が制御系とずれていた。blocked。ADR-0069）。
 
 鍵プールに要る用途の鍵が 1 本も無いときは、`take` が VM を取らずに「鍵なし:」で止まり、runner は `failure: "nokey"` で終わる。kb はチケットを todo に戻し、鍵が登録されると同じ timer が**初めから**回し直す（ADR-0046）。
 

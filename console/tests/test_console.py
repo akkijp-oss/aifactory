@@ -1624,6 +1624,28 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.prepare_failed", app)
 
+    def test_run_that_stopped_on_a_skewed_guest_clock_says_so(self):
+        """貸出直後にゲストの時計が制御系とずれていて止まった run（チケット 491）。
+
+        VM は取れていて、直すのは時計（巻き戻し）。「準備が失敗した」とも「VM を取得できなかった」とも混ぜない"""
+        name = "2026-09-13-kumitate-991"
+        d = self.ws / "runs" / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "ticket.md").write_text("# 調査: 時計がずれた run\n", encoding="utf-8")
+        (d / "state.json").write_text(json.dumps({
+            "pj": PJ, "task": "991", "workflow": "research", "branch": "sandbox/991-research-x", "base": "develop",
+            "started": "2026-09-13T10:00:00", "finished": "2026-09-13T10:00:20", "elapsed_s": 20, "history": [], "loops": {},
+            "result": "failed", "next": "human", "current": None, "pr_url": "", "wip_branch": "", "failure": "clock",
+            "clock_offset_s": 578400,
+            "error": "ゲストの時計が制御系と 578400 秒ずれている（許容 120 秒）"}, ensure_ascii=False), encoding="utf-8")
+        st, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(st, 200)
+        o = d["outcome"]
+        self.assertEqual(o["reason"], "clock_skew")
+        self.assertEqual(o["stopped_step"], "take")
+        self.assertEqual(o["clock_offset_s"], 578400)
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("T.outcome.clock_skew", app)
+
     def test_sandbox_known_red_gates_include_what_the_runner_confirmed_on_base(self):
         """known_red_gates は人が project.yml に書く前提で、実際は誰も書かなかった（チケット 330）。
 
