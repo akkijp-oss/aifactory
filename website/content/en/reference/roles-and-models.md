@@ -74,7 +74,7 @@ Every role is preceded by `_common.md` (shared rules).
 ## routes.env
 
 ```
-MODEL_judgment=claude-fable-5-1
+MODEL_judgment=claude-opus-5
 MODEL_research=claude-sonnet-5
 MODEL_coding=claude-opus-5
 MODEL_default=claude-opus-5
@@ -86,7 +86,7 @@ MODEL_default=claude-opus-5
 | research | Web research | researcher |
 | coding | Coding | implementer |
 
-"Judgement on Fable, web research on Sonnet, everything else on Opus" is the maintainer's decision (2026-09-06). Edit `routes.env` to use other models.
+"Web research on Sonnet, everything else on Opus" is the maintainer's decision (2026-09-12); the judgment class defaults to Opus. Planning is done carefully on Fable, so only the planning steps of each workflow (`plan` in `bug` / `docs` / `hotfix`, `design` in `feature` / `feature-long`, `judge` in `research` — all with `role: planner`) pin their model with `model: claude-fable-5-1` in the YAML. Other judgment-class steps such as reviewer and intake run on the Opus default. Edit `routes.env` and the `model:` lines in the workflow YAML to use other models.
 
 ## Overrides
 

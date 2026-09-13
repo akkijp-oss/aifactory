@@ -74,7 +74,7 @@
 ## routes.env
 
 ```
-MODEL_judgment=claude-fable-5-1
+MODEL_judgment=claude-opus-5
 MODEL_research=claude-sonnet-5
 MODEL_coding=claude-opus-5
 MODEL_default=claude-opus-5
@@ -86,7 +86,7 @@ MODEL_default=claude-opus-5
 | research | Web クローリング調査 | researcher |
 | coding | コーディング | implementer |
 
-判断には Fable、Web 調査には Sonnet、それ以外には Opus を使う構成です。これは 2026-09-06 時点のメンテナの方針で、`routes.env` を編集すれば変更できます。
+Web 調査には Sonnet、それ以外（judgment クラスの既定を含む）には Opus を使う構成です。計画は Fable で丁寧に行うため、各ワークフローの計画工程（`bug` / `docs` / `hotfix` の `plan`、`feature` / `feature-long` の `design`、`research` の `judge`。いずれも役割は planner）だけ、YAML の `model: claude-fable-5-1` でモデルを固定しています。同じ judgment クラスでも reviewer や intake は既定どおり Opus です。これは 2026-09-12 時点のメンテナの判断で、`routes.env` と各ワークフローの `model:` を編集すれば変更できます。
 
 ## 上書き
 
