@@ -74,6 +74,8 @@ Until Tailscale works, set `SB_JUMP=<same value as PVE_HOST>` (for example `SB_J
 
 Create VM 9100 from the Ubuntu 24.04 cloud image, bake the shared layer with `31-provision-base.sh`, and turn it into a template with `qm template`. The contents are listed in `sandbox/templates/base/README.md` (mise, Node 22, PostgreSQL 16, Redis, Chrome, gh, Claude Code, the `/run/sandbox` tmpfs, and so on). Ruby is not included (the project layer installs it according to `.ruby-version`).
 
+The clock settings are baked here too: NTP is enabled and the polling interval is capped at 64 seconds. A rolled-back pool VM restarts its clock from the moment the snapshot was taken, so with the default interval (up to 34 minutes) any commit or ADR written in that window gets a date that is days old. The per-lease correction is done by `sandbox take`.
+
 ```bash
 sandbox/proxmox/run.sh 30-base-template.sh create
 ```

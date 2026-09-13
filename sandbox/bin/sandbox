@@ -740,6 +740,50 @@ _reserve_vm_locked() {
 }
 reserve_vm() { with_state_lock _reserve_vm_locked "$@"; }
 
+# ---------- 時計（491）
+# プール VM は RAM 込みの snapshot（40-pool.sh の clean）を qm rollback で戻して貸すので、復元直後のゲストは
+# **snapshot を取った時刻から時計が再開する**。timesyncd の次のポーリング（既定では最大 34 分）まで数日ずれたまま走り、
+# その間に付いたコミットの author date と agent が書く ADR の日付が嘘になる（実測で 6 日 17 時間）。
+# 貸し出すたびにここで合わせる。合わせきれなくても take は止めない（止めるのは runner の検知。嘘の日付で工程を
+# 始めないことが目的で、VM を返すかどうかは run の判断）
+: "${SB_CLOCK_TOLERANCE_S:=120}"   # これを超えていたら合わせにいく
+: "${SB_CLOCK_WAIT_S:=20}"         # timesyncd の収束を待つ上限（秒）
+guest_epoch() { # ip → ゲストの UTC epoch（数字以外は空）
+  local out; out="$(vm "$1" 'date -u +%s' 2>/dev/null | tr -dc '0-9\n' | tail -1)"
+  printf '%s' "$out"
+}
+clock_offset() { # ip → ゲスト - 制御系（秒。測れなければ空で rc 1）
+  local g; g="$(guest_epoch "$1")"
+  [[ -n "$g" ]] || return 1
+  echo $(( g - $(date -u +%s) ))
+}
+sync_clock() { # ip
+  local ip=$1 before after i
+  before="$(clock_offset "$ip")" || { echo "[warn] $ip: ゲストの時計を測れなかった（date が数字を返さない）" >&2; return 0; }
+  if (( before <= SB_CLOCK_TOLERANCE_S && before >= -SB_CLOCK_TOLERANCE_S )); then
+    echo "[clock] guest offset ${before}s"
+    return 0
+  fi
+  # まず NTP に合わせ直させる（再起動すると待たずに 1 回目のポーリングが飛ぶ）
+  vm "$ip" 'sudo systemctl try-restart systemd-timesyncd' >/dev/null 2>&1 || true
+  after="$before"
+  for (( i = 0; i < SB_CLOCK_WAIT_S; i++ )); do
+    sleep 1
+    after="$(clock_offset "$ip")" || continue
+    (( after <= SB_CLOCK_TOLERANCE_S && after >= -SB_CLOCK_TOLERANCE_S )) && break
+  done
+  # NTP が届かない網では収束しない。制御系（ホストの時計を共有する LXC）の時刻を手で入れる
+  if (( after > SB_CLOCK_TOLERANCE_S || after < -SB_CLOCK_TOLERANCE_S )); then
+    if vm "$ip" "sudo date -u -s @$(date -u +%s)" >/dev/null 2>&1; then
+      after="$(clock_offset "$ip")" || after="$before"
+    fi
+  fi
+  echo "[clock] guest offset ${before}s → ${after}s"
+  (( after > SB_CLOCK_TOLERANCE_S || after < -SB_CLOCK_TOLERANCE_S )) &&
+    echo "[warn] $ip: ゲストの時計が ${after}s ずれたまま（許容 ${SB_CLOCK_TOLERANCE_S}s）。この VM で回す run は時計の検知で止まる" >&2
+  return 0
+}
+
 cmd_take() {
   local pj=${1:?pj} task=${2:?task-id}; shift 2 || true
   local a
@@ -762,6 +806,7 @@ cmd_take() {
   if [[ "$status" != running ]] || ! wait_port "$ip" 22; then
     rollback "$vmid" "$ip" || die "vm $vmid: rollback が通らない（${_rollback_err}）"
   fi
+  sync_clock "$ip"          # env を書く前に合わせる（GH_TOKEN の期限も貸出後のコミットもこの時計に乗る。491）
   inject_env "$ip" "$task" "$pj"
   dns_set "$task" "$ip"; _reserved_dns=1
   local rec; rec="$(jq -nc --arg v "$vmid" --arg n "$name" --arg i "$ip" --arg p "$pj" --arg s "$(date -Iseconds)" --argjson k "$(pool_keys_json)" \
@@ -792,6 +837,7 @@ cmd_reset() {
   echo "[reset] $(state_field "$task" name) → clean"
   _pool_need_from_state "$task"; pool_apply_keys "$task"; pool_require_keys
   rollback "$vmid" "$ip" || die "vm $vmid: 巻き戻しに失敗（${_rollback_err}）。貸出は継続。\`sandbox reset $task\` を後で再実行するか、\`sandbox ls\` で VM の状態を確かめてください"
+  sync_clock "$ip"          # 巻き戻した直後こそ snapshot 時刻に戻っている（491）
   inject_env "$ip" "$task" "$pj"
   state_set_keys "$task"
   touch_used "$vmid"

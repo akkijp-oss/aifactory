@@ -78,6 +78,8 @@ Tailscale が使えるようになるまでは `~/.config/sandbox/env` に `SB_J
 
 Ubuntu 24.04 の cloud image から VM 9100 を作り、`31-provision-base.sh` で全プロジェクト共通のソフトウェアをインストールします。その後、`qm template` でテンプレートに変換します。入っているものは `sandbox/templates/base/README.md` に一覧があります（mise、Node 22、PostgreSQL 16、Redis、Chrome、gh、Claude Code、`/run/sandbox` の tmpfs など）。Ruby は入れません（プロジェクト層で `.ruby-version` に従います）。
 
+時計の設定もここで焼きます（NTP を有効にし、ポーリング間隔の上限を 64 秒にする）。巻き戻したプール VM はスナップショットを取った時刻から時計が再開するので、既定の間隔（最大 34 分）のままだと、その間に付いたコミットや ADR の日付が数日前になります。貸出のたびの是正は `sandbox take` 側が行います。
+
 ```bash
 sandbox/proxmox/run.sh 30-base-template.sh create
 ```

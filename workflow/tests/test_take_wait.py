@@ -46,6 +46,8 @@ case "$1" in
     ;;
   ssh)
     if [ -n "$SSH_FAILS" ]; then echo "fatal: couldn't find remote ref develop" >&2; exit 128; fi
+    # 貸出直後に runner が測るゲストの時計（491）。この偽 VM は制御系と合っている
+    if [ "$3" = "date -u +%s" ]; then date -u +%s; fi
     ;;
 esac
 exit 0

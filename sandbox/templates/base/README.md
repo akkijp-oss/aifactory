@@ -4,7 +4,7 @@
 
 | 分類 | 内容 |
 |---|---|
-| OS | Ubuntu 24.04 cloud image、TZ Asia/Tokyo、qemu-guest-agent、unattended-upgrades 削除 |
+| OS | Ubuntu 24.04 cloud image、TZ Asia/Tokyo、NTP 有効（`timedatectl set-ntp true` + `/etc/systemd/timesyncd.conf.d/aifactory.conf` で `PollIntervalMaxSec=64`。次回焼き直しから。ADR-0069）、qemu-guest-agent、unattended-upgrades 削除 |
 | ユーザー | `dev`（sudo NOPASSWD、手元の Mac の公開鍵） |
 | ビルド依存 | build-essential、libpq-dev、libyaml-dev、libssl-dev、zlib1g-dev、libffi-dev、libreadline-dev、libgmp-dev、libvips、imagemagick、libjemalloc2、fonts-noto-cjk |
 | ツール | git、curl、wget、jq、unzip、ripgrep、htop、tmux、gh |

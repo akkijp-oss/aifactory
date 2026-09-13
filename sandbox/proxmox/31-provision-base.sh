@@ -21,6 +21,18 @@ log() { echo "[provision] $*"; }
 # ---------- OS
 log "os basics"
 timedatectl set-timezone Asia/Tokyo
+# 時計（チケット 491）。プール VM は RAM 込みの snapshot を巻き戻して貸すので、復元直後のゲストは
+# snapshot 取得時刻から時計が再開する。既定のポーリング間隔（最大 34 分）のままだと、その間に付いた
+# コミットと ADR の日付が数日前になる。最大 64 秒にして自力で戻れるようにし、NTP の有効化も明示する
+# （Ubuntu の既定でも有効だが、既定に依存しない）。貸出ごとの是正は sandbox CLI の sync_clock が行う
+timedatectl set-ntp true
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+cat > /etc/systemd/timesyncd.conf.d/aifactory.conf <<'TIMESYNCD'
+[Time]
+PollIntervalMinSec=16
+PollIntervalMaxSec=64
+TIMESYNCD
+systemctl restart systemd-timesyncd
 apt-get update -qq
 apt-get upgrade -y -qq >/dev/null
 apt-get install -y -qq qemu-guest-agent ca-certificates gnupg curl wget git jq unzip ripgrep htop tmux \

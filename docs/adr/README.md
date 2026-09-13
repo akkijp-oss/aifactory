@@ -80,3 +80,4 @@
 - [0066: 制御系 sqlite のロックは「長く待つ」のではなく「トランザクションをやり直す」（WAL 併用。runner の poll は op を取り消さない）](0066-control-sqlite-retries-the-transaction.md)
 - [0067: worker はゲストを止める前に作業ブランチを wip へ push する（保全コマンドは制御系が payload で渡す）](0067-worker-preserves-work-before-stopping-the-guest.md)
 - [0068: 止まったゲストは `guest-start` で起動し直し、`--resume` がそれを自動で呼ぶ（起動できない回は作り直さず止まる）](0068-guest-start-restarts-a-stopped-guest.md)
+- [0069: ゲストの時計は貸出のたびに合わせ、それでもずれていたら run を止める（記録の日付は「合っている」を前提にしない）](0069-guest-clock-is-synced-at-lease-and-skew-fails-the-run.md)

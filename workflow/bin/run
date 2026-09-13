@@ -154,6 +154,16 @@ class PrepareFailed(RuntimeError):
     「環境起因の赤」を直そうとして時間を焼くだけなので、工程を 1 つも始めずに終わる（チケット 330）"""
 
 
+class ClockSkew(RuntimeError):
+    """貸出直後のゲストの時計が制御系とずれすぎていた（チケット 491）。
+
+    プール VM は RAM 込みの snapshot を巻き戻して貸すので、復元直後のゲストは snapshot 取得時刻から
+    時計が再開し、timesyncd の次のポーリングまで数日ずれたまま走る。その間に付いた commit の author date と
+    agent が書く ADR の日付が嘘になり、`git log --since` も `--diff-filter=A` も取りこぼす。
+    sandbox take 側で合わせてはいるが（sync_clock）、NTP が届かない網では黙って通ってしまうので、
+    ここで必ず測り、ずれていれば工程を 1 つも始めずに終わる（嘘の日付を履歴に残さない）"""
+
+
 # 秘密の伏せ方とトークンの払い出しは lib/aifactory_gh.py に 1 か所（kb も同じものを使う。チケット 345）
 SECRET_LINE = gh.SECRET_LINE
 scrub = gh.scrub
@@ -525,6 +535,38 @@ class Run:
         return stream(["sandbox", "ssh", self.task, cmd], log_path, render=render)
 
     # ---------- lifecycle
+    # ゲストの時計を測る 1 行（UTC の epoch 秒）。backend が OS ごとに上書きする（windows.py は PowerShell）
+    clock_probe_cmd = "date -u +%s"
+
+    def check_clock(self):
+        """貸出直後のゲストの時計を制御系と突き合わせる（チケット 491）。工程を始める前の 1 回だけ。
+
+        ずれたまま走らせると、commit の author date も agent が書く ADR の日付も数日前になる（実測: #478 と #486 が
+        6 日 17 時間）。履歴に嘘の日付が混ざると `git log --since` や `--diff-filter=A` が取りこぼし、後から直せない。
+        測れた値は成否に関わらず state.json に残す（どの run がどれだけずれたかを後から数えられる）。
+        run の途中でずれ直すことは kvm-clock では起きない前提なので、測るのはここだけ。`sandbox reset` で
+        巻き戻し直したときは sandbox 側の sync_clock がまた合わせる"""
+        if self.dry or self.resume: return
+        tol = int(os.environ.get("AIFACTORY_CLOCK_TOLERANCE_S") or 120)
+        # ssh そのものが通らないときは sb が上げる例外をそのまま通す（「時計が測れない」と言い換えない）
+        out = (self.sb(self.clock_probe_cmd) or "").strip().splitlines()
+        raw = (out or [""])[-1].strip()
+        control = time.time()
+        try:
+            guest = int(raw)
+        except ValueError:
+            # 測れなかったものを「ずれていない」と読み替えない（黙って通すと嘘の日付が履歴に入る）
+            raise ClockSkew(f"ゲストの時計を測れなかった（`{self.clock_probe_cmd}` が数字を返さない): {raw[:120]!r}")
+        off = round(guest - control)
+        self.state["clock_offset_s"] = off
+        self.save()
+        iso = lambda e: datetime.datetime.fromtimestamp(e).astimezone().isoformat(timespec="seconds")
+        self.log(f"clock: guest offset {off}s（許容 {tol}s）")
+        if abs(off) > tol:
+            raise ClockSkew(f"ゲストの時計が制御系と {off} 秒ずれている（許容 {tol} 秒）: "
+                            f"guest={iso(guest)} control={iso(control)}。"
+                            f"そのまま回し直してよい（次の貸出が時計を合わせ直す）")
+
     def take(self):
         if self.dry:
             self.push_attachments()      # 転送はしないが、依頼文の案内は dry-run でも組み立てて見せる
@@ -541,8 +583,15 @@ class Run:
             if POOL_BUSY in why: raise PoolBusy(why)
             if NO_KEY in why: raise NoKey(([l.strip() for l in why.splitlines() if NO_KEY in l] or [why])[-1])
             raise RuntimeError(f"command failed ({r.returncode}): sandbox take {self.pj} {self.task}\n{why}")
-        print(((r.stdout or "").strip().splitlines() or [""])[-1])
+        out_lines = (r.stdout or "").strip().splitlines()
+        # take の出力は最後の 1 行（[ok] …）だけ残すが、時計の是正（491）は run の記録に残す。
+        # 「どれだけずれていた VM をいつ合わせたか」は、後から日付を疑うときの唯一の手がかりになる
+        for l in out_lines[:-1]:
+            if l.startswith("[clock]"): print(l)
+        print((out_lines or [""])[-1])
         self.taken = True   # ここから先で落ちたら VM を返す（238）
+        # checkout より前に時計を見る。ここから先の commit / ADR の日付が全部これに乗る（491）
+        self.check_clock()
         self.sb(f"mkdir -p {self.work}")
         if self.from_branch:
             # --from: base ではなく前回の wip ブランチの続きから始める（実装済みのコミットを持ったまま次の step に入る。333）
@@ -1017,7 +1066,8 @@ class Run:
         記録が無いと kb がチケットを `実行中` のまま残し、console も「実行中・工程 0」と見せてしまう。
         failure は「同じ failed でも扱いが違う終わり方」の目印。kb と console がこれを見て見せ方と次の一手を変える。
         今あるのは "wait_timeout"（VM の空き待ちが上限。チケットは todo に戻す。242）と
-        "prepare"（貸出直後の準備が失敗。VM か prepare.sh を直してから回し直す。330）"""
+        "prepare"（貸出直後の準備が失敗。VM か prepare.sh を直してから回し直す。330）と
+        "clock"（ゲストの時計が制御系とずれていた。VM は返すので、回し直せば次の貸出が合わせ直す。491）"""
         err = scrub(str(e))[-1500:]
         self.state.update({"result": "failed", "next": "human", "current": None, "error": err, "pr_url": "", "wip_branch": "",
                            "finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "elapsed_s": int(time.time() - self.t0)})
@@ -1062,6 +1112,10 @@ class Run:
         except PrepareFailed as e:
             # 準備で落ちた run。直す所は VM か prepare.sh 側にあるので、agent を起こさず人間へ返す（330）
             return self.fail_before_start(e, failure="prepare")
+        except ClockSkew as e:
+            # 貸出直後のゲストの時計がずれていた（491）。嘘の日付のコミットを積ませないよう工程を 1 つも始めずに終える。
+            # VM は返す（次の take が巻き戻し直して合わせる）
+            return self.fail_before_start(e, failure="clock")
         except NoKey as e:
             # 要る用途の Claude の鍵が鍵プールに無い。VM は取っていない。鍵が登録されれば回せるので一時停止（kb が todo に戻し、timer が回し直す。ADR-0046）
             return self.fail_before_start(e, failure="nokey")
