@@ -2977,6 +2977,13 @@ class RepoStatusTest(unittest.TestCase):
         self.git(self.work, "config", "user.name", "test")
         self.commit("gates.sh", "echo one\n", "最初のコミット")
         self.git(self.work, "push", "-u", "origin", "main")
+        # PJ 定義の置き場（paths は全 test で共有の module。退避して戻す）
+        self.projects = self.tmp / "projects"; self.projects.mkdir()
+        old = self.core.paths.PROJECT_DIRS
+        self.core.paths.PROJECT_DIRS = [self.projects]
+        self.addCleanup(setattr, self.core.paths, "PROJECT_DIRS", old)
+        self.core._repo_fetch_at.clear()
+        self.addCleanup(self.core._repo_fetch_at.clear)
 
     def git(self, cwd, *args):
         r = subprocess.run(["git", *args], cwd=str(cwd), text=True, capture_output=True)
@@ -3044,11 +3051,103 @@ class RepoStatusTest(unittest.TestCase):
         self.assertEqual(self.core.repo_status(self.work, ttl=300)["ahead"], first["ahead"])
         self.assertEqual(self.status()["ahead"], 1)                    # ttl=0 なら読み直す
 
+    # ---------- develop に着地済みだが、この制御系（main 追従）にまだ配備されていない分（チケット 487）
+    def make_pj(self, name, repo, base):
+        """PJ 定義を一時の置き場に 1 つ作る。paths は全 test で共有なので setUp で退避してある"""
+        d = self.projects / name; d.mkdir(parents=True, exist_ok=True)
+        (d / "project.yml").write_text(f"name: {name}\nrepo: {repo}\nbase_branch: {base}\napp_dir: /home/dev/app\ngates: gates.sh\n", encoding="utf-8")
+        return d
+
+    def origin_slug(self):
+        """origin の URL（一時 dir のパス）から owner/name にあたる末尾 2 要素"""
+        return f"{self.tmp.name}/origin"
+
+    def push_to_develop(self, msg="develop に着地した変更"):
+        other = self.tmp / "other"
+        if not other.exists():
+            self.git(self.tmp, "clone", "-q", str(self.origin), str(other))
+            self.git(other, "config", "user.email", "t@example.invalid"); self.git(other, "config", "user.name", "test")
+            self.git(other, "checkout", "-q", "develop")
+        self.commit("gates.sh", f"echo {len(msg)}\n", msg, cwd=other)
+        self.git(other, "push", "-q", "origin", "develop")
+
+    def test_commits_landed_on_the_pj_base_but_not_in_head_are_undeployed(self):
+        """487 そのもの: ctl は main 追従（ADR-0042）なので develop に着地した変更は昇格まで効かない。
+           #337 の警告は origin/main との比較なので、この状態を clean と表示してしまう"""
+        self.git(self.work, "push", "-q", "origin", "main:develop")      # develop を main から切る
+        self.make_pj("aifactory", self.origin_slug(), "develop")
+        self.push_to_develop("unittest-pull をゲートに足す")
+        d = self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.assertFalse(d["diverged"], "#337 の判定では clean に見える（これが本票の穴）")
+        self.assertTrue(d["undeployed"])
+        b = next(x for x in d["bases"] if x["branch"] == "develop")
+        self.assertEqual((b["undeployed"], b["only_here"], b["pjs"]), (1, 0, ["aifactory"]))
+        self.assertTrue(b["known"])
+        self.assertTrue(any("unittest-pull" in l for l in b["latest"]), b["latest"])
+        self.assertIsNotNone(d["fetched"])
+
+    def test_the_upstream_branch_itself_is_not_repeated_as_a_base(self):
+        """base が main の PJ は既存の ahead / behind が担う。同じ比較を 2 回出さない"""
+        self.make_pj("onmain", self.origin_slug(), "main")
+        d = self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.assertEqual(d["bases"], [])
+        self.assertFalse(d["undeployed"])
+
+    def test_a_pj_of_another_repo_is_not_compared(self):
+        """他 PJ の base_branch は別リポジトリのブランチ名。この checkout の origin/develop と比べると嘘になる"""
+        self.git(self.work, "push", "-q", "origin", "main:develop")
+        self.make_pj("kumitate", "example/kumitate", "develop")
+        self.push_to_develop()
+        d = self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.assertEqual(d["bases"], [])
+        self.assertFalse(d["undeployed"])
+
+    def test_a_base_that_does_not_exist_on_origin_is_unknown_and_silent(self):
+        self.make_pj("aifactory", self.origin_slug(), "develop")
+        d = self.core.repo_status(self.work, ttl=0, fetch=True)
+        b = next(x for x in d["bases"] if x["branch"] == "develop")
+        self.assertFalse(b["known"]); self.assertIsNone(b["undeployed"])
+        self.assertFalse(d["undeployed"])                                 # 分からないときは警告を出さない
+
+    def test_fetch_is_rate_limited_and_its_failure_is_tolerated(self):
+        """網を触るのは 5 分に 1 回まで。落ちても overview は今までどおり返す"""
+        self.make_pj("aifactory", self.origin_slug(), "develop")
+        calls = []
+        real = self.core._git_out
+        def spy(path, *args, **kw):
+            if args[:1] == ("fetch",): calls.append(args)
+            return real(path, *args, **kw)
+        self.core._git_out = spy
+        self.addCleanup(setattr, self.core, "_git_out", real)
+        self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.assertEqual(len(calls), 1, "TTL 内は 2 回目の fetch を呼ばない")
+        self.core._repo_fetch_at.clear()
+        self.git(self.work, "remote", "set-url", "origin", str(self.tmp / "nowhere.git"))
+        d = self.core.repo_status(self.work, ttl=0, fetch=True)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(d["fetch_error"], "失敗は握って文字列で見せる")
+        self.assertTrue(d["known"])
+
+    def test_fetch_is_off_unless_asked(self):
+        """既定は網を触らない（#337 のまま）。overview だけが fetch つきで呼ぶ"""
+        calls = []
+        real = self.core._git_out
+        def spy(path, *args, **kw):
+            if args[:1] == ("fetch",): calls.append(args)
+            return real(path, *args, **kw)
+        self.core._git_out = spy
+        self.addCleanup(setattr, self.core, "_git_out", real)
+        self.core.repo_status(self.work, ttl=0)
+        self.assertEqual(calls, [])
+        self.assertIsNone(self.core.repo_status(self.work, ttl=0)["fetched"])
+
     def test_board_warns_when_the_checkout_differs_from_origin(self):
         """JS を動かす基盤が無いので、ボードのソースを検査する（他の画面の作りと同じ）"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         i = app.index("async function viewBoard"); board = app[i: app.index("\n}", i)]
-        for key in ("o.repo", "repo.diverged", "T.board.repoDiverged", "T.board.repoAhead", "T.board.repoBehind", "T.board.repoDirty", "T.board.repoHow"):
+        for key in ("o.repo", "repo.diverged", "T.board.repoDiverged", "T.board.repoAhead", "T.board.repoBehind", "T.board.repoDirty", "T.board.repoHow",
+                    "repo.undeployed", "T.board.repoUndeployed", "T.board.repoUndeployedHow", "T.board.repoOnlyHere", "T.board.repoFetchError"):
             self.assertIn(key, board, key)
 
 

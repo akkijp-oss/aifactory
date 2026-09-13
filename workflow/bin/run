@@ -947,6 +947,7 @@ class Run:
                "BRANCH": self.branch, "WORKFLOW": self.wf_name, "TITLE": self.title,
                "PR_NUMBER": self.pr_number or "", "MERGE_METHOD": os.environ.get("MERGE_METHOD", "merge"),
                "KNOWN_RED": " ".join(self.project.get("known_red_gates", [])),
+               "REPO": self.project.get("repo") or "",     # gates.sh が「配った PJ 定義が origin/<base> の版か」を見るため（487）
                **self.automerge_env()}
         log_path = self.run_dir / f"code-{step['id']}-{len(self.state['history'])}.log"
         self.set_current(step["id"], "code", log_path.name)

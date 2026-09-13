@@ -7,7 +7,7 @@
 #
 # 赤いゲートの VM 内ログ（~/gates/<name>.log）は $WORK/gates/<name>.log に抜粋を残す（チケット 331）。VM は run の終わりに
 # 返却・初期化されるので、そこに置かないと「どのテストがどう落ちたか」は run が終わった時点で誰にも読めなくなる。
-# runner から次の env で呼ばれる: PJ TASK RUN_DIR PROJECT_DIR GATES WORK BASE BRANCH KNOWN_RED
+# runner から次の env で呼ばれる: PJ TASK RUN_DIR PROJECT_DIR GATES WORK BASE BRANCH KNOWN_RED REPO
 set -uo pipefail
 : "${TASK:?}" "${PROJECT_DIR:?}" "${GATES:?}" "${WORK:?}"
 # ログの転記は秘密の形（sk-ant-… / gh*_ / KEY=値）を伏せてから run に置く（scrub.sh。PR 本文にも同じものが通る）
@@ -19,6 +19,38 @@ KEY="$HOME/.ssh/conf.d/aifactory/sb_ed25519"
 ip="$(jq -r --arg id "$TASK" '.[$id].ip' "$HOME/.config/sandbox/state.json")"
 scp -q -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$PROJECT_DIR/$GATES" "dev@$ip:/home/dev/gates.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+
+# ---------- 配った PJ 定義が origin/$BASE の版か（チケット 487）
+# 配るのは制御系（ctl）の作業ツリー、正本は origin/$BASE。ctl は main 追従（ADR-0042）なので、base が develop の
+# PJ では develop に着地した PJ 定義が昇格まで配られない。#446 で足した unittest-pull は「行そのものが無い」まま
+# 全緑の run が 2 回出た（赤くならないので誰も気づかない）。黙って減らないよう、差があれば 1 行言う。
+# FAIL にはしない: 配布経路の問題であって実装役の変更ではなく、FAIL にすると全 run が implement へ戻る（ADR-0042 §4）。
+# git が無い・PJ 定義が追跡外（workspace/projects）・repo が違う PJ では何も言わない（比べる正本が無い＝黙る）
+pj_drift() {
+  local base="${BASE:-main}" url rel changed short bits="" missing gates_note
+  [ -n "${REPO:-}" ] || return 0
+  url="$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null)" || return 0
+  case "$url" in *"$REPO"*) ;; *) return 0 ;; esac                     # 別リポジトリの PJ 定義は比べない
+  git -C "$PROJECT_DIR" rev-parse -q --verify "refs/remotes/origin/$base" >/dev/null 2>&1 || return 0
+  rel="$(git -C "$PROJECT_DIR" rev-parse --show-prefix 2>/dev/null)"; [ -n "$rel" ] || return 0
+  changed="$(git -C "$PROJECT_DIR" diff --name-only "origin/$base" -- . 2>/dev/null)"
+  [ -n "$changed" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    short="${f#"$rel"}"; gates_note=""
+    if [ "$short" = "$GATES" ]; then     # ゲートは名前まで出す（「どのゲートが走っていないか」が本題）
+      git -C "$PROJECT_DIR" show "origin/$base:$f" 2>/dev/null | awk '/^gate /{print $2}' | sort -u > "$tmp/gates-base.txt"
+      awk '/^gate /{print $2}' "$PROJECT_DIR/$GATES" 2>/dev/null | sort -u > "$tmp/gates-here.txt"
+      missing="$(comm -23 "$tmp/gates-base.txt" "$tmp/gates-here.txt" 2>/dev/null | tr '\n' ' ')"
+      missing="${missing% }"
+      [ -n "$missing" ] && gates_note=" (missing: $missing)"
+    fi
+    bits="$bits $short$gates_note"
+  done <<< "$changed"
+  [ -n "$bits" ] || return 0
+  printf 'INFO pj-drift %s differs from origin/%s:%s' "$rel" "$base" "$bits"
+}
+drift="$(pj_drift 2>/dev/null)"
 
 # PJ の gates.sh に base を渡す（`bin/changelog-release check --base origin/$BASE` のように base と比べるゲートがある。
 # 渡さないと既定の main と比べ、VM の origin/main はテンプレート時点で古いので、develop 向きの PJ では毎回赤になった。2026-09-10 run 347）
@@ -113,6 +145,8 @@ fi
 
 # ---------- 結果を組み立てて置く
 left="$(awk '/^FAIL/{print $2}' <<< "$out")"
+# 配布版と正本のズレは判定の行の先頭に置く（gates.txt の 1 行目・console の INFO・実装役への依頼文で見える）
+[ -n "$drift" ] && out="$drift"$'\n'"$out"
 { printf '%s\n' "$out"
   if [ -n "$base_block" ]; then printf '%s\n' "$base_block"; fi
   for g in $left; do printf '\n=== %s.log (tail 60)\n' "$g"; cat "$tmp/head-$g.log" 2>/dev/null; done

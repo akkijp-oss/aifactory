@@ -125,7 +125,15 @@ runner が読む PJ 定義（`examples/projects/<pj>/` の `project.yml` / `gate
 
 基本は**手元（Mac）の checkout で直して push し、制御系では `bin/ctl-update` で配備するだけ**にします。急ぎで制御系の中で直したときは `git format-patch origin/main --stdout` で持ち出し、手元から push してから制御系を `git reset --hard origin/main` で揃え直します。
 
-食い違い（push していないコミット・取り込んでいないコミット・未コミットの変更）は、コンソールのボードに警告として出ます。手順の全文と、制御系から直接 push できるようにする deploy key の付け替えは `sandbox/OPERATIONS.md` の「PJ 定義の変更手順」にあります。
+食い違い（push していないコミット・取り込んでいないコミット・未コミットの変更）は、コンソールのボードに警告として出ます。コンソールは 5 分に 1 回 origin を取り込んでから比べます（対象のブランチだけで、HEAD も作業ツリーも動かしません）。網や認証の都合で取り込めないときは `CONSOLE_REPO_FETCH=0` で止められ、件数は最後に取り込めた時点のものになります。手順の全文と、制御系から直接 push できるようにする deploy key の付け替えは `sandbox/OPERATIONS.md` の「PJ 定義の変更手順」にあります。
+
+### 着地したのにまだ効いていない変更
+
+制御系の checkout は `main` 追随なので、`develop` に着地した変更は**昇格して `bin/ctl-update` を通すまで 1 行も効きません**。runner も `sandbox` CLI もコンソールも PJ 定義も、この checkout から動く／配られるからです。上の警告は `origin/main` との比較なので、この状態は「食い違い無し」と表示されてしまいます（ADR-0070）。
+
+そのため、ボードには別の 1 行が出ます: `origin/develop に着地済みで、この制御系にまだ配備されていないコミットが N 件あります（PJ: aifactory）`。比べる先は PJ の `base_branch` で、この checkout と同じ `repo` を持つ PJ だけを見ます（他 PJ の `base_branch` は別リポジトリのブランチ名なので比べません）。消すには昇格して `bin/ctl-update` を通します。**制御系の追随先は `main` のままにします**（ADR-0042）。
+
+PJ 定義については、VM へ配る直前にも同じ突き合わせをします。配った版が `origin/<base>` と違うと、run の `work/gates.txt` の 1 行目に `INFO pj-drift examples/projects/aifactory/ differs from origin/develop: gates.sh (missing: unittest-pull)` と出ます。`missing:` は base にはあるのに配布版に無いゲート、つまり**その run で走っていないゲート**です。赤ではないので run は止まりません。
 
 ## 通信制限（ファイアウォール）
 
