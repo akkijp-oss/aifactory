@@ -4,7 +4,8 @@
   glue/bin/dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]] [--resume-paused]
 
 - 回し始める前に `kb sync --all-review` を 1 回呼び、人が GitHub でマージ / クローズした PR を板に反映する（345。`--dry-run` / `--resume-paused` では呼ばない）
-- `kb next --json [--pj P]` で最も古い todo を 1 件取り、`kb run <id>` を呼ぶ。終わったら次を取る。todo が無くなれば終了
+- `kb list --status todo [--pj P]` を id 順に見て、先行票（`depends_on`）が全部 done の最も古い 1 件を取り、`kb run <id>` を呼ぶ。
+  終わったら次を取る。未完了の先行票を持つ票は理由を残して飛ばす（判定は console と同じ `core.pm_unmet_deps`。ADR-0078）。todo が無くなれば終了
 - 鍵の利用枠切れで一時停止中のチケット（`kb resumable`。runner が todo に戻したもの）は、解除時刻を過ぎていれば `kb run <id> --from`
   で**続きから**回し、過ぎていなければ飛ばす（初めからやり直さない。チケット 380 / ADR-0043）
 - `--resume-paused` は一時停止中のチケット**だけ**を対象にする（他の todo には手を付けない）。制御系の systemd timer
@@ -22,6 +23,9 @@ import argparse, datetime, json, os, pathlib, subprocess, sys, time
 HERE = pathlib.Path(__file__).resolve().parent.parent          # glue/
 REPO = HERE.parent
 sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths
+# 先行条件（depends_on）の判定は core の 1 か所だけにある。ここに規則を書き写さない（ADR-0015 / ADR-0078）。
+# ★読めなければ落ちる。判定なしで素通しするより安全側（止めてある票を機械が起動する事故を塞ぐのが本来の目的）
+sys.path.insert(0, str(REPO / "console" / "lib")); import core
 KB = REPO / "kanban" / "bin" / "kb"
 LOG = paths.LOGS / "dispatch.log"
 POOL_PER_PJ = int(os.environ.get("SANDBOX_POOL_PER_PJ") or 3)   # PJ ごとの台数（既定 3。40-pool.sh で増やしたら SANDBOX_POOL_PER_PJ で合わせる）
@@ -45,7 +49,7 @@ def next_ticket(pj=None, skip=()):
         tid = int(r[0])
         if tid in skip: continue
         info = dict(l.split(None, 1) for l in sh([str(KB), "show", str(tid)]).stdout.split("-" * 60)[0].splitlines() if len(l.split(None, 1)) == 2)
-        return {"id": tid, "pj": info.get("pj"), "kind": info.get("kind"), "title": info.get("title", "")}
+        return {"id": tid, "pj": info.get("pj"), "kind": info.get("kind"), "title": info.get("title", ""), "depends_on": info.get("depends_on")}
     return None
 
 
@@ -105,6 +109,12 @@ def main():
             if not t: log("todo が無い（または全部飛ばした）。終了"); break
         tid, pj = t["id"], t["pj"]
         plan = paused.get(tid)
+        # 先行票が終わっていない票は回さない（#573 / ADR-0078）。判定は core の 1 か所。黙って外さず、どの先行票を待っているかを残す。
+        # --resume-paused の t は kb resumable 由来で depends_on を持たず、pm_unmet_deps は空を返す（起動時の関門は通過済み。ADR-0078 決定 4）
+        unmet = core.pm_unmet_deps(t)
+        if unmet:
+            log(f"{tid} {pj}: 先行票 " + "、".join(f"{d}={s or '未起票'}" for d, s in unmet.items()) + " が未完了 → 飛ばす")
+            skip.add(tid); continue
         # 利用枠切れで一時停止中のチケットは、解除時刻を過ぎるまで回さない（回しても同じ所で止まり VM を取り直すだけ。380）
         if plan and not plan["ready"]:
             why = (f"鍵が無くて一時停止中（{'、'.join(plan.get('needed_keys') or [])} の鍵が鍵プールに登録されたら回す）" if plan.get("paused") == "nokey"
