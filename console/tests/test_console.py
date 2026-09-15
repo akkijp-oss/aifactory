@@ -1851,6 +1851,17 @@ class ApiTest(unittest.TestCase):
     PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
                        "requeue_proposed")
 
+    PM_ACTIONS = ("none", "run", "requeue")
+
+    def _assert_proposal(self, p):
+        """提案は ADR-0074 決定 5 の 1 行と同じ形で、語彙もその表の中だけ（日本語の説明文を持たない）"""
+        self.assertIsInstance(p, dict, "板を読めているのに提案が無い")
+        self.assertEqual(sorted(p), sorted(["pj", "ticket", "run", "state", "action", "reason_code", "facts", "mode"]))
+        self.assertIn(p["action"], self.PM_ACTIONS, p["action"])
+        self.assertIn(p["reason_code"], self.PM_REASON_CODES + (None,), p["reason_code"])
+        self.assertEqual(p["mode"], "propose", "この版は提案だけ（auto は次のチケット）")
+        self.assertIsInstance(p["facts"], dict)
+
     def _pm(self, pj):
         st, d = self.http.get(f"/api/pm?pj={urllib.parse.quote(pj)}")
         self.assertEqual(st, 200, d)
@@ -1882,10 +1893,10 @@ class ApiTest(unittest.TestCase):
         self.assertFalse(e["next"]["launchable"])
         self.assertTrue(e["runs"]["readable"]); self.assertEqual(e["runs"]["reason"], "no_records")   # 記録が無い ≠ 読めない
         self.assertEqual(e["runs"]["active_n"], 0); self.assertIsNone(e["run"])
-        # 次の一手（提案）も同じ口で返る（新しい endpoint を作らない。ADR-0074 決定 4）。読むだけなので何も書かれていない
-        self.assertEqual(d["proposal"]["action"], "run"); self.assertEqual(d["proposal"]["reason_code"], "proposed")
+        # 次の一手（提案）も同じ口で返る（新しい endpoint を作らない。ADR-0074 決定 4）。読むだけなので何も書かれていない。
+        # この PJ の run はほかの検査も足すので、ここでは形と語彙だけを見る（値の場合分けは PmTickTest が持つ）
+        self._assert_proposal(d["proposal"]); self.assertIsNone(d["proposal_error"])
         self.assertEqual(e["proposal"]["reason_code"], "no_todo"); self.assertEqual(e["proposal"]["action"], "none")
-        self.assertIsNone(d["proposal_error"]); self.assertEqual(d["decisions"], [])
 
     def test_pm_status_waits_while_a_run_is_going(self):
         """走行中の run がある PJ は waiting。次の票を「起動してよい」とは言わない（launchable は偽）"""
@@ -2112,7 +2123,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200, d)
         self.assertTrue(d["ticked"]); self.assertEqual(d["by"], "api"); self.assertTrue(d["dry"])
         self.assertFalse(d["logged"]); self.assertEqual(d["mode"], "propose")
-        self.assertEqual(d["proposal"]["action"], "run")
+        self._assert_proposal(d["proposal"])
         _, after = self.http.get("/api/pm?pj=" + PJ)
         self.assertEqual(after["decisions"], [], "下見のはずの 1 周が判断ログに書いている")
         self.assertEqual(jobs(), before, "提案のはずの 1 周がジョブを起こしている")
