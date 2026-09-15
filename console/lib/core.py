@@ -1238,12 +1238,23 @@ def tickets_list(pj=None, status=None, all_=True):
             "kinds": ks, "kind_desc": kind_desc(ks), "labels": STATUS_LABEL}
 
 
-def ticket_next(pj=None):
-    """画面が「配車する」を押す前に見せる下見を 1 件（kb next --json）。実際に回る票は dispatch が kb list + kb show で選び直す。無ければ None"""
+def kb_next(pj=None):
+    """薄いままの `kb next --json` の生の 1 件（todo を id 順に 1 件。依存も一時停止も見ない。ADR-0077 / ADR-0078）。
+       無ければ None、読めなければ ApiError。★これを画面へそのまま出さない（下見は ticket_next を通す。#581）"""
     rc, out, err = kb("next", *(["--pj", pj] if pj else []), "--json")
     if rc != 0: raise ApiError((err or out).strip() or f"kb next が失敗 rc={rc}")
     out = out.strip()
-    return {"next": json.loads(out) if out else None}
+    return json.loads(out) if out else None
+
+
+def ticket_next(pj=None):
+    """画面が「配車する」を押す前に見せる下見（#581）。
+
+    ★`kb next` の生の 1 件をそのまま見せない。dispatch が飛ばす票（未完了の先行票 / 解除前の一時停止）を
+      同じ判定（core の pm_pick_next 1 か所）で飛ばして選び直し、**実際に回る票**と、なぜ他を選ばなかったかを返す。
+    返す形は pm_pick_next と同じ（`next` キーは今までどおり残すので、既存の呼び手は壊れない）。
+    読めなければ ApiError（「候補なし」に倒さない）"""
+    return pm_pick_next(kb_next(pj), pj)
 
 
 PR_NUMBER = re.compile(r"(?:/pull/|#)(\d+)")   # kb の pr_url_for は repo があれば .../pull/N、無ければ #N を書く（kanban/bin/kb）
@@ -2673,7 +2684,7 @@ def config_model_apply(b):
 
 # ---------- PM（管理役）の状態（ADR-0074。読むだけ・保存しない・何も起こさない）
 # 状態は保存せず毎回導く（決定 2）。ここに要るのは「PM の判断」だけで、材料（overview / board_runs /
-# run_detail / ticket_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
+# run_detail / kb_next / pm_pick_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
 # ★この口の一番の約束は「取得できていない」と「0 件」を別の値で持つこと。読めなかったものを 0 件や
 #   null で返すと、確かめられていない状態がそのまま「順調」に見える。だから:
 #   - 板: readable / reason（ok / no_db / kb_failed）で分ける。counts は板の集計を読めたときだけ入れる
@@ -2688,16 +2699,20 @@ PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout",
 # 「次にやること」の理由コード。前 4 つは決定 5 の判断ログの語彙をそのまま使い、後ろ 2 つは
 # 状態表示のためにここで足す（判断ログには書かない）
 # blocked_by_dependency は「未完了の先行票があるので選べない」＝確かめた結論。「読めていない」（board_unreadable）とも
-# 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）
+# 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）。blocked_by_pause は「解除前の一時停止しか残っていない」。
+# 解け方は一時停止の種類で違う: 利用枠切れ（quota）は解除時刻が来れば timer（dispatch --resume-paused）が続きを回すが、
+# 鍵待ち（nokey）は人が鍵を登録するまで、回数超過（hits_exceeded）は人が枠を確かめるまで解けない（timer は拾わない）。
+# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）
 PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                   "requeue_proposed", "blocked_by_dependency")
+                   "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
 # 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
 PM_MODES = ("propose", "auto")                       # auto は #538。本票は propose だけを受ける
 PM_ACTIONS = ("none", "run", "requeue")              # 判断ログの action。propose では実行しない（決めて書くだけ）
-# ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を 1 語足した。ここに無い語を PM が作らない
+# ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を、#581 が blocked_by_pause を 1 語ずつ足した。
+# ここに無い語を PM が作らない
 PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                    "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                   "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency")
+                   "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
 PM_REVIEW_RETRY_MAX = 2                              # 決定 3 の線②: review 由来の再投入は同じ票につき 2 回まで
 # PM がもう一度回してよい停止理由（決定 3）。ここに無い理由（pr_created / step_timeout / human_abandoned /
 # runner_gone / failed_before_start …）は「直す所が run の外」なので、PM は判断せず人に渡す
@@ -2755,26 +2770,80 @@ def pm_unmet_deps(row):
     return _pm_unmet_deps(_pm_deps(row))
 
 
-def _pm_pick_next(next_row, pj=None):
-    """`kb next` の 1 件から、未完了の先行票を持つ票を飛ばして次の候補を決める（#570）。
+PAUSE_FACTS = ("paused", "until", "needed_keys", "hits_exceeded", "quota_hits", "step")
+# 一時停止（利用枠切れ / 鍵なし）の票のうち、下見と判断ログに載せる材料だけ。日本語の説明文は持たない（表示は strings.js）
 
-    `kb next` は todo を id 順に 1 件返すだけで依存を見ない。判定を kb 側に持たせず core に置くのは
-    ADR-0074 決定 1（判定の正本は core、kb は状態を変える薄い CLI）のまま。
-    返り値: (選んだ票 or None, 飛ばした票 {票 id: {先行票 id: status}}, 依存で候補が尽きたか)
-    ★DB を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない"""
-    skipped = {}
-    if not isinstance(next_row, dict): return next_row, skipped, False
-    unmet = pm_unmet_deps(next_row)
-    if not unmet: return next_row, skipped, False        # depends_on を持たない票はここで抜ける（今までどおり）
-    skipped[str(next_row["id"])] = unmet                 # キーを文字列で揃える理由は _pm_unmet_deps を参照
+
+def pm_resume_plans(pj=None):
+    """一時停止中（利用枠切れ / 鍵なし で todo に戻した）のチケット {id: 続きを回す計画}（ADR-0043 / ADR-0046）。
+
+    ★正本は `kb resumable --json`（台帳 + run の state.json）。解除時刻や回数の規則は kb の resume_plan が持ち、
+      ここにも dispatch にも書き写さない（ADR-0015）。読めなければ ApiError を上へ出す
+      （「一時停止は 1 件も無い」に倒すと、確かめていないことを確かめたように見せることになる）"""
+    rc, out, err = kb("resumable", *(["--pj", pj] if pj else []), "--json")
+    if rc != 0: raise ApiError((err or out).strip() or f"kb resumable が失敗 rc={rc}")
+    out = out.strip()
+    return {int(p["id"]): p for p in (json.loads(out) if out else [])}
+
+
+def pm_paused_skip(plan):
+    """その票を「今は回さない」か（dispatch の 2 条件と同じ。glue/bin/dispatch）。
+
+    解除前（ready が偽＝解除時刻前 / 鍵が未登録）か、利用枠切れが上限回数続いた（hits_exceeded）なら真。
+    どちらの規則も kb の resume_plan が判定した結果を読むだけで、時刻や回数の計算はここでしない"""
+    return bool(plan) and bool(not plan.get("ready") or plan.get("hits_exceeded"))
+
+
+def pm_pick_next(next_row, pj=None, plans=None):
+    """`kb next` の 1 件から、dispatch が飛ばす票を飛ばして「実際に回る票」を決める（#570 / #573 / #581）。
+
+    `kb next` は todo を id 順に 1 件返すだけで、先行条件も一時停止も見ない（ADR-0077 / ADR-0078 の決定どおり
+    薄いまま）。飛ばす判定を kb 側に持たせず core に置くのは ADR-0074 決定 1（判定の正本は core）のまま。
+    ★下見（ticket_next）も PM（pm_status）もこの 1 か所を通る。dispatch は候補を自分で舐めるが、判定そのものは
+      同じ 2 つ（pm_unmet_deps / kb resumable の ready・hits_exceeded）を同じ順で使う。規則を呼び手側に書き写さない。
+
+    飛ばすのは dispatch が板と run の記録だけで確かめられる 2 つ:
+      1. 未完了の先行票がある（pm_unmet_deps。#573 / ADR-0078）
+      2. 解除前の一時停止 / 利用枠切れが続いた（pm_resume_plans。ADR-0043 / ADR-0046）
+    配車のときの環境で決まるもの（PJ の project.yml・Pull worker・プールの空き）はここでは確かめない。
+
+    返り値（dict。`next` が null でも理由コードで何を確かめたかを言う）:
+      {"next": 票 or None, "reason": picked_next / no_todo / blocked_by_dependency / blocked_by_pause,
+       "kb_next": 薄い kb next が返した生の id or None,
+       "skipped_by_dependency": {票 id: {先行票 id: status}}, "skipped_by_pause": {票 id: {…PAUSE_FACTS}}}
+    ★DB や kb resumable を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない
+
+    `plans`（id → 一時停止の予定）を渡すと `pm_resume_plans` を呼ばずにそれを使う。呼び手が同じ tick で
+    既に引いているときに二度引かないための注入口で、今の呼び手は誰も渡していない（None なら自分で引く）。"""
+    out = {"next": None, "reason": "no_todo",
+           "kb_next": next_row.get("id") if isinstance(next_row, dict) else next_row,
+           "skipped_by_dependency": {}, "skipped_by_pause": {}}
+    if not isinstance(next_row, dict): return out         # todo が 1 件も無い（確かめた 0 件）
+    if plans is None: plans = pm_resume_plans(pj)
+
+    def runnable(r):
+        """回せるか。飛ばすなら理由を out に残す（キーを文字列で揃える理由は _pm_unmet_deps を参照）"""
+        unmet = pm_unmet_deps(r)
+        if unmet:
+            out["skipped_by_dependency"][str(r["id"])] = unmet; return False
+        plan = plans.get(int(r["id"]))
+        if pm_paused_skip(plan):
+            out["skipped_by_pause"][str(r["id"])] = {k: plan.get(k) for k in PAUSE_FACTS}; return False
+        return True
+
+    if runnable(next_row):
+        out["next"], out["reason"] = next_row, "picked_next"; return out
     q, a = "SELECT * FROM tickets WHERE status = 'todo'", ()
     if pj: q, a = q + " AND pj = ?", (pj,)
     for r in rows(q + " ORDER BY id", a):
-        if str(r["id"]) in skipped: continue
-        unmet = pm_unmet_deps(r)
-        if not unmet: return r, skipped, False
-        skipped[str(r["id"])] = unmet
-    return None, skipped, True                           # todo は在るが、どれも先行票を待っている
+        if str(r["id"]) in out["skipped_by_dependency"] or str(r["id"]) in out["skipped_by_pause"]: continue
+        if runnable(r):
+            out["next"], out["reason"] = r, "picked_next"; return out
+    # todo は在るが全部飛ばした。最後に飛ばした理由ではなく、先行条件で待っている票が 1 つでもあればそちらを言う
+    # （依存は「どの票を先に片付けるか」が板の上で人に見える。一時停止のうち機械が片付けるのは
+    #  解除時刻を待つ利用枠切れだけで、鍵待ち・回数超過は人が動くまで解けない＝skipped_by_pause の中身を見る）
+    out["reason"] = "blocked_by_dependency" if out["skipped_by_dependency"] else "blocked_by_pause"
+    return out
 
 
 def _pm_why(why, key, default=None):
@@ -2820,7 +2889,7 @@ def pm_status(pj=None):
     """管理役（PM）の「いまの状態」と「次にやること」を、既存の記録だけから導いて返す（ADR-0074 決定 2 / 決定 4）。
 
     副作用なし: 何も起こさず（ticket_run も pr-automerge も呼ばない）、何も書かず、kanban.db も作らない
-    （`kb next` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
+    （`kb next` / `kb resumable` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
     （PM の状態を読む口自体が落ちると、状態が分からないことすら分からなくなる）。
 
     pj を渡すとその PJ に絞る。省略すると全 PJ 横断で、どれか 1 つでも走っていれば waiting になる粗さがある。
@@ -2846,7 +2915,7 @@ def pm_status(pj=None):
     o, o_error = None, None
     try: o = overview(pj=pj)
     except Exception as e: o_error = str(e)
-    next_row, dep_skipped, dep_blocked, kb_next_id = None, {}, False, None
+    next_row, dep_skipped, pause_skipped, pick_reason, kb_next_id = None, {}, {}, "no_todo", None
     if not board["db"]:
         board["reason"] = "no_db"                                # 空の workspace。「todo が 0 件」とは別の値
     elif o is None:
@@ -2854,20 +2923,23 @@ def pm_status(pj=None):
     else:
         board["counts"] = o["counts"]
         try:
-            next_row = ticket_next(pj=pj)["next"]                # 0 件なら None、読めなければ ApiError（core.py の ticket_next）
-            kb_next_id = next_row.get("id") if isinstance(next_row, dict) else next_row   # kb next が返した生の id（依存で飛ばす前）
+            next_row = kb_next(pj)                               # 0 件なら None、読めなければ ApiError（core.py の kb_next）
+            kb_next_id = next_row.get("id") if isinstance(next_row, dict) else next_row   # kb next が返した生の id（飛ばす前）
             board["readable"] = True; board["reason"] = "ok"
         except Exception as e:
             board["reason"] = "kb_failed"; board["error"] = str(e)
         if board["readable"]:
-            # 票が宣言した先行条件（depends_on）を見て、未完了の先行票を持つ票は飛ばす（#570 / ADR-0077）。
+            # dispatch が飛ばす票（未完了の先行票 / 解除前の一時停止）を同じ判定で飛ばす（#570 / #581。判定は core の 1 か所）。
             # ここを引けなかったら「候補なし」ではなく「板を読めていない」に倒す（確かめた結論と混ぜない）
             try:
-                next_row, dep_skipped, dep_blocked = _pm_pick_next(next_row, pj)
+                pick = pm_pick_next(next_row, pj)
             except Exception as e:
                 board["readable"] = False; board["reason"] = "kb_failed"; board["error"] = str(e)
             else:
+                next_row, pick_reason = pick["next"], pick["reason"]
+                dep_skipped, pause_skipped = pick["skipped_by_dependency"], pick["skipped_by_pause"]
                 if dep_skipped: _pm_fact(why, "skipped_by_dependency", dep_skipped)
+                if pause_skipped: _pm_fact(why, "skipped_by_pause", pause_skipped)
         try:
             bl = tickets_list(pj=pj, status="blocked")["tickets"]
             board["blocked"] = [{k: t.get(k) for k in ("id", "title", "pj")} for t in bl[:6]]
@@ -2876,7 +2948,7 @@ def pm_status(pj=None):
             board["blocked_n"] = None                            # 読めなかったので「0 件」とは言わない
     _pm_fact(why, "board_reason", board["reason"])
     _pm_fact(why, "kb_next", kb_next_id)                          # その口（kb next）が何を返したか。依存で絞る前の生の値
-    _pm_fact(why, "picked", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)   # 依存で絞った後に選んだ票
+    _pm_fact(why, "picked", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)   # 飛ばした後に選んだ票
 
     # --- 材料 2: run の記録（overview と同じ絞り方＝board_runs）と、実行中の kb-run ジョブ
     runs_all = None
@@ -2940,8 +3012,10 @@ def pm_status(pj=None):
     elif next_row:
         reason = "picked_next"
     else:
-        # 依存で選べないのは「確かめた結論」。todo が 1 件も無い（no_todo）とも、読めていない（board_unreadable）とも別の値
-        reason = "blocked_by_dependency" if dep_blocked else "no_todo"
+        # 飛ばして選べないのは「確かめた結論」。todo が 1 件も無い（no_todo）とも、読めていない（board_unreadable）とも
+        # 別の値で、依存（人が先に片付ける）と一時停止（利用枠切れなら時刻が来れば機械が片付ける。鍵待ち・回数超過は
+        # 人が動くまで解けない）も分ける（pm_pick_next が決める）
+        reason = pick_reason
     nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
     try: decisions = pm_decisions()
     except Exception: decisions = []
@@ -3036,13 +3110,22 @@ def pm_decide(pj=None, status=None):
         if pj: q, a = q + " AND pj = ?", (pj,)
         try: facts["todo_ids"] = [t["id"] for t in rows(q + " ORDER BY id", a)]
         except Exception: facts["todo_ids"] = None            # 読めなかったので「候補は 1 件だけだった」とは言わない
-        # 先行票を待っていて飛ばした票も残す（「なぜ他を選ばなかったか」の一部。#570）
+        # 飛ばした票も残す（「なぜ他を選ばなかったか」の一部。#570 / #581）
         facts["skipped_by_dependency"] = _pm_why(nxt.get("why") or [], "skipped_by_dependency", {})
+        facts["skipped_by_pause"] = _pm_why(nxt.get("why") or [], "skipped_by_pause", {})
     elif nxt["reason"] == "blocked_by_dependency":
         # todo は在るが、どれも未完了の先行票を待っている。板は読めているので state は idle のまま（確かめた結論）
         action, code = "none", "blocked_by_dependency"
         facts = {"why": "blocked_by_dependency",
-                 "skipped_by_dependency": _pm_why(nxt.get("why") or [], "skipped_by_dependency", {})}
+                 "skipped_by_dependency": _pm_why(nxt.get("why") or [], "skipped_by_dependency", {}),
+                 "skipped_by_pause": _pm_why(nxt.get("why") or [], "skipped_by_pause", {})}
+    elif nxt["reason"] == "blocked_by_pause":
+        # todo は在るが、どれも解除前の一時停止。利用枠切れ（quota）は解除時刻が来れば timer が続きを回すので人を呼ばない。
+        # 鍵待ち（nokey）は鍵が登録されるまで、回数超過（hits_exceeded）は人が枠を確かめるまで timer も拾わないので、
+        # 人の手が要るかどうかは facts の skipped_by_pause（paused / until / needed_keys / hits_exceeded）で読む（#581）
+        action, code = "none", "blocked_by_pause"
+        facts = {"why": "blocked_by_pause",
+                 "skipped_by_pause": _pm_why(nxt.get("why") or [], "skipped_by_pause", {})}
     else: action, code, facts = "none", "no_todo", {}
     return {"pj": pj or run.get("pj"), "ticket": tid, "run": run.get("name") or None, "state": state,
             "action": action, "reason_code": code, "facts": facts, "mode": "propose"}
