@@ -72,7 +72,9 @@ dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [分]] [--resume-paused
 flowchart TD
   A[kb list --status todo を古い順] --> B{残りがある?}
   B -->|no| Z[終了]
-  B -->|yes| C{project.yml がある?}
+  B -->|yes| P{先行票（depends_on）は全部 done?}
+  P -->|no| Q[理由をログして飛ばす → 次へ]
+  P -->|yes| C{project.yml がある?}
   C -->|no| D[kb block（理由をメモ）→ 次へ]
   C -->|yes| E{その PJ のプールに空き?<br>sandbox ls で貸出数 < 3}
   E -->|no| F[この PJ は飛ばす → 次へ<br>--wait なら飛ばさず kb run --wait]
@@ -85,7 +87,8 @@ flowchart TD
 
 - 回し始める前に `kb sync --all-review`（`--pj` があればそれも）を 1 回だけ呼び、人が GitHub でマージ / クローズした PR を板に反映する（345 / ADR-0050）。結果は `dispatch.log` に `sync …` の 1 行で残る。`--dry-run`（状態を進めない約束）と `--resume-paused`（5 分ごとの timer なので GitHub を叩き続けない）では呼ばない
 - 直列。1 件終わるまで次は始めない
-- 判断はしない。種別は kanban が持つ
+- 種別の判断はしない（種別は kanban が持つ）。見るのは「回せるか」の機械的な確認だけ: `project.yml`・プールの空き・一時停止・先行票
+- 未完了（`done` 以外）の先行票（`depends_on`）を持つチケットは回さずに飛ばし、理由を残す。判定はコンソールの PM と同じ `console/lib/core.py` の 1 か所を通る（ADR-0077 / ADR-0078）
 - プール台数は `POOL_PER_PJ = 3`（`40-pool.sh` で作った台数に合わせる）
 - `--dry-run` ではプール確認をしない
 - `--wait` でもプール確認をしない。待つのは runner 1 か所（`kb run --wait` → `workflow/bin/run --wait`。ADR-0031）。上限を超えたチケットは `todo` に戻るので、次の `dispatch` が拾い直せる
@@ -102,6 +105,7 @@ flowchart TD
 [run kumitate/204 …]
 [dispatch] end   204 kumitate bug rc=0 status=review 1830s
 [dispatch] 205 myapp bug: project.yml 無し → blocked
+[dispatch] 208 kumitate: 先行票 206=todo が未完了 → 飛ばす
 [dispatch] 206 kumitate: 利用枠切れで一時停止中（2026-09-09T15:00:00+09:00 以降に続きを回す）→ 飛ばす
 [dispatch] start 207 kumitate feature 空表示の文言… [続き: implement から origin/sandbox/207-feature-wip・利用枠切れ 1 回目]
 [dispatch] todo が無い（または全部飛ばした）。終了

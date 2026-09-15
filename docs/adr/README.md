@@ -89,3 +89,4 @@
 - [0075: base 確認は自分のログ（`~/gates/<名前>.base.log`）に書く。run が残す証跡は後続の処理で壊さない](0075-base-check-writes-its-own-gate-log.md)
 - [0076: ゲストの PATH はゲストが答える。ログイン環境を起点に版管理ツール（mise）へ訊き、制御系は道具を列挙しない](0076-guest-path-is-answered-by-the-guest.md)
 - [0077: 票の先行条件は人が書く 1 列（`depends_on`）にする。PM はそれだけを読み、本文の自由文は解釈しない](0077-ticket-prerequisites-are-a-column-the-pm-reads.md)
+- [0078: 配車（dispatch）も先行条件を見る。判定は core の 1 か所を通し、飛ばした理由を残す](0078-dispatch-reads-prerequisites-through-core.md)
