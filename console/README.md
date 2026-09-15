@@ -76,7 +76,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
 | `ticket_attach` / `ticket_detach` | 添付を 1 件足す（`content_base64` か ctl 上の `path`）/ 消す。`read_file` は画像を image で返す（4 MiB まで） |
-| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
+| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` / `depends_on` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等）。`run_show` の `progress` に run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が付く |
 | `run_wait` | run の工程が変わる（`until: step`、既定）か終わる（`until: result`）まで待つ（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返す。ログ本文は含まない |
