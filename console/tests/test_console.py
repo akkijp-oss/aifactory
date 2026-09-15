@@ -3632,6 +3632,9 @@ class PmTickTest(unittest.TestCase):
         self.assertEqual(d["proposal"]["reason_code"], "proposed")
         self.assertEqual(d["proposal"]["facts"]["why"], "requeued")
         self.assertEqual(d["proposal"]["facts"]["gate_fails"], ["test"])
+        # 票の番号は run の記録では文字列、板では整数で来る。後から数えるログなので同じ票を 2 つの形で並べない
+        self.assertEqual(d["proposal"]["ticket"], tid)
+        self.assertEqual(self._log(pj)[-1]["ticket"], tid)
 
     def test_a_gates_run_with_no_readable_gate_names_is_left_to_a_human(self):
         """gates.txt が無い・読めないときは推測しない（何が赤かったか分からないまま回し直さない）"""

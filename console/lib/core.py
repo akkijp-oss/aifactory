@@ -2890,7 +2890,10 @@ def pm_decide(pj=None, status=None):
     if not s["board"]["readable"] or not s["runs"]["readable"]: return None
     state, nxt, run = s["state"], s["next"], (s.get("run") or {})
     chk = s.get("requeue")
+    # 票の番号は run の記録では文字列、板では整数で来る。後から数える（「review_retry_limit が今月 12 件」）ログなので、
+    # 同じ票が 2 つの形で並ばないよう数に寄せる。数に見えないものはそのまま残す（推測で捨てない）
     tid = run.get("task")
+    if isinstance(tid, str) and tid.isdigit(): tid = int(tid)
     if state == "waiting": action, code, facts = "none", "run_running", {}
     elif state == "landing": action, code, facts = "none", "landing_observed", {}
     elif state == "blocked":
