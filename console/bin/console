@@ -26,6 +26,10 @@ from core import *   # noqa: F401,F403  読み書きの正本は lib/core.py。�
 
 STATIC = core.HERE / "static"
 DOCS = core.REPO / "website" / "site"          # mkdocs build の出力。/docs/ で配信
+# 「配信できる」の判定は index.html の有無で見る。mkdocs build は書き出す前に site/ を空にするので、
+# 途中で落ちた / 今まさに作っている最中は「ディレクトリはあるが中身が無い」になる。dir の有無だけで見ると
+# その隙間を「ビルド済み」と誤って読み、案内（503）ではなく not found（404）を返してしまう
+def docs_built(): return (DOCS / "index.html").is_file()
 TOKEN = os.environ.get("CONSOLE_TOKEN") or ""   # 空なら認証なし（127.0.0.1 専用）
 COOKIE = "aifactory_console"
 MAX_UPLOAD = core.attachments.MAX_TOTAL + 1024 * 1024   # これを超える POST は読まずに 413（上限の数値は lib が正。ここは受け口の保険）
@@ -96,7 +100,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def send_docs(self, path):
         """/docs/... → website/site/... （mkdocs build の出力）。ディレクトリは index.html。無ければ作り方の案内"""
         rel = path[len("/docs"):].lstrip("/")
-        if not DOCS.is_dir():
+        if not docs_built():
             body = ("<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>docs</title><body style=\"font-family:sans-serif;padding:2em\">"
                     "<h1>ドキュメントサイトはまだビルドされていない</h1><p>リポジトリの <code>website/</code> で:</p>"
                     "<pre>python3 -m venv .venv &amp;&amp; .venv/bin/pip install -r requirements.txt &amp;&amp; .venv/bin/mkdocs build -f mkdocs.yml</pre>"
@@ -255,7 +259,7 @@ def main():
     JOBS.mkdir(exist_ok=True); JobStore.reconcile()
     srv = Server((a.host, a.port), Handler)
     url = f"http://{a.host}:{a.port}/"
-    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}  docs={'yes' if DOCS.is_dir() else 'not built'}  auth={'token' if TOKEN else ('none (loopback)' if a.host in ('127.0.0.1', 'localhost', '::1') else 'none (internal network)')}", flush=True)
+    print(f"[console] {url}  repo={REPO}  kb_root={KB_ROOT}  jobs={JOBS}  docs={'yes' if docs_built() else 'not built'}  auth={'token' if TOKEN else ('none (loopback)' if a.host in ('127.0.0.1', 'localhost', '::1') else 'none (internal network)')}", flush=True)
     if a.open: threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: print("\n[console] 停止（起動中のジョブは続く。console/jobs/ に記録）")

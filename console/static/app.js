@@ -358,11 +358,21 @@ async function dispatchDialog() {
   const opt = (list, blank) => `<option value="">${esc(blank)}</option>` + list.map(x => `<option ${x === pj0 ? 'selected' : ''}>${esc(x)}</option>`).join('');
   const load = async dlg => {
     const pj = dlg.querySelector('#dp-pj').value; const box = dlg.querySelector('#dp-next'); const okb = dlg.querySelector('#dlg-ok');
-    box.innerHTML = `<span class="help">${esc(T.dialog.dispatch.loading)}</span>`;
-    let next = null;
-    try { next = (await api('next' + (pj ? `?pj=${encodeURIComponent(pj)}` : ''))).next; } catch (e) { next = null; }
-    if (next) { box.innerHTML = `<div class="k">${esc(T.dialog.dispatch.nextIs)}</div><div class="pick"><span class="id">${next.id}</span><span class="tag pj">${esc(next.pj)}</span> <span class="tag">${esc(next.kind)}</span> ${esc(next.title)}</div><div class="help">${esc(T.dialog.dispatch.nextNote)}</div>`; okb.disabled = false; }
-    else { box.innerHTML = `<div class="warn">${esc(T.dialog.dispatch.none)}</div>`; okb.disabled = true; }
+    const D = T.dialog.dispatch;
+    box.innerHTML = `<span class="help">${esc(D.loading)}</span>`;
+    let r = null;
+    try { r = await api('next' + (pj ? `?pj=${encodeURIComponent(pj)}` : '')); } catch (e) { r = null; }
+    /* 下見は dispatch と同じ判定（core の pm_pick_next）を通った結果。飛ばした票は 1 行ずつ理由を出す（なぜこれが次なのか） */
+    const next = r && r.next;
+    const why = [
+      ...Object.entries((r && r.skipped_by_dependency) || {}).map(([id, deps]) => tt(D.skippedDep, { id: esc(id), deps: esc(Object.keys(deps).join('、')) })),
+      ...Object.entries((r && r.skipped_by_pause) || {}).map(([id, p]) =>
+        tt(p.hits_exceeded ? D.skippedHits : p.paused === 'nokey' ? D.skippedNoKey : D.skippedPause,
+           { id: esc(id), until: esc(fmtT(p.until) || p.until || ""), n: esc(p.quota_hits) })),
+    ].map(t => `<div class="help">${t}</div>`).join('');
+    if (next) { box.innerHTML = `<div class="k">${esc(D.nextIs)}</div><div class="pick"><span class="id">${next.id}</span><span class="tag pj">${esc(next.pj)}</span> <span class="tag">${esc(next.kind)}</span> ${esc(next.title)}</div>${why}<div class="help">${esc(D.nextNote)}</div><div class="help">${esc(D.unchecked)}</div>`; okb.disabled = false; }
+    /* 取得できていない（r が null）ことを「0 件」と同じ文言にしない。理由の語彙は PM の画面と共通（T.pm.next） */
+    else { box.innerHTML = `<div class="warn">${esc(!r ? D.unreadable : r.reason === 'no_todo' ? D.none : T.pm.next[r.reason] || D.none)}</div>${why}`; okb.disabled = true; }
   };
   const ok = await ask({
     title: T.dialog.dispatch.title, ok: T.btn.dispatch,

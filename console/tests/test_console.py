@@ -347,12 +347,17 @@ class ApiTest(unittest.TestCase):
         self.assertIn("runs_active_n", nav, "ナビの run 数が一覧の長さのままで、6 で頭打ちになる")
 
     def test_next_for_dispatch_dialog(self):
-        """配車ダイアログが押す前に見せる「次に回るチケット」（kb next --json）"""
+        """配車ダイアログが押す前に見せる下見。dispatch と同じ判定で選び直した票と、その理由（#581）"""
         tid = self.todo_id()
         st, d = self.http.get("/api/next"); self.assertEqual(st, 200); self.assertIsNotNone(d["next"]); self.assertEqual(d["next"]["status"], "todo")
         self.assertLessEqual(d["next"]["id"], tid)                                   # 最も古い todo
+        self.assertEqual(d["reason"], "picked_next")                                 # 語彙は PM と共通（PM_NEXT_REASONS）
+        self.assertIn(d["reason"], self.PM_NEXT_REASONS)
+        self.assertEqual(d["kb_next"], d["next"]["id"], "飛ばすものが無い板では、薄い kb next の返りがそのまま選ばれる")
+        self.assertEqual((d["skipped_by_dependency"], d["skipped_by_pause"]), ({}, {}))
         st, d = self.http.get(f"/api/next?pj={PJ}"); self.assertEqual(st, 200); self.assertEqual(d["next"]["pj"], PJ)
         st, d = self.http.get("/api/next?pj=no-such-pj"); self.assertEqual(st, 200); self.assertIsNone(d["next"])
+        self.assertEqual((d["reason"], d["kb_next"]), ("no_todo", None), "0 件は「確かめた 0 件」。飛ばした結果と混ぜない")
 
     def test_sandbox_api_returns_vms(self):
         """/api/sandbox が sandbox ls の結果を列に分けて返す（画面が表を組める）。ジョブの記録は手で置く（VM を使わない）"""
@@ -1904,7 +1909,7 @@ class ApiTest(unittest.TestCase):
     # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
     PM_STATES = ("idle", "waiting", "landing", "blocked")
     PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                       "requeue_proposed", "blocked_by_dependency")
+                       "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
 
     PM_ACTIONS = ("none", "run", "requeue")
 
@@ -2077,7 +2082,7 @@ class ApiTest(unittest.TestCase):
     # ADR-0074 決定 5 の理由コード。画面はこの語彙を日本語に直すだけで、app.js 側で語彙を作らない
     PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                        "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency")
+                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
         """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
@@ -2130,6 +2135,19 @@ class ApiTest(unittest.TestCase):
         self.assertIn("T.help.pmOps", r, "つながっていない理由が画面に常時出ていない")
         self.assertIn("'pm-soon': () => toast(", app, "押しても何も言わないボタンになっている")
         self.assertIn("'pm-pj': el => { localStorage.setItem('pj'", app, "既存の PJ 絞り込み（localStorage）に乗っていない")
+
+    def test_dispatch_dialog_shows_the_same_pick_and_why(self):
+        """配車ダイアログの下見は、選び直した結果と「なぜこれが次なのか」を出す（#581。JS を動かす基盤が無いのでソースを検査）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        d = app[app.index("async function dispatchDialog"):app.index("/* ---------- チケットの一覧")]
+        self.assertIn("skipped_by_dependency", d, "飛ばした票（先行票待ち）を画面に出していない")
+        self.assertIn("skipped_by_pause", d, "飛ばした票（一時停止）を画面に出していない")
+        self.assertIn("T.pm.next[r.reason]", d, "選べない理由を PM と同じ語彙で出していない（画面側で語彙を作らない）")
+        self.assertNotIn("kb_next", d, "下見が飛ばす前の生の kb next を画面に出している")
+        T = load_strings()
+        self.assertNotEqual(T["dialog"]["dispatch"]["none"], T["dialog"]["dispatch"]["unreadable"],
+                            "「候補が 0 件」と「確かめられなかった」を同じ文言にしている")
+        self.assertIn("unchecked", T["dialog"]["dispatch"], "下見が確かめていないこと（VM の空き・worker）を言う文言が無い")
 
     def test_pm_styles_are_additions_only(self):
         """style.css は追加のみ。既存クラスの定義を書き換えると他の 9 画面に波及する"""
@@ -2781,11 +2799,15 @@ class AuthDocsTest(unittest.TestCase):
         st, h, _ = self.req(f"/api/tickets?pj=x&token={self.token}"); self.assertEqual(st, 302); self.assertEqual(h.get("Location"), "/api/tickets?pj=x")
 
     def test_docs_route(self):
+        """ビルド済みなら配信、そうでなければ作り方の案内（503）。「作りかけ」（site/ はあるが index.html が無い）も
+           ビルドされていない側に入れる: mkdocs build は書き出す前に site/ を空にするので、その隙間に来た要求を
+           404 と答えると『ビルドしたのに壊れている』と読めてしまう（ゲートは docs のビルド前に console を回す）"""
         h = {"Authorization": f"Bearer {self.token}"}
+        built = (REPO / "website" / "site" / "index.html").is_file()
         st, _, body = self.req("/docs/", headers=h)
-        self.assertIn(st, (200, 503))                       # website/site/ があれば 200、無ければ作り方の案内（503）
+        self.assertEqual(st, 200 if built else 503, "site/index.html があれば 200、無ければ案内（503）")
         self.assertIn(b"<html", body.lower()[:200] if st == 503 else body.lower())
-        st, hh, _ = self.req("/docs", headers=h); self.assertIn(st, (301, 503))
+        st, hh, _ = self.req("/docs", headers=h); self.assertEqual(st, 301 if built else 503)
         st, _, _ = self.req("/docs/../console/lib/core.py", headers=h); self.assertNotEqual(st, 200)
 
 
