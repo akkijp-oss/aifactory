@@ -662,7 +662,7 @@ NOT_FOUND_LIST_MAX = 40   # 「無い」と言うときに併せて返す実在�
 
 def not_found_message(p, root=None, listing=True):
     """「無い」と言うときは、その場所に「在る」ものを一緒に言う（#537 の「『取得できていない』を『0 件』と同じ値にしない」と同じ精神）。
-       呼ぶ側（MCP 越しの管理役 AI）が名前を推測して叩き直さずに済むように、404 の文言そのものに実在する名前を載せる。
+       呼ぶ側（MCP 越しの AI Factory Manager）が名前を推測して叩き直さずに済むように、404 の文言そのものに実在する名前を載せる。
 
        p から親へ辿って最初に実在するディレクトリ a を見つけ、その直下の名前だけを並べる（中身・サイズ・mtime は載せない。
        再帰もしない）。root を渡すとそこで遡るのを止める（許可された根の外は列挙しない）。
@@ -2690,7 +2690,7 @@ def config_model_apply(b):
     return out
 
 
-# ---------- PM（管理役）の状態（ADR-0074。読むだけ・保存しない・何も起こさない）
+# ---------- PM（AI Factory Manager）の状態（ADR-0074。読むだけ・保存しない・何も起こさない）
 # 状態は保存せず毎回導く（決定 2）。ここに要るのは「PM の判断」だけで、材料（overview / board_runs /
 # run_detail / kb_next / pm_pick_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
 # ★この口の一番の約束は「取得できていない」と「0 件」を別の値で持つこと。読めなかったものを 0 件や
@@ -2894,7 +2894,7 @@ def _pm_jobs(pj=None):
 
 
 def pm_status(pj=None):
-    """管理役（PM）の「いまの状態」と「次にやること」を、既存の記録だけから導いて返す（ADR-0074 決定 2 / 決定 4）。
+    """AI Factory Manager（PM）の「いまの状態」と「次にやること」を、既存の記録だけから導いて返す（ADR-0074 決定 2 / 決定 4）。
 
     副作用なし: 何も起こさず（ticket_run も pr-automerge も呼ばない）、何も書かず、kanban.db も作らない
     （`kb next` / `kb resumable` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
@@ -3159,7 +3159,7 @@ def _pm_log(d, by="tick"):
 
 
 def pm_tick(pj=None, mode="propose", dry=False, by="tick"):
-    """管理役の 1 周。状態を 1 段だけ進める唯一の関数（ADR-0074 決定 1・決定 2）。
+    """AI Factory Manager の 1 周。状態を 1 段だけ進める唯一の関数（ADR-0074 決定 1・決定 2）。
 
     ★本票（#537）は propose だけ。決めて判断ログに書いて返るところまでで、ticket_run も pr-automerge も呼ばない。
       auto（実際に run を起こす）は #538。propose の提案が妥当だと確かめてから自動に切り替える。
@@ -3173,7 +3173,7 @@ def pm_tick(pj=None, mode="propose", dry=False, by="tick"):
     返す形: {ticked, skipped, state, proposal, logged, decision, mode, by, dry, pj, at}
       skipped … None / "locked"（ロックを取れなかった）/ "unreadable"（確かめられていないので提案が無い）"""
     if mode not in PM_MODES: raise ApiError(f"mode は {' / '.join(PM_MODES)} のどちらかです")
-    if mode != "propose": raise ApiError("mode=auto はまだありません。この版の管理役は提案だけで、何も起動しません（自動は後続のチケットで入ります）")
+    if mode != "propose": raise ApiError("mode=auto はまだありません。この版の AI Factory Manager は提案だけで、何も起動しません（自動は後続のチケットで入ります）")
     out = {"ticked": False, "skipped": None, "state": None, "proposal": None, "logged": False, "decision": None,
            "mode": mode, "by": by, "dry": bool(dry), "pj": pj or None, "at": now()}
     try:

@@ -1,6 +1,7 @@
 # ADR 0074: 管理役（PM）は console の中の `pm_tick()` として動かす。tick は 1 段だけ進める oneshot で、マージの判断は持たない
 
 - 状態: Accepted
+- 用語: 本 ADR の「管理役」は、2026-09-15 に正式名称を **AI Factory Manager** と定めた（#586。表示名だけで、`aifactory-pm` / `/api/pm` / `pm_tick` などの識別子は据え置き）。以下の表題と本文は当時の表記のまま
 - 日付: 2026-09-15
 - チケット: 534
 

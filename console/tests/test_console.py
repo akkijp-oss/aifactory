@@ -1904,7 +1904,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([l.strip() for l in kb("show", "701").stdout.splitlines() if l.startswith("depends_on")], ["depends_on"])
         self.assertEqual(json.loads(kb("next", "--pj", PJ, "--json").stdout)["id"], 701)
 
-    # ---- PM（管理役）の状態: GET /api/pm（#535 / ADR-0074 決定 2・決定 4）
+    # ---- PM（AI Factory Manager）の状態: GET /api/pm（#535 / ADR-0074 決定 2・決定 4）
     # 一番の約束は「取得できていない」と「0 件」を別の値で持つこと。ここが同じ値だと、確かめられていない状態が
     # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
     PM_STATES = ("idle", "waiting", "landing", "blocked")
@@ -2091,7 +2091,7 @@ class ApiTest(unittest.TestCase):
         self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span><b id="n-pm"></b></a>', html,
                       "ナビの項目が既存と同じ形になっていない")
         self.assertLess(html.index('data-nav="board"'), html.index('data-nav="pm"'))
-        self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "管理役はボードの直後（頻度順）")
+        self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "AI Factory Manager はボードの直後（頻度順）")
         self.assertIn("p: 'pm'", app, "g p の割り当てが無い（? の一覧にも載らない）")
         self.assertIn("seg[0] === 'pm') await viewPm()", app, "#/pm のルートが無い")
         body = app[app.index("async function viewPm"):app.index("function renderPm")]
@@ -2099,7 +2099,35 @@ class ApiTest(unittest.TestCase):
         self.assertIn("schedule(viewPm, 5000)", body, "既存と同じ 5 秒ポーリングに乗っていない")
         for w in ("EventSource", "WebSocket", "text/event-stream"):
             self.assertNotIn(w, app, f"1 枚の画面のために通信方式（{w}）を増やしている")
-        self.assertNotIn("refreshNav", body, "管理役の画面がナビの既存動作に手を入れている")
+        self.assertNotIn("refreshNav", body, "AI Factory Manager の画面がナビの既存動作に手を入れている")
+
+    def test_pm_nav_label_fits_in_the_rail_by_measure(self):
+        """ナビの「AI Factory Manager」が左ナビの幅に収まる見積り（#586）。
+
+        ★これは計算であって描画の確認ではない。この PJ は gui を持たない宣言（ADR-0080）なので実際に描いて
+        確かめられず、style.css の数値だけから見積もる。数値はテストに直書きせず CSS から読む
+        （直書きするとナビの幅を縮めたときにここが気づけない）。
+        """
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        def px(pattern, why):
+            m = re.search(pattern, css)
+            self.assertTrue(m, why)
+            return float(m.group(1))
+        rail_w = px(r"\.shell\s*\{[^}]*grid-template-columns:\s*([\d.]+)px", "左ナビの列幅（.shell の grid-template-columns）を読めない")
+        rail_pad = px(r"\.rail\s*\{[^}]*padding:\s*[\d.]+px\s+([\d.]+)px", ".rail の左右 padding を読めない")
+        link_pad = px(r"\.rail a\s*\{[^}]*padding:\s*[\d.]+px\s+([\d.]+)px", ".rail a の左右 padding を読めない")
+        font_px = px(r"html,\s*body\s*\{[^}]*font:\s*([\d.]+)px", "本文の font-size（html, body の font）を読めない")
+        usable = rail_w - 2 * rail_pad - 2 * link_pad
+        label = load_strings()["nav"]["pm"]
+        self.assertEqual(label, "AI Factory Manager", "正式名称はオーナーが決めた値（#586）。短縮しない")
+        estimate = len(label) * 0.6 * font_px          # 半角 1 文字を 0.6em と多めに見る（active の太字 600 でも数 % 増）
+        self.assertLessEqual(estimate, usable,
+                             f"左ナビに収まらない見積り: {estimate:.1f}px > {usable:.1f}px。"
+                             "名前は短縮せず、.rail / .shell の幅か font-size で解くこと（#586）")
+        # ラベルは列の幅をバッジと分け合わない: #n-pm は refreshNav が一度も書かないので常に空（幅 0）
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        nav = app[app.index("async function refreshNav"):app.index("function schedule")]
+        self.assertNotIn("n-pm", nav, "#n-pm にバッジを書き始めたら、ラベルに使える幅が減るのでこの見積りを見直す")
 
     def test_pm_view_keeps_unknown_apart_from_zero_and_never_contradicts_itself(self):
         """「取得できていない」を「0 件」「順調」と同じ見え方にしない。同じ画面の中で矛盾もさせない"""
@@ -2152,11 +2180,11 @@ class ApiTest(unittest.TestCase):
     def test_pm_styles_are_additions_only(self):
         """style.css は追加のみ。既存クラスの定義を書き換えると他の 9 画面に波及する"""
         css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
-        pm = css[css.index("/* 管理役（#/pm"):]
+        pm = css[css.index("/* AI Factory Manager（#/pm"):]
         for line in pm.splitlines():
             sel = line.split("{")[0].strip()
             if "{" not in line or not sel or sel.startswith(("/*", "*")): continue
-            self.assertIn("pm-", sel, f"pm- 以外の定義を管理役の節で足している: {sel}")
+            self.assertIn("pm-", sel, f"pm- 以外の定義を AI Factory Manager の節で足している: {sel}")
         self.assertIn(".st.pm-unknown", pm, "「まだ分からない」の札の定義が無い")
         self.assertNotIn("var(--blocked)", pm[pm.index(".st.pm-unknown"):pm.index(".st.pm-s-idle")],
                          "「まだ分からない」を危険色で出している（初期導入直後の console は正常にこの状態になる）")
@@ -3512,7 +3540,7 @@ class RepoStatusTest(unittest.TestCase):
             self.assertIn(key, board, key)
 
 
-# ---------- 管理役の 1 周: core.pm_tick()（#537 / ADR-0074 決定 1・決定 3・決定 5）
+# ---------- AI Factory Manager の 1 周: core.pm_tick()（#537 / ADR-0074 決定 1・決定 3・決定 5）
 # ★この版は propose だけ。決めて判断ログに 1 行書くところまでで、run は起こさない。
 #   だからこの組のテストは全部、ticket_run と JobStore.start を「呼ばれたら落ちる」差し替えの上で回す
 #   （「起こさない」を目視ではなく機械で守る）。
@@ -3541,7 +3569,7 @@ sys.stdin.readline()
 
 
 class PmTickTest(unittest.TestCase):
-    """管理役の 1 周（core.pm_tick）。ADR-0074 が正本で、チケット本文の「JobStore の job にする」は読み替え済み
+    """AI Factory Manager の 1 周（core.pm_tick）。ADR-0074 が正本で、チケット本文の「JobStore の job にする」は読み替え済み
        （tick は timer + oneshot。多重実行だけ既存の jobs/.lock で直列化する）。
 
     workspace は ApiTest と分ける: この組だけが logs/pm-decisions.jsonl に書くので、混ぜると
@@ -3553,7 +3581,7 @@ class PmTickTest(unittest.TestCase):
         cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
         cls.jobs = cls.tmp / "jobs"
         cls.seed = seed_workspace(cls.ws)                      # チケット 1 件 + dry-run の記録（dry は board_runs が落とす）
-        cls.todo = cls._kb("new", PJ, "research", "調査: 管理役の 1 周", "--body", "-", stdin="x\n\n## 完了条件\n- y\n")
+        cls.todo = cls._kb("new", PJ, "research", "調査: AI Factory Manager の 1 周", "--body", "-", stdin="x\n\n## 完了条件\n- y\n")
         cls.todo = int(cls.todo.split()[0])
 
     @classmethod

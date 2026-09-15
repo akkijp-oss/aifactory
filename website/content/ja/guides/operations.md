@@ -61,7 +61,7 @@ kb run <id> --from                       # 手で続きを回す（メモに入�
 - 続けて `AIFACTORY_RESUME_MAX_HITS` 回（既定 6）止まったら自動再開をやめて `blocked` にします（鍵の枠が小さすぎる等）。どちらも `ctl.env` で変えられます
 - 鍵そのものが無効・失効・残高不足（`failure: key`）のときは待っても戻らないので `blocked` です。上の手順で鍵を直してから `kb run <id> --from` で続きを回します
 
-### 管理役（PM）の 1 周は 5 分ごとに提案だけを書く
+### AI Factory Manager（PM）の 1 周は 5 分ごとに提案だけを書く
 
 制御系の systemd timer `aifactory-pm.timer` が 5 分ごとに `console/bin/pm-tick` を呼びます（macOS は launch agent `com.aifactory.pm`。どちらも `install.sh` が入れます）。1 周ですることは「いまの状態を読み、次の一手と**理由**を決め、`$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl` に 1 行書く」だけです。
 
@@ -71,7 +71,7 @@ kb run <id> --from                       # 手で続きを回す（メモに入�
 systemctl status aifactory-pm.timer                    # 5 分ごとの周が動いているか
 journalctl -u aifactory-pm                             # 1 周ごとの JSON（決めたことと理由）
 console/bin/pm-tick --pj <PJ> --dry                    # 今すぐ 1 周（--dry は決めるだけで書かない）
-tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # 判断の記録（コンソールの「管理役」画面と同じもの）
+tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # 判断の記録（コンソールの「AI Factory Manager」画面と同じもの）
 ```
 
 - 1 周は待ちません。run が終わるのを見るのは次の周です（反応は最大 1 間隔ぶん遅れます）

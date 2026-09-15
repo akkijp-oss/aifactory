@@ -316,7 +316,7 @@ ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-dir
 .wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
 @media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
 
-/* 管理役（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
+/* AI Factory Manager（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
    「まだ分からない」は危険色を使わない——初期導入直後の console は正常にこの状態になるので、赤で「壊れている」と読ませない */
 .st.pm-unknown { background: var(--ground); color: var(--muted); border: 1px dashed var(--line); }
 .st.pm-s-idle { background: var(--todo-bg); color: var(--todo); }

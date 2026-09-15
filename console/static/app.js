@@ -279,7 +279,7 @@ async function viewBoard() {
   schedule(viewBoard, 5000);
 }
 
-/* ---------- 管理役（#/pm。ADR-0074 決定 4）。読むだけの画面で、開いても更新しても run は起きない。
+/* ---------- AI Factory Manager（#/pm。ADR-0074 決定 4）。読むだけの画面で、開いても更新しても run は起きない。
    約束は「取得できていない」を「0 件」「順調」と同じ見え方にしないこと。そのために
    (a) 描くのは loading / failed / ok の 1 つだけ（「取得できませんでした」の下に「読み込み中」が並ばない）、
    (b) ok でも board.readable が偽なら状態の語（idle / waiting / …）を出さず「状態を取得できていません」にする
@@ -1321,7 +1321,7 @@ const actions = {
   /* Agent を替えたら、モデル名の一覧をその Agent の分だけにする（今は claude だけなので見た目は変わらない） */
   'model-agent': el => { const sel = $(el.dataset.pick); if (!sel) return; sel.querySelectorAll('optgroup').forEach(g => { g.hidden = g.dataset.agent !== el.value; }); },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
-  'pm-pj': el => { localStorage.setItem('pj', el.value); viewPm(); },                       /* 管理役の画面も既存の PJ 絞り込みに乗る（/api/pm は pj を明示して呼ぶ） */
+  'pm-pj': el => { localStorage.setItem('pj', el.value); viewPm(); },                       /* AI Factory Manager の画面も既存の PJ 絞り込みに乗る（/api/pm は pj を明示して呼ぶ） */
   'pm-soon': () => toast(esc(T.help.pmOps)),                                                /* まだつながっていない操作。押しても何も起きないことをその場で言う */
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
