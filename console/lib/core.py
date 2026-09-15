@@ -2624,7 +2624,8 @@ def config_model_apply(b):
 # run_detail / ticket_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
 # ★この口の一番の約束は「取得できていない」と「0 件」を別の値で持つこと。読めなかったものを 0 件や
 #   null で返すと、確かめられていない状態がそのまま「順調」に見える。だから:
-#   - 板: readable / reason（ok / no_db / kb_failed）で分け、読めていないときは counts を null にする（0 を出さない）
+#   - 板: readable / reason（ok / no_db / kb_failed）で分ける。counts は板の集計を読めたときだけ入れる
+#     （読めなければ null。0 を出さない）。読めたかどうかは readable / reason で言う
 #   - run: readable / reason（ok / no_records / error）で分け、「記録が無い」と「読めなかった」を分ける
 #   - 次にやること: 常に dict で reason を持つ。裸の null にしない（null を「準備完了」と読ませない）
 PM_DECISIONS = "pm-decisions.jsonl"                  # 判断ログ（決定 5）。書くのは tick 票の役目で、ここは読むだけ

@@ -140,8 +140,9 @@ GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()
      ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed）、
        runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は
        picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable
-     counts が null になるのは no_db のときだけ（kb_failed は sqlite から読めた件数が入るので、counts の有無を
-       board.readable の代わりに使わない。板を読めたかは board.reason を見る）
+     counts は板の集計を読めたときだけ入る（読めなければ null。kb_failed には集計が読めた場合と読めなかった場合の
+       両方があるので、counts の有無を board.readable の代わりに使わない。板を読めたかは board.readable /
+       board.reason を見る）
      next.reason は板を読めたかを先に見るので、waiting / landing でも板が読めていなければ board_unreadable になる
      next.launchable が真なのは picked_next のときだけ。next.ticket が null でも「順調」の意味にはならない
      pj を省くと全 PJ 横断（どれか 1 つでも走っていれば waiting、直近の止まった run が 1 本詰まっていれば blocked）
