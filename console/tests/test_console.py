@@ -2799,11 +2799,15 @@ class AuthDocsTest(unittest.TestCase):
         st, h, _ = self.req(f"/api/tickets?pj=x&token={self.token}"); self.assertEqual(st, 302); self.assertEqual(h.get("Location"), "/api/tickets?pj=x")
 
     def test_docs_route(self):
+        """ビルド済みなら配信、そうでなければ作り方の案内（503）。「作りかけ」（site/ はあるが index.html が無い）も
+           ビルドされていない側に入れる: mkdocs build は書き出す前に site/ を空にするので、その隙間に来た要求を
+           404 と答えると『ビルドしたのに壊れている』と読めてしまう（ゲートは docs のビルド前に console を回す）"""
         h = {"Authorization": f"Bearer {self.token}"}
+        built = (REPO / "website" / "site" / "index.html").is_file()
         st, _, body = self.req("/docs/", headers=h)
-        self.assertIn(st, (200, 503))                       # website/site/ があれば 200、無ければ作り方の案内（503）
+        self.assertEqual(st, 200 if built else 503, "site/index.html があれば 200、無ければ案内（503）")
         self.assertIn(b"<html", body.lower()[:200] if st == 503 else body.lower())
-        st, hh, _ = self.req("/docs", headers=h); self.assertIn(st, (301, 503))
+        st, hh, _ = self.req("/docs", headers=h); self.assertEqual(st, 301 if built else 503)
         st, _, _ = self.req("/docs/../console/lib/core.py", headers=h); self.assertNotEqual(st, 200)
 
 
