@@ -8,6 +8,12 @@ app_dir: /home/dev/app/apps/kumitate
 url: http://localhost:3000
 gates: gates.sh
 prepare: prepare.sh
+capabilities:                   # この PJ の VM にある能力（チケット 552）。書いていないキーは「未宣言＝照合しない」
+  browser: false                # 実ブラウザでの目視ができず #526 の完了条件が未達のまま着地した
+  docker: false                 # #528 / #529 の `make e2e` フル実走（docker スタック）は sandbox では実行不能
+  gui: false                    # デスクトップ画面は無い（#529 の「画面を読む」検証は実行者が管理役かオーナー）
+  # egress: このリポジトリからは未実測（pnpm install は通るが、外部バイナリの取得は失敗した実績がある）。
+  #         管理役が VM で確かめてから書くこと。未宣言のあいだは egress の照合をしない
 stack: "pnpm 10 monorepo（turbo）/ Node 22 / Next.js（apps/web :3000）/ PostgreSQL 16 + pgvector / drizzle / vitest"
 facts:
   - "リポジトリ直下は台帳と docs。アプリは apps/kumitate/（pnpm workspace: apps/{web,marketing,scheduler}、packages/{db,dsl,generate,app-sdk,feedback-widget}）"
