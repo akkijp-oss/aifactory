@@ -877,11 +877,17 @@ class Conflict(Exception):
 
 
 @contextlib.contextmanager
-def _flock():
-    """jobs/.lock の flock。console（HTTP）と mcp（stdio）が別プロセスで同じ jobs/ を触るので、二重起動の判定と meta の読み書きはこれで直列化する"""
+def _flock(blocking=True):
+    """jobs/.lock の flock。console（HTTP）と mcp（stdio）が別プロセスで同じ jobs/ を触るので、二重起動の判定と meta の読み書きはこれで直列化する。
+
+    blocking=False は「取れなければ待たずに Conflict」。待つ側（JobStore）の既定は今までどおり待つ。
+    ★プロセス内の threading.Lock だけでは別プロセスの二重起動を防げない（console と mcp と timer は別プロセス）ので、
+      待たない側もこの flock を使う。flock は open したファイル記述子ごとに効くので、この with の中で
+      もう一度 _flock() を取ると同じプロセスでも詰まる（JobStore.start / _wait を中で呼ばないこと）"""
     JOBS.mkdir(parents=True, exist_ok=True)
     with open(JOBS / ".lock", "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        try: fcntl.flock(f, fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB))
+        except OSError: raise Conflict("ほかの処理が jobs/.lock を使っています。少し待ってからもう一度実行してください")
         try: yield
         finally: fcntl.flock(f, fcntl.LOCK_UN)
 
@@ -2635,7 +2641,18 @@ PM_LANDING_NEXT = ("pr", "automerge")                            # 決定 2: sta
 PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout", "human_abandoned")
 # 「次にやること」の理由コード。前 4 つは決定 5 の判断ログの語彙をそのまま使い、後ろ 2 つは
 # 状態表示のためにここで足す（判断ログには書かない）
-PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable")
+PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
+                   "requeue_proposed")
+# 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
+PM_MODES = ("propose", "auto")                       # auto は #538。本票は propose だけを受ける
+PM_ACTIONS = ("none", "run", "requeue")              # 判断ログの action。propose では実行しない（決めて書くだけ）
+PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
+                   "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
+                   "proposed", "approved", "skipped_by_steer", "paused")
+PM_REVIEW_RETRY_MAX = 2                              # 決定 3 の線②: review 由来の再投入は同じ票につき 2 回まで
+# PM がもう一度回してよい停止理由（決定 3）。ここに無い理由（pr_created / step_timeout / human_abandoned /
+# runner_gone / failed_before_start …）は「直す所が run の外」なので、PM は判断せず人に渡す
+PM_REQUEUE_REASONS = ("step_failed", "loop_limit")
 
 
 def pm_decisions(limit=20):
@@ -2664,7 +2681,7 @@ def _pm_run(name):
     except Exception: return None
     if not d: return None
     s = d.get("summary") or {}
-    return {**{k: s.get(k) for k in ("name", "pj", "task", "status", "next", "workflow", "started")},
+    return {**{k: s.get(k) for k in ("name", "pj", "task", "status", "next", "workflow", "started", "resume_step")},
             "outcome": d.get("outcome"), "progress": d.get("progress"), "ticket": d.get("ticket")}
 
 
@@ -2713,6 +2730,7 @@ def pm_status(pj=None):
     """
     board = {"readable": False, "reason": "no_db", "error": None, "counts": None, "db": DB.exists(),
              "blocked": [], "blocked_n": None}
+    requeue = None                                           # 止まった run を回し直してよいか（_pm_requeue_check の結果）
     runs = {"readable": True, "reason": "no_records", "error": None, "active": [], "active_n": 0,
             "abandoned_n": 0, "unreadable_n": 0, "jobs_running": []}
     why = []
@@ -2777,7 +2795,13 @@ def pm_status(pj=None):
         reason = ((d or {}).get("outcome") or {}).get("reason")
         ticket_status = ((d or {}).get("ticket") or {}).get("status")
         if reason in PM_BLOCKED_REASONS and ticket_status != "done":
-            state = "blocked"; run_ev = d
+            # 止まった run のうち、PM がもう一度回してよいものだけ blocked から外す（ADR-0074 決定 2・決定 3）。
+            # 判定は _pm_requeue_check の 1 か所だけにあり、ここは結果を状態に写すだけ
+            requeue = _pm_requeue_check(d, _pm_prior_runs(d, pj))
+            state = "idle" if requeue["requeue"] else "blocked"
+            run_ev = d
+            _pm_fact(why, "requeue", requeue["requeue"])
+            _pm_fact(why, "requeue_reason_code", requeue["reason_code"])
         _pm_fact(why, "last_run_reason", reason)
         _pm_fact(why, "last_run_ticket_status", ticket_status)
     _pm_fact(why, "state", state)
@@ -2790,10 +2814,155 @@ def pm_status(pj=None):
         reason = "landing_observed" if state == "landing" else "run_running"
     elif state == "blocked":
         reason = "needs_human"
+    elif requeue and requeue["requeue"]:
+        # 止まった票をもう一度回す提案。「次の票を選んだ」とも「回す票が無い」とも別の値にする
+        reason = "requeue_proposed"
+        t, rt = run_ev or {}, (run_ev or {}).get("ticket") or {}
+        next_row = {"id": rt.get("id") or t.get("task"), "title": rt.get("title"), "pj": t.get("pj"), "status": rt.get("status")}
     else:
         reason = "picked_next" if next_row else "no_todo"
     nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
     try: decisions = pm_decisions()
     except Exception: decisions = []
-    return {"state": state, "board": board, "runs": runs, "run": run_ev, "next": nxt,
-            "decisions": decisions, "pj": pj or None, "now": now(), "tz": tz_info()}
+    out = {"state": state, "board": board, "runs": runs, "run": run_ev, "next": nxt, "requeue": requeue,
+           "decisions": decisions, "pj": pj or None, "now": now(), "tz": tz_info()}
+    # 次の一手（提案）。読むだけの口なので決めるだけで、書くのも起こすのも pm_tick の役目（ADR-0074 決定 4）。
+    # 材料は今この関数が組んだものをそのまま渡す（同じ tick の中で板を 2 度読んで別の答えを出さない）
+    out["proposal"], out["proposal_error"] = None, None
+    try: out["proposal"] = pm_decide(pj, status=out)
+    except Exception as e: out["proposal_error"] = str(e)    # 提案を作れなくても状態を読む口自体は落とさない
+    return out
+
+def _pm_prior_runs(last, pj=None, limit=20):
+    """同じ票の、last より前に止まった run（新しい順）。ticket_detail と同じ絞り方（task が一致し PJ も同じ）で、
+       board_runs（dry-run と v0 を除く）から取る。実行中は数えない（まだ落ちていない）"""
+    tid, name = (last or {}).get("task"), (last or {}).get("name")
+    if not tid or not name: return []
+    try: rs = board_runs(pj or (last or {}).get("pj"))
+    except Exception: return []
+    out, seen = [], False
+    for r in rs:                                     # board_runs は新しい順。last より後ろに並ぶものが「前の run」
+        if str(r.get("task")) != str(tid): continue
+        if r.get("name") == name: seen = True; continue
+        if not seen or r.get("status") == "running": continue
+        d = _pm_run(r["name"])
+        if d: out.append(d)
+        if len(out) >= limit: break
+    return out
+
+
+def _pm_requeue_check(last, prior):
+    """止まった run を「PM がもう一度回してよいか」で分ける（副作用なし。ADR-0074 決定 3 の線②）。
+
+    ★同一性は機械で読める事実だけで判定する。指摘の自由文は比べない（ADR-0074 / ADR-0025）:
+      - gates 由来（gate_fails がある）… 直前に止まった run と FAIL の集合が同じなら止める（same_gate_fails）。
+        違えば（前の run が無い場合を含む）回す。集合が空・読めないときは推測せず、回さない
+      - review 由来（review 工程で止まった）… 文面ではなく本数で切る。同じ票で review 止まりが
+        PM_REVIEW_RETRY_MAX + 1 本目になったら止める（review_retry_limit）。人が起こした run も区別せず数える（安全側）
+    返り値: {"requeue": bool, "reason_code": 止める理由の語（回すときは None）, "facts": 機械で読めた事実}"""
+    o = (last or {}).get("outcome") or {}
+    reason, step = o.get("reason"), o.get("stopped_step")
+    facts = {"outcome_reason": reason, "stopped_step": step}
+    def no(code, **extra): return {"requeue": False, "reason_code": code, "facts": {**facts, **extra}}
+    def yes(from_step, **extra): return {"requeue": True, "reason_code": None, "facts": {**facts, "from_step": from_step, **extra}}
+    if reason not in PM_REQUEUE_REASONS: return no(None)      # 直す所が run の外。語彙に無いので理由コードも作らない
+    if step == "review":
+        n = 1 + sum(1 for d in prior if ((d.get("outcome") or {}).get("stopped_step")) == "review")
+        facts.update({"review_fails_n": n, "retry_max": PM_REVIEW_RETRY_MAX})
+        if n - 1 >= PM_REVIEW_RETRY_MAX: return no("review_retry_limit")
+        return yes("implement")                               # 続けるのは runner のループ延長ではなく新しい run（決定 3）
+    fails = sorted(o.get("gate_fails") or [])
+    if not fails: return no(None)                             # gates.txt が無い・読めない。何が赤かったか分からないまま回さない
+    prev = sorted(((prior[0].get("outcome") or {}).get("gate_fails") or []) if prior else [])
+    facts.update({"gate_fails": fails, "prev_gate_fails": prev})
+    if prev and prev == fails: return no("same_gate_fails")
+    return yes((last or {}).get("resume_step") or step)
+
+
+def pm_decide(pj=None, status=None):
+    """次の一手と、その理由を決める（副作用なし。何も起こさず何も書かない）。ADR-0074 決定 5 の 1 行と同じ形。
+
+    status を渡すと pm_status を呼び直さない（同じ tick の中で 2 度読んで別の答えを出さないため）。
+    ★確かめられていないとき（板か run の記録を読めていない）は None を返す。「次にすることが無い」でも
+      「順調」でもなく、出す操作が無いという意味で、0 件・順調と同じ値にしない（#535 と同じ型）。
+    返す形: {pj, ticket, run, state, action, reason_code, facts, mode}。at / by は書く側（_pm_log）が足す"""
+    s = status if status is not None else pm_status(pj)
+    if not s["board"]["readable"] or not s["runs"]["readable"]: return None
+    state, nxt, run = s["state"], s["next"], (s.get("run") or {})
+    chk = s.get("requeue")
+    tid = run.get("task")
+    if state == "waiting": action, code, facts = "none", "run_running", {}
+    elif state == "landing": action, code, facts = "none", "landing_observed", {}
+    elif state == "blocked":
+        # 語彙に当たる理由があるものだけ理由コードを付ける。PM が判断せず人に渡すだけのもの
+        # （pr_created / step_timeout / human_abandoned / gates.txt が読めない …）は理由コードを作らず null にする
+        action, facts = "none", {**((chk or {}).get("facts") or {})}
+        code = (chk or {}).get("reason_code")
+        if not code: facts["needs_human"] = True
+    elif chk and chk.get("requeue"):
+        action, code, facts = "requeue", "proposed", {"why": "requeued", **chk["facts"]}
+    elif nxt["reason"] == "picked_next":
+        action, code = "run", "proposed"
+        tid = (nxt.get("ticket") or {}).get("id")
+        # 「なぜ他を選ばなかったか」も残す（画面の主役は理由）。kb next は todo を id 順に 1 件返すだけなので、
+        # 候補の全 id と並べ方を facts に置けば、選ばれなかった票も後から追える
+        facts = {"why": "picked_next", "order": "id", "todo_ids": None, "blocked_ids": [b.get("id") for b in s["board"]["blocked"]]}
+        try: facts["todo_ids"] = [t["id"] for t in tickets_list(pj=pj, status="todo")["tickets"]]
+        except Exception: facts["todo_ids"] = None            # 読めなかったので「候補は 1 件だけだった」とは言わない
+    else: action, code, facts = "none", "no_todo", {}
+    return {"pj": pj or run.get("pj"), "ticket": tid, "run": run.get("name") or None, "state": state,
+            "action": action, "reason_code": code, "facts": facts, "mode": "propose"}
+
+
+def _pm_log(d, by="tick"):
+    """判断を logs/pm-decisions.jsonl に 1 行足す（決定 5）。置き方は config-changes.jsonl と同じで、新しい置き場を作らない。
+
+    ★5 分ごとの tick が同じ提案を繰り返す間、同じ行でログを埋めない: 直前の同じ PJ の行と（at / by 以外が）
+      同じなら書かずに same_as_last で返す。書けなかった（権限・容量）ことは logged=False + error で分ける"""
+    keys = ("pj", "ticket", "run", "state", "action", "reason_code", "facts", "mode")
+    line = {"at": now(), **{k: d.get(k) for k in keys}, "by": by}
+    try: prev = next((r for r in pm_decisions(limit=200) if r.get("pj") == line["pj"]), None)
+    except Exception: prev = None
+    if prev and all(prev.get(k) == line[k] for k in keys):
+        return {"logged": False, "same_as_last": True, "error": None, "line": line}
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / PM_DECISIONS, "a", encoding="utf-8") as f: f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError as e:
+        return {"logged": False, "same_as_last": False, "error": str(e), "line": line}
+    return {"logged": True, "same_as_last": False, "error": None, "line": line}
+
+
+def pm_tick(pj=None, mode="propose", dry=False, by="tick"):
+    """管理役の 1 周。状態を 1 段だけ進める唯一の関数（ADR-0074 決定 1・決定 2）。
+
+    ★本票（#537）は propose だけ。決めて判断ログに書いて返るところまでで、ticket_run も pr-automerge も呼ばない。
+      auto（実際に run を起こす）は #538。propose の提案が妥当だと確かめてから自動に切り替える。
+    ★長く待たない。run の完了を待つのは tick の外（timer の次の発火）で、ここに sleep のループを書かない
+      ——待つと VM と鍵を掴んだまま詰まる。
+    ★二重起動は jobs/.lock の flock で防ぐ（timer からの tick と Web / MCP からの手動 tick が重なりうる）。
+      別プロセスなので threading.Lock では防げない。取れなければ待たずに skipped="locked" で返り、何も書かない。
+      ★#538 で auto を足すときも、この with の中で ticket_run（JobStore.start）を呼ばないこと。
+        flock は open ごとに効くので、同じプロセスでも同じ .lock を二重に取って詰まる。決めて・ロックを出てから起こす。
+
+    返す形: {ticked, skipped, state, proposal, logged, decision, mode, by, dry, pj, at}
+      skipped … None / "locked"（ロックを取れなかった）/ "unreadable"（確かめられていないので提案が無い）"""
+    if mode not in PM_MODES: raise ApiError(f"mode は {' / '.join(PM_MODES)} のどちらかです")
+    if mode != "propose": raise ApiError("mode=auto はまだありません。この版の管理役は提案だけで、何も起動しません（自動は後続のチケットで入ります）")
+    out = {"ticked": False, "skipped": None, "state": None, "proposal": None, "logged": False, "decision": None,
+           "mode": mode, "by": by, "dry": bool(dry), "pj": pj or None, "at": now()}
+    try:
+        with _flock(blocking=False):
+            s = pm_status(pj)
+            out.update({"ticked": True, "state": s["state"], "proposal": s.get("proposal")})
+            if out["proposal"] is None:
+                out["skipped"] = "unreadable"                 # 板か run の記録を読めていない。推測で 1 行書かない
+                return out
+            if dry: return out                                # 下見。決めるところまでで書かない
+            w = _pm_log(out["proposal"], by=by)
+            out.update({"logged": w["logged"], "decision": w["line"], "log_error": w["error"],
+                        "same_as_last": w["same_as_last"]})
+            return out
+    except Conflict:
+        out["skipped"] = "locked"                             # 先に走っている tick がある。後から来たほうは何もしない
+        return out
