@@ -136,7 +136,8 @@ GET  /api/overview[?pj=]           状態の件数・動いている run / ジ�
      pj は run の一覧だけ絞る（上限 limit を掛ける前に絞る。件数は runs_active_n）。counts は常に全 PJ
 GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・履歴・run・ジョブ
      どちらも kinds（workflow/kit/workflows/*.yml。`.` / `_` 始まりは出さない）と kind_desc（種別 → 用途）を返す
-GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる
+GET  /api/next[?pj=]               「配車する」を押す前の下見としてコンソールが引く todo（kb next --json。無ければ null）
+     配車そのものは dispatch が kb list + kb show で選び直す（先行票が未完了なら飛ばすので下見とずれうる）
 GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()。読み取りのみで何も起動しない。ADR-0074）
      state は idle / waiting / landing / blocked の 4 つで、保存せず既存の記録から毎回導く
      ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed）、
