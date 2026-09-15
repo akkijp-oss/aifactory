@@ -58,6 +58,10 @@ class InstallSystemdTest(unittest.TestCase):
         """テンプレートにある常駐（<name>.service と <name>.timer の組）"""
         return sorted(p.name for p in TEMPLATES.iterdir() if p.suffix in (".service", ".timer"))
 
+    def expected_timers(self):
+        """テンプレートにある timer の名前。常駐を 1 つ足しても数え直さずに済むよう、ここも数ではなく名前で見る"""
+        return sorted(p.name for p in TEMPLATES.iterdir() if p.suffix == ".timer")
+
     def test_systemd_installs_every_unit_in_the_templates(self):
         r = self.run_install("--systemd")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -78,7 +82,7 @@ class InstallSystemdTest(unittest.TestCase):
     def test_every_timer_is_enabled_and_started(self):
         self.assertEqual(self.run_install("--systemd").returncode, 0)
         enabled = re.findall(r"^systemctl enable --now (\S+)$", self.calls_text(), re.M)   # sudo 経由の重複を数えない
-        self.assertEqual(sorted(enabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer", "aifactory-resume.timer"])
+        self.assertEqual(sorted(enabled), self.expected_timers())
         self.assertIn("systemctl daemon-reload", self.calls_text())
 
     def test_the_cli_is_copied_too(self):
@@ -92,7 +96,7 @@ class InstallSystemdTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.unit_names(), [])
         disabled = re.findall(r"^systemctl disable --now (\S+)$", self.calls_text(), re.M)
-        self.assertEqual(sorted(disabled), ["aifactory-gh-refresh.timer", "aifactory-idle-stop.timer", "aifactory-resume.timer"])
+        self.assertEqual(sorted(disabled), self.expected_timers())
 
     def test_resume_timer_calls_dispatch_in_the_checkout_every_5_minutes(self):
         """利用枠切れで止まった run の続きは checkout の dispatch --resume-paused が回す（380）。@@REPO@@ はこの checkout に埋まる"""
@@ -104,6 +108,21 @@ class InstallSystemdTest(unittest.TestCase):
         timer = (TEMPLATES / "aifactory-resume.timer").read_text()
         self.assertIn("OnUnitActiveSec=5min", timer)
         self.assertIn("Unit=aifactory-resume.service", timer)
+
+    def test_pm_timer_takes_one_oneshot_turn_every_5_minutes(self):
+        """管理役の 1 周は新しい常駐ではなく timer + oneshot（ADR-0074 決定 1。aifactory-resume.* と同型）。
+           この版は提案を書くだけなので、ExecStart は console/bin/pm-tick（kb run ではない）"""
+        self.assertEqual(self.run_install("--systemd").returncode, 0)
+        svc = (self.units / "aifactory-pm.service").read_text()
+        self.assertIn("Type=oneshot", svc)
+        self.assertIn(f"ExecStart=/usr/bin/python3 {REPO}/console/bin/pm-tick", svc)
+        self.assertNotIn("kb run", svc, "1 周が直接 run を起こす形になっている（この版は提案だけ）")
+        self.assertIn(f"WorkingDirectory={REPO}", svc)
+        self.assertIn(f"EnvironmentFile=-{self.home}/.config/aifactory/ctl.env", svc)
+        timer = (TEMPLATES / "aifactory-pm.timer").read_text()
+        self.assertIn("OnUnitActiveSec=5min", timer)
+        self.assertIn("Unit=aifactory-pm.service", timer)
+        self.assertIn("WantedBy=timers.target", timer)
 
     def test_idle_stop_timer_runs_every_15_minutes(self):
         """止まっている時間が長いほど節電になるが、次の take の待ちは増やせない。15 分ごと"""

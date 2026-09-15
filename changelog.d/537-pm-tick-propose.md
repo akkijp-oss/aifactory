@@ -1,0 +1,2 @@
+### Added
+- **管理役（PM）の 1 周（`core.pm_tick()`）。まだ提案だけで、run は起こさない**。制御系の `aifactory-pm.timer`（macOS は `com.aifactory.pm`）が 5 分ごとに `console/bin/pm-tick` を呼び、いまの状態から次の一手と**理由**を決めて `$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl` に 1 行書く。口は `POST /api/pm/tick` と MCP の `pm_tick` で、`GET /api/pm` には `proposal`（次の一手）が付いた。1 周は待たず（run の完了は次の周で見る）、`jobs/.lock` を待たずに取るので重なった周は何もしない。止まった run をもう一度回せると判断したときは `blocked` ではなく `next.reason: requeue_proposed` になる。「同じ理由で 2 回」の判定は機械で読める事実だけ（ゲートは FAIL した名前の集合、レビューは回数）で、指摘の文面は比べない（ADR-0074）

@@ -1,0 +1,10 @@
+[Unit]
+Description=aifactory: let the PM decide the next move every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=aifactory-pm.service
+
+[Install]
+WantedBy=timers.target

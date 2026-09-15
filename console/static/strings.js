@@ -137,6 +137,7 @@ const T = {
       "landing_observed": "着地を見守っているので、次は起こしません。",
       "needs_human": "人が確かめるまで、次は起こしません。",
       "board_unreadable": "板を読めていないので、次を決められません。",
+      "requeue_proposed": "止まったチケットをもう一度回すことを提案します。",
       "other": "次を決めた理由をこの画面ではまだ読めません。"
     },
     "reason": {
@@ -157,7 +158,7 @@ const T = {
       "paused": "人が一時停止を指示したため",
       "other": "この画面より新しい理由が記録されています"
     },
-    "action": { "requeue": "もう一度回す" },
+    "action": { "none": "何もしない", "run": "次のチケットを回す", "requeue": "もう一度回す" },
     "actionRaw": "記録にあった操作の名前をそのまま出しています。",
     "reasonNone": "理由が記録されていません。",
     "countsUnknown": "件数を読めていません。",
