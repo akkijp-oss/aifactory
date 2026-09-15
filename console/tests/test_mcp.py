@@ -2,7 +2,7 @@
 
   python3 -m unittest discover -s console/tests -v
 """
-import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest, urllib.request
+import hashlib, importlib.machinery, importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest, unittest.mock, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MCP = REPO / "console" / "bin" / "mcp"
@@ -630,6 +630,79 @@ class McpTest(unittest.TestCase):
         desc = tools["project_write"]["description"]
         for k in ("workspace/projects/<pj>/", "examples", "次の run", ".bak-", "bash -n", "schema"): self.assertIn(k, desc)
         self.assert_examples_untouched()
+
+    def test_28_unknown_argument_is_rejected_on_ticket_action(self):
+        """スキーマに無いキーを渡したら成功を返さない（#585）。宣言している additionalProperties: false を入口で効かせる"""
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: mcp 未知キーの拒否", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r); tid = r["id"]
+        err, msg = self.c.tool("ticket_action", id=tid, action="set", note="正当なメモ", nonexistent_key_probe_585="x")
+        self.assertTrue(err, f"未知キーを渡したのに成功が返った: {msg}")
+        self.assertIn("nonexistent_key_probe_585", msg)
+        # 弾いたのだから副作用も無い（正当な note も書かれていない）
+        self.assertIn(self.c.tool("ticket_show", id=tid)[1]["ticket"]["note"], (None, ""))
+
+    def test_29_unknown_argument_is_rejected_on_ticket_new(self):
+        """ticket_new も同じ扱い。弾いたなら票は増えない"""
+        title = "調査: mcp 未知キーでは起票しない"
+        err, msg = self.c.tool("ticket_new", pj=PJ, kind="research", title=title, body="x\n\n## 完了条件\n- y", nonexistent_key_probe_585="x")
+        self.assertTrue(err, f"未知キーを渡したのに起票された: {msg}")
+        self.assertIn("nonexistent_key_probe_585", msg)
+        err, t = self.c.tool("ticket_list", all=True); self.assertFalse(err)
+        self.assertFalse([x for x in t["tickets"] if x["title"] == title], "弾いたはずの呼び出しで票が増えている")
+
+    def test_30_declared_keys_still_work(self):
+        """既存の挙動は不変: status / note / kind / run / depends_on の set と、空文字列での消去"""
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: mcp 既知キーの不変", body="x\n\n## 完了条件\n- y")
+        self.assertFalse(err, r); tid = r["id"]
+        err, r = self.c.tool("ticket_action", id=tid, action="set", status="in_progress", note="メモ", kind="chore"); self.assertFalse(err, r)
+        t = self.c.tool("ticket_show", id=tid)[1]["ticket"]
+        self.assertEqual(t["status"], "in_progress"); self.assertEqual(t["note"], "メモ"); self.assertEqual(t["kind"], "chore")
+        err, r = self.c.tool("ticket_action", id=tid, action="set", depends_on="1,2"); self.assertFalse(err, r)
+        self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["depends_on"], "1,2")
+        err, r = self.c.tool("ticket_action", id=tid, action="set", note="", depends_on=""); self.assertFalse(err, r)
+        t = self.c.tool("ticket_show", id=tid)[1]["ticket"]
+        self.assertIn(t["note"], (None, "")); self.assertIn(t["depends_on"], (None, ""))
+        # キーを渡さなければ触らない（status だけ変えても depends_on は消えない）
+        err, r = self.c.tool("ticket_action", id=tid, action="set", depends_on="3"); self.assertFalse(err, r)
+        err, r = self.c.tool("ticket_action", id=tid, action="set", status="todo"); self.assertFalse(err, r)
+        self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["depends_on"], "3")
+
+    def test_31_missing_required_key_is_rejected(self):
+        """required も宣言だけにしない。欠けたキー名が文言に出る"""
+        err, msg = self.c.tool("ticket_show"); self.assertTrue(err); self.assertIn("id", msg)
+        err, msg = self.c.tool("run_show"); self.assertTrue(err); self.assertIn("name", msg)
+        err, msg = self.c.tool("ticket_action", id=1); self.assertTrue(err); self.assertIn("action", msg)
+
+
+class McpArgsValidationTest(unittest.TestCase):
+    """全ツールが未知キーを入口で弾くこと（#585）。ハンドラを差し替えて確かめるので、VM もジョブも起こさない"""
+    @classmethod
+    def setUpClass(cls):
+        loader = importlib.machinery.SourceFileLoader("mcp_args_validation_module", str(MCP))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        cls.mcp = importlib.util.module_from_spec(spec); loader.exec_module(cls.mcp)
+
+    def test_every_tool_rejects_unknown_keys_before_the_handler(self):
+        mcp = self.mcp
+        called = []
+        stub = {n: (lambda a, _n=n: called.append(_n) or {"ok": True}) for n in mcp.TOOL_MAP}
+        dummy = {"string": "x", "integer": 1, "boolean": True, "array": [], "object": {}}
+        for name, _desc, sc, _fn in mcp.TOOLS:
+            args = {k: (sc["properties"][k].get("enum") or [dummy.get(sc["properties"][k].get("type"), "x")])[0] for k in sc["required"]}
+            args["nonexistent_key_probe_585"] = "x"
+            with unittest.mock.patch.object(mcp, "TOOL_MAP", stub):
+                res = mcp.handle({"method": "tools/call", "params": {"name": name, "arguments": args}})
+            self.assertTrue(res["isError"], f"{name}: 未知キーを渡したのに成功が返った")
+            self.assertIn("nonexistent_key_probe_585", res["content"][0]["text"], name)
+        self.assertEqual(called, [], f"弾く前にハンドラが呼ばれた: {called}")
+
+    def test_declared_keys_reach_the_handler(self):
+        mcp = self.mcp
+        got = []
+        with unittest.mock.patch.object(mcp, "TOOL_MAP", {"ticket_action": lambda a: got.append(a) or {"ok": True}}):
+            res = mcp.handle({"method": "tools/call", "params": {"name": "ticket_action", "arguments": {"id": 1, "action": "set", "depends_on": "2", "note": None}}})
+        self.assertFalse(res["isError"], res)
+        self.assertEqual(got, [{"id": 1, "action": "set", "depends_on": "2", "note": None}])   # null も「キーが在る」として通す
 
 
 if __name__ == "__main__":
