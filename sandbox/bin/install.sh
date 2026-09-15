@@ -5,7 +5,7 @@
 #     aifactory-gh-refresh  GitHub App トークンの更新（45 分ごと）
 #     aifactory-idle-stop   使われていないプール VM の停止（15 分ごと。252）
 #     aifactory-resume      鍵の利用枠切れで一時停止した run の続きを回す（5 分ごと。380）
-#     aifactory-pm          管理役（PM）の 1 周（5 分ごと。537 / ADR-0074）。この版は提案を書くだけで run は起こさない
+#     aifactory-pm          AI Factory Manager（PM）の 1 周（5 分ごと。537 / ADR-0074）。この版は提案を書くだけで run は起こさない
 #   install.sh --remove   systemd の登録を外す
 #   macOS: シンボリックリンクだと launchd（gh-refresh）の bash が Documents 配下を読めず "Operation not permitted" になる（TCC）ので実体コピー。
 #   launchd の plist は sandbox/templates/launchd/（BUILD.md Step 0b）。リポジトリの sandbox/bin/sandbox を更新したら、もう一度これを実行する
@@ -33,7 +33,7 @@ do_systemd() {
   done
   $SUDO systemctl daemon-reload
   for u in "${UNITS[@]}"; do $SUDO systemctl enable --now "$u.timer" >/dev/null; done
-  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）/ aifactory-resume.timer（5 分ごと。利用枠切れで止まった run の続き）/ aifactory-pm.timer（5 分ごと。管理役の提案。run は起こさない）"
+  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）/ aifactory-resume.timer（5 分ごと。利用枠切れで止まった run の続き）/ aifactory-pm.timer（5 分ごと。AI Factory Manager の提案。run は起こさない）"
   echo "     ログ: journalctl -u aifactory-gh-refresh -u aifactory-idle-stop -u aifactory-resume -u aifactory-pm"
 }
 do_remove() {

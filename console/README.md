@@ -36,12 +36,12 @@ journalctl -u aifactory-console -f
 
 ## 画面
 
-ナビは頻度順（ボード / 管理役 / 起票 / 実行記録 / ジョブ / sandbox / 統計 / 鍵 / ログ / 設定）。`g` + 頭文字で移動、`?` で一覧。画面と文言の約束は `UX.md`（ADR-0019）。
+ナビは頻度順（ボード / AI Factory Manager / 起票 / 実行記録 / ジョブ / sandbox / 統計 / 鍵 / ログ / 設定）。`g` + 頭文字で移動、`?` で一覧。画面と文言の約束は `UX.md`（ADR-0019）。
 
 | 画面 | 見るもの | 動かすもの |
 |---|---|---|
 | ボード | 工程の帯（未着手 → 実行中 → レビュー待ち → 完了、横に人間待ち）と 5 列のカード。動いている run はここに出る | 起票（起票画面へ）/ **配車する**（ダイアログ。PJ・件数・dry-run を選び、押す前に「次に回るチケット」を見せる。未着手が無ければ押せない） |
-| 管理役 | 管理役（PM）のいまの状態・次に回すものとその理由・判断の記録（新しい順）・板の要約（`GET /api/pm`。`proposal` に次の一手が付く）。**板を読めていないときは 4 状態の語を出さず「状態を取得できていません」**と出し、「回すチケットがありません」（0 件）と区別する。5 秒更新。`g p` | 読むだけ（モード切替・一時停止・今すぐ回すは置き場だけで、まだつながっていないことを画面に出している） |
+| AI Factory Manager | AI Factory Manager（PM）のいまの状態・次に回すものとその理由・判断の記録（新しい順）・板の要約（`GET /api/pm`。`proposal` に次の一手が付く）。**板を読めていないときは 4 状態の語を出さず「状態を取得できていません」**と出し、「回すチケットがありません」（0 件）と区別する。5 秒更新。`g p` | 読むだけ（モード切替・一時停止・今すぐ回すは置き場だけで、まだつながっていないことを画面に出している） |
 | チケット | 本文・履歴・関連する run・ジョブ | `kb run`（ダイアログで PJ・workflow・所要を確認。dry-run は離して置く / --keep / --resume）/ 状態を進める（`kb start|review|done|reopen|block`。**確認なし、トーストの「元に戻す」**で前の状態へ。人間待ちだけメモを聞くダイアログ）/ `kb set`（種別・PR・メモ）/ `kb sync`（押す前に対象 run と前後の状態・メモを見せる。run の後にチケットが更新されていれば警告） |
 | 実行記録 | `$AIFACTORY_WORKSPACE/runs/` の一覧。run の工程トラック（step ごとの合否と所要、戻し ↺、終端 end / human）・ファイル・ログ。実行中は `state.json` の `current` が指す step のログを自動で開いて 5 秒ごとに追い読み（ADR-0014） | — |
 | sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml の有無、Claude の鍵が鍵プールにそろっているか、プールの定義 / 実体 / 貸出 / 空き）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
@@ -51,6 +51,8 @@ journalctl -u aifactory-console -f
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
 | 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`。4 行それぞれに入力欄があり、ここから直せる。モデルは Agent → モデル名の 2 段で表示名から選ぶか、ID を直接入力する = ADR-0072）、PJ 定義の置き場、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める。工程詳細には**その工程の yml ブロックだけ**を出す編集欄があり、モデルの欄と画面の中で双方向に同期する（ファイル全体は出さない。`id` と担い手の種類は変えられない = ADR-0073） | workflow を開く、工程を開く、定義の原文を読む、モデルの経路を変える、工程の定義（その工程の yml ブロック）を変える（どちらも影響する工程を見てから保存する） |
+
+- 表示名は **AI Factory Manager**、識別子は `pm` のまま据え置き（`aifactory-pm.service` / `aifactory-pm.timer`・`com.aifactory.pm.plist`・`console/bin/pm-tick`・`GET /api/pm`・MCP の `pm_status` / `pm_tick`・`core.py` の `pm_*`・`logs/pm-decisions.jsonl`・画面のルート `#/pm`）。稼働中の systemd timer と公開済みの API 名を変えないため（#587）。
 
 ## MCP（AI セッションからの読み書き）
 
@@ -83,8 +85,8 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `run_action` | 人間の後始末（wip から PR 化・マージ／打ち切り）を実行記録に書く（`kb run-note`）。`close` は決着と PR 番号を記録し、`note` は説明を書き直す |
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task / VM 名 / IP / since / 稼働状態）と PJ ごとのプール（定義 / 実体 / 貸出 / 空き）/ 実勢（ジョブ）/ 返却（ジョブ） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
-| `pm_status` | 管理役（PM）の状態（読み取りのみ。何も起動しない。ADR-0074）: `state`（`idle` / `waiting` / `landing` / `blocked`）、`board`・`runs`（読めたかを `readable` / `reason` で持ち、件数とは別の値）、根拠にした run 1 件、`next`（常に object）、`proposal`（次の一手。読めていなければ `null`）、判断ログ |
-| `pm_tick` | 管理役の 1 周（`core.pm_tick()`）。**この版は提案だけで、run は起こさない・マージもしない**: 状態を読み、次の一手と理由を決め、判断ログに 1 行書いて返る。待たない（run の完了は次の周で見る）。`jobs/.lock` を待たずに取るので、ほかの周と重なったら `skipped: "locked"` で何もしない。`dry` で書かずに下見 |
+| `pm_status` | AI Factory Manager（PM）の状態（読み取りのみ。何も起動しない。ADR-0074）: `state`（`idle` / `waiting` / `landing` / `blocked`）、`board`・`runs`（読めたかを `readable` / `reason` で持ち、件数とは別の値）、根拠にした run 1 件、`next`（常に object）、`proposal`（次の一手。読めていなければ `null`）、判断ログ |
+| `pm_tick` | AI Factory Manager の 1 周（`core.pm_tick()`）。**この版は提案だけで、run は起こさない・マージもしない**: 状態を読み、次の一手と理由を決め、判断ログに 1 行書いて返る。待たない（run の完了は次の周で見る）。`jobs/.lock` を待たずに取るので、ほかの周と重なったら `skipped: "locked"` で何もしない。`dry` で書かずに下見 |
 | `logs` / `config` | glue のログ / workflow・routes・PJ・git |
 
 `tools/list` は全ツールに `annotations`（`title` / `readOnlyHint`、`sandbox_release` / `job_stop` / `computer_close` には `destructiveHint`）を返す。これが無いと Claude Code は「並列に呼べないツール」とみなして同じターンの呼び出しを直列に送るので、サーバーが非同期でも待たされる（ADR-0038）。
@@ -140,7 +142,7 @@ GET  /api/next[?pj=]               「配車する」を押す前の下見。dis
      next（回せる票。無ければ null）/ reason（PM と同じ語彙）/ kb_next（薄い kb next が返した生の id）/
      skipped_by_dependency（票 → 未完了の先行票）/ skipped_by_pause（票 → 一時停止の事実）を返す
      ★配車のときの環境で決まるもの（PJ の project.yml・Pull worker・プールの空き）はここでは確かめない（#581）
-GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()。読み取りのみで何も起動しない。ADR-0074）
+GET  /api/pm[?pj=]                 AI Factory Manager（PM）の状態（core.pm_status()。読み取りのみで何も起動しない。ADR-0074）
      state は idle / waiting / landing / blocked の 4 つで、保存せず既存の記録から毎回導く
      ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed）、
        runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は
@@ -159,7 +161,7 @@ GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()
      ★proposal が null なのは「することが無い」ではなく「板か実行記録を読めていない」の意味（出す操作が無い）
      止まった run をもう一度回せると PM が判断したときは state が blocked ではなく idle で、
        next.reason は requeue_proposed（picked_next とも no_todo とも別の値）。launchable は偽（提案であって起動許可ではない）
-POST /api/pm/tick {pj, dry}        管理役の 1 周（core.pm_tick()。ADR-0074 決定 1・決定 4）
+POST /api/pm/tick {pj, dry}        AI Factory Manager の 1 周（core.pm_tick()。ADR-0074 決定 1・決定 4）
      ★この版は propose だけ: 決めて判断ログ（workspace/logs/pm-decisions.jsonl）に 1 行書くところまでで、
        ticket_run も pr-automerge も呼ばない。run を起こすのは人（POST /api/tickets/<id>/run）のまま
      待たない（run の完了を待つのは次の周）。二重に回らないよう jobs/.lock を待たずに取り、

@@ -1,0 +1,3 @@
+### Changed
+- **「管理役」の正式名称を「AI Factory Manager」に定め、画面・文書・website の表記を揃えました**。console の左ナビと `#/pm` の画面、MCP の道具一覧、`console/README.md` / `UX.md`、website の ja / en がすべて同じ名前になります。日本語の画面でも**英字のまま**「AI Factory Manager」と表示します（固有の製品名として扱う明示的な例外。カタカナ表記や「管理役（AI Factory Manager）」の併記は採りません）。en 側でばらついていた "Manager" / "the manager (PM)" も同じ名前に揃えました。
+- ★**識別子は 1 つも変えていません**: `aifactory-pm.service` / `aifactory-pm.timer` / `com.aifactory.pm`、`console/bin/pm-tick`、`GET /api/pm` / `POST /api/pm/tick`、MCP の `pm_status` / `pm_tick`、`core.pm_*`、`#/pm` のルート、`logs/pm-decisions.jsonl` はそのままです（配備済みの制御系と食い違うと二重常駐や timer の取りこぼしを起こすため。改名するかどうかは別のチケットで判断します）。**入れ替え作業も再登録も要りません**。
