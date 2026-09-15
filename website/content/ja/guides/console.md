@@ -130,6 +130,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/overview[?pj=]` | 状態の件数、動いている run とジョブ、貸出数。`pj` は run の一覧だけ絞ります（上限 `limit` を掛ける前に絞るので、7 本以上動いていても漏れません。絞り込み後の件数は `runs_active_n`）。`counts` は常に全 PJ です |
 | `GET /api/tickets[?pj=]` / `GET /api/tickets/<id>` | 一覧 / 本文・履歴・run・ジョブ。一覧は PJ 候補（`pjs`）と、その PJ に project.yml があるか（`pj_ready`）も返す |
 | `GET /api/next[?pj=]` | 配車で次に回る todo（`kb next`）。無ければ `null` |
+| `GET /api/pm[?pj=]` | 管理役（PM）の状態（`core.pm_status()`。読み取りだけで、何も起動しません。ADR-0074）。`state` は `idle` / `waiting` / `landing` / `blocked` の 4 つで、保存せず既存の記録から毎回導きます。**「取得できていない」と「0 件」は別の値です**: 板は `board.readable` と `board.reason`（`ok` / `no_db` / `kb_failed`。読めていなければ `counts` は `null`）、run の記録は `runs.readable` と `runs.reason`（`ok` / `no_records` / `error`）。`next` は常に object で、`next.reason` は `picked_next` / `no_todo` / `run_running` / `landing_observed` / `needs_human` / `board_unreadable`。`next.launchable` が真なのは `picked_next` のときだけで、`next.ticket` が `null` でも「順調」という意味にはなりません |
 | `GET /api/tickets/<id>/sync-preview[?run=]` | 状態同期の下見（`kb sync --dry-run`）。前後の状態とメモ、run の後にチケットが更新されたか |
 | `POST /api/tickets` | `kb new` |
 | `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr, dry_run}`。`sync` は既定で書かず前後を返します（書くのは `dry_run: false` のときだけ） |
@@ -172,6 +173,7 @@ claude mcp reset-project-choices   # 承認をやり直す
 | `sandbox_status` / `sandbox_ls` / `sandbox_release` | 貸出状況（`leases[]` に task・VM 名・IP・貸出開始・稼働状態）/ 実機の状態確認（ジョブ）/ 返却（ジョブ） |
 | `project_show` / `project_read` | PJ 定義（`project.yml` / `gates.sh` / `provision.sh` / `prepare.sh`）の概況と 1 ファイル。`project_show` は `project.yml` の本文と読み取り結果・schema 検証（`valid` / `errors[]`）・直下のファイル一覧（退避は `backups[]`）・どちらの置き場から読んだか（`source`）・書き先（`writable_dir`）・sandbox の準備状態を返します。読みは `$AIFACTORY_WORKSPACE/projects/<pj>/` を先に見て、無ければ `examples/projects/<pj>/` に落ちます（`file` は 4 つのファイル名だけで、パス区切りは受け付けません） |
 | `project_write` | PJ 定義のファイルを 1 つ置きます（backend の切替・`facts` の追記・`gates.sh` の差し替え。ssh も scp も要りません）。書けるのは `$AIFACTORY_WORKSPACE/projects/<pj>/` だけで、同梱の `examples/projects/` は読むだけです。部分更新はしないので、`project_read` で全文を取り、直した全文を `content` に渡します（コメントとキーの順が保たれます）。書く前に検証し（`project.yml` は schema、`*.sh` は `bash -n`）、通らなければ何も書きません。更新前のファイルは `<file>.bak-<timestamp>` に残り、`*.sh` には実行ビット（0755）が立ちます。その PJ が `examples/` 側にしか無ければ、直下のファイルを一度だけ workspace へ複製してから書きます（`seeded_from` / `copied`）。書いた内容は次の run から効きます（ADR-0052） |
+| `pm_status` | 管理役（PM）の状態を返します（読み取りだけで、何も起動しません。ADR-0074）。`GET /api/pm` と同じ内容です（どちらも `core.pm_status()` を呼びます） |
 | `job_list` / `job_show` / `job_wait` / `job_stop` | ジョブの一覧・出力・待機（既定 60 秒・上限 300 秒）・停止 |
 | `logs` / `config` | intake / dispatch のログ / ワークフロー・routes・プロジェクト・git |
 | `stats` | 工程ごとの消費統計（画面の「統計」と同じ集計。`days` / `pj` / `dry` / `tz`） |
