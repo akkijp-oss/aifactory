@@ -677,7 +677,9 @@ def not_found_message(p, root=None):
     if miss is None: head = f"ファイルが見つかりません: {rel(p)}"
     elif miss.exists(): head = f"ディレクトリではありません: {rel(miss)}"
     else: head = f"ディレクトリが見つかりません: {rel(miss)}"
-    if a is None: return head                 # 許可された根そのものが無い（列挙する先が無いので文言だけ）
+    # 列挙してよいのは許可された根の中だけ。p が根そのもの（実在するディレクトリ）だと上の while に入らず
+    # 遡りの検査が 1 度も走らないので、ここでも見る（そうしないと根の親＝workspace 直下や / の名前が出る）
+    if a is None or (limit is not None and not a.is_relative_to(limit)): return head
     try: ents = sorted((x for x in a.iterdir() if not x.name.startswith(".")), key=lambda x: x.name)
     except OSError as e: return f"{head}。{rel(a)} の中を見られません（{e.strerror}）"
     names = [x.name + ("/" if x.is_dir() else "") for x in ents]

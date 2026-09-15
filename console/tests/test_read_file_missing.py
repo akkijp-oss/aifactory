@@ -89,6 +89,14 @@ class ReadFileMissingTest(unittest.TestCase):
         self.assertEqual(core.not_found_message(empty / "r" / "a.log", root=empty),
                          f"ディレクトリが見つかりません: {empty}")
 
+    def test_the_root_itself_is_not_listed_from_outside(self):
+        """要求パスが根そのもの（実在するディレクトリ）でも、根の親は列挙しない（遡りの検査を素通りしない）"""
+        err = self.err_of(self.runs)                        # runs/ は在るがファイルではない
+        self.assertTrue(err.startswith("ファイルが見つかりません: "), err)
+        self.assertNotIn("にあるのは", err)                   # 根の親（tmp 直下）の名前を出さない
+        # 添付側の根（/tmp・ホーム）でも同じ。/ 直下の名前が出ない
+        self.assertNotIn("にあるのは", core.not_found_message(pathlib.Path("/tmp"), root=pathlib.Path("/tmp")))
+
     def test_attach_path_missing_lists_siblings(self):
         """ticket_attach_path（ApiError を投げる口）も同じ導出を使う。404 のまま文言だけが厚くなる"""
         with patch.object(core, "ATTACH_PATH_ROOTS", [self.tmp]):
