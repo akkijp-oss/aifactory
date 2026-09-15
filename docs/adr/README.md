@@ -85,3 +85,4 @@
 - [0071: sandbox の Go は PJ テンプレートに焼き、版は `workers/go.mod` から読む。満たせない run は prepare で止める](0071-go-toolchain-is-baked-from-go-mod.md)
 - [0072: モデルは「Agent + モデル名（表示名）」の 2 段で選ぶ。表示名と ID の固定の表を console に 1 つ持つ](0072-console-picks-a-model-by-display-name.md)
 - [0073: console から直せるのは「その工程の yml ブロック 1 つ」まで。id と担い手の種類は固定する](0073-console-edits-one-step-block-of-a-workflow.md)
+- [0074: 管理役（PM）は console の中の `pm_tick()` として動かす。tick は 1 段だけ進める oneshot で、マージの判断は持たない](0074-pm-loop-runs-inside-console-as-a-oneshot-tick.md)
