@@ -64,7 +64,7 @@ $kb render                                                              # BOARD.
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
 - `note` は**状態の要約**で、1 行目が `[run] ` で始まる行だけが機械（`kb run` / `kb sync` / 再走）のもの。2 行目以降は人のもので、run は消さない（ADR-0048）。長い申し送りは本文の `## PM 補足` に（`kb append --section "PM 補足"`）。人の `kb set --note` は今までどおりメモ全体を書く
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
-- `depends_on`（`--depends`）は**未完了（`done` 以外）の先行票を持つ票を PM が次に選ばない**ための列。人が書き（`--depends ''` で消す）、本文の自由文は解釈しない。存在検査はしない（DB に無い id は読む側が未完了に倒す）。`kb next` と `glue/bin/dispatch` は見ない（判定は `console/lib/core.py` の `pm_status` 側。ADR-0077）
+- `depends_on`（`--depends`）は**未完了（`done` 以外）の先行票を持つ票を PM が次に選ばない**ための列。人が書き（`--depends ''` で消す）、本文の自由文は解釈しない。存在検査はしない（DB に無い id は読む側が未完了に倒す）。`kb next` は見ない（低レベルの口に判断を入れない）。判定は `console/lib/core.py` の `pm_unmet_deps` 1 か所にあり、`pm_status` も `glue/bin/dispatch` もそこを通る（ADR-0077 / ADR-0078）
 - 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
   - 名前は sanitize する（パス区切り・`..`・制御文字・Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）を落とし 120 バイトに切る。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所（console / MCP / intake も同じ判定を通る）
   - `kb new --attach` は「**起票は成功・添付だけ失敗**」になることがある（上限超えなど）。そのとき id は標準出力に出るが終了コードは 0 ではない。チケットは在るので、添付だけ `kb attach <id> <file>` でやり直す

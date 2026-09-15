@@ -45,7 +45,7 @@ PJ の一覧（intake が LLM に渡す候補、dispatch が見る `project.yml`
 - **intake の出力は提案**。`kb new` が pj / kind の実在を検証し、confidence とモデル名を本文末尾に残す。低ければ人間が `kb set` で直す
 - `--attach` の画像（png / jpg / gif / webp）は一時ディレクトリの `attachments/` に複製して `--tools Read` で LLM に見せ、読み取れた事実を本文の `## 現状` に書かせる。画像が無いときの呼び方（`--tools ""`）は変わらない
 - 起票はできて添付だけ失敗したときは、id を出したうえで終了コード 2（チケットは在るので `kb attach` でやり直す）
-- **dispatch は判断しない**。種別は kanban が持つ。dispatch が見るのは「project.yml があるか」「プール（PJ あたり 3 台）に空きがあるか」「鍵の利用枠切れで一時停止中なら解除時刻を過ぎたか（`kb resumable`）」だけ。一時停止中のチケットは初めからではなく `kb run --from` で続きから回す（ADR-0043）
+- **dispatch は種別の判断をしない**。種別は kanban が持つ。dispatch が見るのは「回せるか」の機械的な確認だけ:「project.yml があるか」「プール（PJ あたり 3 台）に空きがあるか」「鍵の利用枠切れで一時停止中なら解除時刻を過ぎたか（`kb resumable`）」「先行票（`depends_on`）が全部 done か（判定は console と同じ `core.pm_unmet_deps`。飛ばしたら理由をログに残す。ADR-0078）」。一時停止中のチケットは初めからではなく `kb run --from` で続きから回す（ADR-0043）
 - **直列**。並列にするなら PJ 単位（プールが別）から。ゲートが 15〜60 分かかる観察があるので、並列より先にゲートの差分実行が効く
 - LLM は Mac 側の `claude -p`（cwd を一時ディレクトリにし、ツール無しで呼ぶ）。VM は使わない
 
