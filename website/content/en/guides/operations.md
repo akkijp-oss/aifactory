@@ -47,7 +47,7 @@ kb run <id> --from                       # continue by hand (the command is in t
 - After `AIFACTORY_RESUME_MAX_HITS` stops in a row (default 6) the automatic resume gives up and the ticket becomes `blocked` (the token's window is too small, etc.). Both can be set in `ctl.env`
 - If the token itself is invalid, expired or out of credit (`failure: key`), waiting does not help, so the ticket is `blocked`. Fix the token as above and continue with `kb run <id> --from`
 
-### The manager's turn writes a proposal every 5 minutes
+### The AI Factory Manager's turn writes a proposal every 5 minutes
 
 The control plane's systemd timer `aifactory-pm.timer` calls `console/bin/pm-tick` every 5 minutes (on macOS, the launch agent `com.aifactory.pm`; `install.sh` installs either one). A turn only reads the current state, decides the next move and the **reason**, and writes one line to `$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl`.
 
@@ -57,7 +57,7 @@ The control plane's systemd timer `aifactory-pm.timer` calls `console/bin/pm-tic
 systemctl status aifactory-pm.timer                    # is the five-minute turn running
 journalctl -u aifactory-pm                             # the JSON for each turn (what was decided and why)
 console/bin/pm-tick --pj <PJ> --dry                    # take a turn now (--dry decides without writing)
-tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # the decision log (the same one the Manager screen shows)
+tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # the decision log (the same one the AI Factory Manager screen shows)
 ```
 
 - A turn does not wait. A run finishing is seen by the next turn (so reactions lag by up to one interval)
