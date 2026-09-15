@@ -99,9 +99,12 @@ def main():
     try: paused = resumable(a.pj)
     except (core.ApiError, ValueError, KeyError, TypeError) as e:
         # kb が traceback を吐いたときは末尾の 1 行（何が起きたか）だけ残す。冒頭を出すと理由が切れて読めない
+        # ★rc は 0。この口は 5 分ごとの timer（aifactory-resume.timer / Type=oneshot・SuccessExitStatus 無指定）が
+        #   叩くので、rc 1 を返すと journal が 5 分ごとに赤で埋まり「本当の失敗」と見分けられなくなる。
+        #   console/bin/pm-tick が同じ理由で「今日は何もしない」を rc 0 に載せている（ADR-0074 決定 1 の運用）
         log("一時停止の一覧（kb resumable）を読めなかったので何も回さない: "
             + ((str(e).strip().splitlines() or [""])[-1].strip()[:300] or type(e).__name__))
-        return 1
+        return 0
     if a.resume_paused:
         # 解除時刻を過ぎたものだけ（古い順）。回数超過は kb が blocked にしているはずだが、ここでも回さない
         queue = [p for p in sorted(paused.values(), key=lambda p: p["id"]) if p["ready"] and not p["hits_exceeded"]]

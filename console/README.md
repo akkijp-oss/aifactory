@@ -148,10 +148,7 @@ GET  /api/pm[?pj=]                 AI Factory Manager（PM）の状態（core.pm
        runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は
        picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable /
        blocked_by_dependency（未完了の先行票を持つ票しか無い。ADR-0077）/
-       blocked_by_pause（解除時刻を待つ一時停止の票しか無い＝時刻が来れば timer が続きを回す。ADR-0043 / #581）/
-       blocked_by_key（鍵待ち・利用枠切れの回数超過の票しか無い＝人が鍵を登録するか枠を確かめるまで解けない。ADR-0081）
-     ★blocked_by_key のときだけ state を blocked（人の確認待ち）に上げる（状態の語は 4 つのまま）。
-       何を待っているかは proposal.facts.skipped_by_pause（paused / until / needed_keys / hits_exceeded）で読む
+       blocked_by_pause（解除前の一時停止の票しか無い。ADR-0043 / #581）
      counts は板の集計を読めたときだけ入る（読めなければ null。kb_failed には集計が読めた場合と読めなかった場合の
        両方があるので、counts の有無を board.readable の代わりに使わない。板を読めたかは board.readable /
        board.reason を見る）

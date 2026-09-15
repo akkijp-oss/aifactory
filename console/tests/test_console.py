@@ -1909,7 +1909,7 @@ class ApiTest(unittest.TestCase):
     # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
     PM_STATES = ("idle", "waiting", "landing", "blocked")
     PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                       "requeue_proposed", "blocked_by_dependency", "blocked_by_pause", "blocked_by_key")
+                       "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
 
     PM_ACTIONS = ("none", "run", "requeue")
 
@@ -2082,8 +2082,7 @@ class ApiTest(unittest.TestCase):
     # ADR-0074 決定 5 の理由コード。画面はこの語彙を日本語に直すだけで、app.js 側で語彙を作らない
     PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                        "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause",
-                       "blocked_by_key")
+                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
         """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
@@ -2166,7 +2165,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(sorted(core.PM_REASON_CODES), sorted(self.PM_REASON_CODES),
                          "core.PM_REASON_CODES とこのテストの語彙がずれている（足したなら両方に足す）")
         # 「次にやること」の理由のうち、判断ログにも載る語は両方のタプルに要る（片方だけだと提案が語を受けられない）
-        for w in ("blocked_by_dependency", "blocked_by_pause", "blocked_by_key"):
+        for w in ("blocked_by_dependency", "blocked_by_pause"):
             self.assertIn(w, core.PM_NEXT_REASONS, f"PM_NEXT_REASONS に {w} が無い")
             self.assertIn(w, core.PM_REASON_CODES, f"PM_REASON_CODES に {w} が無い")
 

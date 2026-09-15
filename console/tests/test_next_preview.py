@@ -215,39 +215,42 @@ class NextPreviewTest(unittest.TestCase):
         self.assertEqual(p["skipped_by_pause"]["971"]["needed_keys"], ["fable"])
 
     # ---------- C: 人が動くまで解けない一時停止（#582）
-    def assertCallsAHuman(self, tid, paused_kind):
-        """★本票の完了条件: 人が動くまで解けない一時停止しか無い板で、PM が「人がやることは無い」と言わない"""
+    def assertNamesWhatItWaitsFor(self, tid, paused_kind):
+        """★本票の完了条件（管理役の裁定版）: 人が動くまで解けない一時停止でも state は idle・語彙も増やさず、
+        「どの票が・何を待っているか」が判断の材料（facts）に必ず出ること。
+
+        ★state を blocked へ格上げしないのは ja/en の guides/console.md に公開済みの契約（#581）。
+          「人がやることは無い」と言わせないのは、状態の語ではなく facts と画面の役目にする（#582）。"""
         pm = self.pm()
-        self.assertNotEqual(pm["state"], "idle", "鍵待ちしか無い板で PM が「人がやることは無い」と言っている")
-        self.assertEqual(pm["state"], "blocked")
-        self.assertEqual(pm["next"]["reason"], "blocked_by_key")
+        self.assertEqual(pm["state"], "idle", "板は読めている（一時停止で選べないことを人間待ちに格上げしない）")
+        self.assertEqual(pm["next"]["reason"], "blocked_by_pause")
         self.assertFalse(pm["next"]["launchable"])
         p = pm["proposal"]
-        self.assertEqual(p["reason_code"], "blocked_by_key")
+        self.assertEqual(p["reason_code"], "blocked_by_pause")
+        # ★ここが芯: 何を待っているかが読める（quota と nokey / hits_exceeded を facts で見分けられる）
         self.assertEqual(p["facts"]["skipped_by_pause"][str(tid)]["paused"], paused_kind)
-        # 下見（GET /api/next）も同じ語で言う（判定は core の 1 か所）
         pre = self.preview()
-        self.assertEqual(pre["reason"], "blocked_by_key")
+        self.assertEqual(pre["reason"], "blocked_by_pause")
         self.assertIsNone(pre["next"])
         picked, out = self.dispatched()
         self.assertIsNone(picked, f"回らない票を配車が回している\n{out}")
         return pm
 
-    def test_pm_calls_a_human_when_the_only_todo_waits_for_a_key(self):
-        """鍵待ち（nokey）は鍵が登録されるまで timer も拾わない。PM は idle のままにせず人を呼ぶ"""
+    def test_pm_names_the_key_the_only_todo_waits_for(self):
+        """鍵待ち（nokey）は鍵が登録されるまで timer も拾わない。state は idle のまま、待ち先を facts で言う"""
         self.new(971)
         self.paused(971, failure="nokey")
 
-        pm = self.assertCallsAHuman(971, "nokey")
+        pm = self.assertNamesWhatItWaitsFor(971, "nokey")
         facts = {f["fact"]: f["value"] for f in pm["next"]["why"]}
         self.assertEqual(facts["skipped_by_pause"]["971"]["needed_keys"], ["fable"], "何を待っているのかが判断の材料に無い")
 
-    def test_pm_calls_a_human_when_the_only_todo_hit_the_limit_too_often(self):
-        """回数超過（hits_exceeded）も人が枠を確かめるまで解けない。鍵待ちと同じ扱いにする"""
+    def test_pm_names_the_quota_the_only_todo_exceeded(self):
+        """回数超過（hits_exceeded）も人が枠を確かめるまで解けない。鍵待ちと同じく facts に出す"""
         self.new(961)
         self.paused(961, retry_after="past", hits=9, sync_env={"AIFACTORY_RESUME_MAX_HITS": "99"})
 
-        pm = self.assertCallsAHuman(961, "quota")
+        pm = self.assertNamesWhatItWaitsFor(961, "quota")
         self.assertTrue(pm["proposal"]["facts"]["skipped_by_pause"]["961"]["hits_exceeded"])
 
     def test_a_quota_pause_alone_still_leaves_the_pm_idle(self):
@@ -261,8 +264,8 @@ class NextPreviewTest(unittest.TestCase):
         self.assertEqual(pm["proposal"]["reason_code"], "blocked_by_pause")
         self.assertEqual(self.preview()["reason"], "blocked_by_pause")
 
-    def test_a_key_wait_next_to_a_runnable_ticket_is_not_a_block(self):
-        """回せる票が 1 件でもあれば、鍵待ちが混じっていても今までどおり次を選ぶ（人を呼ぶのは尽きたときだけ）"""
+    def test_a_key_wait_next_to_a_runnable_ticket_does_not_change_the_pick(self):
+        """回せる票が 1 件でもあれば、鍵待ちが混じっていても今までどおり次を選ぶ"""
         self.new(971); self.new(972)
         self.paused(971, failure="nokey")
 

@@ -231,10 +231,16 @@ class KbResumePausedTest(unittest.TestCase):
         return env
 
     def test_dispatch_resume_paused_does_not_treat_an_unreadable_list_as_zero(self):
-        """★本票の完了条件: 一覧を読めなかったときに「一時停止 0 件」と同じ挙動にしない（黙って何もせず rc 0 で終わらない）"""
+        """★本票の完了条件: 一覧を読めなかったときに「一時停止 0 件」と同じ挙動にしない。
+
+        ★終了コードは 0 のまま検査する（1 にしない）。この口は 5 分ごとの timer
+          （aifactory-resume.timer / Type=oneshot・SuccessExitStatus 無指定）が叩くので、rc 1 だと
+          journal が 5 分ごとに赤で埋まり「本当の失敗」と見分けられなくなる。console/bin/pm-tick が
+          同じ理由で「今日は何もしない」を rc 0 に載せている（ADR-0074 決定 1 の運用）。
+          区別は rc ではなく「何も回していないこと」と「理由をログに出したこと」で示す。"""
         env = self.unreadable_env()
         r = self.dispatch("--resume-paused", env=env)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, "timer が叩く口なので rc は 0（理由はログで言う）\n" + r.stdout + r.stderr)
         self.assertIn("読めなかった", r.stdout)
         self.assertNotIn("今回せるものは無い", r.stdout, "読めなかったことを一時停止 0 件と同じ文で言っている")
         self.assertFalse(self.calls.exists(), "確かめられていないのに runner を呼んでいる")
@@ -245,7 +251,7 @@ class KbResumePausedTest(unittest.TestCase):
         """通常の配車も同じ。一時停止中か確かめられないまま、止めてある票を初めから回さない"""
         env = self.unreadable_env()
         r = self.dispatch("--once", env=env)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, "rc ではなく「回していないこと」で示す（上の test の理由と同じ）\n" + r.stdout + r.stderr)
         self.assertIn("読めなかった", r.stdout)
         self.assertFalse(self.calls.exists(), "一時停止中の票を、確かめないまま初めから回している")
         self.assertEqual(self.show()["status"], "todo")

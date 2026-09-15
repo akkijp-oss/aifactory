@@ -92,4 +92,3 @@
 - [0078: 配車（dispatch）も先行条件を見る。判定は core の 1 か所を通し、飛ばした理由を残す](0078-dispatch-reads-prerequisites-through-core.md)
 - [0079: 配車の下見は「実際に回る票」を見せる。選び直しは core の 1 か所（`pm_pick_next`）を通す](0079-preview-picks-the-same-ticket-as-dispatch.md)
 - [0080: 実行環境の「できないこと」は PJ 定義が宣言し、完了条件との照合は警告だけにする。判定は 1 か所、未宣言は照合しない](0080-environment-capabilities-are-declared-and-checked-as-a-warning.md)
-- [0081: 機械が片付けられない一時停止（鍵待ち / 回数超過）は `blocked_by_key` と呼んで人を呼ぶ。配車は一時停止の一覧を読めなければ止まる](0081-a-pause-a-machine-cannot-clear-calls-a-human.md)
