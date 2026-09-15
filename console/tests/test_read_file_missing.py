@@ -1,4 +1,5 @@
-"""read_file / ticket_attach_path が「見つかりません」と言うとき、その場所に実在する名前を併せて返すこと（#550）。
+"""read_file が「見つかりません」と言うとき、その場所に実在する名前を併せて返すこと（#550）と、
+ticket_attach_path（ホーム / /tmp）はその名前を載せないこと（#571）。
 
 一時ディレクトリだけで自立している（VM も claude も kb も使わない）。
 
@@ -97,16 +98,34 @@ class ReadFileMissingTest(unittest.TestCase):
         # 添付側の根（/tmp・ホーム）でも同じ。/ 直下の名前が出ない
         self.assertNotIn("にあるのは", core.not_found_message(pathlib.Path("/tmp"), root=pathlib.Path("/tmp")))
 
-    def test_attach_path_missing_lists_siblings(self):
-        """ticket_attach_path（ApiError を投げる口）も同じ導出を使う。404 のまま文言だけが厚くなる"""
-        with patch.object(core, "ATTACH_PATH_ROOTS", [self.tmp]):
-            with self.assertRaises(core.ApiError) as cm:
-                core.ticket_attach_path(1, str(self.run / "gamen.png"))
-        self.assertEqual(cm.exception.code, 404)
-        msg = str(cm.exception)
-        self.assertTrue(msg.startswith("ファイルが見つかりません: "), msg)
-        self.assertIn("agent-plan-0.log", msg)
-        self.assertNotIn(SECRET, msg)
+    def test_attach_path_missing_does_not_list_home(self):
+        """ticket_attach_path（ApiError を投げる口）は 404 の文言だけを返し、ホーム直下 / /tmp 直下の実在名を載せない（#571）。
+
+           名前だけでも運用の内情が読める（`routes.env.pre-deploy-20260911.patch` は配備前バックアップの存在と日付を示す）。
+           列挙を戻す（`listing=False` を外す）と、このテストが名指しで落ちる。"""
+        td = tempfile.TemporaryDirectory(prefix="aifactory-home-"); self.addCleanup(td.cleanup)
+        home = pathlib.Path(td.name).resolve()                    # ctl のホーム直下を模す
+        (home / "routes.env.pre-deploy-20260911.patch").write_text(SECRET + "\n", encoding="utf-8")
+        (home / "workspace.old").mkdir()
+        (home / "aifactory").mkdir()
+        (home / ".config").mkdir()
+        (home / "aifactory" / "README.md").write_text("# aifactory\n", encoding="utf-8")
+        leaks = ("にあるのは", "routes.env.pre-deploy-20260911.patch", "workspace.old",
+                 "aifactory", "README.md", SECRET)
+        with patch.object(core, "ATTACH_PATH_ROOTS", [home]):
+            for path in (home / "gamen.png",                      # 根の直下
+                         home / "aifactory" / "nai.png",          # 根の下のサブディレクトリ
+                         home):                                   # 根そのもの
+                with self.subTest(path=str(path)):
+                    with self.assertRaises(core.ApiError) as cm:
+                        core.ticket_attach_path(1, str(path))
+                    self.assertEqual(cm.exception.code, 404)
+                    msg = str(cm.exception)
+                    self.assertTrue(msg.startswith("ファイルが見つかりません: "), msg)
+                    self.assertIn(str(path), msg)                 # 何が無かったのかは名指しする
+                    for leak in leaks:
+                        if leak in str(path): continue            # 要求パスそのものに含まれる語は除く
+                        self.assertNotIn(leak, msg, f"{leak} が漏れている: {msg}")
 
 
 if __name__ == "__main__":

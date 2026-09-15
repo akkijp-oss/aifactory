@@ -660,14 +660,16 @@ def rel(p):
 NOT_FOUND_LIST_MAX = 40   # 「無い」と言うときに併せて返す実在名の上限（*.jsonl が何百と並ぶ run でも応答が肥大しないように）
 
 
-def not_found_message(p, root=None):
+def not_found_message(p, root=None, listing=True):
     """「無い」と言うときは、その場所に「在る」ものを一緒に言う（#537 の「『取得できていない』を『0 件』と同じ値にしない」と同じ精神）。
        呼ぶ側（MCP 越しの管理役 AI）が名前を推測して叩き直さずに済むように、404 の文言そのものに実在する名前を載せる。
 
        p から親へ辿って最初に実在するディレクトリ a を見つけ、その直下の名前だけを並べる（中身・サイズ・mtime は載せない。
        再帰もしない）。root を渡すとそこで遡るのを止める（許可された根の外は列挙しない）。
        a が p の親なら「ファイルが見つかりません」、途中のディレクトリが無いなら（run 自体が無い等）「ディレクトリが見つかりません」。
-       判定はここ 1 か所で、read_file（タプルで返す口）と ticket_attach_path（ApiError を投げる口）の両方から呼ぶ（ADR-0015）"""
+       判定はここ 1 か所で、read_file（タプルで返す口）と ticket_attach_path（ApiError を投げる口）の両方から呼ぶ（ADR-0015）。
+       listing=False なら文言（head）だけを返して実在名を並べない。ホーム / /tmp を根とする ticket_attach_path が使う——
+       工場の成果物置き場と違って、そこは人の持ち物で、名前だけでも運用の内情が読めるものが平置きされている（#571）"""
     p = pathlib.Path(p)
     limit = pathlib.Path(root).resolve() if root is not None else None
     a, miss = p.parent, None
@@ -677,6 +679,7 @@ def not_found_message(p, root=None):
     if miss is None: head = f"ファイルが見つかりません: {rel(p)}"
     elif miss.exists(): head = f"ディレクトリではありません: {rel(miss)}"
     else: head = f"ディレクトリが見つかりません: {rel(miss)}"
+    if not listing: return head                        # 呼ぶ側が列挙を要求しない（#571）
     # 列挙してよいのは許可された根の中だけ。p が根そのもの（実在するディレクトリ）だと上の while に入らず
     # 遡りの検査が 1 度も走らないので、ここでも見る（そうしないと根の親＝workspace 直下や / の名前が出る）
     if a is None or (limit is not None and not a.is_relative_to(limit)): return head
@@ -1466,7 +1469,9 @@ def ticket_attach_path(tid, path):
     root = next((r.resolve() for r in ATTACH_PATH_ROOTS if r.exists() and p.is_relative_to(r.resolve())), None)
     if root is None:
         raise ApiError("このパスは添付できません（添付できるのはホームディレクトリか /tmp の下だけです）")
-    if not p.is_file(): raise ApiError(not_found_message(p, root), 404)   # read_file と同じ形で、その場所に在る名前を併せて返す（#550）
+    # 「無い」と言うだけで、ホーム直下 / /tmp 直下の実在名は載せない。名前だけで運用の内情
+    # （配備前バックアップの存在と日付）が読める実例があったため（#571。read_file 側は #550 のまま列挙する）
+    if not p.is_file(): raise ApiError(not_found_message(p, root, listing=False), 404)
     return ticket_attach(tid, [(p.name, p.read_bytes())])
 
 
