@@ -165,6 +165,20 @@ sandbox ssh 999 'curl -sI https://github.com | head -1; ping -c1 -W1 <LAN 内の
 sandbox release 999
 ```
 
+## 依存ファイルが PR に混ざったとき
+
+工程の終わりに残った**追跡済みの**未コミット変更は、runner が `sandbox: uncommitted changes by agent` というコミットで拾います（時間上限や利用枠で切られたときに書きかけを次の実行へ渡すための救済です）。ここに `pnpm-lock.yaml` や `package.json` が混ざると、誰も意図していない依存の変更が PR に載ります（チケット 572: `@types/node` の downgrade で CI のテストが 18 件赤になりました）。
+
+この 2 つは**既定で掃き寄せの対象から外し**、作業ツリーごと HEAD の内容へ戻します。PJ ごとに変えるときは `project.yml` の `sweep_exclude`（[project.yml](../reference/project-yml.md#sweep_exclude) 参照）。**意図した依存の変更は、実装役が自分で `git add` してコミットします**（自分で `git add` したファイルは除外されません）。
+
+拾ったかどうかは、差分を開かなくても次の 3 か所で分かります。
+
+- 掃き寄せコミットの本文（拾ったファイルと、除外して戻したファイルの一覧）
+- コンソールと MCP の `run_show` の `outcome.swept`
+- runner の標準出力（`[run] 掃き寄せ: …`）
+
+run の開始時（checkout と `prepare` の直後）にも作業ツリーを確かめ、汚れていれば HEAD の内容へ戻します（`outcome.dirty_at_start`）。テンプレートや前の実行が残した変更が、次の run の基準になるのを防ぐためです。run は止めません。それでも毎回汚れる場合は、**VM のテンプレート側**（`clean` スナップショット）か `prepare.sh` を疑ってください。
+
 ## 障害と対処
 
 | 症状 | 見るところ | 対処 |
