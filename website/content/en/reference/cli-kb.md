@@ -88,6 +88,8 @@ kb capcheck --json               # hits / scanned / skipped plus the matching li
 
 Prints a line whenever a ticket's `## 完了条件` (acceptance criteria) asks for a capability that `project.yml` declared `false` (ADR-0080). It changes neither the database nor the ticket bodies. Tickets whose project has no declaration are not counted in `scanned`, so "checked, found nothing" is never confused with "not checked". Matching free text produces both false positives and misses; decide whether to extend the vocabulary only after looking at this output.
 
+Reading the declaration needs pyyaml. Where it is missing, or `project.yml` cannot be read, the check is skipped silently (no warnings) and filing behaves exactly as before.
+
 ### Advancing state
 
 ```bash
