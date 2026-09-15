@@ -2,12 +2,14 @@
 
   python3 -m unittest discover -s console/tests -v
 """
-import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
+import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MCP = REPO / "console" / "bin" / "mcp"
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from test_console import seed_workspace, PJ
+from test_console import seed_workspace, free_port, PJ
+
+CONSOLE = REPO / "console" / "bin" / "console"
 
 
 EXAMPLES = REPO / "examples" / "projects"
@@ -286,12 +288,41 @@ class McpTest(unittest.TestCase):
             self.assertIn("annotations", t, f"{n} に annotations が無い")
             self.assertIn("readOnlyHint", t["annotations"], n)
             self.assertTrue(t["annotations"].get("title"), n)
-        for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file", "keys_list"):
+        for n in ("ticket_show", "overview", "job_show", "job_wait", "sandbox_status", "run_show", "read_file", "keys_list", "pm_status"):
             self.assertTrue(tools[n]["annotations"]["readOnlyHint"], f"{n} は読み取りのはず")
         for n in ("ticket_run", "ticket_new", "ticket_action", "run_action", "intake", "dispatch", "sandbox_ls", "sandbox_release", "job_stop"):
             self.assertFalse(tools[n]["annotations"]["readOnlyHint"], f"{n} は状態を変える")
         for n in ("sandbox_release", "job_stop"):
             self.assertTrue(tools[n]["annotations"].get("destructiveHint"), f"{n} は取り返しがつかない")
+
+    def test_14c_pm_status_is_the_same_through_http_and_mcp(self):
+        """PM の状態は MCP と Web で挙動が分かれないこと（#535 / ADR-0074 決定 4）。
+
+        どちらも core.pm_status() を呼ぶだけなので、同じ workspace なら同じ内容が返る（時刻の now を除く）。
+        読み取りのみで、何も起動しない（ジョブは増えない）。"""
+        tools = {t["name"]: t for t in self.c.call("tools/list")["result"]["tools"]}
+        self.assertIn("pm_status", tools)
+        self.assertEqual(list(tools["pm_status"]["inputSchema"]["properties"]), ["pj"])
+        self.assertIn("読み取りのみ", tools["pm_status"]["description"])
+        before = len(self.c.tool("job_list")[1]["jobs"])
+        port = free_port()
+        proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(port)], env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (proc.terminate(), proc.wait(timeout=10)))
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(50):
+            try:
+                with urllib.request.urlopen(base + "/api/overview", timeout=10): break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+        with urllib.request.urlopen(f"{base}/api/pm?pj={PJ}", timeout=10) as r: http = json.loads(r.read())
+        err, mcp = self.c.tool("pm_status", pj=PJ)
+        self.assertFalse(err, mcp)
+        for d in (http, mcp): d.pop("now")
+        self.assertEqual(http, mcp)
+        self.assertIn(mcp["state"], ("idle", "waiting", "landing", "blocked"))
+        self.assertIsInstance(mcp["next"], dict)                       # next は裸の null にしない
+        self.assertEqual(len(self.c.tool("job_list")[1]["jobs"]), before)   # 何も起動していない
 
     # ---- sandbox_status（336 の 2・3 番目）。実機も sandbox/bin/sandbox も使わず、PATH に偽の `sandbox` を置いた別クライアントで確かめる
     LS_TABLE = ("TASK     VM             VMID   IP           STATUS    SINCE\n"
