@@ -2002,6 +2002,77 @@ class ApiTest(unittest.TestCase):
         self.assertFalse(d["next"]["launchable"])
         self.assertIn(d["state"], self.PM_STATES)
 
+    # ---- PM の画面: #/pm（#536 / ADR-0074 決定 4）。JS を動かす基盤が無いので、test_board_* と同じくソースを検査する
+    # ADR-0074 決定 5 の理由コード。画面はこの語彙を日本語に直すだけで、app.js 側で語彙を作らない
+    PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
+                       "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
+                       "proposed", "approved", "skipped_by_steer", "paused")
+
+    def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
+        """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
+        html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span><b id="n-pm"></b></a>', html,
+                      "ナビの項目が既存と同じ形になっていない")
+        self.assertLess(html.index('data-nav="board"'), html.index('data-nav="pm"'))
+        self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "管理役はボードの直後（頻度順）")
+        self.assertIn("p: 'pm'", app, "g p の割り当てが無い（? の一覧にも載らない）")
+        self.assertIn("seg[0] === 'pm') await viewPm()", app, "#/pm のルートが無い")
+        body = app[app.index("async function viewPm"):app.index("function renderPm")]
+        self.assertIn("'pm' + (pj ?", body, "/api/pm を pj を明示して呼んでいない（裁定 3）")
+        self.assertIn("schedule(viewPm, 5000)", body, "既存と同じ 5 秒ポーリングに乗っていない")
+        for w in ("EventSource", "WebSocket", "text/event-stream"):
+            self.assertNotIn(w, app, f"1 枚の画面のために通信方式（{w}）を増やしている")
+        self.assertNotIn("refreshNav", body, "管理役の画面がナビの既存動作に手を入れている")
+
+    def test_pm_view_keeps_unknown_apart_from_zero_and_never_contradicts_itself(self):
+        """「取得できていない」を「0 件」「順調」と同じ見え方にしない。同じ画面の中で矛盾もさせない"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        r = app[app.index("function renderPm"):app.index("/* 配車のダイアログ")]
+        # 描くのは loading / failed / ok の 1 つだけ（「取得できませんでした」の下に「読み込み中です」が並ばない）
+        for phase in ("loading", "failed"):
+            self.assertIn(f"if (s.phase === '{phase}') return render", r, f"{phase} が他の分岐と同居しうる書き方になっている")
+        self.assertEqual(r.count("render("), 3, "render は 3 分岐でちょうど 1 回ずつ（どれか 1 つだけを描く）")
+        # 板を読めていないときは 4 状態の語を出さない（裁定 1）。人間待ちの件数は状態の札に混ぜない（裁定 2）
+        self.assertIn("b.readable ?", r, "board.readable を state より先に見ていない")
+        self.assertIn("T.pm.unknownState", r, "状態を取得できていないときの文言が無い")
+        badge = r[r.index("const badge"):r.index("const boardNote")]
+        for w in ("blocked_n", "b.blocked"):
+            self.assertNotIn(w, badge, "人間待ちの件数を状態の札に混ぜている（板の要約側に出す）")
+        self.assertIn("b.counts", r)
+        self.assertIn("T.pm.countsUnknown", r, "counts が null のときに件数を出さない分岐が無い")
+        T = load_strings()
+        # 「回すチケットがありません」と「板を読めていません」を同じ文言にしない（本票の完了条件）
+        self.assertNotEqual(T["pm"]["next"]["no_todo"], T["pm"]["next"]["board_unreadable"])
+        self.assertEqual(sorted(set(self.PM_NEXT_REASONS) - set(T["pm"]["next"])), [], "next.reason の語彙に文言の無いものがある")
+        self.assertEqual(sorted(set(self.PM_STATES) - set(T["pm"]["state"])), [], "state の語彙に文言の無いものがある")
+        self.assertEqual(sorted(set(self.PM_REASON_CODES) - set(T["pm"]["reason"])), [], "判断ログの理由コードに文言の無いものがある")
+        self.assertIn("other", T["pm"]["reason"], "この画面より新しい理由コードを受ける文言が無い")
+
+    def test_pm_view_places_the_pending_controls_without_silently_disabling_them(self):
+        """まだつながっていない操作は、黙って disabled にしない（Tab で届かず、理由も言えない）"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        r = app[app.index("function renderPm"):app.index("/* 配車のダイアログ")]
+        soon = r[r.index("const soon ="):r.index("const ops =")]
+        self.assertNotRegex(soon, r"(?<!aria-)disabled", "押せない理由を言わずに disabled にしている")
+        self.assertIn('data-act="pm-soon"', soon, "押したときに理由を返す口が無い")
+        self.assertIn("T.help.pmOps", r, "つながっていない理由が画面に常時出ていない")
+        self.assertIn("'pm-soon': () => toast(", app, "押しても何も言わないボタンになっている")
+        self.assertIn("'pm-pj': el => { localStorage.setItem('pj'", app, "既存の PJ 絞り込み（localStorage）に乗っていない")
+
+    def test_pm_styles_are_additions_only(self):
+        """style.css は追加のみ。既存クラスの定義を書き換えると他の 9 画面に波及する"""
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        pm = css[css.index("/* 管理役（#/pm"):]
+        for line in pm.splitlines():
+            sel = line.split("{")[0].strip()
+            if "{" not in line or not sel or sel.startswith(("/*", "*")): continue
+            self.assertIn("pm-", sel, f"pm- 以外の定義を管理役の節で足している: {sel}")
+        self.assertIn(".st.pm-unknown", pm, "「まだ分からない」の札の定義が無い")
+        self.assertNotIn("var(--blocked)", pm[pm.index(".st.pm-unknown"):pm.index(".st.pm-s-idle")],
+                         "「まだ分からない」を危険色で出している（初期導入直後の console は正常にこの状態になる）")
+        self.assertIn("table.pm-log", pm, "判断の記録の表の定義が無い")
+
     def test_pm_decision_is_not_copied_into_the_http_layer(self):
         """判定は core.py に 1 つだけ（ADR-0015）。bin/console と bin/mcp は core の関数を呼ぶ 1 行しか持たない"""
         console_src = (REPO / "console" / "bin" / "console").read_text(encoding="utf-8")

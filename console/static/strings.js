@@ -2,13 +2,15 @@
    本体は厳密な JSON（tests/test_strings.py が読み、表記のルールと app.js / index.html との鍵の対応を検査する）。
    - btn.* とダイアログの ok: ユーザーの行為を動詞で（「実行する」）。「OK」「はい」は使わない。取り消しは「キャンセル」
    - msg / err / empty / help / sub / next / banner とダイアログの本文: 「ですます」の文。末尾は「。」
-   - 用語は用語集どおり（チケット / PJ / 実行記録 / 工程 / ジョブ / 貸出）。「タスク」「プロジェクト」は使わない */
+   - 用語は用語集どおり（チケット / PJ / 実行記録 / 工程 / ジョブ / 貸出）。「タスク」「プロジェクト」は使わない
+   - pm.*（管理役の画面）: 理由の語彙（next.reason / reason_code）は記録の側が正本で、画面はそれを日本語に直すだけ。
+     「読めていない」と「0 件」を同じ文言にしない（board_unreadable と no_todo は必ず別の文にする） */
 const T = {
   "status": { "todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了" },
   "jobState": { "running": "実行中", "done": "終了", "failed": "失敗", "stopped": "止めた", "lost": "記録なし", "ended": "終了（終了コード不明）" },
   "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）", "abandoned": "中断" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
-  "nav": { "board": "ボード", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "stats": "統計", "keys": "鍵", "logs": "ログ", "config": "設定",
+  "nav": { "board": "ボード", "pm": "管理役", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "stats": "統計", "keys": "鍵", "logs": "ログ", "config": "設定",
            "badgeScope": "この数字はすべての PJ の件数です。ボードで PJ を選んでも変わりません。", "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "power": { "running": "起動中", "stopped": "停止中", "idle": "節電で停止中", "candidate": "停止候補" },
@@ -23,6 +25,7 @@ const T = {
     "refreshVms": "一覧を取り直す", "release": "返却する", "stop": "止める",
     "keyAdd": "この鍵を登録する", "keyRemove": "削除する", "keyToken": "トークンを入れ替える",
     "modelPreview": "変更を確かめる", "modelInherit": "継承へ戻す", "blockPreview": "この定義の変更を確かめる",
+    "pmMode": "モードを切り替える", "pmPause": "一時停止する", "pmNow": "今すぐ回す",
     "start": "開始にする", "review": "レビュー待ちにする", "done": "完了にする", "reopen": "未着手に戻す", "redo": "未着手に戻す（やり直す）", "block": "人間待ちにする",
     "openReason": "理由を読む", "openReport": "報告を読む", "openLatestRun": "最新の実行記録を開く",
     "openTickets": "一覧で探す", "openTicket": "チケットを開く", "openRun": "実行記録を開く", "openRuns": "実行記録の一覧を見る", "openSandbox": "sandbox を見る", "openBoard": "ボードへ戻る", "openIntake": "起票へ戻る", "openJob": "ジョブを開く", "openDefinition": "定義の原文を読む"
@@ -41,7 +44,7 @@ const T = {
 
   "th": {
     "run": "実行記録", "ticket": "チケット", "workflow": "workflow", "started": "開始", "elapsed": "所要", "result": "結果", "step": "工程",
-    "at": "日時", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
+    "at": "日時", "pmTarget": "対象", "pmAction": "決めたこと", "field": "項目", "before": "前", "after": "後", "state": "状態", "what": "内容", "rc": "終了コード",
     "process": "処理", "reason": "理由", "title": "題名", "updated": "更新", "lentSince": "貸出から", "token": "Claude の鍵", "lent": "貸出", "command": "コマンド", "pidRc": "プロセス ID / 終了コード", "name": "名前", "flow": "流れ",
     "lentTo": "貸出先", "power": "稼働状態",
     "poolDefined": "定義", "poolActual": "実体", "free": "空き",
@@ -86,6 +89,7 @@ const T = {
   "sub": {
     "stats": "agent の工程ごとに、ターン・トークン・thinking・時間・費用換算を実行記録から集めます。まず、どこで消費しているかを知るための画面です。",
     "board": "未着手 → 実行中 → レビュー待ち → 完了。人間待ちは横に置きます。",
+    "pm": "管理役のいまの状態と、次に回すものと、その理由を並べます。この画面は読むだけで、何も起こしません。",
     "tickets": "番号・題名・PJ・状態で探せます。完了したチケットもすべてここに並びます。",
     "runs": "runner がチケットを 1 回回した記録です。工程ごとのログと成果物をここから読めます。記録は runs/ に残ります。",
     "sandbox": "貸出は誰がその VM を使っているか、稼働は VM の電源が入っているかです。稼働の一覧は Proxmox に ssh して取ります（数秒）。",
@@ -110,6 +114,59 @@ const T = {
     "repoOnlyHere": "この制御系にだけあるコミットが {n} 件あります（origin/{branch} には入っていません）。",
     "repoFetchError": "origin の取り込みができませんでした（{what}）。件数は最後に取り込めた時点のものです。"
   },
+  "pm": {
+    "loading": "状態を取得しています。",
+    "unknownState": "状態を取得できていません",
+    "stale": "最後に読めたのは {t} です。",
+    "h": { "now": "いま", "next": "次に回すもの", "log": "判断の記録", "board": "板の要約", "ops": "操作" },
+    "state": {
+      "idle": "回すチケットを待っています",
+      "waiting": "run が動いています",
+      "landing": "着地を見守っています",
+      "blocked": "人の確認を待っています"
+    },
+    "boardReason": {
+      "no_db": "まだ記録がありません。チケットを起票すると板ができます。",
+      "kb_failed": "板を読めませんでした（{e}）。",
+      "other": "板を読めていません。"
+    },
+    "next": {
+      "picked_next": "次はこのチケットです。",
+      "no_todo": "回すチケットがありません。",
+      "run_running": "run が動いているので、終わるまで次は起こしません。",
+      "landing_observed": "着地を見守っているので、次は起こしません。",
+      "needs_human": "人が確かめるまで、次は起こしません。",
+      "board_unreadable": "板を読めていないので、次を決められません。",
+      "other": "次を決めた理由をこの画面ではまだ読めません。"
+    },
+    "reason": {
+      "no_todo": "回すチケットがなかったため",
+      "picked_next": "次のチケットを選べたため",
+      "run_running": "run が動いていたため",
+      "landing_observed": "着地を見守っていたため",
+      "merged_observed": "PR が取り込まれたのを見たため",
+      "requeued": "同じチケットをもう一度回したため",
+      "same_gate_fails": "同じゲートが続けて赤かったため",
+      "review_retry_limit": "レビューからのやり直しが上限に達したため",
+      "release_path": "本番に出る操作にあたるため",
+      "risky_diff": "差分に取り返しのつきにくい変更があったため",
+      "forbidden_hint": "PJ が禁じている変更にあたるおそれがあるため",
+      "proposed": "自動では進めず、人に提案するため",
+      "approved": "人が承認したため",
+      "skipped_by_steer": "人がこのチケットを飛ばすよう指示したため",
+      "paused": "人が一時停止を指示したため",
+      "other": "この画面より新しい理由が記録されています"
+    },
+    "action": { "requeue": "もう一度回す" },
+    "actionRaw": "記録にあった操作の名前をそのまま出しています。",
+    "reasonNone": "理由が記録されていません。",
+    "countsUnknown": "件数を読めていません。",
+    "blockedHead": "人の確認を待っているチケット: {n} 件",
+    "blockedPj": "この一覧は PJ {pj} の分です。",
+    "blockedUnknown": "人の確認を待っているチケットの件数を読めていません。",
+    "blockedMore": "ほか {n} 件はボードの「人間待ち」で見られます。"
+  },
+
   "tickets": { "count": "{n} 件（全 {m} 件）", "link": "チケット {id}: {title}" },
   "logs": {
     "count": "{n} 件（全 {m} 件）", "capped": "新しい {n} 件だけ表示しています。", "confidence": "確度 {v}",
@@ -254,7 +311,8 @@ const T = {
     "lsVms": "プールの VM が 1 台もありませんでした。ジョブの記録で出力を確かめてください。",
     "log": "空です。",
     "logs": "条件に合う記録はありません。チケット番号を短くするか、PJ と種類を「すべて」にしてください。",
-    "logFile": "まだありません。起票や配車をすると作られます。"
+    "logFile": "まだありません。起票や配車をすると作られます。",
+    "pmDecisions": "まだ判断の記録がありません。管理役が判断すると、新しい順にここへ並びます。"
   },
 
   "help": {
@@ -353,7 +411,11 @@ const T = {
     "attach": "1 ファイル 20 MiB・1 チケット合計 100 MiB までです。トークンや鍵は添付しないでください。",
     "attachNotDraft": "選んだファイルは下書きに残りません。画面を離れると選び直しになります。",
     "attachKeptOnSwitch": "選んだファイルは、方式を切り替えるだけなら残ります。",
-    "attachEmpty": "まだ添付はありません。"
+    "attachEmpty": "まだ添付はありません。",
+    "pmOps": "これらの操作はまだつながっていません。押しても何も起こりません。あとの更新で使えるようになります。",
+    "pmAllPj": "すべての PJ をまとめて見ています。どれか 1 つでも動いていれば「run が動いています」と出ます。PJ を選ぶと、その PJ だけで見直します。",
+    "pmCountsAll": "この件数はすべての PJ の合計です。左のナビの数字と同じで、上で PJ を選んでも変わりません。",
+    "pmReadOnly": "この画面は記録を読んで並べるだけです。開いても、更新しても、run は起きません。"
   },
 
   "msg": {
@@ -390,7 +452,8 @@ const T = {
     "needKeyName": "鍵の名前を入れてください。",
     "needKeyToken": "トークンを入れてください。claude setup-token で表示される文字列です。",
     "needKeyFlag": "「Fable に使う」と「Opus・Sonnet・Haiku に使う」の少なくとも片方にチェックを付けてください。",
-    "attachFailedAfterNew": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。"
+    "attachFailedAfterNew": "チケット {id} は起票できましたが、添付できませんでした。チケットの画面から添付し直せます。",
+    "pm": "管理役の状態を取得できませんでした（{e}）。しばらくして画面を読み直してください。"
   },
 
   "dialog": {

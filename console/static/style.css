@@ -315,3 +315,22 @@ ul.wflist .tag { margin: 0 2px; }
 ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
 @media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
+
+/* 管理役（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
+   「まだ分からない」は危険色を使わない——初期導入直後の console は正常にこの状態になるので、赤で「壊れている」と読ませない */
+.st.pm-unknown { background: var(--ground); color: var(--muted); border: 1px dashed var(--line); }
+.st.pm-s-idle { background: var(--todo-bg); color: var(--todo); }
+.st.pm-s-waiting { background: var(--in_progress-bg); color: var(--in_progress); }
+.st.pm-s-landing { background: var(--review-bg); color: var(--review); }
+.st.pm-s-blocked { background: var(--blocked-bg); color: var(--blocked); }
+.pm-note { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.pm-run { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.pm-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pm-list li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+/* 判断の記録。主役は理由なので、理由の列だけ本文の色で出し、他は控える。横送りは表の中（.scroll）に閉じる */
+table.pm-log { width: max-content; min-width: 100%; }
+table.pm-log td { color: var(--muted); }
+table.pm-log td.pm-why { color: var(--ink); }
+/* まだつながっていない操作。黙って disabled にはしない（Tab で届かず理由も言えない）。破線で「これからのもの」と示す */
+button.pm-soon { border-style: dashed; color: var(--muted); }
+button.pm-soon:hover { background: var(--ground); }

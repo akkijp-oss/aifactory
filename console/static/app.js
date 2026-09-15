@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
-const KEYS = { b: 'board', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', t: 'stats', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
+const KEYS = { b: 'board', p: 'pm', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', t: 'stats', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
@@ -277,6 +277,79 @@ async function viewBoard() {
     <div class="flow">${cell('todo')}${cell('in_progress')}${cell('review')}${cell('done')}<div class="gap"></div><div class="cell side s-blocked"><div class="k">${esc(T.status.blocked)}</div><div class="n">${n('blocked')}</div></div></div>
     <div class="board">${col('todo', by.todo)}${col('in_progress', by.in_progress)}${col('review', by.review)}${col('done', by.done, 15)}${col('blocked', by.blocked)}</div>`);
   schedule(viewBoard, 5000);
+}
+
+/* ---------- 管理役（#/pm。ADR-0074 決定 4）。読むだけの画面で、開いても更新しても run は起きない。
+   約束は「取得できていない」を「0 件」「順調」と同じ見え方にしないこと。そのために
+   (a) 描くのは loading / failed / ok の 1 つだけ（「取得できませんでした」の下に「読み込み中」が並ばない）、
+   (b) ok でも board.readable が偽なら状態の語（idle / waiting / …）を出さず「状態を取得できていません」にする
+       ——板を読めていないのは確かめた結論ではないので、4 状態のどれにも寄せない。
+   通信は 5 秒ごとの /api/pm 1 本だけ（ADR-0074 決定 4: この 1 枚のために別の通信方式を足さない）。PJ は既存の絞り込み（localStorage）に乗る */
+let pmPjs = null;                                  // PJ の選択肢。画面に入ったとき 1 度だけ取る（ポーリングでは取り直さない）
+let pmShown = { route: '', pj: null, seen: null };  // seen = 最後に読めた時刻（再取得に失敗したとき、古い数字を出さずに時刻だけ言う）
+
+async function viewPm() {
+  const pj = localStorage.getItem('pj') || '';
+  if (pmShown.route !== lastRoute || pmShown.pj !== pj) { pmShown = { route: lastRoute, pj, seen: null }; renderPm(pj, { phase: 'loading' }); }
+  if (!pmPjs) { try { pmPjs = (await api('tickets')).pjs; } catch (e) { pmPjs = null; } }   // 選択肢が取れなくても本体は出す
+  let d = null;
+  try { d = await api('pm' + (pj ? `?pj=${encodeURIComponent(pj)}` : '')); }
+  catch (e) { renderPm(pj, { phase: 'failed', err: e.message }); schedule(viewPm, 5000); return; }
+  pmShown.seen = d.now;
+  renderPm(pj, { phase: 'ok', d });
+  schedule(viewPm, 5000);
+}
+
+function renderPm(pj, s) {
+  const bar = `<label class="help">${esc(T.label.pj)} <select data-act="pm-pj"><option value="">${esc(T.label.allPj)}</option>${(pmPjs || []).map(p => `<option ${p === pj ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>`;
+  const top = head(esc(T.nav.pm), T.sub.pm, bar);
+  if (s.phase === 'loading') return render(top + `<div class="panel"><span class="dot pulse"></span>${esc(T.pm.loading)}</div>`);
+  if (s.phase === 'failed') return render(top + `<div class="err">${esc(tt(T.err.pm, { e: s.err }))}</div>`
+    + (pmShown.seen ? `<div class="help top">${esc(tt(T.pm.stale, { t: fmtT(pmShown.seen) }))}</div>` : ''));
+  const d = s.d, b = d.board || {}, nx = d.next || {}, r = d.run;
+  /* 状態の札。板を読めていないときは 4 状態の語を出さない（裁定 1）。色も危険側に振らず、地の色の「まだ分からない」にする */
+  const badge = b.readable ? `<span class="st pm-s-${esc(d.state)}">${esc(T.pm.state[d.state] || d.state)}</span>`
+                           : `<span class="st pm-unknown">${esc(T.pm.unknownState)}</span>`;
+  const boardNote = b.readable ? ''
+    : `<div class="pm-note">${esc(b.reason === 'kb_failed' ? tt(T.pm.boardReason.kb_failed, { e: b.error || '' }) : (T.pm.boardReason[b.reason] || T.pm.boardReason.other))}</div>`;
+  /* 根拠にした run。工程の言い換えはボード・チケット・実行記録と同じ stepNow / stepText に通す（判定を増やさない） */
+  const runLine = r
+    ? `<div class="pm-run"><span class="dot pulse"></span>${runLink(r.name)}${r.pj ? `<span class="tag pj">${esc(r.pj)}</span>` : ''}<span>${esc(stepText({ current: (r.progress || {}).current, next: r.next }) + tt(T.board.liveSince, { t: since(r.started) }))}</span></div>`
+    : `<div class="pm-note">${esc(T.board.noLive)}</div>`;
+  const now = `<div class="panel"><h2>${esc(T.pm.h.now)}</h2>${badge}${boardNote}${pj ? '' : `<div class="pm-note">${esc(T.help.pmAllPj)}</div>`}${runLine}</div>`;
+  const t = nx.ticket;
+  const next = `<div class="panel next"><h2>${esc(T.pm.h.next)}</h2><p>${esc(T.pm.next[nx.reason] || T.pm.next.other)}</p>`
+    + (t ? `<div class="line"><span class="id mono">${esc(String(t.id))}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span><a href="#/ticket/${esc(t.id)}">${esc(t.title)}</a></div>` : '')
+    + `</div>`;
+  /* 判断の記録。この画面の主役は「何をしたか」ではなく「なぜそうしたか」なので、理由の列だけ本文の色で出す。
+     理由と操作の語彙は記録の側が正本で、画面に無い語は作らずそのまま出す（title でその旨を言う） */
+  const act = x => T.pm.action[x.action] ? esc(T.pm.action[x.action]) : (x.action ? `<span class="mono" title="${esc(T.pm.actionRaw)}">${esc(x.action)}</span>` : '');
+  const why = x => esc(x.reason_code ? (T.pm.reason[x.reason_code] || T.pm.reason.other) : T.pm.reasonNone);
+  const target = x => [x.pj ? `<span class="tag pj">${esc(x.pj)}</span>` : '',
+                       x.ticket ? `<a class="mono" href="#/ticket/${esc(x.ticket)}">${esc(x.ticket)}</a>` : '',
+                       x.run ? runLink(x.run) : ''].filter(Boolean).join(' ');
+  const dec = d.decisions || [];
+  const log = `<div class="panel"><h2>${esc(T.pm.h.log)}</h2>` + (dec.length
+    ? `<div class="scroll"><table class="pm-log"><tr><th class="nw">${esc(T.th.at)}</th><th>${esc(T.th.pmTarget)}</th><th>${esc(T.th.pmAction)}</th><th>${esc(T.th.reason)}</th></tr>`
+      + dec.map(x => `<tr><td class="nw">${esc(fmtT(x.at))}</td><td>${target(x)}</td><td>${act(x)}</td><td class="pm-why">${why(x)}</td></tr>`).join('') + `</table></div>`
+    : `<div class="help">${esc(T.empty.pmDecisions)}</div>`) + `</div>`;
+  /* 板の要約。件数は常に全 PJ の集計なので、そう書く（人間待ちの一覧は選んだ PJ の分で、同じ画面で数が食い違って見える）。
+     counts が null なら件数を出さない——0 件と読ませない（裁定 2 のとおり人間待ちは状態の札に混ぜず、ここに出す） */
+  const c = b.counts;
+  const bn = b.blocked_n, bl = b.blocked || [];
+  const board = `<div class="panel"><h2>${esc(T.pm.h.board)}</h2>`
+    + (c ? `<div class="tiles">${STATUSES.map(x => `<div class="tile"><span class="help">${esc(T.status[x])}</span><b>${esc(String(c[x] != null ? c[x] : ''))}</b></div>`).join('')}</div><div class="help">${esc(T.help.pmCountsAll)}</div>`
+         : `<div class="pm-note">${esc(T.pm.countsUnknown)}</div>`)
+    + (bn == null ? `<div class="pm-note top">${esc(T.pm.blockedUnknown)}</div>`
+                  : `<div class="help top">${esc(tt(T.pm.blockedHead, { n: bn }))}${pj ? ` ${esc(tt(T.pm.blockedPj, { pj }))}` : ''}</div>`
+                    + (bl.length ? `<ul class="pm-list">${bl.map(x => `<li><a class="mono" href="#/ticket/${esc(x.id)}">${esc(x.id)}</a> <span class="tag pj">${esc(x.pj)}</span> ${esc(x.title)}</li>`).join('')}</ul>` : '')
+                    + (bn > bl.length ? `<div class="help">${esc(tt(T.pm.blockedMore, { n: bn - bl.length }))}</div>` : ''))
+    + `</div>`;
+  /* 操作の置き場。まだ口がつながっていないので、黙って disabled にはしない（Tab で届かず、理由も言えない）。
+     見た目で「これからのもの」と分かるようにし、理由をパネルに常時出し、押したときも同じ文を返す */
+  const soon = label => `<button type="button" class="pm-soon" data-act="pm-soon" aria-disabled="true">${esc(label)}</button>`;
+  const ops = `<div class="panel"><h2>${esc(T.pm.h.ops)}</h2><div class="actions">${soon(T.btn.pmMode)}${soon(T.btn.pmPause)}${soon(T.btn.pmNow)}</div><div class="help top">${esc(T.help.pmOps)}</div></div>`;
+  render(top + now + next + log + board + ops + `<div class="help">${esc(T.help.pmReadOnly)}</div>`);
 }
 
 /* 配車のダイアログ。押す前に「次に回るチケット」を見せる（影響を名前で示す）。未着手が無ければ実行できない */
@@ -1238,6 +1311,8 @@ const actions = {
   /* Agent を替えたら、モデル名の一覧をその Agent の分だけにする（今は claude だけなので見た目は変わらない） */
   'model-agent': el => { const sel = $(el.dataset.pick); if (!sel) return; sel.querySelectorAll('optgroup').forEach(g => { g.hidden = g.dataset.agent !== el.value; }); },
   'pj-filter': el => { localStorage.setItem('pj', el.value); viewBoard(); },
+  'pm-pj': el => { localStorage.setItem('pj', el.value); viewPm(); },                       /* 管理役の画面も既存の PJ 絞り込みに乗る（/api/pm は pj を明示して呼ぶ） */
+  'pm-soon': () => toast(esc(T.help.pmOps)),                                                /* まだつながっていない操作。押しても何も起きないことをその場で言う */
   'tickets-pj': el => { tkFilter.pj = el.value; tkSync(); tkRender(); },
   'tickets-status': el => { tkFilter.status = el.value; tkSync(); tkRender(); },
   'logs-pj': el => { lgFilter.pj = el.value; lgSync(); lgRender(); },
@@ -1479,6 +1554,7 @@ async function route() {
   const [path, q] = h.slice(1).split('?'); const seg = path.split('/').filter(Boolean);
   try {
     if (seg[0] === 'board' || !seg.length) await viewBoard();
+    else if (seg[0] === 'pm') await viewPm();
     else if (seg[0] === 'tickets') await viewTickets(q);
     else if (seg[0] === 'ticket') await viewTicket(seg[1]);
     else if (seg[0] === 'runs') await viewRuns();
