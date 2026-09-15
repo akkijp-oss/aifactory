@@ -86,6 +86,7 @@ flowchart TD
 ```
 
 - Before it starts, `dispatch` calls `kb sync --all-review` once (passing `--pj` when given) so PRs a human merged or closed on GitHub land on the board (345 / ADR-0050). The result is one `sync …` line in `dispatch.log`. It is not called with `--dry-run` (which promises not to advance state) or `--resume-paused` (the 5-minute timer should not keep hitting GitHub)
+- It picks tickets through exactly two entry points: `kb list --status todo` (plus `--pj` when given) walked in id order, and `kb show <id>` for the candidate. It never calls `kb next` (that entry point is used by the console's preview `GET /api/next` and the PM's `pm_status`). The "`bin/dispatch` (`kb next` → `kb run`)" in the Consequences section of ADR-0077 is a factual error; the correct route is written in the Context section of ADR-0078
 - Sequential. The next ticket does not start until the current one finishes
 - Makes no decision about the kind (kanban holds that). All it checks is the mechanical "can this run": `project.yml`, a free VM in the pool, a pause, prerequisites
 - A ticket with an unfinished (anything other than `done`) prerequisite (`depends_on`) is skipped rather than run, with the reason logged. The rule lives in one place in `console/lib/core.py` and the PM in the console goes through the same one (ADR-0077 / ADR-0078)

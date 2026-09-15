@@ -55,7 +55,7 @@ flowchart TB
 
 | 境界 | 契約 |
 |---|---|
-| glue → kanban | `kb new <pj> <kind> <title> --body` でチケット作成、`kb list --status todo` / `kb next --json` で取り出し |
+| glue → kanban | `kb new <pj> <kind> <title> --body` でチケット作成、`kb list --status todo` / `kb show <id>` で取り出し |
 | kanban → ワークフロー | `kb run <id>` が `workflow/bin/run <pj> <id> <workflow> <ticket.md>` を呼ぶ。結果は `workspace/runs/<run>/state.json` |
 | ワークフロー → sandbox | `sandbox take / ssh / url / reset / release / ls` の 5 操作 + ls。Proxmox の都合はこの内側 |
 | ワークフロー → プロジェクト | `workspace/projects/<pj>/project.yml` と `gates.sh`（なければ `examples/projects/<pj>/`）。プロジェクトは「基本情報と作業ルール」だけを提供する |

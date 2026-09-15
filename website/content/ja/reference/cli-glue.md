@@ -86,6 +86,7 @@ flowchart TD
 ```
 
 - 回し始める前に `kb sync --all-review`（`--pj` があればそれも）を 1 回だけ呼び、人が GitHub でマージ / クローズした PR を板に反映する（345 / ADR-0050）。結果は `dispatch.log` に `sync …` の 1 行で残る。`--dry-run`（状態を進めない約束）と `--resume-paused`（5 分ごとの timer なので GitHub を叩き続けない）では呼ばない
+- 票を選ぶ口は `kb list --status todo`（`--pj` があればそれも）を番号順に舐め、候補 1 件を `kb show <id>` で読む、の 2 つだけです。`kb next` は呼びません（`kb next` はコンソールの下見 `GET /api/next` と PM の `pm_status` が使う口です）。ADR-0077 の「結果」節にある「`bin/dispatch`（`kb next` → `kb run`）」は事実誤認で、正しい経路は ADR-0078 の「状況」節にあります
 - 直列。1 件終わるまで次は始めない
 - 種別の判断はしない（種別は kanban が持つ）。見るのは「回せるか」の機械的な確認だけ: `project.yml`・プールの空き・一時停止・先行票
 - 未完了（`done` 以外）の先行票（`depends_on`）を持つチケットは回さずに飛ばし、理由を残す。判定はコンソールの PM と同じ `console/lib/core.py` の 1 か所を通る（ADR-0077 / ADR-0078）
