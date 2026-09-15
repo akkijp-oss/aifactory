@@ -318,8 +318,20 @@ function renderPm(pj, s) {
     : `<div class="pm-note">${esc(T.board.noLive)}</div>`;
   const now = `<div class="panel"><h2>${esc(T.pm.h.now)}</h2>${badge}${boardNote}${pj ? '' : `<div class="pm-note">${esc(T.help.pmAllPj)}</div>`}${runLine}</div>`;
   const t = nx.ticket;
+  /* 飛ばした一時停止の票を 1 票 1 行で出す。理由の 1 文だけだと「どの票が・何を待っているか」が画面から読めず、
+     鍵の登録も利用枠の確認も人にしかできないのに、誰にも知らされないまま止まる（#582）。
+     材料は同じ tick の判断が積んだもの（why）を使い、無ければ提案の facts から読む（画面で判定を作らない） */
+  const pausedBy = ((nx.why || []).filter(f => f.fact === 'skipped_by_pause').pop() || {}).value
+    || ((d.proposal || {}).facts || {}).skipped_by_pause || {};
+  const pauseWhy = f => f.hits_exceeded ? tt(T.pm.pause.hits, { n: f.quota_hits })
+    : f.paused === 'nokey' ? tt(T.pm.pause.nokey, { keys: (f.needed_keys || []).join('、') })
+    : tt(T.pm.pause.quota, { until: f.until ? fmtT(f.until) : '' });
+  const pausedList = Object.keys(pausedBy).length
+    ? `<ul class="pm-list">${Object.keys(pausedBy).map(id => `<li><a class="mono" href="#/ticket/${esc(id)}">${esc(id)}</a> ${esc(pauseWhy(pausedBy[id] || {}))}</li>`).join('')}</ul>`
+    : '';
   const next = `<div class="panel next"><h2>${esc(T.pm.h.next)}</h2><p>${esc(T.pm.next[nx.reason] || T.pm.next.other)}</p>`
     + (t ? `<div class="line"><span class="id mono">${esc(String(t.id))}</span><span class="tag pj">${esc(t.pj)}</span><span class="tag">${esc(t.kind)}</span><a href="#/ticket/${esc(t.id)}">${esc(t.title)}</a></div>` : '')
+    + pausedList
     + `</div>`;
   /* 判断の記録。この画面の主役は「何をしたか」ではなく「なぜそうしたか」なので、理由の列だけ本文の色で出す。
      理由と操作の語彙は記録の側が正本で、画面に無い語は作らずそのまま出す（title でその旨を言う） */

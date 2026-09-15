@@ -2710,17 +2710,22 @@ PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout",
 # 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）。blocked_by_pause は「解除前の一時停止しか残っていない」。
 # 解け方は一時停止の種類で違う: 利用枠切れ（quota）は解除時刻が来れば timer（dispatch --resume-paused）が続きを回すが、
 # 鍵待ち（nokey）は人が鍵を登録するまで、回数超過（hits_exceeded）は人が枠を確かめるまで解けない（timer は拾わない）。
-# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）
+# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）。
+# ★blocked_by_pause は「時刻が来れば機械が片付ける」側だけに狭め、人が動くまで解けない側は blocked_by_key と呼ぶ
+# （ADR-0081 / #582。機械が一生片付けないものを「一時停止」と同じ語で言うと、板に鍵待ちしか無いときに
+#  画面も判断ログも「人がやることは無い」と言い続ける）
 PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                   "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
+                   "requeue_proposed", "blocked_by_dependency", "blocked_by_pause", "blocked_by_key")
 # 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
 PM_MODES = ("propose", "auto")                       # auto は #538。本票は propose だけを受ける
 PM_ACTIONS = ("none", "run", "requeue")              # 判断ログの action。propose では実行しない（決めて書くだけ）
-# ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を、#581 が blocked_by_pause を 1 語ずつ足した。
-# ここに無い語を PM が作らない
+# ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を、#581 が blocked_by_pause を、
+# ADR-0081（#582）が blocked_by_key を 1 語ずつ足した。ここに無い語を PM が作らない
+# ★語を足すときは PM_NEXT_REASONS と両方に入れる（片方だけだと文言・提案のどちらかが語を受けられない。#570 の事故）
 PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                    "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                   "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
+                   "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause",
+                   "blocked_by_key")
 PM_REVIEW_RETRY_MAX = 2                              # 決定 3 の線②: review 由来の再投入は同じ票につき 2 回まで
 # PM がもう一度回してよい停止理由（決定 3）。ここに無い理由（pr_created / step_timeout / human_abandoned /
 # runner_gone / failed_before_start …）は「直す所が run の外」なので、PM は判断せず人に渡す
@@ -2802,6 +2807,17 @@ def pm_paused_skip(plan):
     return bool(plan) and bool(not plan.get("ready") or plan.get("hits_exceeded"))
 
 
+def pm_pause_needs_human(plan):
+    """その一時停止は「人が動くまで解けない」か（#582）。plan は resume_plan の返り（PAUSE_FACTS の抜粋でもよい）。
+
+    解け方は 2 つに分かれる:
+      - 利用枠切れ（quota）… 解除時刻が来れば timer（dispatch --resume-paused）が続きを回す＝人を呼ばない
+      - 鍵待ち（nokey）… 鍵プールに鍵が登録されるまで ready にならない＝人が登録するまで機械は一生拾わない
+      - 回数超過（hits_exceeded）… 人が枠を確かめるまで自動では回さない（ADR-0046）
+    ★ここも判定の結果（paused の種別 / hits_exceeded）を読むだけで、時刻や回数の規則は kb の resume_plan が正本"""
+    return bool(plan) and bool(plan.get("paused") == "nokey" or plan.get("hits_exceeded"))
+
+
 def pm_pick_next(next_row, pj=None, plans=None):
     """`kb next` の 1 件から、dispatch が飛ばす票を飛ばして「実際に回る票」を決める（#570 / #573 / #581）。
 
@@ -2816,7 +2832,7 @@ def pm_pick_next(next_row, pj=None, plans=None):
     配車のときの環境で決まるもの（PJ の project.yml・Pull worker・プールの空き）はここでは確かめない。
 
     返り値（dict。`next` が null でも理由コードで何を確かめたかを言う）:
-      {"next": 票 or None, "reason": picked_next / no_todo / blocked_by_dependency / blocked_by_pause,
+      {"next": 票 or None, "reason": picked_next / no_todo / blocked_by_dependency / blocked_by_pause / blocked_by_key,
        "kb_next": 薄い kb next が返した生の id or None,
        "skipped_by_dependency": {票 id: {先行票 id: status}}, "skipped_by_pause": {票 id: {…PAUSE_FACTS}}}
     ★DB や kb resumable を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない
@@ -2848,9 +2864,11 @@ def pm_pick_next(next_row, pj=None, plans=None):
         if runnable(r):
             out["next"], out["reason"] = r, "picked_next"; return out
     # todo は在るが全部飛ばした。最後に飛ばした理由ではなく、先行条件で待っている票が 1 つでもあればそちらを言う
-    # （依存は「どの票を先に片付けるか」が板の上で人に見える。一時停止のうち機械が片付けるのは
-    #  解除時刻を待つ利用枠切れだけで、鍵待ち・回数超過は人が動くまで解けない＝skipped_by_pause の中身を見る）
-    out["reason"] = "blocked_by_dependency" if out["skipped_by_dependency"] else "blocked_by_pause"
+    # （依存は「どの票を先に片付けるか」が板の上で人に見える）。一時停止のうち機械が片付けるのは解除時刻を待つ
+    # 利用枠切れだけなので、鍵待ち・回数超過が 1 件でもあれば blocked_by_key と言って人を呼ぶ（#582）
+    if out["skipped_by_dependency"]: out["reason"] = "blocked_by_dependency"
+    elif any(pm_pause_needs_human(p) for p in out["skipped_by_pause"].values()): out["reason"] = "blocked_by_key"
+    else: out["reason"] = "blocked_by_pause"
     return out
 
 
@@ -3002,6 +3020,11 @@ def pm_status(pj=None):
             _pm_fact(why, "requeue_reason_code", requeue["reason_code"])
         _pm_fact(why, "last_run_reason", reason)
         _pm_fact(why, "last_run_ticket_status", ticket_status)
+    # 人が動くまで解けない一時停止（鍵待ち / 回数超過）しか残っていない板は、timer も拾わないので人を呼ぶ
+    # （ADR-0081 / #582）。「回すチケットを待っています」のまま置くと、画面も判断ログも人の出番を言わない。
+    # 状態の語は 4 つのまま増やさず既存の blocked に寄せ、上げたことを覚えておいて理由を言い分ける
+    key_block = state == "idle" and pick_reason == "blocked_by_key" and not (requeue and requeue["requeue"])
+    if key_block: state = "blocked"
     _pm_fact(why, "state", state)
 
     # --- 次にやること。ticket には状態にかかわらず kb next の結果を入れ、起こしてよいかは launchable で言う
@@ -3011,7 +3034,8 @@ def pm_status(pj=None):
     elif state in ("landing", "waiting"):
         reason = "landing_observed" if state == "landing" else "run_running"
     elif state == "blocked":
-        reason = "needs_human"
+        # 鍵待ち / 回数超過で blocked に上げた分は、何を待っているか言える（止まった run の人間待ちと混ぜない。#582）
+        reason = "blocked_by_key" if key_block else "needs_human"
     elif requeue and requeue["requeue"]:
         # 止まった票をもう一度回す提案。「次の票を選んだ」とも「回す票が無い」とも別の値にする
         reason = "requeue_proposed"
@@ -3099,6 +3123,13 @@ def pm_decide(pj=None, status=None):
     if isinstance(tid, str) and tid.isdigit(): tid = int(tid)
     if state == "waiting": action, code, facts = "none", "run_running", {}
     elif state == "landing": action, code, facts = "none", "landing_observed", {}
+    elif nxt["reason"] == "blocked_by_key":
+        # todo は在るが、どれも人が動くまで解けない一時停止（鍵待ち / 回数超過）。state は blocked に上げてあるが、
+        # 止まった run の人間待ち（reason_code なし）とは別物なので、blocked の分岐より先に理由コードを付ける。
+        # 何を待っているかは facts の skipped_by_pause（paused / until / needed_keys / hits_exceeded）で読む（#582）
+        action, code = "none", "blocked_by_key"
+        facts = {"why": "blocked_by_key",
+                 "skipped_by_pause": _pm_why(nxt.get("why") or [], "skipped_by_pause", {})}
     elif state == "blocked":
         # 語彙に当たる理由があるものだけ理由コードを付ける。PM が判断せず人に渡すだけのもの
         # （pr_created / step_timeout / human_abandoned / gates.txt が読めない …）は理由コードを作らず null にする

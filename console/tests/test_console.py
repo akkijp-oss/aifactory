@@ -1909,7 +1909,7 @@ class ApiTest(unittest.TestCase):
     # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
     PM_STATES = ("idle", "waiting", "landing", "blocked")
     PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                       "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
+                       "requeue_proposed", "blocked_by_dependency", "blocked_by_pause", "blocked_by_key")
 
     PM_ACTIONS = ("none", "run", "requeue")
 
@@ -2082,7 +2082,8 @@ class ApiTest(unittest.TestCase):
     # ADR-0074 決定 5 の理由コード。画面はこの語彙を日本語に直すだけで、app.js 側で語彙を作らない
     PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                        "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
+                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause",
+                       "blocked_by_key")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
         """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
@@ -2152,6 +2153,25 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(sorted(set(self.PM_STATES) - set(T["pm"]["state"])), [], "state の語彙に文言の無いものがある")
         self.assertEqual(sorted(set(self.PM_REASON_CODES) - set(T["pm"]["reason"])), [], "判断ログの理由コードに文言の無いものがある")
         self.assertIn("other", T["pm"]["reason"], "この画面より新しい理由コードを受ける文言が無い")
+
+    def test_pm_view_lists_what_each_paused_ticket_waits_for(self):
+        """★本票の完了条件: 一時停止で飛ばした票を「どの票が・何を待っているか」まで画面に出す（#582）。
+
+        理由の 1 文（T.pm.next[...]）だけだと、鍵の登録も利用枠の確認も人にしかできないのに、誰も何を
+        すればよいか分からない。JS を動かす基盤が無いので、他の PM 画面の検査と同じくソースを見る"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        r = app[app.index("function renderPm"):app.index("/* 配車のダイアログ")]
+        self.assertIn("skipped_by_pause", r, "飛ばした票（一時停止）を画面に出していない")
+        self.assertIn("T.pm.pause.", r, "何を待っているかの文言を画面が使っていない（語彙は strings.js が正本）")
+        nxt = r[r.index("const pausedBy"):r.index("/* 判断の記録")]
+        self.assertIn("nx.why", nxt, "同じ tick が積んだ材料ではなく、別の口から読み直している")
+        for w in ("ready", "retry_after", "resumable"):
+            self.assertNotIn(w, r, f"画面が一時停止の判定（{w}）を持っている（判定は core の 1 か所）")
+        T = load_strings()
+        self.assertEqual(sorted(set(("nokey", "hits", "quota")) - set(T["pm"]["pause"])), [],
+                         "一時停止の種類に文言の無いものがある")
+        self.assertNotEqual(T["pm"]["pause"]["nokey"], T["pm"]["pause"]["quota"],
+                            "「人が鍵を登録するまで解けない」と「時刻が来れば機械が回す」を同じ文言にしている")
 
     def test_pm_view_places_the_pending_controls_without_silently_disabling_them(self):
         """まだつながっていない操作は、黙って disabled にしない（Tab で届かず、理由も言えない）"""
