@@ -156,6 +156,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "overview": return overview(pj=q.get("pj") or None), 200
         if ep == "tickets": return tickets_list(pj=q.get("pj")), 200
         if ep == "next": return ticket_next(pj=q.get("pj")), 200
+        if ep == "pm": return pm_status(pj=q.get("pj") or None), 200
         m = re.match(r"^tickets/(\d+)$", ep)
         if m: return ticket_detail(int(m.group(1))), 200
         m = re.match(r"^tickets/(\d+)/sync-preview$", ep)

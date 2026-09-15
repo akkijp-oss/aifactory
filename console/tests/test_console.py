@@ -1844,6 +1844,133 @@ class ApiTest(unittest.TestCase):
         self.assertIn(v["ticket"]["note"], (None, ""))
         self.assertTrue(any(h["field"] == "note" and h["old"] == "x" and not h["new"] for h in v["history"]))
 
+    # ---- PM（管理役）の状態: GET /api/pm（#535 / ADR-0074 決定 2・決定 4）
+    # 一番の約束は「取得できていない」と「0 件」を別の値で持つこと。ここが同じ値だと、確かめられていない状態が
+    # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
+    PM_STATES = ("idle", "waiting", "landing", "blocked")
+    PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable")
+
+    def _pm(self, pj):
+        st, d = self.http.get(f"/api/pm?pj={urllib.parse.quote(pj)}")
+        self.assertEqual(st, 200, d)
+        self.assertIn(d["state"], self.PM_STATES, d["state"])
+        self.assertIsInstance(d["next"], dict, "next は常に dict（裸の null にしない）")
+        self.assertIn(d["next"]["reason"], self.PM_NEXT_REASONS, d["next"]["reason"])
+        return d
+
+    def _pm_run_fixture(self, pj, tid, name, **state):
+        """PM のテスト用の run 1 本。他の検査に持ち越さないよう後片付けまで登録する"""
+        self._fixture_run(name, {"pj": pj, "task": str(tid), "workflow": "feature", "branch": "sandbox/x", "base": "main",
+                                 "started": "2026-09-14T09:00:00", "current": None, "loops": {}, "history": [], **state})
+        self.addCleanup(shutil.rmtree, self.ws / "runs" / name, True)
+        return name
+
+    def test_pm_status_reads_the_board_and_keeps_zero_apart_from_unknown(self):
+        """/api/pm は板と run の「読めたか」を件数とは別の値で返す。todo 0 件は例外でも空配列でもなく理由付きの空"""
+        self.todo_id()                                                     # この PJ に todo を 1 件用意する
+        d = self._pm(PJ)
+        self.assertEqual(d["decisions"], [])                               # 判断ログはまだ無い（無ければ空配列）
+        self.assertTrue(d["board"]["db"]); self.assertTrue(d["board"]["readable"]); self.assertEqual(d["board"]["reason"], "ok")
+        self.assertIsNotNone(d["board"]["counts"]); self.assertIsInstance(d["board"]["blocked_n"], int)
+        self.assertEqual(d["pj"], PJ)
+        # todo が 0 件の PJ: 読めている（readable / reason ok）のに次が無い、という別の値で返る
+        e = self._pm("nosuch-pj")
+        self.assertTrue(e["board"]["readable"]); self.assertEqual(e["board"]["reason"], "ok")
+        self.assertIsNotNone(e["board"]["counts"])                         # 「読めていない」ではないので件数は出る
+        self.assertEqual(e["next"]["reason"], "no_todo"); self.assertIsNone(e["next"]["ticket"])
+        self.assertFalse(e["next"]["launchable"])
+        self.assertTrue(e["runs"]["readable"]); self.assertEqual(e["runs"]["reason"], "no_records")   # 記録が無い ≠ 読めない
+        self.assertEqual(e["runs"]["active_n"], 0); self.assertIsNone(e["run"])
+
+    def test_pm_status_waits_while_a_run_is_going(self):
+        """走行中の run がある PJ は waiting。次の票を「起動してよい」とは言わない（launchable は偽）"""
+        pj, tid = "pm-waiting", 771
+        name = self._pm_run_fixture(pj, tid, f"2026-09-14-{pj}-{tid}", next="implement",
+                                    current={"step": "implement", "kind": "agent", "since": "2026-09-14T09:10:00"})
+        jid = self._put_job("20260914-091000-kb-run", run_hint=name, ticket=tid, label=f"kb run {tid}",
+                            started="2026-09-14T09:10:00", finished=None, rc=None, state="running")
+        self.addCleanup(shutil.rmtree, self.tmp / "jobs" / jid, True)
+        d = self._pm(pj)
+        self.assertEqual(d["state"], "waiting")
+        self.assertEqual(d["next"]["reason"], "run_running"); self.assertFalse(d["next"]["launchable"])
+        self.assertEqual(d["runs"]["active_n"], 1); self.assertEqual([x["name"] for x in d["runs"]["active"]], [name])
+        self.assertEqual([j["id"] for j in d["runs"]["jobs_running"]], [jid])
+        self.assertEqual(d["run"]["name"], name); self.assertEqual(d["run"]["outcome"]["reason"], "running")
+        self.assertIn("progress", d["run"])                                # 既存の run_detail をそのまま使っている
+
+    def test_pm_status_only_observes_a_landing_run(self):
+        """state.json の next が pr / automerge の run は landing（PM は観察するだけ。ADR-0074 決定 2・決定 6）"""
+        pj, tid = "pm-landing", 772
+        name = self._pm_run_fixture(pj, tid, f"2026-09-14-{pj}-{tid}", next="pr",
+                                    current={"step": "pr", "kind": "code", "since": "2026-09-14T09:40:00"})
+        d = self._pm(pj)
+        self.assertEqual(d["state"], "landing")
+        self.assertEqual(d["next"]["reason"], "landing_observed"); self.assertFalse(d["next"]["launchable"])
+        self.assertEqual(d["run"]["name"], name)
+
+    def test_pm_status_hands_a_stopped_run_to_a_human(self):
+        """止まった run の理由が ADR-0074 決定 2 の 5 語なら blocked（人の判断待ち）。todo 0 件とは別の値"""
+        pj, tid = "pm-blocked", 773
+        name = self._pm_run_fixture(pj, tid, f"2026-09-14-{pj}-{tid}", finished="2026-09-14T10:00:00", result="failed",
+                                    history=[{"step": "implement", "ok": True, "next": "gates", "at": "2026-09-14T09:30:00"},
+                                             {"step": "gates", "ok": False, "next": "human", "at": "2026-09-14T09:50:00"}])
+        d = self._pm(pj)
+        self.assertEqual(d["state"], "blocked")
+        self.assertEqual(d["next"]["reason"], "needs_human"); self.assertFalse(d["next"]["launchable"])
+        self.assertEqual(d["run"]["name"], name); self.assertEqual(d["run"]["outcome"]["reason"], "step_failed")
+        self.assertTrue(d["runs"]["readable"]); self.assertEqual(d["runs"]["reason"], "ok")
+
+    def test_pm_status_tells_the_three_kinds_of_no_next_apart(self):
+        """「選べない」の 3 つ（todo 0 件 / 走行中で待ち / 人の判断待ち）が別の値で区別できる。
+
+        4 つ目の「板を読めていない」も同じ組に混ざらないこと（空の workspace の検査で別に確かめる）。"""
+        zero = self._pm("nosuch-pj")["next"]["reason"]
+        pj, tid = "pm-three", 774
+        name = self._pm_run_fixture(pj, tid, f"2026-09-14-{pj}-{tid}", next="implement",
+                                    current={"step": "implement", "kind": "agent", "since": "2026-09-14T09:10:00"})
+        waiting = self._pm(pj)["next"]["reason"]
+        shutil.rmtree(self.ws / "runs" / name)                             # 同じ PJ を止まった run だけの状態にする
+        self._pm_run_fixture(pj, tid, f"2026-09-14-{pj}-{tid}-b", finished="2026-09-14T10:00:00", result="failed",
+                             history=[{"step": "gates", "ok": False, "next": "human", "at": "2026-09-14T09:50:00"}])
+        human = self._pm(pj)["next"]["reason"]
+        self.assertEqual(len({zero, waiting, human}), 3, (zero, waiting, human))
+        self.assertEqual((zero, waiting, human), ("no_todo", "run_running", "needs_human"))
+
+    def test_pm_status_survives_a_workspace_with_no_records(self):
+        """run の記録も板も無い PJ（空の workspace）でも落ちず、0 件とは別の値で「読めていない」と言う。
+           `kb next` は DB を作ってしまうので、DB が無いときは呼ばない（読むだけの口に副作用を持たせない）"""
+        ws = self.tmp / "pm-empty-ws"; ws.mkdir(exist_ok=True)
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws), "CONSOLE_JOBS": str(self.tmp / "pm-empty-jobs")}
+        code = ("import json, sys; sys.path.insert(0, %r); import core; print(json.dumps(core.pm_status(), ensure_ascii=False))"
+                % str(REPO / "console" / "lib"))
+        r = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertFalse(d["board"]["db"]); self.assertFalse(d["board"]["readable"]); self.assertEqual(d["board"]["reason"], "no_db")
+        self.assertIsNone(d["board"]["counts"]); self.assertIsNone(d["board"]["blocked_n"])   # 読めていない板を 0 件にしない
+        self.assertEqual(d["next"]["reason"], "board_unreadable"); self.assertFalse(d["next"]["launchable"])
+        self.assertIn(d["state"], self.PM_STATES); self.assertNotEqual(d["state"], "idle")    # 確かめられていない状態を緑にしない
+        self.assertTrue(d["runs"]["readable"]); self.assertEqual(d["runs"]["reason"], "no_records")
+        self.assertEqual(d["decisions"], []); self.assertIsNone(d["run"])
+        self.assertFalse((ws / "kanban" / "kanban.db").exists(), "読むだけの口が DB を作っている")
+
+    def test_pm_decision_is_not_copied_into_the_http_layer(self):
+        """判定は core.py に 1 つだけ（ADR-0015）。bin/console と bin/mcp は core の関数を呼ぶ 1 行しか持たない"""
+        console_src = (REPO / "console" / "bin" / "console").read_text(encoding="utf-8")
+        self.assertIn('if ep == "pm": return pm_status(pj=q.get("pj") or None), 200', console_src)
+        mcp_src = (REPO / "console" / "bin" / "mcp").read_text(encoding="utf-8")
+        self.assertIn('def t_pm_status(a): return core.pm_status(pj=a.get("pj") or None)', mcp_src)
+        # TOOLS の説明文（agent に読ませる文章）を除いた実行部分に、PM の語彙が 1 つも無いこと
+        mcp_code = mcp_src[: mcp_src.index("TOOLS = [")] + mcp_src[mcp_src.index("TOOL_MAP"):]
+        for word in ("idle", "waiting", "landing", "blocked", "no_todo", "picked_next", "board_unreadable", "run_outcome"):
+            self.assertNotIn(word, console_src, f"bin/console に PM の判定（{word}）が写っている")
+            self.assertNotIn(word, mcp_code, f"bin/mcp に PM の判定（{word}）が写っている")
+        # ADR-0074 に無い名前を新設しない（票の本文にあった pm_view / pm_next_ticket は作らない）
+        hits = subprocess.run(["grep", "-rn", "-e", "pm_view", "-e", "pm_next_ticket",
+                               str(REPO / "console" / "lib"), str(REPO / "console" / "bin"), str(REPO / "console" / "static")],
+                              capture_output=True, text=True).stdout
+        self.assertEqual(hits, "", hits)
+
     def _put_job(self, jid, **over):
         """終わったジョブの記録を CONSOLE_JOBS に直接置く（JobStore はディスクの meta.json を読む）"""
         meta = {"id": jid, "kind": "kb-run", "label": "kb run", "cmd": [str(KB), "run"], "ticket": None, "run_hint": None,

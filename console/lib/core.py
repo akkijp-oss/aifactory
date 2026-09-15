@@ -1132,13 +1132,26 @@ def _base_status(p, b, pjs):
 
 
 # ---------- overview
+def board_runs(pj=None):
+    """板と PM が見る run（v1 の本番ぶんだけ。dry-run と v0 は除く）。pj を渡すとその PJ に絞る。
+       overview と pm_status が同じ絞り方を使うための 1 か所（ADR-0015: 同じ導出を 2 度書かない）"""
+    return [r for r in list_runs() if r["kind"] == "v1" and not r.get("dry") and (not pj or r.get("pj") == pj)]
+
+
+def run_live_row(r):
+    """実行中の run 1 件を、突き合わせ用の軽い形にする（overview の runs_live と pm_status の runs.active が同じ形）。
+       工程（step / since）は current があるときだけ入れる（開始前・工程の切れ目に前の工程を出さない）"""
+    return {**{k: r.get(k) for k in ("name", "pj", "task", "workflow", "next", "started")},
+            **({"step": r["current"].get("step"), "since": r["current"].get("since")} if r.get("current") else {})}
+
+
 def overview(pj=None, limit=6):
     """概況。pj を渡すと run の一覧だけその PJ に絞る（上限を掛ける前に絞る。7 本以上動いていても選んだ PJ の run が漏れない）。
        counts はナビのバッジ用に常に全 PJ の集計（画面の PJ 選択と連動させない。console/UX.md のボード行）"""
     counts = {s: 0 for s in STATUSES}
     for r in rows("SELECT status, COUNT(*) n FROM tickets GROUP BY status"): counts[r["status"]] = r["n"]
     running = JobStore.running()
-    runs = [r for r in list_runs() if r["kind"] == "v1" and not r.get("dry") and (not pj or r.get("pj") == pj)]
+    runs = board_runs(pj)
     active = [r for r in runs if r["status"] == "running"]
     not_started = [r for r in runs if r["status"] == "not_started"]
     abandoned = [r for r in runs if r["status"] == "abandoned"]
@@ -1149,9 +1162,7 @@ def overview(pj=None, limit=6):
     # 一覧（runs_active）は帯のための上限つき、突き合わせ（runs_live）は上限なしの軽い形（チケット 376）。
     # ボードのカードはチケット 1 枚ごとに動いている run を探すので、上限で切ると 7 本目以降のカードだけ工程が出ない。
     # 工程（step / since）は current があるときだけ入れる（開始前・工程の切れ目に前の工程を出さない）。
-    live = [{**{k: r.get(k) for k in ("name", "pj", "task", "workflow", "next", "started")},
-             **({"step": r["current"].get("step"), "since": r["current"].get("since")} if r.get("current") else {})}
-            for r in active]
+    live = [run_live_row(r) for r in active]
     return {"counts": counts, "labels": STATUS_LABEL, "jobs_running": len(running), "jobs": running[:limit],
             "pj": pj or None, "limit": limit,
             "runs_active": active[:limit], "runs_active_n": len(active),          # 一覧は上限つき、件数は絞り込み後の全件（画面が「ほか n 件」を出す）
@@ -2606,3 +2617,175 @@ def config_model_apply(b):
     warn.append("この変更は commit していません。制御系で git pull すると元に戻ることがあります。")
     out["warning"] = " ".join(warn) or None
     return out
+
+
+# ---------- PM（管理役）の状態（ADR-0074。読むだけ・保存しない・何も起こさない）
+# 状態は保存せず毎回導く（決定 2）。ここに要るのは「PM の判断」だけで、材料（overview / board_runs /
+# run_detail / ticket_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
+# ★この口の一番の約束は「取得できていない」と「0 件」を別の値で持つこと。読めなかったものを 0 件や
+#   null で返すと、確かめられていない状態がそのまま「順調」に見える。だから:
+#   - 板: readable / reason（ok / no_db / kb_failed）で分け、読めていないときは counts を null にする（0 を出さない）
+#   - run: readable / reason（ok / no_records / error）で分け、「記録が無い」と「読めなかった」を分ける
+#   - 次にやること: 常に dict で reason を持つ。裸の null にしない（null を「準備完了」と読ませない）
+PM_DECISIONS = "pm-decisions.jsonl"                  # 判断ログ（決定 5）。書くのは tick 票の役目で、ここは読むだけ
+PM_STATES = ("idle", "waiting", "landing", "blocked")            # 決定 2 の語彙。これ以外の状態を作らない
+PM_LANDING_NEXT = ("pr", "automerge")                            # 決定 2: state.json の next がこれなら着地中（PM は観察するだけ）
+# 決定 2 の「PM が再投入しないと決めた」停止理由。ADR の 5 語に固定し、ここで「等」を広げない（ADR-0025 の語彙が正本）
+PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout", "human_abandoned")
+# 「次にやること」の理由コード。前 4 つは決定 5 の判断ログの語彙をそのまま使い、後ろ 2 つは
+# 状態表示のためにここで足す（判断ログには書かない）
+PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable")
+
+
+def pm_decisions(limit=20):
+    """PM の判断ログ（新しい順）。config_changes と同じ置き方・同じ読み方で、末尾 200 行だけ見る（決定 5）。
+       書く口はここには無い（tick 票の役目）。ファイルが無ければ空（「無い」と「読めない」は空で同じに見えるが、
+       このログは PM 自身が書くもので、無い＝まだ 1 度も判断していない）"""
+    p = LOGS / PM_DECISIONS
+    if not p.is_file(): return []
+    out = []
+    try: text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError: return []
+    for l in text.splitlines()[-200:]:
+        try: out.append(json.loads(l))
+        except Exception: pass
+    return list(reversed(out))[:limit]
+
+
+def _pm_fact(why, key, value):
+    """判断の材料を 1 つ足す。機械で読めた値だけを入れる（日本語の説明文は書かない。表示は strings.js が作る）"""
+    why.append({"fact": key, "value": value})
+
+
+def _pm_run(name):
+    """状態の根拠にした run 1 件。run_detail（outcome / progress の唯一の合成箇所）をそのまま使う"""
+    try: d = run_detail(name)
+    except Exception: return None
+    if not d: return None
+    s = d.get("summary") or {}
+    return {**{k: s.get(k) for k in ("name", "pj", "task", "status", "next", "workflow", "started")},
+            "outcome": d.get("outcome"), "progress": d.get("progress"), "ticket": d.get("ticket")}
+
+
+def _pm_jobs(pj=None):
+    """対象 PJ で実行中の kb-run ジョブ（決定 2 の waiting の材料）。
+
+    ジョブの PJ は run_hint（run 名）から読む。読めなければチケットの行から引く。どちらでも分からないものは
+    落とさずに残す（「関係ないかもしれない」を根拠に緑側へ倒さない）"""
+    try: jobs = [j for j in JobStore.running() if j.get("kind") == "kb-run"]
+    except Exception: return []
+    if not pj or not jobs: return [{k: j.get(k) for k in ("id", "label", "ticket", "run_hint")} for j in jobs]
+    tids = sorted({str(j["ticket"]) for j in jobs if j.get("ticket")})
+    by_tid = {}
+    if tids:
+        q = "SELECT id, pj FROM tickets WHERE id IN (%s)" % ",".join("?" * len(tids))
+        by_tid = {str(t["id"]): t["pj"] for t in rows(q, tuple(tids))}
+
+    def job_pj(j):
+        m = RUN_NAME.match(str(j.get("run_hint") or ""))
+        return m.group(1) if m else by_tid.get(str(j.get("ticket")))
+
+    return [{k: j.get(k) for k in ("id", "label", "ticket", "run_hint")} for j in jobs if job_pj(j) in (pj, None)]
+
+
+def pm_status(pj=None):
+    """管理役（PM）の「いまの状態」と「次にやること」を、既存の記録だけから導いて返す（ADR-0074 決定 2 / 決定 4）。
+
+    副作用なし: 何も起こさず（ticket_run も pr-automerge も呼ばない）、何も書かず、kanban.db も作らない
+    （`kb next` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
+    （PM の状態を読む口自体が落ちると、状態が分からないことすら分からなくなる）。
+
+    pj を渡すとその PJ に絞る。省略すると全 PJ 横断で、どれか 1 つでも走っていれば waiting になる粗さがある。
+    counts は overview と同じく常に全 PJ の集計（ナビのバッジと同じ値）。
+
+    返す形（キーは固定。値が無いことは null ではなく理由コードで表す）:
+      state    … idle / waiting / landing / blocked のどれか（PM_STATES）
+      board    … 板を読めたか（readable / reason / error / counts / db / blocked / blocked_n）
+      runs     … run の記録を読めたか（readable / reason / error / active / active_n / abandoned_n /
+                 unreadable_n / jobs_running）
+      run      … 状態の根拠にした run 1 件（無ければ null。理由は runs.reason が別に持つ）
+      next     … 常に dict。{reason, ticket, launchable, why}。launchable が真なのは picked_next のときだけ
+      decisions… 判断ログの新しい順（まだ無ければ空配列）
+    """
+    board = {"readable": False, "reason": "no_db", "error": None, "counts": None, "db": DB.exists(),
+             "blocked": [], "blocked_n": None}
+    runs = {"readable": True, "reason": "no_records", "error": None, "active": [], "active_n": 0,
+            "abandoned_n": 0, "unreadable_n": 0, "jobs_running": []}
+    why = []
+
+    # --- 材料 1: 板（counts は sqlite から直接、次の 1 件は kb next から）
+    o, o_error = None, None
+    try: o = overview(pj=pj)
+    except Exception as e: o_error = str(e)
+    next_row = None
+    if not board["db"]:
+        board["reason"] = "no_db"                                # 空の workspace。「todo が 0 件」とは別の値
+    elif o is None:
+        board["reason"] = "kb_failed"; board["error"] = o_error
+    else:
+        board["counts"] = o["counts"]
+        try:
+            next_row = ticket_next(pj=pj)["next"]                # 0 件なら None、読めなければ ApiError（core.py の ticket_next）
+            board["readable"] = True; board["reason"] = "ok"
+        except Exception as e:
+            board["reason"] = "kb_failed"; board["error"] = str(e)
+        try:
+            bl = tickets_list(pj=pj, status="blocked")["tickets"]
+            board["blocked"] = [{k: t.get(k) for k in ("id", "title", "pj")} for t in bl[:6]]
+            board["blocked_n"] = len(bl)
+        except Exception:
+            board["blocked_n"] = None                            # 読めなかったので「0 件」とは言わない
+    _pm_fact(why, "board_reason", board["reason"])
+    _pm_fact(why, "kb_next", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)
+
+    # --- 材料 2: run の記録（overview と同じ絞り方＝board_runs）と、実行中の kb-run ジョブ
+    runs_all = None
+    try: runs_all = board_runs(pj)
+    except Exception as e:
+        runs["readable"] = False; runs["reason"] = "error"; runs["error"] = str(e)
+    active, stopped = [], None
+    if runs_all is not None:
+        active = [r for r in runs_all if r.get("status") == "running"]
+        stopped = next((r for r in runs_all if r.get("status") != "running"), None)   # list_runs は新しい順
+        runs["active"] = [run_live_row(r) for r in active]
+        runs["active_n"] = len(active)
+        runs["abandoned_n"] = len([r for r in runs_all if r.get("status") == "abandoned"])
+        runs["unreadable_n"] = len([r for r in runs_all if r.get("state_error")])
+        runs["reason"] = "ok" if runs_all else "no_records"      # 「1 本も無い」と「読めなかった（error）」を分ける
+    runs["jobs_running"] = _pm_jobs(pj)
+    _pm_fact(why, "runs_reason", runs["reason"])
+    _pm_fact(why, "runs_active", runs["active_n"] if runs["readable"] else None)
+    _pm_fact(why, "jobs_running", len(runs["jobs_running"]))
+
+    # --- 判断（決定 2。当たった順に 1 つ決める。landing は waiting より細かい見方なので先に見る
+    #     ——着地中の run にも kb-run ジョブは動いているので、ジョブを先に見ると landing が一度も出ない）
+    landing = next((r for r in active if r.get("next") in PM_LANDING_NEXT), None)
+    run_ev, state = None, "idle"
+    if landing:
+        state = "landing"; run_ev = _pm_run(landing["name"])
+    elif active or runs["jobs_running"]:
+        state = "waiting"
+        if active: run_ev = _pm_run(active[0]["name"])
+    elif not board["readable"]:
+        state = "blocked"                                        # 板が読めない＝人が見るまで PM は何も起こせない
+    elif stopped:
+        d = _pm_run(stopped["name"])
+        reason = ((d or {}).get("outcome") or {}).get("reason")
+        ticket_status = ((d or {}).get("ticket") or {}).get("status")
+        if reason in PM_BLOCKED_REASONS and ticket_status != "done":
+            state = "blocked"; run_ev = d
+        _pm_fact(why, "last_run_reason", reason)
+        _pm_fact(why, "last_run_ticket_status", ticket_status)
+    _pm_fact(why, "state", state)
+
+    # --- 次にやること。ticket には状態にかかわらず kb next の結果を入れ、起こしてよいかは launchable で言う
+    reason = {"landing": "landing_observed", "waiting": "run_running"}.get(state)
+    if reason is None:
+        if not board["readable"]: reason = "board_unreadable"
+        elif state == "blocked": reason = "needs_human"
+        else: reason = "picked_next" if next_row else "no_todo"
+    nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
+    try: decisions = pm_decisions()
+    except Exception: decisions = []
+    return {"state": state, "board": board, "runs": runs, "run": run_ev, "next": nxt,
+            "decisions": decisions, "pj": pj or None, "now": now(), "tz": tz_info()}
