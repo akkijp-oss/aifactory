@@ -1,0 +1,2 @@
+### Fixed
+- **macOS / Linux ワーカー: ゲストの PATH をゲスト自身に答えさせる**。mise が管理する道具（`go` など）が guest-exec 経由で `command not found` になっていた。runner が固定の一覧で PATH を上書きしていて、その一覧に mise の shims が無かったのが原因。ログイン環境（`/etc/profile.d/*.sh` など）と mise の答えをそのまま使う形にしたので、新しい版管理ツールを入れてもワーカー側を直さなくてよい（[ADR-0076](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0076-guest-path-is-answered-by-the-guest.md)）。Windows の決め方は従来どおり

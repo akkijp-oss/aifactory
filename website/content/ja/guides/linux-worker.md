@@ -98,6 +98,14 @@ GUIアプリのホームは `/home/aifactory-task`、チケット用シェルの
 
 ヘッドレス構成では `Alt+F2` で `gmrun` を開き、インストール済みアプリの名前を入力して起動できる。`Alt+Tab` でウィンドウを切り替え、`Alt+F4` で閉じる。日本語を表示するアプリには対応フォントも導入する。
 
+### ゲストでコマンドが動く形
+
+PATHの決め方はmacOSワーカーと同じ規則で、`workflow/lib/macos.py` の `guest_path_prelude()` を共有する。**ゲスト自身に答えさせる**形で、runnerは道具を列挙しない（[ADR-0076](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0076-guest-path-is-answered-by-the-guest.md)）。
+
+ワーカーは作業を `systemd-run ... /bin/bash --noprofile --norc -c '<command>'` で起動するので、ユーザーの `~/.bashrc` や `~/.profile` は読まれない。前置きが `/etc/profile`（と `/etc/profile.d/*.sh`）を読んでから、保険の固定PATH（`/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.cargo/bin`）を足し、`mise` が居れば `mise activate bash --shims` の答えを入れる。
+
+**ゲストで道具を足すなら `/etc/profile.d/*.sh` に置く**（またはmiseなどの版管理ツールに任せる）。runnerの固定PATHに足さない。
+
 ## 運用上の範囲
 
 専用インスタンスを実行境界にする。ワーカーの接続トークンとジャーナルはroot専用、画面用トークンだけをタスクユーザーへ読み取り許可する。作業フォルダーを削除しても、デスクトップ、クリップボード、タスクユーザーのホーム、GUI経由で起動したアプリの状態は残る。ログアウトや画面ロック中は使わず、ヘッドレス方式ではロック機能を追加しない。
