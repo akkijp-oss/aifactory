@@ -2910,7 +2910,10 @@ def pm_decide(pj=None, status=None):
         # 「なぜ他を選ばなかったか」も残す（画面の主役は理由）。kb next は todo を id 順に 1 件返すだけなので、
         # 候補の全 id と並べ方を facts に置けば、選ばれなかった票も後から追える
         facts = {"why": "picked_next", "order": "id", "todo_ids": None, "blocked_ids": [b.get("id") for b in s["board"]["blocked"]]}
-        try: facts["todo_ids"] = [t["id"] for t in tickets_list(pj=pj, status="todo")["tickets"]]
+        # 要るのは id だけ。tickets_list は種別と PJ の一覧まで組むので、5 秒ごとに来る読み取りでは引かない
+        q, a = "SELECT id FROM tickets WHERE status = 'todo'", ()
+        if pj: q, a = q + " AND pj = ?", (pj,)
+        try: facts["todo_ids"] = [t["id"] for t in rows(q + " ORDER BY id", a)]
         except Exception: facts["todo_ids"] = None            # 読めなかったので「候補は 1 件だけだった」とは言わない
     else: action, code, facts = "none", "no_todo", {}
     return {"pj": pj or run.get("pj"), "ticket": tid, "run": run.get("name") or None, "state": state,
