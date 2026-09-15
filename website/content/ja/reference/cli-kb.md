@@ -72,7 +72,8 @@ kb list --status review          # 状態で絞る
 kb list --pj kumitate --all      # PJ で絞る。--all で done も
 kb show 204                      # 全項目 + 本文
 kb next                          # 最も古い todo を 1 件
-kb next --pj kumitate --json     # JSON（コンソールの下見 GET /api/next・PM・外部ツール向け。path に本文の絶対パス。dispatch は使わない）
+kb next --pj kumitate --json     # JSON（PM と外部ツール向け。path に本文の絶対パス。dispatch は使わない）
+                                 # コンソールの下見 GET /api/next はこの返りを core で選び直してから見せます
 kb resumable [--pj P] [--json]   # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む。ADR-0043）
 ```
 
@@ -110,8 +111,9 @@ kb show 538                            # depends_on 534,535,536,537
   「確かめられない = 未完了」として安全側に扱うので、その票は先行票を起票するまで選ばれません。
 - 自分自身を先行票にはできません。番号として読めない値（`12x` / `#534` など）も断ります。
 - `--depends` を書いていないチケットの扱いは今までどおりです。列が無かった頃の `kanban.db` には `kb` が起動時に足します。
-- `kb next` は先行条件を見ません（todo を番号順に 1 件返すだけの口です）。判定は `console/lib/core.py` の 1 か所にあり、
-  PM と [`dispatch`](cli-glue.md) はどちらもそこを通ります（ADR-0078）。`kb run <id>` を人が直に打てば、先行票が残っていても回ります。
+- `kb next` は先行条件も一時停止も見ません（todo を番号順に 1 件返すだけの口です）。判定は `console/lib/core.py` の 1 か所
+  （`pm_pick_next`）にあり、PM も [`dispatch`](cli-glue.md) も、コンソールの下見（`GET /api/next`）もそこを通ります
+  （ADR-0078 / ADR-0079）。`kb run <id>` を人が直に打てば、先行票が残っていても回ります。
 
 `kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。`depends_on` は `note` と同じ扱いです。
 

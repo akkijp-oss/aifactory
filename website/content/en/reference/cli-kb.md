@@ -72,7 +72,8 @@ kb list --status review          # by state
 kb list --pj kumitate --all      # by project; --all includes done
 kb show 204                      # all fields + body
 kb next                          # the oldest todo
-kb next --pj kumitate --json     # JSON (for the console preview GET /api/next, the PM and external tools; path holds the body's absolute path; dispatch does not use it)
+kb next --pj kumitate --json     # JSON (for the PM and external tools; path holds the body's absolute path; dispatch does not use it)
+                                 # the console preview GET /api/next re-picks from this answer in core before showing it
 kb resumable [--pj P] [--json]   # tickets paused by the Claude usage limit, and whether their reset time has passed (read by dispatch --resume-paused; ADR-0043)
 ```
 
@@ -114,9 +115,10 @@ tickets to finish first" (`blocked_by_dependency`). See `GET /api/pm` in the [co
 - A ticket cannot depend on itself. Values that do not read as numbers (`12x`, `#534`, …) are refused.
 - Tickets without `--depends` behave exactly as before. A `kanban.db` that predates the column gets it added by `kb` on
   startup.
-- `kb next` does not look at prerequisites (it is just the low-level entry point that returns one todo in id order). The rule lives in one
-  place in `console/lib/core.py`, and both the PM and [`dispatch`](cli-glue.md) go through it (ADR-0078). Run `kb run
-  <id>` by hand and the ticket runs even with prerequisites outstanding.
+- `kb next` looks at neither prerequisites nor paused tickets (it is just the low-level entry point that returns one todo in id
+  order). The rule lives in one place in `console/lib/core.py` (`pm_pick_next`), and the PM, [`dispatch`](cli-glue.md) and the
+  console's preview (`GET /api/next`) all go through it (ADR-0078 / ADR-0079). Run `kb run <id>` by hand and the ticket runs
+  even with prerequisites outstanding.
 
 `kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
 
