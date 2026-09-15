@@ -855,14 +855,28 @@ class Run:
         lib/aifactory_sweep.py に 1 か所）は拾わず HEAD の内容へ戻す。環境が解決し直しただけの lock / manifest が
         「意図した変更」として PR に載り、CI を 18 件赤にした（チケット 572）。
         拾った / 戻した一覧は本文・stdout・state.json に残す（差分を開かないと気づけない状態をやめる）。
-        変更が無ければコミットは作らない（空のコミットを wip ブランチに残さない）"""
+        変更が無ければコミットは作らない（空のコミットを wip ブランチに残さない）。
+        `git add` が失敗した回（step を殺されて `.git/index.lock` が残った等）は **戻しもコミットもせず**記録だけ残す
+        （未コミットの実装は作業ツリーに残す。救済のための掃き寄せが救済対象を消さない）"""
         app = "cd $SANDBOX_APP_DIR && "
         excl = sweep.excludes(self.project)
-        dirty = sweep.status_paths(self.sb(app + "git status --porcelain --untracked-files=no", check=False))
         specs = " ".join(shlex.quote(s) for s in sweep.add_pathspecs(excl))
-        self.sb(app + f"git add -u -- {specs}", check=False)
-        staged = [l.strip() for l in self.sb(app + "git diff --cached --name-only", check=False).splitlines() if l.strip()]
-        committed, excluded = sweep.split(dirty, staged)
+        dirty = sweep.status_paths(self.sb(app + sweep.STATUS_CMD, check=False))
+        if not dirty: return
+        # 「戻す対象」は **除外の glob だけ**で決める（判定は git 自身にさせる。同じ status を pathspec 付きで
+        # もう一度数え、消えた分が除外に当たったファイル）。`git add` の結果から逆算すると、add が失敗した回に
+        # 汚れ全部が「除外」になり、実装役の作業を worktree ごと消す（救済の場でこそ起きる）
+        kept = sweep.status_paths(self.sb(app + sweep.STATUS_CMD + f" -- {specs}", check=False))
+        pre_staged = sweep.nul_paths(self.sb(app + sweep.STAGED_CMD, check=False))
+        excluded = sweep.excluded_paths(dirty, kept, pre_staged)
+        if sweep.ADD_OK not in self.sb(app + f"git add -u -- {specs} && echo {sweep.ADD_OK}", check=False).split():
+            # add が通らなかった回は **何もしない**（戻しもコミットもしない）。未コミットの実装は作業ツリーに残る＝
+            # 変更前（`git add -u && (...|| git commit)`）と同じ安全側。黙って落とさず記録する
+            self.log(f"掃き寄せ（{message}）: git add が失敗した。戻しもコミットもしない（{', '.join(dirty[:20])}）")
+            print(sweep.add_failed_summary(message, dirty), flush=True)
+            self.last_sweep = {"message": message, "committed": [], "excluded": [], "add_failed": True, "dirty": dirty}
+            return
+        committed = sweep.nul_paths(self.sb(app + sweep.STAGED_CMD, check=False))
         if excluded:
             # 作業ツリーごと HEAD へ戻す。ここで戻さないと、gates と reviewer が測る木と push する木がずれる
             # （#542 の実装役が手でやった復旧と同じ）。実パスを渡す（glob は一致 0 件の PJ で失敗する）
@@ -883,7 +897,7 @@ class Run:
         run は止めない（テンプレート起因なら全便が止まる）。戻した事実は state.json の `dirty_at_start` に残す。
         pull backend（macOS / Windows / Linux）の take は別実装なので対象外（チケット 572）"""
         app = "cd $SANDBOX_APP_DIR && "
-        dirty = sweep.status_paths(self.sb(app + "git status --porcelain --untracked-files=no", check=False))
+        dirty = sweep.status_paths(self.sb(app + sweep.STATUS_CMD, check=False))
         if not dirty: return
         self.log(f"開始時の汚れ（{stage}）: {', '.join(dirty[:20])}")
         print(sweep.dirty_summary(stage, dirty), flush=True)

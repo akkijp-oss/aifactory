@@ -163,6 +163,8 @@ Whether a sweep happened is visible without opening a diff:
 - `outcome.swept` in the console and in MCP `run_show`
 - the runner's stdout (`[run] 掃き寄せ: …`)
 
+If `git add` itself fails in a step (a `.git/index.lock` left behind by a step killed at its time limit, a tracked file that cannot be read, …), the sweep **neither restores nor commits anything**: it only records the fact on stdout (`[run] 掃き寄せ: git add が失敗したので何もしなかった`) and as `add_failed` in `outcome.swept`. The work in progress stays in the working tree, so retrieve it with `sandbox ssh <task>` before releasing the VM.
+
 The working tree is also checked at the start of a run (right after checkout and after `prepare`) and restored to HEAD if dirty (`outcome.dirty_at_start`), so that leftovers from the template or from an earlier run do not become the baseline of the next one. The run is not stopped. If it keeps happening on every run, suspect the **VM template** (the `clean` snapshot) or `prepare.sh`.
 
 ## Failures and fixes

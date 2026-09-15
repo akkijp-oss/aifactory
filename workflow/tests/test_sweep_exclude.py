@@ -274,6 +274,66 @@ class SweepExcludeTest(unittest.TestCase):
         self.assertEqual(r.state["history"][-1]["failure"], "timeout")
         self.assertEqual(r.state["history"][-1]["swept"]["committed"], ["README.md"])
 
+    # ---------- d2: `git add` が失敗した回（救済の場でこそ起きる）
+    def test_a_failing_git_add_leaves_the_agents_work_in_the_worktree(self):
+        """★退行注入: `.git/index.lock` が残っていて `git add` が失敗しても、実装役の作業を消さない。
+
+        step が時間上限で SIGKILL されると、agent が git の途中で殺されて lock が残る＝**救済のために呼ばれた
+        掃き寄せが救済対象を消す**経路。除外を「staged にならなかったもの」で決めると必ずこうなる
+        （実測: lock がある木で `git status` は rc=0 で一覧を返し、`git add -u` だけが rc=128 で落ちる）"""
+        r = self.build(933)
+        (self.app / "README.md").write_text("実装した\n", encoding="utf-8")
+        self.dirty_deps()
+        (self.app / ".git/index.lock").write_text("", encoding="utf-8")
+        self.addCleanup(lambda: (self.app / ".git/index.lock").unlink(missing_ok=True))
+        before = git_out(self.app, "rev-parse", "HEAD").strip()
+        out = self.sweep_only(r, run.WIP_TIMEOUT_MESSAGE)
+        self.assertEqual(git_out(self.app, "rev-parse", "HEAD").strip(), before)       # コミットは作らない
+        self.assertEqual((self.app / "README.md").read_text(encoding="utf-8"), "実装した\n")   # ★作業は残る
+        self.assertIn("^20.17.6", (self.app / "apps/web/package.json").read_text(encoding="utf-8"))  # 戻しもしない
+        self.assertTrue(r.last_sweep["add_failed"])                                    # 黙って落とさない
+        self.assertEqual(r.last_sweep["excluded"], [])
+        self.assertIn("README.md", r.last_sweep["dirty"])
+        self.assertIn("git add", out)
+
+    def test_a_failing_git_add_never_restores_the_agents_files(self):
+        """★`git add` だけが失敗して `git restore` は通る組み合わせ（index.lock と違い戻しが実行できてしまう）。
+
+        実測した引き金: 追跡済みのファイルが読めない（`chmod 000`）と `git add -u` は rc=128・staged は空・
+        `git restore --staged --worktree` は rc=0。除外を「staged にならなかったもの」で決めていると、
+        **汚れている全ファイル**が戻る対象になって実装役の作業が消える。ここでは失敗を `sb` の層で注入する
+        （root で走らせても chmod が効かないので、引き金ではなく分岐そのものを固定する）"""
+        r = self.build(935)
+        real_sb = r.sb
+        r.sb = lambda cmd, input_text=None, check=True: (
+            "" if "git add -u" in cmd else real_sb(cmd, input_text, check))
+        (self.app / "README.md").write_text("実装した\n", encoding="utf-8")
+        self.dirty_deps()
+        before = git_out(self.app, "rev-parse", "HEAD").strip()
+        self.sweep_only(r, run.WIP_TIMEOUT_MESSAGE)
+        self.assertEqual((self.app / "README.md").read_text(encoding="utf-8"), "実装した\n")  # ★消さない
+        self.assertEqual(git_out(self.app, "rev-parse", "HEAD").strip(), before)
+        self.assertTrue(r.last_sweep["add_failed"])
+
+    # ---------- d3: 名前に非 ASCII を含むファイル（記録が嘘をつかない）
+    def test_a_non_ascii_filename_is_recorded_as_committed_not_as_excluded(self):
+        """`git status --porcelain` の既定は非 ASCII を八進で括る。列挙を `-z` で揃えないと、同じファイルが
+        「拾った」と「除外して戻した」の両方に出る（コミットには入っているのに本文が嘘を書く）"""
+        r = self.build(934)
+        jp = self.app / "日本"; jp.mkdir()
+        (jp / "表.txt").write_text("あ\n", encoding="utf-8")
+        git(self.app, "add", "日本/表.txt"); git(self.app, "commit", "-q", "-m", "非 ASCII の追跡ファイル")
+        (jp / "表.txt").write_text("実装した\n", encoding="utf-8")
+        self.dirty_deps()
+        self.sweep_only(r)
+        self.assertEqual(r.last_sweep["committed"], ["日本/表.txt"])
+        self.assertEqual(sorted(r.last_sweep["excluded"]), ["apps/web/package.json", "pnpm-lock.yaml"])
+        body = git_out(self.app, "log", "-1", "--format=%b")
+        self.assertIn("- 日本/表.txt", body)
+        self.assertNotIn("除外して HEAD の内容へ戻したファイル（依存ファイル", body.split("拾ったファイル:")[0])
+        self.assertNotIn("日本/表.txt", body.split("除外して HEAD", 1)[1])
+        self.assertEqual(git_out(self.app, "status", "--porcelain", "--untracked-files=no").strip(), "")
+
     # ---------- e: PJ 側で既定を切れる
     def test_a_project_that_declares_an_empty_exclude_list_sweeps_everything(self):
         """`sweep_exclude: []` は「除外なし」の明示。既定に戻さない"""
@@ -339,13 +399,39 @@ class SweepLibTest(unittest.TestCase):
     def test_restore_pathspecs_use_real_paths_not_globs(self):
         self.assertEqual(sweep.restore_pathspecs(["apps/web/package.json"]), [":(top)apps/web/package.json"])
 
-    def test_status_paths_reads_renames_and_quoted_names(self):
-        out = sweep.status_paths('M  a.txt\nR  old.txt -> new.txt\n M "a b.txt"\n?? skip\n')
-        self.assertEqual(out, ["a.txt", "new.txt", "a b.txt", "skip"])
+    def test_status_paths_reads_renames_and_names_with_spaces(self):
+        """`-z` は 1 レコード `XY SP <path> NUL`。rename だけ元のパスが次のフィールドに続く"""
+        out = sweep.status_paths("M  a.txt\0R  new.txt\0old.txt\0 M a b.txt\0")
+        self.assertEqual(out, ["a.txt", "new.txt", "a b.txt"])
 
-    def test_split_separates_what_was_staged_from_what_was_left(self):
-        committed, excluded = sweep.split(["README.md", "package.json"], ["README.md"])
-        self.assertEqual((committed, excluded), (["README.md"], ["package.json"]))
+    def test_status_paths_keeps_non_ascii_names_as_is(self):
+        """★`git status --porcelain` の既定は非 ASCII を八進で括る。`STATUS_CMD` は quotePath=false + -z なので
+        生の UTF-8 が出る。ここで文字化けさせると `STAGED_CMD` 側の名前と一致せず、記録が嘘をつく"""
+        self.assertEqual(sweep.status_paths(" M 日本/表.txt\0"), ["日本/表.txt"])
+        self.assertEqual(sweep.nul_paths("日本/表.txt\0README.md\0"), ["日本/表.txt", "README.md"])
+
+    def test_both_列挙_commands_disable_path_quoting(self):
+        for cmd in (sweep.STATUS_CMD, sweep.STAGED_CMD):
+            self.assertIn("core.quotePath=false", cmd)
+            self.assertIn("-z", cmd.split())
+
+    def test_excluded_paths_are_decided_by_the_glob_not_by_what_got_staged(self):
+        """★除外は「glob に当たったもの」だけ。`git add` の成否から逆算しない（add が落ちた回に全部消える）"""
+        dirty = ["README.md", "apps/web/package.json", "pnpm-lock.yaml"]
+        kept = ["README.md"]
+        self.assertEqual(sweep.excluded_paths(dirty, kept, []), ["apps/web/package.json", "pnpm-lock.yaml"])
+        # add が失敗して staged が空でも、glob に当たらない README.md は戻す対象にならない
+        self.assertNotIn("README.md", sweep.excluded_paths(dirty, kept, []))
+
+    def test_a_file_the_agent_staged_itself_is_never_restored(self):
+        """実装役が自分で `git add` した依存ファイルは意図が明示されている。戻さない"""
+        self.assertEqual(sweep.excluded_paths(["a/package.json", "pnpm-lock.yaml"], [], ["a/package.json"]),
+                         ["pnpm-lock.yaml"])
+
+    def test_add_failed_summary_names_the_files_left_behind(self):
+        out = sweep.add_failed_summary("wip: step timeout", ["README.md"])
+        self.assertIn("git add", out)
+        self.assertIn("README.md", out)
 
     def test_commit_body_lists_both_sides(self):
         body = sweep.commit_body(["README.md"], ["package.json"])

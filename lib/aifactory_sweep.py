@@ -15,11 +15,29 @@ pathspec の形について:
 - `:/`（top magic）が要る。app_dir がリポジトリ直下でない PJ（kumitate は `apps/kumitate`）で `git add -u` に
   パスを付けると **cwd 相対**になり、掃き寄せの範囲が黙って縮む。`:/` を先頭に置いてツリー全体を対象にする
 - 除外は `:(top,glob,exclude)<glob>`。`glob` を付けないと `**` が効かない
+
+「除外したファイル」を **glob の判定でだけ決める**こと（「staged にならなかったもの」で代用しない）:
+- 代用すると `git add` が失敗した回（step が時間上限で殺され `.git/index.lock` が残った等）に staged が空になり、
+  **汚れている全ファイル**が「除外」と見なされて `git restore --worktree` で消える。救済の場でこそ起きる
+- 判定は git 自身にさせる（`add_pathspecs()` を `git status` にも渡し、残った一覧＝拾う対象とする）。
+  fnmatch で `**` を再実装しない（git の glob と挙動がずれる）
+
+ファイル名の列挙は **必ず `-z` と `core.quotePath=false`** で取る（`STATUS_CMD` / `STAGED_CMD`）:
+- 既定の `git status --porcelain` は非 ASCII を `"\346\227\245..."` と八進で括る。`git diff --cached --name-only` も同じ。
+  中途半端に外すと同じファイルが別の文字列になり、記録が嘘をつく（拾ったのに「除外して戻した」と書く）
 """
 
 DEFAULT_EXCLUDE = ["**/package.json", "**/pnpm-lock.yaml"]
 
 COMMIT_BODY_HEAD = "掃き寄せ（step の終わりに残っていた未コミットの変更を救済）"
+
+# ファイル名の列挙はこの 2 つだけを使う（`-z` + quotePath=false。八進エスケープと引用符を混ぜない）。
+# `STATUS_CMD` は末尾に ` -- <pathspec>` を足して「除外を効かせた一覧」も取れる
+STATUS_CMD = "git -c core.quotePath=false status --porcelain -z --untracked-files=no"
+STAGED_CMD = "git -c core.quotePath=false diff --cached --name-only -z"
+
+# `git add` が通ったことを stdout で確かめるための目印（sb は返り値を捨てて stdout しか返さない）
+ADD_OK = "SWEEP-ADD-OK"
 
 
 def excludes(project):
@@ -47,37 +65,40 @@ def restore_pathspecs(paths):
     return [f":(top){p}" for p in paths]
 
 
-def status_paths(porcelain):
-    """`git status --porcelain --untracked-files=no` の出力 → パスの一覧（リポジトリ直下からの相対）。
+def status_paths(porcelain_z):
+    """`STATUS_CMD`（`git status --porcelain -z`）の出力 → パスの一覧（リポジトリ直下からの相対）。
 
-    rename（`R  old -> new`）は新しい方を採る。空白を含む名前は git が `"..."` で括るので外す。
+    `-z` は 1 レコードが `XY SP <path> NUL`。rename / copy だけは元のパスが次の NUL 区切りに続くので読み飛ばし、
+    新しい方を採る。引用符も八進エスケープも出ない（`STATUS_CMD` が `core.quotePath=false` を渡している）。
     """
-    out = []
-    for line in (porcelain or "").splitlines():
-        if len(line) < 4: continue
-        path = line[3:]
-        if " -> " in path: path = path.split(" -> ", 1)[1]
-        out.append(_unquote(path))
+    fields = (porcelain_z or "").split("\0")
+    out, i = [], 0
+    while i < len(fields):
+        rec = fields[i]; i += 1
+        if len(rec) < 4: continue
+        if "R" in rec[:2] or "C" in rec[:2]: i += 1     # 続く 1 フィールドは rename / copy の元のパス
+        out.append(rec[3:])
     return out
 
 
-def _unquote(path):
-    if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
-        try: return path[1:-1].encode("latin-1", "backslashreplace").decode("unicode_escape")
-        except Exception: return path[1:-1]
-    return path
+def nul_paths(out):
+    """`STAGED_CMD`（`--name-only -z`）の出力 → パスの一覧"""
+    return [p for p in (out or "").split("\0") if p]
 
 
-def split(dirty, staged):
-    """（掃き寄せ前の未コミット一覧, `git add` 後に staged な一覧）→ (拾った, 除外した)。
+def excluded_paths(dirty, kept, pre_staged):
+    """（掃き寄せ前の未コミット一覧, 除外 pathspec を付けて数え直した一覧, 掃き寄せ前から staged な一覧）
+    → 除外して HEAD へ戻すファイル。
 
-    staged に載らなかった未コミットのファイルが「除外した」。
-    実装役が自分で `git add` 済みのファイルは staged 側に居るので、除外の対象にならない（意図が明示されている）。
+    ★判定は **除外の glob（git が `kept` として返した差）だけ**で決める。「`git add` の後で staged にならなかったもの」
+    で代用してはいけない: add が失敗した回（`.git/index.lock` が残った等）に staged が空になり、実装役の作業を
+    全部「除外」と見なして worktree ごと消す。救済（`wip: step timeout`）の場でこそ起きる事故。
+
+    実装役が自分で `git add` 済みのファイル（`pre_staged`）は、依存ファイルでも戻さない（意図が明示されている。
+    票の「依存の変更は明示的に要求されたときだけ」）。
     """
-    dirty = list(dict.fromkeys(dirty)); staged = list(dict.fromkeys(staged))
-    committed = [p for p in dirty if p in staged] + [p for p in staged if p not in dirty]
-    excluded = [p for p in dirty if p not in staged]
-    return committed, excluded
+    kept = set(kept); pre = set(pre_staged)
+    return [p for p in dict.fromkeys(dirty) if p not in kept and p not in pre]
 
 
 def commit_body(committed, excluded):
@@ -110,6 +131,13 @@ def summary(message, committed, excluded):
     if committed: parts.append("  拾った: " + ", ".join(committed))
     if excluded: parts.append("  除外して戻した: " + ", ".join(excluded))
     return "\n".join(parts)
+
+
+def add_failed_summary(message, dirty):
+    """`git add` が失敗した回の要約。**この回は何も戻さず・何もコミットしない**（未コミットの実装は作業ツリーに残る）。
+    黙って落とすと、救済されなかったことに誰も気づけない"""
+    return (f"[run] 掃き寄せ（{message}）: git add が失敗したので何もしなかった（戻しもコミットもしない）。"
+            f"未コミットのまま残っている {len(dirty)} 件: " + ", ".join(dirty[:20]))
 
 
 def dirty_summary(stage, restored):

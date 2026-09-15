@@ -177,6 +177,8 @@ sandbox release 999
 - コンソールと MCP の `run_show` の `outcome.swept`
 - runner の標準出力（`[run] 掃き寄せ: …`）
 
+`git add` 自体が失敗した工程（step を時間上限で殺されて `.git/index.lock` が残った、追跡済みのファイルが読めない、など）は、**戻しもコミットもせず**に標準出力（`[run] 掃き寄せ: git add が失敗したので何もしなかった`）と `outcome.swept` の `add_failed` に残します。書きかけは作業ツリーに残るので、VM を返す前に `sandbox ssh <task>` で取り出してください。
+
 run の開始時（checkout と `prepare` の直後）にも作業ツリーを確かめ、汚れていれば HEAD の内容へ戻します（`outcome.dirty_at_start`）。テンプレートや前の実行が残した変更が、次の run の基準になるのを防ぐためです。run は止めません。それでも毎回汚れる場合は、**VM のテンプレート側**（`clean` スナップショット）か `prepare.sh` を疑ってください。
 
 ## 障害と対処
