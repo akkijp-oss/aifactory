@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- aifactory 管理役（PM）の 1 周（ADR-0074 決定 1）。Linux の aifactory-pm.timer と同じ仕事を launchd で 5 分ごとに。
+       この版は提案だけ: 次の一手と理由を logs/pm-decisions.jsonl に 1 行書いて終わる（run は起こさない）。
+       @@PYTHON@@ / @@REPO@@ / @@PATH@@ / @@HOME@@ / @@WORKSPACE@@ は console/bin/install.sh が埋める -->
+  <key>Label</key><string>com.aifactory.pm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@PYTHON@@</string>
+    <string>@@REPO@@/console/bin/pm-tick</string>
+  </array>
+  <key>WorkingDirectory</key><string>@@REPO@@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>@@PATH@@</string>
+    <key>HOME</key><string>@@HOME@@</string>
+    <key>LANG</key><string>ja_JP.UTF-8</string>
+    <key>AIFACTORY_WORKSPACE</key><string>@@WORKSPACE@@</string>
+  </dict>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>@@HOME@@/Library/Logs/aifactory-pm.log</string>
+  <key>StandardErrorPath</key><string>@@HOME@@/Library/Logs/aifactory-pm.log</string>
+</dict>
+</plist>

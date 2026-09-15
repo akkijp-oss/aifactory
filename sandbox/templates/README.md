@@ -100,6 +100,8 @@ Node monorepo の PJ は `examples/projects/kumitate/provision.sh` が実例（c
 
 VM 内で `$SANDBOX_APP_DIR`（無ければ `~/app`）に cd し、CI と同じ組を 1 つずつ `PASS name` / `FAIL name (~/gates/name.log)` の行で出す。全部通れば 0、どれか赤なら非0。workflow runner はこの終了コードで合否を決め、赤の行だけを agent に戻す。実例は `examples/projects/kumitate/gates.sh`。
 
+ログの出力先は `~/gates/<name>${GATES_LOG_SUFFIX:-}.log` と書く。runner が base で回し直すときだけ `GATES_LOG_SUFFIX=.base` を渡すので、本実行の赤いログが base の結果で上書きされない（チケット 551）。
+
 ## 焼く前の後片付け（base / PJ 共通）
 - 認証情報を残さない: `gh auth logout`、`~/.config/gh` 削除、`GH_TOKEN` は環境変数のみ
 - 履歴を消す: `~/.bash_history`

@@ -141,11 +141,13 @@ INFO strings red (also red on base; not a gate)
 PASS feature
 
 === base check: origin/develop
-BASE-CHECK origin/develop 675cdbc
-FAIL strings (~/gates/strings.log)
+BASE-CHECK origin/develop 675cdbc (logs: ~/gates/<name>.base.log)
+FAIL strings (~/gates/strings.base.log)
 ```
 
 残りに `FAIL` が無ければゲートは成功として次の工程へ進むので、実装への差し戻しを消費しません。確かめたゲート名は run の記録に残り、`sandbox_status` が `known_red_gates` に手で書いた値と合わせて返します。`project.yml` は書き換えません。
+
+base 確認の出力は本実行とは別のファイル（`~/gates/<名前>.base.log`）に書きます。同じ名前に書くと、診断のための回し直しが診断対象（本実行の赤いログ）を消してしまうためです。runner は base 確認の呼び出しにだけ env `GATES_LOG_SUFFIX=.base` を渡すので、PJ の `gates.sh` の `gate()` はこれを見てください（未設定なら従来どおり `<名前>.log`）。見ていない PJ では `=== base check:` の中に `BASE-CHECK-LOG-MISSING <名前>` が 1 行出ます（判定は変わりません）。
 
 base を確認できなかった回（未コミットの変更を退避できない、`origin/<base_branch>` が無いなど）は `=== base check:` に `BASE-CHECK-SKIP` と理由が出て、格下げは行いません。base を見たあと作業ブランチへ戻し切れなかった場合は、赤が残っていなくても run を止めて人に返します。
 

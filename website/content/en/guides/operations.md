@@ -47,6 +47,24 @@ kb run <id> --from                       # continue by hand (the command is in t
 - After `AIFACTORY_RESUME_MAX_HITS` stops in a row (default 6) the automatic resume gives up and the ticket becomes `blocked` (the token's window is too small, etc.). Both can be set in `ctl.env`
 - If the token itself is invalid, expired or out of credit (`failure: key`), waiting does not help, so the ticket is `blocked`. Fix the token as above and continue with `kb run <id> --from`
 
+### The manager's turn writes a proposal every 5 minutes
+
+The control plane's systemd timer `aifactory-pm.timer` calls `console/bin/pm-tick` every 5 minutes (on macOS, the launch agent `com.aifactory.pm`; `install.sh` installs either one). A turn only reads the current state, decides the next move and the **reason**, and writes one line to `$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl`.
+
+**This version starts no run and merges nothing.** It keeps saying "this is what I would run next"; actually running it is still a person's job (*Run* on the console, or `kb run <id>`). The order is deliberate: the loop switches to automatic only once its proposals have been shown to be sound (ADR-0074).
+
+```bash
+systemctl status aifactory-pm.timer                    # is the five-minute turn running
+journalctl -u aifactory-pm                             # the JSON for each turn (what was decided and why)
+console/bin/pm-tick --pj <PJ> --dry                    # take a turn now (--dry decides without writing)
+tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # the decision log (the same one the Manager screen shows)
+```
+
+- A turn does not wait. A run finishing is seen by the next turn (so reactions lag by up to one interval)
+- Turns do not overlap. `jobs/.lock` is taken without waiting, so if the timer's turn and a turn started from the screen collide, the later one does nothing (`skipped: "locked"`)
+- While the same decision holds, no new line is added — a five-minute timer does not fill the log with identical lines
+- The decision log carries no prose. The reason is a `reason_code` from a fixed vocabulary, and the wording is built by the screen (ADR-0025)
+
 ### GitHub token (automatic)
 
 GitHub App installation tokens expire after one hour. The systemd timer `aifactory-gh-refresh.timer` on the control plane reissues them to every lent VM every 45 minutes, and the runner reissues before each code step. By hand:

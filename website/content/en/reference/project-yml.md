@@ -139,11 +139,13 @@ INFO strings red (also red on base; not a gate)
 PASS feature
 
 === base check: origin/develop
-BASE-CHECK origin/develop 675cdbc
-FAIL strings (~/gates/strings.log)
+BASE-CHECK origin/develop 675cdbc (logs: ~/gates/<name>.base.log)
+FAIL strings (~/gates/strings.base.log)
 ```
 
 If no `FAIL` is left, the gates step passes and the run moves on, without spending one of its trips back to the implementer. The confirmed gate names are kept in the run record, and `sandbox_status` returns them together with whatever was written by hand in `known_red_gates`. `project.yml` itself is never rewritten.
+
+The base check writes to a separate file from the main run (`~/gates/<name>.base.log`). Writing to the same name would let the diagnostic rerun erase what it is diagnosing - the red log of the main run. The runner passes `GATES_LOG_SUFFIX=.base` in the environment for the base-check call only, so the `gate()` function in your `gates.sh` should honour it (unset means `<name>.log`, as before). Projects that ignore it get one `BASE-CHECK-LOG-MISSING <name>` line inside `=== base check:` (the verdict is unchanged).
 
 If base could not be checked (uncommitted changes could not be stashed, `origin/<base_branch>` is missing, and so on), the reason is printed under `=== base check:` as `BASE-CHECK-SKIP` and nothing is downgraded. If the working tree cannot be put back on the working branch after the base check, the run stops and goes to a human even when no gate is left red.
 

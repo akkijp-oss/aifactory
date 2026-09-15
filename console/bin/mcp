@@ -43,6 +43,8 @@ def arg_int(a, k, required=True):
 
 
 def t_overview(a): return core.overview(pj=a.get("pj") or None)
+def t_pm_status(a): return core.pm_status(pj=a.get("pj") or None)
+def t_pm_tick(a): return core.pm_tick(pj=a.get("pj") or None, dry=bool(a.get("dry")), by="mcp")
 def t_ticket_list(a): return core.tickets_list(pj=a.get("pj"), status=a.get("status"), all_=bool(a.get("all")))
 def t_ticket_show(a):
     """チケット 1 件。run があれば「状態を合わせたらどうなるか」の下見も付ける（HTTP の sync-preview と同じ内容）。
@@ -163,6 +165,21 @@ TOOLS = [
      "keyは1〜4個のキー名（大小どちらでもよく、3 OSで同じ）: CTRL ALT SHIFT WIN CMD / ENTER TAB ESC SPACE BACKSPACE DELETE / LEFT RIGHT UP DOWN HOME END PAGEUP PAGEDOWN / F1〜F12 / A〜Z / 0〜9 / 記号（US配列）= - + , . / ; ' [ ] \\ ` 。WINとCMDはどちらもそのOSのメタキー、+はSHIFTと=。", schema({"session":STR,"action":{"type":"string","enum":["screenshot","click","move","type","key","scroll"]},"x":INT,"y":INT,"button":{"type":"string","enum":["left","right"]},"count":INT,"text":STR,"keys":{"type":"array","items":STR},"amount":INT},["session","action"]), t_computer_action),
     ("computer_close", "画面操作用の予約を返却する。Macは専用VMを削除、Windows/Linuxはworkspaceを削除。保存済みスクリーンショットは保持する。",schema({"session":STR},["session"]),t_computer_close),
     ("overview", "工場の概況: 状態ごとのチケット数、動いている run（今の step）、実行中ジョブ、貸出中 VM 数、枠組みの checkout が origin と食い違っていないか（repo）、PJ の base（origin/<base_branch>）に着地済みでこの制御系に未配備の変更（repo.undeployed / repo.bases）。pj を渡すと run の一覧だけその PJ に絞る（チケット数は常に全 PJ）", schema({"pj": STR}), t_overview),
+    ("pm_status", "管理役（PM）の状態（ADR-0074）: state（idle / waiting / landing / blocked）、板の読み取り結果（board）、"
+     "run の記録の読み取り結果（runs）、状態の根拠にした run 1 件（run）、次にやること（next）、判断ログ（decisions）。"
+     "読み取りのみで何も起動しない（起動は ticket_run）。"
+     "★「取得できていない」と「0 件」は別の値で返る: board.readable / board.reason（ok / no_db / kb_failed）、"
+     "runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は "
+     "picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable。"
+     "next.launchable が真なのは picked_next のときだけで、next.ticket が null でも「順調」の意味にはならない。"
+     "pj を省くと全 PJ 横断（どれか 1 つでも走っていれば waiting）。counts は overview と同じく常に全 PJ",
+     schema({"pj": STR}), t_pm_status),
+    ("pm_tick", "管理役（PM）の 1 周を 1 回だけ回す（ADR-0074）。★この版は提案だけで、何も起動しない・何もマージしない: "
+     "状態を読み、次の一手と理由を決め、判断ログ（logs/pm-decisions.jsonl）に 1 行書いて返る。run を起こすのは人（ticket_run）のまま。"
+     "待たない（run の完了は次の周で見る）。二重に回らないよう jobs/.lock を待たずに取るので、"
+     "ほかの周と重なったら何もせず skipped=locked で返る。dry を真にすると決めるだけで書かない。"
+     "返りの proposal が null なのは「することが無い」ではなく「板か実行記録を読めていない」の意味",
+     schema({"pj": STR, "dry": {**BOOL, "description": "決めるだけで判断ログに書かない"}}), t_pm_tick),
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
     ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ。run があれば sync_preview（状態を合わせたときの前後）も付く", schema({"id": INT}, ["id"]), t_ticket_show),
     ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR}, ["pj", "kind", "title"]), t_ticket_new),
@@ -235,7 +252,9 @@ RO = {"readOnlyHint": True}                                  # core を書かな
 RW = {"readOnlyHint": False}                                 # 状態を変える（ジョブを起こすものを含む）
 DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}   # 取り返しがつかない（VM を巻き戻す・走っているものを止める）
 ANNOTATIONS = {
-    "overview": ("概況", RO), "ticket_list": ("チケット一覧", RO), "ticket_show": ("チケット 1 件", RO),
+    "overview": ("概況", RO), "pm_status": ("管理役（PM）の状態", RO),
+    "pm_tick": ("管理役の 1 周（提案を書く）", RW),            # 判断ログに 1 行足す。この版は run を起こさない
+    "ticket_list": ("チケット一覧", RO), "ticket_show": ("チケット 1 件", RO),
     "run_list": ("実行記録の一覧", RO), "run_show": ("実行記録 1 件", RO), "read_file": ("記録のファイルを読む", RO),
     "run_wait": ("run の工程遷移を待つ", RO),                # 待つだけで何も変えない（ASYNC_TOOLS に入れる条件。ADR-0051）
     "sandbox_status": ("VM の貸出状況", RO),                 # 古ければ裏で ls を起こすが、読むのは Proxmox の実勢だけ（ADR-0038）

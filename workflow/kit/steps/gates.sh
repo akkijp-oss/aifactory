@@ -7,6 +7,9 @@
 #
 # 赤いゲートの VM 内ログ（~/gates/<name>.log）は $WORK/gates/<name>.log に抜粋を残す（チケット 331）。VM は run の終わりに
 # 返却・初期化されるので、そこに置かないと「どのテストがどう落ちたか」は run が終わった時点で誰にも読めなくなる。
+#
+# base 確認は同じゲート名で走るので、出力先を分けないと診断のための再実行が診断対象（本実行の赤いログ）を消す。
+# PJ の gates.sh に env GATES_LOG_SUFFIX=.base を渡し、base 側は ~/gates/<name>.base.log に書かせる（チケット 551）。
 # runner から次の env で呼ばれる: PJ TASK RUN_DIR PROJECT_DIR GATES WORK BASE BRANCH KNOWN_RED REPO
 set -uo pipefail
 : "${TASK:?}" "${PROJECT_DIR:?}" "${GATES:?}" "${WORK:?}"
@@ -67,7 +70,7 @@ base_block=""
 sandbox ssh "$TASK" "mkdir -p $WORK && : > $WORK/base-red.txt && rm -rf $WORK/gates && mkdir -p $WORK/gates"
 
 # ---------- 赤いゲートのログを work/ に残す（チケット 331）
-# base 確認は同じゲートを base で回し直すので ~/gates/<name>.log を base の結果で上書きする。その前に HEAD 側を取る。
+# base 側は ~/gates/<name>.base.log に書くので本実行のログは残る（#551）が、取るのはここ（base 確認の前）のままにする。
 # INFO に落とした分（known_red / この後 base でも赤と分かる分）もファイルは残す。「元から赤い」の根拠を reviewer と
 # 人が run の記録だけで確かめられるようにするため。実装役へ戻す依頼文に載せるかどうかは runner が FAIL だけで選ぶ
 red_head="$(awk '/^(FAIL|INFO) /{print $2}' <<< "$out")"
@@ -93,7 +96,7 @@ for g in $red_head; do
 done
 
 if [ -n "$fails" ] && [ -n "${BASE:-}" ] && [ -n "${BRANCH:-}" ]; then
-  # base で回し直すと ~/gates/<name>.log が base の結果で上書きされる。HEAD 側のログ末尾を先に取っておく
+  # `=== <name>.log (tail 60)` 節の元。base 側は別ファイル（.base.log）に書かせるので上書きはされない（#551）
   for g in $fails; do sandbox ssh "$TASK" "tail -60 ~/gates/$g.log" > "$tmp/head-$g.log" 2>/dev/null; done
   sandbox ssh "$TASK" "cat > ~/base-check.sh" <<'BASE_CHECK'
 #!/usr/bin/env bash
@@ -126,8 +129,9 @@ restore() {                     # どこで抜けても作業ブランチへ戻�
 }
 trap restore EXIT
 git checkout -q --detach "origin/$base" 2>/dev/null || { echo "BASE-CHECK-SKIP origin/$base を checkout できない"; exit 0; }
-echo "BASE-CHECK origin/$base $sha"
-BASE="$base" bash "$HOME/gates.sh" "$@"
+echo "BASE-CHECK origin/$base $sha (logs: ~/gates/<name>.base.log)"
+# 本実行の ~/gates/<name>.log を潰さないよう、base 側は別名前空間に書かせる（チケット 551）。export はしない
+BASE="$base" GATES_LOG_SUFFIX=.base bash "$HOME/gates.sh" "$@"
 BASE_CHECK
   args=""; for g in $fails; do args="$args $(printf '%q' "$g")"; done
   base_out="$(sandbox ssh "$TASK" "bash ~/base-check.sh $(printf '%q' "$BASE") $(printf '%q' "$BRANCH")$args")"
@@ -138,8 +142,17 @@ BASE_CHECK
     if grep -q '^BASE-RESTORE-FAILED' <<< "$base_out"; then echo '!restore-failed'; fi
   } | sed '/^$/d' | sandbox ssh "$TASK" "mkdir -p $WORK && cat > $WORK/base-red.txt"
   base_block="$(printf '\n=== base check: origin/%s\n%s' "$BASE" "$base_out")"
+  # PJ の gates.sh が GATES_LOG_SUFFIX を見ていないと、base の結果が本実行の ~/gates/<name>.log を上書きしたままになる（#551）。
+  # 追跡外の私有 PJ 定義はこの repo から直せないので、黙って元の事故に戻らないよう 1 行残す。FAIL/INFO にはしない（判定は不変）
+  if ! grep -q '^BASE-CHECK-SKIP' <<< "$base_out"; then
+    for g in $fails; do
+      q="$(printf '%q' "$g")"
+      [ "$(sandbox ssh "$TASK" "test -f ~/gates/$q.base.log && echo yes")" = yes ] && continue
+      base_block="$base_block$(printf '\nBASE-CHECK-LOG-MISSING %s (PJ の gates.sh が GATES_LOG_SUFFIX を見ていない。~/gates/%s.log は base の結果で上書きされたかもしれない)' "$g" "$g")"
+    done
+  fi
   for g in $base_red; do    # 「base でも赤い」の根拠を reviewer が確かめられるように base 側のログ末尾も残す
-    base_block="$base_block$(printf '\n\n--- %s.log on base (tail 30)\n%s' "$g" "$(sandbox ssh "$TASK" "tail -30 ~/gates/$g.log")")"
+    base_block="$base_block$(printf '\n\n--- %s.base.log on base (tail 30)\n%s' "$g" "$(sandbox ssh "$TASK" "tail -30 ~/gates/$g.base.log")")"
   done
 fi
 

@@ -129,7 +129,8 @@ mkdir -p "$HOME/gates"; rc=0
 SELECT="$*"   # 引数があればその名前のゲートだけ走らせる（runner が base で確かめるときに使う）
 gate() { local name=$1; shift
   if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
-  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+  local log="$HOME/gates/$name${GATES_LOG_SUFFIX:-}.log"   # base で確かめるときは runner が .base を渡す
+  if "$@" > "$log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name${GATES_LOG_SUFFIX:-}.log)"; rc=1; fi
 }
 gate typecheck pnpm --filter @myapp/web typecheck
 gate lint      pnpm --filter @myapp/web lint
@@ -140,6 +141,8 @@ exit $rc
 情報扱いにしたいもの（失敗しても止めない）は `gate` ではなく `INFO` を出す形にするか、`known_red_gates` に書きます。実行時間はここが大半なので、まず「CI と同じ」で始め、重ければ後で差分実行を考えます。Rails なら `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` のように並べます。
 
 ゲートが赤いとき、runner は**その赤いゲートだけ**を base でも実行し、base でも赤ければ実装工程に戻しません。上の `SELECT` はそのための契約です（引数なしなら今までどおり全部走ります）。
+
+`GATES_LOG_SUFFIX` も同じ契約の一部です。base で回し直すときだけ runner が `.base` を渡すので、base 側の出力は `~/gates/<名前>.base.log` に行き、**本実行の赤いログ `~/gates/<名前>.log` はそのまま残ります**。ここを固定名にすると、診断のための回し直しが診断対象（失敗の証拠）を消してしまいます。
 
 **依存の再取得やマイグレーションはゲートに入れないでください。** それは「品質を測る」前の準備で、失敗したときの宛先も違います（ゲートの赤は実装エージェント、準備の失敗は人）。準備は `prepare.sh` に書き、`project.yml` の `prepare` で指定します。
 

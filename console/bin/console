@@ -156,6 +156,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "overview": return overview(pj=q.get("pj") or None), 200
         if ep == "tickets": return tickets_list(pj=q.get("pj")), 200
         if ep == "next": return ticket_next(pj=q.get("pj")), 200
+        if ep == "pm": return pm_status(pj=q.get("pj") or None), 200
         m = re.match(r"^tickets/(\d+)$", ep)
         if m: return ticket_detail(int(m.group(1))), 200
         m = re.match(r"^tickets/(\d+)/sync-preview$", ep)
@@ -222,6 +223,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ep == "sandbox/release": return op_sandbox_release(b)
         if ep == "keys": return keys_apply(b)
         if ep == "config/model": return config_model_apply(b)   # 既定は下見（書くのは dry_run: false のときだけ）
+        if ep == "pm/tick": return pm_tick(pj=b.get("pj") or None, dry=bool(b.get("dry")), by="api")
         m = re.match(r"^jobs/([\w.-]+)/stop$", ep)
         if m: return op_job_stop(m.group(1))
         raise ApiError("not found", 404)

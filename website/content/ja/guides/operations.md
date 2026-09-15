@@ -61,6 +61,24 @@ kb run <id> --from                       # 手で続きを回す（メモに入�
 - 続けて `AIFACTORY_RESUME_MAX_HITS` 回（既定 6）止まったら自動再開をやめて `blocked` にします（鍵の枠が小さすぎる等）。どちらも `ctl.env` で変えられます
 - 鍵そのものが無効・失効・残高不足（`failure: key`）のときは待っても戻らないので `blocked` です。上の手順で鍵を直してから `kb run <id> --from` で続きを回します
 
+### 管理役（PM）の 1 周は 5 分ごとに提案だけを書く
+
+制御系の systemd timer `aifactory-pm.timer` が 5 分ごとに `console/bin/pm-tick` を呼びます（macOS は launch agent `com.aifactory.pm`。どちらも `install.sh` が入れます）。1 周ですることは「いまの状態を読み、次の一手と**理由**を決め、`$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl` に 1 行書く」だけです。
+
+**この版は run を起こしません。マージもしません。**「次はこれを回します」と書き続けるだけで、実際に回すのは今までどおり人（コンソールの「実行する」か `kb run <id>`）です。提案が妥当かを確かめてから自動に切り替える順序にしてあります（ADR-0074）。
+
+```bash
+systemctl status aifactory-pm.timer                    # 5 分ごとの周が動いているか
+journalctl -u aifactory-pm                             # 1 周ごとの JSON（決めたことと理由）
+console/bin/pm-tick --pj <PJ> --dry                    # 今すぐ 1 周（--dry は決めるだけで書かない）
+tail -3 "$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl" # 判断の記録（コンソールの「管理役」画面と同じもの）
+```
+
+- 1 周は待ちません。run が終わるのを見るのは次の周です（反応は最大 1 間隔ぶん遅れます）
+- 二重には回りません。`jobs/.lock` を待たずに取るので、timer の周と画面から押した周が重なったら、後から来たほうは何もせず終わります（`skipped: "locked"`）
+- 同じ判断が続く間は記録の行が増えません。5 分ごとに同じ行で埋まらないようにしてあります
+- 判断の記録に日本語の説明文は入りません。理由は語彙（`reason_code`）で残り、文言は画面が作ります（ADR-0025）
+
 ### GitHub のトークン（自動）
 
 GitHub App の installation token は 1 時間で切れます。制御系の systemd timer `aifactory-gh-refresh.timer` が 45 分ごとに貸出中の VM へ払い出し直し、runner もスクリプトが担当する工程の前に払い出し直します。手動なら:
