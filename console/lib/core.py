@@ -2680,7 +2680,10 @@ def _pm_jobs(pj=None):
     by_tid = {}
     if tids:
         q = "SELECT id, pj FROM tickets WHERE id IN (%s)" % ",".join("?" * len(tids))
-        by_tid = {str(t["id"]): t["pj"] for t in rows(q, tuple(tids))}
+        # 板が壊れていても状態を読む口自体は落とさない（pm_status の docstring の約束）。
+        # 引けなければ by_tid は空のまま = そのジョブの PJ は「分からない」になり、job_pj が None を返して残る
+        try: by_tid = {str(t["id"]): t["pj"] for t in rows(q, tuple(tids))}
+        except Exception: by_tid = {}
 
     def job_pj(j):
         m = RUN_NAME.match(str(j.get("run_hint") or ""))

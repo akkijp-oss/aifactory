@@ -1976,6 +1976,32 @@ class ApiTest(unittest.TestCase):
         self.assertIsNone(d["next"]["ticket"]); self.assertFalse(d["next"]["launchable"])
         self.assertEqual(d["runs"]["active_n"], 1); self.assertEqual(d["runs"]["reason"], "ok")
 
+    def test_pm_status_survives_a_broken_board_while_a_run_is_going(self):
+        """壊れた kanban.db × 実行中の kb-run ジョブ × pj 指定でも、例外を外に出さず「読めていない」と言う。
+
+        pm_status の docstring が「例外は外に出さない」と約束している（状態を読む口自体が落ちると、
+        状態が分からないことすら分からなくなる）。ジョブの PJ をチケット表から引く経路が唯一
+        try の外に出ていたため、GET /api/pm が 500 になっていた。"""
+        ws = self.tmp / "pm-broken-ws"; (ws / "kanban").mkdir(parents=True, exist_ok=True)
+        (ws / "kanban" / "kanban.db").write_text("not a database", encoding="utf-8")
+        jobs = self.tmp / "pm-broken-jobs"; jd = jobs / "20260914-091000-kb-run"; jd.mkdir(parents=True, exist_ok=True)
+        (jd / "meta.json").write_text(json.dumps(
+            {"id": "20260914-091000-kb-run", "kind": "kb-run", "label": "kb run 775", "cmd": ["kb", "run", "775"],
+             "ticket": 775, "run_hint": None, "pid": 1, "state": "running", "rc": None,
+             "started": "2026-09-14T09:10:00"}), encoding="utf-8")
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws), "CONSOLE_JOBS": str(jobs)}
+        code = ("import json, sys; sys.path.insert(0, %r); import core; "
+                "print(json.dumps(core.pm_status(pj='pm-broken'), ensure_ascii=False))"
+                % str(REPO / "console" / "lib"))
+        r = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)          # 例外が外に出ていれば 1（= GET /api/pm が 500）
+        d = json.loads(r.stdout)
+        self.assertFalse(d["board"]["readable"])             # 壊れた板を「読めた」と言わない
+        self.assertIsNone(d["board"]["counts"])              # 読めていない板を 0 件にしない
+        self.assertEqual(d["next"]["reason"], "board_unreadable")
+        self.assertFalse(d["next"]["launchable"])
+        self.assertIn(d["state"], self.PM_STATES)
+
     def test_pm_decision_is_not_copied_into_the_http_layer(self):
         """判定は core.py に 1 つだけ（ADR-0015）。bin/console と bin/mcp は core の関数を呼ぶ 1 行しか持たない"""
         console_src = (REPO / "console" / "bin" / "console").read_text(encoding="utf-8")
