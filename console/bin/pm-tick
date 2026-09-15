@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""console/bin/pm-tick: 管理役の 1 周（core.pm_tick）を 1 回だけ回して、結果を JSON で出す薄い入口。
+"""console/bin/pm-tick: AI Factory Manager の 1 周（core.pm_tick）を 1 回だけ回して、結果を JSON で出す薄い入口。
 
 aifactory-pm.timer / com.aifactory.pm.plist が 5 分ごとにこれを起こす（ADR-0074 決定 1）。
 判定はここに 1 行も無い（ADR-0015: 正本は console/lib/core.py）。この版は propose だけで、何も起動しない。
@@ -20,7 +20,7 @@ import core  # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description="管理役の 1 周（提案のみ。何も起動しない）")
+    ap = argparse.ArgumentParser(description="AI Factory Manager の 1 周（提案のみ。何も起動しない）")
     ap.add_argument("--pj", help="この PJ だけを見る（省略すると全 PJ 横断）")
     ap.add_argument("--dry", action="store_true", help="決めるところまでで、判断ログに書かない")
     a = ap.parse_args()

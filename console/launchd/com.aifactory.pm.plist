@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- aifactory 管理役（PM）の 1 周（ADR-0074 決定 1）。Linux の aifactory-pm.timer と同じ仕事を launchd で 5 分ごとに。
+  <!-- aifactory の AI Factory Manager（PM）の 1 周（ADR-0074 決定 1）。Linux の aifactory-pm.timer と同じ仕事を launchd で 5 分ごとに。
        この版は提案だけ: 次の一手と理由を logs/pm-decisions.jsonl に 1 行書いて終わる（run は起こさない）。
        @@PYTHON@@ / @@REPO@@ / @@PATH@@ / @@HOME@@ / @@WORKSPACE@@ は console/bin/install.sh が埋める -->
   <key>Label</key><string>com.aifactory.pm</string>

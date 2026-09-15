@@ -1,4 +1,4 @@
-# aifactory: 管理役（PM）の 1 周（ADR-0074 決定 1）。timer が 5 分ごとに起こす oneshot で、常駐は増やさない
+# aifactory: AI Factory Manager（PM）の 1 周（ADR-0074 決定 1）。timer が 5 分ごとに起こす oneshot で、常駐は増やさない
 # この版は提案だけ: 状態を読み、次の一手と理由を決め、$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl に 1 行書いて終わる。run は起こさない
 # 二重に回らないよう console/jobs/.lock を待たずに取る。重なった周は何もせず終わる（rc 0）
 # sandbox/bin/install.sh --systemd が @@USER@@ / @@HOME@@ / @@PATH@@ / @@REPO@@ を埋めて置く。ログ: journalctl -u aifactory-pm

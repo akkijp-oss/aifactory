@@ -110,7 +110,7 @@ class InstallSystemdTest(unittest.TestCase):
         self.assertIn("Unit=aifactory-resume.service", timer)
 
     def test_pm_timer_takes_one_oneshot_turn_every_5_minutes(self):
-        """管理役の 1 周は新しい常駐ではなく timer + oneshot（ADR-0074 決定 1。aifactory-resume.* と同型）。
+        """AI Factory Manager の 1 周は新しい常駐ではなく timer + oneshot（ADR-0074 決定 1。aifactory-resume.* と同型）。
            この版は提案を書くだけなので、ExecStart は console/bin/pm-tick（kb run ではない）"""
         self.assertEqual(self.run_install("--systemd").returncode, 0)
         svc = (self.units / "aifactory-pm.service").read_text()

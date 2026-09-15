@@ -2,7 +2,7 @@
 # console/bin/install.sh: Web コンソールを「いつでも開ける」状態にする。
 #   install.sh            ~/.local/bin/aifactory-console（symlink）だけ
 #   install.sh --launchd  さらに launchd に登録して常駐（macOS。ログイン時に自動起動、落ちたら再起動）。http://127.0.0.1:8765/
-#                         管理役の 1 周（com.aifactory.pm、5 分ごと。ADR-0074）も一緒に登録する。提案を書くだけで run は起こさない
+#                         AI Factory Manager の 1 周（com.aifactory.pm、5 分ごと。ADR-0074）も一緒に登録する。提案を書くだけで run は起こさない
 #   install.sh --systemd  systemd に登録して常駐（Linux。制御系 LXC 用。ADR-0017）。CONSOLE_HOST / CONSOLE_PORT で bind 先（既定 127.0.0.1:8765）。
 #                         127.0.0.1 以外に bind するときは ~/.config/aifactory/ctl.env に CONSOLE_TOKEN が要る（console が拒む）
 #   install.sh --remove   launchd / systemd の登録と symlink を外す
@@ -12,7 +12,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"     # console/
 REPO="$(cd "$HERE/.." && pwd)"
 LABEL=com.aifactory.console
-PM_LABEL=com.aifactory.pm                                   # 管理役の 1 周（5 分ごとの oneshot。ADR-0074 決定 1）
+PM_LABEL=com.aifactory.pm                                   # AI Factory Manager の 1 周（5 分ごとの oneshot。ADR-0074 決定 1）
 PLIST_SRC="$HERE/launchd/$LABEL.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PM_PLIST_SRC="$HERE/launchd/$PM_LABEL.plist"
@@ -45,7 +45,7 @@ do_launchd() {
   sed -e "s#@@PYTHON@@#$py#g" -e "s#@@REPO@@#$REPO#g" -e "s#@@PATH@@#$path#g" -e "s#@@HOME@@#$HOME#g" -e "s#@@WORKSPACE@@#$ws#g" "$PM_PLIST_SRC" > "$PM_PLIST_DST"
   launchctl bootout "gui/$(id -u)/$PM_LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PM_PLIST_DST"
-  log "launchd: $PM_PLIST_DST を登録（管理役の 1 周・5 分ごと。提案を書くだけで run は起こさない）"
+  log "launchd: $PM_PLIST_DST を登録（AI Factory Manager の 1 周・5 分ごと。提案を書くだけで run は起こさない）"
   local i; for i in $(seq 1 20); do
     curl -sf "http://127.0.0.1:$PORT/api/overview" >/dev/null 2>&1 && { log "ok: http://127.0.0.1:$PORT/  ログ: ~/Library/Logs/aifactory-console.log"; return 0; }
     sleep 0.5
