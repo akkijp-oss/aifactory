@@ -1432,6 +1432,9 @@ def ticket_run(tid, b):
     return {"job": JobStore.start("kb-run", cmd, label, ticket=tid, run_hint=hint, conflict=same)}
 
 
+KB_WARNING = "[kb] warning:"   # kb が stderr に出す警告の印（ticket_new が拾って戻り値に載せる。チケット 552）
+
+
 def ticket_new(b):
     for k in ("pj", "kind", "title"):
         if not b.get(k): raise ApiError(f"{k} を指定してください")
@@ -1444,7 +1447,10 @@ def ticket_new(b):
     rc, out, err = kb(*args, stdin=b.get("body") or "")
     if rc != 0: raise ApiError((err or out).strip() or f"kb new が失敗 rc={rc}")
     tid = int(out.split()[0]) if out.split() and out.split()[0].isdigit() else None
-    return {"rc": rc, "stdout": out, "stderr": err, "id": tid}
+    # 完了条件と PJ の能力宣言の食い違い（チケット 552）。判定は kb（正本は lib/aifactory_capabilities.py）が
+    # 済ませて stderr に出しているので、ここでは規則を持たずその行を拾うだけ。起票は止めない
+    warnings = [l[len(KB_WARNING):].strip() for l in (err or "").splitlines() if l.startswith(KB_WARNING)]
+    return {"rc": rc, "stdout": out, "stderr": err, "id": tid, "warnings": warnings}
 
 
 # ---------- 添付（正本は lib/aifactory_attachments.py。ここは入口で、書くのは必ず kb 経由＝ history と updated が揃う）
@@ -1696,7 +1702,9 @@ def project_show(pj):
     return {"pj": pj, "dir": rel(d) if d else None, "source": project_source(d) if d else None,
             "writable_dir": rel(wdir), "writable_dir_exists": wdir.is_dir(),
             "files": files, "backups": backups, "project_yml": yml,
-            "backend": parsed.get("backend"), "worker": parsed.get("worker"), "sandbox": tpl}
+            "backend": parsed.get("backend"), "worker": parsed.get("worker"),
+            # 宣言された能力（書いていないキーは未宣言＝照合しない）。チケット 552
+            "capabilities": parsed.get("capabilities"), "sandbox": tpl}
 
 
 def project_write(pj, file, content):

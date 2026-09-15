@@ -22,6 +22,7 @@
 | `workflow_overrides` | object | | workflow name → overrides (v1: `base_branch` only) | Base decision |
 | `known_red_gates` | array | | Names of gates already red on the base branch (names from `gates.sh`) | The runner downgrades FAIL to INFO and does not send the agent back to "fix it" |
 | `auto_merge` | boolean / object | | Let the runner merge a PR into `base_branch` when the gates are green, the review is PASS and CI is all green (off by default) | Runs the `automerge` step after `pr`. Without it the step is skipped entirely and the PR is handed to a human |
+| `capabilities` | object | | What this execution environment can do (`browser` / `docker` / `egress` / `gui`, all optional) | Checked against the ticket's acceptance criteria to emit warnings. If any key is `false`, a "what this environment cannot verify" section is added to the prompt |
 
 
 ### `auto_merge`
@@ -150,6 +151,30 @@ The base check writes to a separate file from the main run (`~/gates/<name>.base
 If base could not be checked (uncommitted changes could not be stashed, `origin/<base_branch>` is missing, and so on), the reason is printed under `=== base check:` as `BASE-CHECK-SKIP` and nothing is downgraded. If the working tree cannot be put back on the working branch after the base check, the run stops and goes to a human even when no gate is left red.
 
 How to write it: [Add a project](../guides/add-project.md#gates-sh).
+
+### `capabilities` (what this environment cannot do)
+
+Acceptance criteria that require something the environment does not have used to be accepted as-is, and the run would land a PR without ever meeting them. `capabilities` declares what the environment has so the criteria can be checked mechanically (ADR-0080).
+
+```yaml
+capabilities:
+  browser: false    # Can you look at and drive a real browser with a screen? (false if headless only)
+  docker: false     # Can you start containers with docker / compose?
+  egress: true      # Can you fetch from the outside network?
+  gui: false        # Can you drive a desktop screen?
+```
+
+All four keys are optional. **A key you omit is "undeclared" and is never checked** — that is different from `false` ("we confirmed it is missing"), so leave out anything you have not measured. With `computer_use: true`, `gui` is treated as `true` even when omitted (and `gui: false` is rejected).
+
+A declaration turns on three things.
+
+- **Filing**: `kb new` / `intake` / `ticket_new` scan the `## 完了条件` (acceptance criteria) section and warn about lines that contradict the declaration. **Filing is never blocked** — the exit code is unchanged and the warnings only go to stderr and to `warnings[]` on `ticket_new`. Free text produces both false positives and misses, so this is material for a human, never an input to a decision.
+- **Launching**: the prompt gains a "## この環境で検証できないこと" section (for every role) listing the missing capabilities and the criteria lines that matched. It exists so that work which cannot be done is not reported as done — not so the criteria get dropped.
+- **Reporting**: the implementer's `report.md` must carry a `## 未検証項目` section. A report without it, or with it empty, is rejected the same way a missing output is and goes back to a human (write "無し" if nothing applies).
+
+Projects without a declaration behave exactly as before: no warnings and no extra prompt section.
+
+To count how many existing tickets would warn, run `kb capcheck [--pj P] [--all] [--json]`. It changes neither the database nor the ticket bodies. Decide whether to extend the vocabulary only after looking at that measurement.
 
 `computer_use: true` enables the VM-local computer MCP on `macos-pull` / `windows-pull`. It defaults to disabled. See [setup](../guides/computer-use.md).
 

@@ -10,6 +10,8 @@
   既に整った ticket.md を持っているなら intake を通さず `kb new --body` を直接使う
 - --depends は先行票の番号（カンマ区切り）をそのまま kb new --depends へ渡す。人が渡した値だけで、本文の自由文からは
   依存を推測しない（#570 / ADR-0077）
+- 整形した完了条件を PJ の能力宣言（project.yml の `capabilities`）と突き合わせ、食い違う行を警告する（#552）。
+  判定は LLM ではなく LLM の後の決定的なコード（lib/aifactory_capabilities.py）で、警告だけ。起票は止めないし rc も変えない
 - --attach のファイルは起票したチケットに添付する（kb new --attach）。画像（png / jpg / gif / webp）は LLM にも見せ、
   本文の「## 現状」に画像から読み取れる事実を書かせる。起票はできて添付だけ失敗したときは id を出したうえで rc 2
 - 結果は kanban/bin/kb new で起票し、id を出す。--dry-run は起票せず判定結果（JSON）を出すだけ（添付はしない）
@@ -22,7 +24,7 @@ import argparse, datetime, json, os, pathlib, re, shutil, subprocess, sys, tempf
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # glue/
 REPO = HERE.parent
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_capabilities as caps
 KB = REPO / "kanban" / "bin" / "kb"
 LOG = paths.LOGS / "intake.log"
 
@@ -140,6 +142,16 @@ def ask_llm(text, pjs, kds, fixed, model, images=()):
     except json.JSONDecodeError as e: die(f"JSON が壊れている: {e}\n{m.group(1)[:1500]}")
 
 
+def capability_warnings(pj, body):
+    """整形後の本文の完了条件 × PJ の能力宣言 → 警告の行（判定は lib が正本。照合が失敗しても起票は落とさない）"""
+    try:
+        decl = caps.load_declared(pj)
+        if not decl: return []                       # 宣言が無い PJ は照合しない
+        return caps.format_warnings(caps.scan(body, decl))
+    except Exception as e:
+        return [f"能力の照合ができなかった: {type(e).__name__}: {e}"]
+
+
 def main():
     ap = argparse.ArgumentParser(prog="intake", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="自由文のファイル。- で標準入力")
@@ -171,8 +183,13 @@ def main():
     res.setdefault("confidence", None); res.setdefault("reason", "")
     for k in ("pj", "kind", "title", "body"):
         if not res.get(k): die(f"LLM の出力に {k} が無い: {json.dumps(res, ensure_ascii=False)[:500]}")
+    # 能力の照合は LLM の外（決定的なコード）で行う。LLM に能力を教えると完了条件を弱める方向へ倒れるため（ADR-0012 の
+    # 「判定は LLM 1 回、以降はコード」とも揃う）。警告するだけで、body も rc も変えない
+    warnings = capability_warnings(res["pj"], res["body"])
     if a.dry_run:
+        res["capability_warnings"] = warnings
         print(json.dumps(res, ensure_ascii=False, indent=2)); return
+    for w in warnings: print(f"[intake] warning: {w}", file=sys.stderr)
     body = res["body"].strip() + f"\n\n---\n（intake {datetime.datetime.now().isoformat(timespec='minutes')} / model {model} / confidence {res['confidence']} / {res['reason']}）\n"
     pr = re.match(r"^pr:\s*#?(\d+)", body); cmd = [str(KB), "new", res["pj"], res["kind"], res["title"][:70], "--body", "-"]
     if pr: cmd += ["--pr", pr.group(1)]; body = re.sub(r"^pr:.*\n", "", body, count=1)
