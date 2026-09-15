@@ -2699,8 +2699,10 @@ PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout",
 # 「次にやること」の理由コード。前 4 つは決定 5 の判断ログの語彙をそのまま使い、後ろ 2 つは
 # 状態表示のためにここで足す（判断ログには書かない）
 # blocked_by_dependency は「未完了の先行票があるので選べない」＝確かめた結論。「読めていない」（board_unreadable）とも
-# 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）。blocked_by_pause は「解除前の一時停止しか残っていない」
-# ＝時刻が来れば機械が片付ける（人を呼ばない）。人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）
+# 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）。blocked_by_pause は「解除前の一時停止しか残っていない」。
+# 解け方は一時停止の種類で違う: 利用枠切れ（quota）は解除時刻が来れば timer（dispatch --resume-paused）が続きを回すが、
+# 鍵待ち（nokey）は人が鍵を登録するまで、回数超過（hits_exceeded）は人が枠を確かめるまで解けない（timer は拾わない）。
+# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）
 PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
                    "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
 # 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
@@ -2835,7 +2837,8 @@ def pm_pick_next(next_row, pj=None, plans=None):
         if runnable(r):
             out["next"], out["reason"] = r, "picked_next"; return out
     # todo は在るが全部飛ばした。最後に飛ばした理由ではなく、先行条件で待っている票が 1 つでもあればそちらを言う
-    # （先に片付けるものが人に見えるのは依存の側で、一時停止は時刻が来れば機械が片付ける）
+    # （依存は「どの票を先に片付けるか」が板の上で人に見える。一時停止のうち機械が片付けるのは
+    #  解除時刻を待つ利用枠切れだけで、鍵待ち・回数超過は人が動くまで解けない＝skipped_by_pause の中身を見る）
     out["reason"] = "blocked_by_dependency" if out["skipped_by_dependency"] else "blocked_by_pause"
     return out
 
@@ -3007,7 +3010,8 @@ def pm_status(pj=None):
         reason = "picked_next"
     else:
         # 飛ばして選べないのは「確かめた結論」。todo が 1 件も無い（no_todo）とも、読めていない（board_unreadable）とも
-        # 別の値で、依存（人が先に片付ける）と一時停止（時刻が来れば機械が片付ける）も分ける（pm_pick_next が決める）
+        # 別の値で、依存（人が先に片付ける）と一時停止（利用枠切れなら時刻が来れば機械が片付ける。鍵待ち・回数超過は
+        # 人が動くまで解けない）も分ける（pm_pick_next が決める）
         reason = pick_reason
     nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
     try: decisions = pm_decisions()
@@ -3113,7 +3117,9 @@ def pm_decide(pj=None, status=None):
                  "skipped_by_dependency": _pm_why(nxt.get("why") or [], "skipped_by_dependency", {}),
                  "skipped_by_pause": _pm_why(nxt.get("why") or [], "skipped_by_pause", {})}
     elif nxt["reason"] == "blocked_by_pause":
-        # todo は在るが、どれも解除前の一時停止（利用枠切れ / 鍵待ち）。時刻が来れば timer が続きを回すので人を呼ばない（#581）
+        # todo は在るが、どれも解除前の一時停止。利用枠切れ（quota）は解除時刻が来れば timer が続きを回すので人を呼ばない。
+        # 鍵待ち（nokey）は鍵が登録されるまで、回数超過（hits_exceeded）は人が枠を確かめるまで timer も拾わないので、
+        # 人の手が要るかどうかは facts の skipped_by_pause（paused / until / needed_keys / hits_exceeded）で読む（#581）
         action, code = "none", "blocked_by_pause"
         facts = {"why": "blocked_by_pause",
                  "skipped_by_pause": _pm_why(nxt.get("why") or [], "skipped_by_pause", {})}

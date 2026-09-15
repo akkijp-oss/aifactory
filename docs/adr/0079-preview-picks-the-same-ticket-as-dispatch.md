@@ -43,9 +43,17 @@ PM の `_pm_pick_next()`（先行条件だけ見る）。PM 側も一時停止�
    `next` / `reason` / `kb_next`（薄い `kb next` が返した生の id）/ `skipped_by_dependency` / `skipped_by_pause`。
    `next` キーは残すので既存の呼び手は壊れない。
 5. 理由の語彙は **PM と共通**にする（ADR-0074 決定 5 の表）。足すのは `blocked_by_pause` の 1 語だけで、
-   下見のために別の語彙を作らない。`blocked_by_pause` は「解除前の一時停止の票しか残っていない」＝
-   時刻が来れば機械（`dispatch --resume-paused` の timer）が片付ける、という意味で、
+   下見のために別の語彙を作らない。`blocked_by_pause` は「解除前の一時停止の票しか残っていない」という意味で、
    人が先に片付ける `blocked_by_dependency` とも、人の一時停止指示（`paused`）とも別の値にする。
+   ★**この 1 語の中に、解け方の違う 3 つが混ざっている**（`skipped_by_pause` の中身で見分ける）:
+   - 利用枠切れ（`paused: quota`・`until` あり）→ 解除時刻が来れば機械（`dispatch --resume-paused` の timer）が片付ける
+   - 鍵待ち（`paused: nokey`・`until` は `null`）→ **人が鍵を登録するまで解けない**（`ready` は鍵プールの中身で決まり、
+     時間では変わらない。timer の待ち行列は `ready` の票しか拾わない = `glue/bin/dispatch:98`）
+   - 回数超過（`hits_exceeded`）→ **人が枠を確かめるまで自動では回さない**（同上の待ち行列から外れる）
+
+   したがって `blocked_by_pause` を「放っておけば機械が片付ける」と読んではならない。
+   後ろ 2 つだけが残った板を PM がどう知らせるか（語彙を分けるか、PM 画面に飛ばした票を出すか）は本票では決めず、
+   ★**まず「時刻で解ける」と言い切らない**ことだけを本票の範囲とする（別票）。
 6. `kb next` / `kb resumable` / `dispatch` は**変えない**（ADR-0077 / ADR-0078 / #573 が正本）。
 
 ## 理由
