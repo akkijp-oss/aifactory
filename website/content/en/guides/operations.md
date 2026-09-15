@@ -151,6 +151,22 @@ sandbox ssh 999 'curl -sI https://github.com | head -1; ping -c1 -W1 <IP of a ho
 sandbox release 999
 ```
 
+## When dependency files end up in a PR
+
+Tracked changes still uncommitted at the end of a step are picked up by the runner as a commit named `sandbox: uncommitted changes by agent` — a rescue that carries unfinished work over when a step is cut off by a time or usage limit. If `pnpm-lock.yaml` or `package.json` get swept in, dependency changes nobody asked for ride along into the PR (ticket 572: an `@types/node` downgrade turned 18 CI tests red).
+
+Those two are **left out of the sweep by default** and restored to their HEAD content, working tree included. Per project this is `sweep_exclude` in `project.yml` (see [project.yml](../reference/project-yml.md#the-sweep-sweep_exclude)). **Intentional dependency changes are committed by the implementer** — files the agent staged itself are never excluded.
+
+Whether a sweep happened is visible without opening a diff:
+
+- the body of the sweep commit (what was picked up, what was excluded and restored)
+- `outcome.swept` in the console and in MCP `run_show`
+- the runner's stdout (`[run] 掃き寄せ: …`)
+
+If `git add` itself fails in a step (a `.git/index.lock` left behind by a step killed at its time limit, a tracked file that cannot be read, …), the sweep **neither restores nor commits anything**: it only records the fact on stdout (`[run] 掃き寄せ: git add が失敗したので何もしなかった`) and as `add_failed` in `outcome.swept`. The work in progress stays in the working tree, so retrieve it with `sandbox ssh <task>` before releasing the VM.
+
+The working tree is also checked at the start of a run (right after checkout and after `prepare`) and restored to HEAD if dirty (`outcome.dirty_at_start`), so that leftovers from the template or from an earlier run do not become the baseline of the next one. The run is not stopped. If it keeps happening on every run, suspect the **VM template** (the `clean` snapshot) or `prepare.sh`.
+
 ## Failures and fixes
 
 | Symptom | Look at | Fix |

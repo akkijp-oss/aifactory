@@ -21,6 +21,7 @@
 | `forbidden` | array | | Project-specific prohibitions | Added to every role's prompt as "Forbidden in this project" |
 | `workflow_overrides` | object | | workflow name → overrides (v1: `base_branch` only) | Base decision |
 | `known_red_gates` | array | | Names of gates already red on the base branch (names from `gates.sh`) | The runner downgrades FAIL to INFO and does not send the agent back to "fix it" |
+| `sweep_exclude` | array | | Globs the sweep must not pick up (defaults to `**/package.json` and `**/pnpm-lock.yaml`; `[]` means no exclusion) | Left out of the end-of-step sweep commit and restored to their HEAD content |
 | `auto_merge` | boolean / object | | Let the runner merge a PR into `base_branch` when the gates are green, the review is PASS and CI is all green (off by default) | Runs the `automerge` step after `pr`. Without it the step is skipped entirely and the PR is handed to a human |
 | `capabilities` | object | | What this execution environment can do (`browser` / `docker` / `egress` / `gui`, all optional) | Checked against the ticket's acceptance criteria to emit warnings. If any key is `false`, a "what this environment cannot verify" section is added to the prompt |
 
@@ -130,6 +131,38 @@ pnpm --filter @kumitate/db db:migrate
 ```
 
 If it fails, the runner ends the run without starting any agent (`result: failed` and `failure: prepare` in `state.json`, an empty step history, output in `code-prepare.log`), and the kanban ticket becomes `blocked`. On the macOS / Windows / Linux workers the existing `provision.sh` already plays the same role on every lease.
+
+## The sweep: sweep_exclude
+
+At the end of a step the runner commits whatever **tracked** changes are still uncommitted in the working tree, as a commit named `sandbox: uncommitted changes by agent` (untracked files are never picked up). This is a **rescue**: when a step is cut off by its time limit or by a usage limit, it carries the unfinished work over to the next attempt.
+
+The rescue is not a judgement about what belongs in the deliverable. Implementers are expected to commit their own work, so anything left uncommitted may well be something **only the environment wrote** — a `pnpm-lock.yaml` that got re-resolved, and the `package.json` that came with it. Sweeping those in puts dependency changes nobody asked for into the PR (the accident behind ticket 572: an `@types/node` downgrade turned 18 CI tests red).
+
+So by default these files are left out of the sweep and restored to their HEAD content, working tree included:
+
+- `**/package.json`
+- `**/pnpm-lock.yaml`
+
+```yaml
+sweep_exclude:            # replaces the defaults
+  - "**/package.json"
+  - "**/pnpm-lock.yaml"
+  - "**/uv.lock"
+```
+
+Write `sweep_exclude: []` for no exclusion at all (sweep everything).
+
+**Intentional dependency changes must be committed by the implementer.** Files the agent has staged itself (`git add`) are never excluded — the intent is explicit there.
+
+When a sweep happens, the fact is recorded in three places, so that no one has to open a diff to notice it:
+
+- the body of the sweep commit lists what was picked up and what was excluded and restored
+- `swept` in the step history of `state.json` (`outcome.swept` in the console and MCP)
+- the runner's stdout (`[run] 掃き寄せ: …`)
+
+### Checking the working tree at the start
+
+Right after checkout and right after `prepare`, the runner checks `git status` and restores any dirty **tracked** file to its HEAD content before the first agent starts (untracked files are left alone). This keeps leftovers from the VM template or from an earlier run from silently becoming the baseline of the next one. What was restored is kept in `dirty_at_start` in `state.json` and readable as `outcome.dirty_at_start`. The run is not stopped.
 
 ## Gates that are red on base too
 

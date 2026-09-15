@@ -1385,6 +1385,33 @@ class ApiTest(unittest.TestCase):
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("T.outcome.step_timeout", app)
 
+    def test_run_outcome_shows_what_the_sweep_picked_up(self):
+        """掃き寄せ（`sandbox: uncommitted changes by agent`）が何を拾い、何を除外して戻したか（チケット 572）。
+
+        差分を開かないと気づけない状態をやめる。run 開始時に汚れていた作業ツリーを戻した記録（dirty_at_start）も同じ場所に出す。
+        """
+        hist = [("plan", True), ("implement", True), ("gates", True), ("review", True), ("sync", True), ("pr", True)]
+        state = self._state(hist, workflow="bug")
+        state["history"][1]["swept"] = {"message": "sandbox: uncommitted changes by agent",
+                                        "committed": ["src/a.ts"], "excluded": ["apps/web/package.json"]}
+        state["dirty_at_start"] = [{"stage": "checkout", "restored": ["apps/web/package.json"]}]
+        name = self._fixture_run("2026-09-16-kumitate-991", state, {"work/plan.md": "# 計画\n"})
+        _, d = self.http.get(f"/api/runs/{name}")
+        o = d["outcome"]
+        self.assertEqual(len(o["swept"]), 1)
+        self.assertEqual(o["swept"][0]["step"], "implement")
+        self.assertEqual(o["swept"][0]["committed"], ["src/a.ts"])
+        self.assertEqual(o["swept"][0]["excluded"], ["apps/web/package.json"])
+        self.assertEqual(o["dirty_at_start"], [{"stage": "checkout", "restored": ["apps/web/package.json"]}])
+
+    def test_run_outcome_without_a_sweep_says_so_with_empty_lists(self):
+        """掃き寄せが起きなかった run は空（「記録が無い」と「拾わなかった」を同じ形で出す＝欄を消さない）"""
+        hist = [("plan", True), ("implement", True)]
+        name = self._fixture_run("2026-09-16-kumitate-992", self._state(hist, workflow="bug"), {})
+        _, d = self.http.get(f"/api/runs/{name}")
+        self.assertEqual(d["outcome"]["swept"], [])
+        self.assertEqual(d["outcome"]["dirty_at_start"], [])
+
     def test_run_outcome_no_key_is_a_pause_not_a_failure(self):
         """鍵プールに要る用途の鍵が無く VM を取らずに止まった run（ADR-0046）。「VM の準備で止まった」ではなく「鍵が無いので一時停止」と読める"""
         state = {**self._state([], workflow="bug"), "result": "failed", "failure": "nokey", "needed_keys": ["fable", "other"],
