@@ -142,6 +142,7 @@ def main():
     ap = argparse.ArgumentParser(prog="intake", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="自由文のファイル。- で標準入力")
     ap.add_argument("--pj"); ap.add_argument("--kind"); ap.add_argument("--model"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--depends", metavar="IDS", help="先行票の番号。カンマ区切りで kb new へ素通しする（LLM には書かせない）")
     ap.add_argument("--attach", action="extend", nargs="+", default=[], metavar="FILE",
                     help="起票したチケットに添付するファイル（複数可）。画像は LLM にも見せる")
     a = ap.parse_args()
@@ -174,6 +175,7 @@ def main():
     pr = re.match(r"^pr:\s*#?(\d+)", body); cmd = [str(KB), "new", res["pj"], res["kind"], res["title"][:70], "--body", "-"]
     if pr: cmd += ["--pr", pr.group(1)]; body = re.sub(r"^pr:.*\n", "", body, count=1)
     for f in a.attach: cmd += ["--attach", f]      # kb new --attach は 1 回 1 ファイル（append）
+    if a.depends: cmd += ["--depends", a.depends] # 人が渡した値だけを素通しする（本文の自由文から依存を推測しない。#570）
     r = subprocess.run(cmd, input=body, text=True, capture_output=True, errors="replace")
     tid = r.stdout.split()[0] if r.stdout.split() and r.stdout.split()[0].isdigit() else None
     # kb new は「起票はできた・添付だけ失敗」でも id を出して rc≠0 で戻る。id が取れているならチケットは在るので、
