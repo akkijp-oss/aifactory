@@ -384,6 +384,10 @@ def run_outcome(d, s, state, wf, files):
     if s.get("status") == "not_started": o["reason"] = "not_started"; return o
     state = state or {}
     hist = state.get("history") or []
+    # 掃き寄せ（`sandbox: uncommitted changes by agent`）が何を拾い、何を除外して戻したか。
+    # 差分を開かないと気づけない状態をやめるため、どの終わり方の run でも outcome に載せる（チケット 572）
+    o["swept"] = [{"step": h.get("step"), **(h.get("swept") or {})} for h in hist if h.get("swept")]
+    o["dirty_at_start"] = state.get("dirty_at_start") or []
     # runner が居なくなった run（チケット 236）: 待っても進まないことと、終わったジョブを先に言う
     if s.get("status") == "abandoned":
         o["reason"] = "runner_gone"; o["job"] = s.get("runner")

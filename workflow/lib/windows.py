@@ -5,8 +5,12 @@ import json
 import os
 import pathlib
 import re
+import sys
 import uuid
 from macos import acquire_lease, backend as pull_backend, Client
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "lib"))
+import aifactory_sweep as sweep
 
 
 def quote(value):
@@ -154,8 +158,18 @@ def backend(Run):
                     f"& claude -p --model {quote(model)} --dangerously-skip-permissions --output-format stream-json --verbose" + computer + "; exit $LASTEXITCODE")
 
         def save_agent_changes(self):
-            return self.sb("Set-Location $env:SANDBOX_APP_DIR; git add -u; if($LASTEXITCODE){exit $LASTEXITCODE}; "
-                           "git diff --cached --quiet; if($LASTEXITCODE -eq 1){git commit -q -m 'sandbox: uncommitted changes by agent'}; "
+            """掃き寄せの PowerShell 版。除外の規則（pathspec）と本文は lib/aifactory_sweep.py から読む
+            （文言も glob も写さない。写しを 2 か所に置くと片方だけ直る）。
+
+            Linux 版（Run.commit_tracked）と違い、除外したファイルを HEAD へ戻す・拾った一覧を state に残す所までは
+            寄せていない（PowerShell から一覧を取り回す経路を実機で確かめられないため）。**Windows 版は除外と
+            本文だけ**で、戻しと記録は別票にする（チケット 572 / report.md に残す）"""
+            excl = sweep.excludes(self.project)
+            specs = " ".join(quote(s) for s in sweep.add_pathspecs(excl))
+            body = sweep.commit_body_rule_only(excl)
+            return self.sb(f"Set-Location $env:SANDBOX_APP_DIR; git add -u -- {specs}; if($LASTEXITCODE){{exit $LASTEXITCODE}}; "
+                           "git diff --cached --quiet; if($LASTEXITCODE -eq 1){git commit -q -m 'sandbox: uncommitted changes by agent' "
+                           f"-m {quote(body)}}}; "
                            "git status --porcelain | Select-String '^\\?\\?' | Select-Object -First 20", check=False).strip()
 
         def output_exists(self, name):
