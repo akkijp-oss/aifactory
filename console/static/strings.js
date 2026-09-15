@@ -138,6 +138,7 @@ const T = {
       "needs_human": "人が確かめるまで、次は起こしません。",
       "board_unreadable": "板を読めていないので、次を決められません。",
       "requeue_proposed": "止まったチケットをもう一度回すことを提案します。",
+      "blocked_by_dependency": "先に終わらせるチケットが残っているので、次は起こしません。",
       "other": "次を決めた理由をこの画面ではまだ読めません。"
     },
     "reason": {
@@ -156,6 +157,7 @@ const T = {
       "approved": "人が承認したため",
       "skipped_by_steer": "人がこのチケットを飛ばすよう指示したため",
       "paused": "人が一時停止を指示したため",
+      "blocked_by_dependency": "先に終わらせるチケットが終わっていなかったため",
       "other": "この画面より新しい理由が記録されています"
     },
     "action": { "none": "何もしない", "run": "次のチケットを回す", "requeue": "もう一度回す" },

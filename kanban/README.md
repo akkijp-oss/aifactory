@@ -29,7 +29,7 @@ $AIFACTORY_WORKSPACE/kanban/
 
 ```bash
 kb=kanban/bin/kb
-$kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--note TEXT]   # 起票。id が返る
+$kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--note TEXT] [--depends IDS]  # 起票。id が返る
 $kb list [--status S] [--pj P] [--all]                                  # 一覧（既定は done 以外）
 $kb show <id>                                                           # メタ + 本文
 $kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（glue のルーターが読む）
@@ -43,7 +43,7 @@ $kb run-note <run> [--result done|abandoned] [--pr N] [--text T]        # 人間
 $kb start|review|done|reopen <id> [--note TEXT]                         # 手で状態を進める
                                                                         # done と set --pr は、紐づく run が人間待ちのままなら run 記録にも転記する
 $kb block <id> --note "何を待っているか"                                  # 人間待ち
-$kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] # 任意の項目（`--note ''` でメモを空に戻す）
+$kb set <id> [--status S] [--pr N] [--run NAME] [--note TEXT] [--kind K] [--depends IDS]  # 任意の項目（`--note ''` でメモを空に戻す）
 $kb append <id> [--section S] [--text T]                                # 本文の末尾に追記（--text が無ければ stdin）
 $kb attach <id> <file>...                                               # 画像・PDF・CSV などを添付（コピー。本文には書かない）
 $kb attachments <id> [--json]                                           # 添付の一覧（名前・サイズ・種別・追加日時）
@@ -64,6 +64,7 @@ $kb render                                                              # BOARD.
 - 追記そのものは本文（ファイルが正）に残り、`history` には `body - → append 12字 (PM 補足)` の形で「いつ・どれだけ足したか」だけが残る（`history` は `field/old/new` の 3 列なので差分は持たない）
 - `note` は**状態の要約**で、1 行目が `[run] ` で始まる行だけが機械（`kb run` / `kb sync` / 再走）のもの。2 行目以降は人のもので、run は消さない（ADR-0048）。長い申し送りは本文の `## PM 補足` に（`kb append --section "PM 補足"`）。人の `kb set --note` は今までどおりメモ全体を書く
 - `kb set --note ''` はメモを空に戻す（DB は NULL）。`kb` 自体は元から空文字列を通していた。空を「未指定」として無視していたのは MCP / HTTP（`console/lib/core.py`）と画面で、`note` は**キーがあれば空でも渡す・キーが無ければ触らない**に変えた（`status` / `kind` / `pr` は従来どおり空を無視する）
+- `depends_on`（`--depends`）は**未完了（`done` 以外）の先行票を持つ票を PM が次に選ばない**ための列。人が書き（`--depends ''` で消す）、本文の自由文は解釈しない。存在検査はしない（DB に無い id は読む側が未完了に倒す）。`kb next` と `glue/bin/dispatch` は見ない（判定は `console/lib/core.py` の `pm_status` 側。ADR-0077）
 - 添付（`kb attach` / `kb new --attach`）は `attachments/<id>/` にコピーされ、**本文には書かない**（正本は実体のファイル。一覧は `kb show` の末尾・コンソール・MCP `ticket_show` が導く。ADR-0041）
   - 名前は sanitize する（パス区切り・`..`・制御文字・Markdown の記法（`` ` `` `*` `[` `]` `<` `>` `|`）を落とし 120 バイトに切る。同じ名前は `-2`, `-3` … を付けて上書きしない）。上限は 1 ファイル 20 MiB・1 チケット合計 100 MiB。判定は `lib/aifactory_attachments.py` に 1 か所（console / MCP / intake も同じ判定を通る）
   - `kb new --attach` は「**起票は成功・添付だけ失敗**」になることがある（上限超えなど）。そのとき id は標準出力に出るが終了コードは 0 ではない。チケットは在るので、添付だけ `kb attach <id> <file>` でやり直す
