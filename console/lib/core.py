@@ -2830,7 +2830,7 @@ def pm_status(pj=None):
     o, o_error = None, None
     try: o = overview(pj=pj)
     except Exception as e: o_error = str(e)
-    next_row, dep_skipped, dep_blocked = None, {}, False
+    next_row, dep_skipped, dep_blocked, kb_next_id = None, {}, False, None
     if not board["db"]:
         board["reason"] = "no_db"                                # 空の workspace。「todo が 0 件」とは別の値
     elif o is None:
@@ -2839,6 +2839,7 @@ def pm_status(pj=None):
         board["counts"] = o["counts"]
         try:
             next_row = ticket_next(pj=pj)["next"]                # 0 件なら None、読めなければ ApiError（core.py の ticket_next）
+            kb_next_id = next_row.get("id") if isinstance(next_row, dict) else next_row   # kb next が返した生の id（依存で飛ばす前）
             board["readable"] = True; board["reason"] = "ok"
         except Exception as e:
             board["reason"] = "kb_failed"; board["error"] = str(e)
@@ -2858,7 +2859,8 @@ def pm_status(pj=None):
         except Exception:
             board["blocked_n"] = None                            # 読めなかったので「0 件」とは言わない
     _pm_fact(why, "board_reason", board["reason"])
-    _pm_fact(why, "kb_next", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)
+    _pm_fact(why, "kb_next", kb_next_id)                          # その口（kb next）が何を返したか。依存で絞る前の生の値
+    _pm_fact(why, "picked", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)   # 依存で絞った後に選んだ票
 
     # --- 材料 2: run の記録（overview と同じ絞り方＝board_runs）と、実行中の kb-run ジョブ
     runs_all = None

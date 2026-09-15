@@ -3853,6 +3853,9 @@ class PmDependsTest(unittest.TestCase):
         d = self._pm(ws)
         self.assertEqual((d["next"]["reason"], d["next"]["ticket"]["id"]), ("picked_next", 603))
         self.assertEqual(d["proposal"]["facts"]["skipped_by_dependency"], {"602": {"601": "blocked"}})
+        # 判断の材料は「その口が何を返したか」。kb next の生の返り（602）と、依存で絞った後に選んだ票（603）を混ぜない
+        facts = {f["fact"]: f["value"] for f in d["next"]["why"]}
+        self.assertEqual((facts["kb_next"], facts["picked"]), (602, 603))
 
     def test_pm_treats_an_unknown_prerequisite_as_not_done(self):
         """DB に無い id を先行票に書いたら「確かめられない」＝未完了として扱う（安全側）。status は null で残す"""
