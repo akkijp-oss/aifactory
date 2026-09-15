@@ -2749,7 +2749,9 @@ def pm_unmet_deps(row):
 
     ★先行条件を判定する唯一の口。console（pm_status）も glue/bin/dispatch もここを通る。
       規則（depends_on の読み方・done 以外は未完了・DB に無い id は未完了）を呼び手側に書き写さない（ADR-0015 / ADR-0078）。
-    空 dict なら回してよい。DB を引けないときは例外を上へ出す（「依存なし」に倒さない）"""
+    空 dict なら回してよい。★`kanban.db` がまだ無いときは例外にならない。db() が None を返し rows() が []
+      を返すので、先行票は全部「未起票」＝未完了に倒れる（＝その票は回さない。安全側）。DB はあるのに
+      引けないとき（壊れている等）だけ例外が上へ出る。どちらも「依存なし」には倒さない"""
     return _pm_unmet_deps(_pm_deps(row))
 
 
