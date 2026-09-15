@@ -3,12 +3,12 @@
 `kanban/bin/kb`. The ticket ledger (SQLite) holding ids, state and history, and the entry point for calling the runner. Python 3 standard library only.
 
 ```
-kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
+kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--attach FILE]...
 kb list [--status S] [--pj P] [--all]
 kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
-kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS]
 kb append <id> [--section S] [--text T]
 kb attach <id> <file>...
 kb attachments <id> [--json]
@@ -47,7 +47,7 @@ kb render
 ### new
 
 ```bash
-kb new <pj> <kind> "<title>" [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+kb new <pj> <kind> "<title>" [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS]
 ```
 
 | Argument | Meaning |
@@ -60,6 +60,7 @@ kb new <pj> <kind> "<title>" [--body FILE|-] [--pr N] [--id N] [--status S] [--n
 | `--id` | Explicit number (default `MAX(id)+1`, minimum 100). Error if it exists |
 | `--status` | Initial state (default todo) |
 | `--note` | Note |
+| `--depends` | Prerequisite ticket numbers, comma-separated (e.g. `534,535`). See "Prerequisites" below |
 
 Output: one line `<id> <state> <pj> <kind> <PR> <title>` plus the body path. The file slug comes from the ASCII part of the title, or the kind if there is none.
 
@@ -88,7 +89,35 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 
 Changing `--pr` also rewrites the `pr:` line in the body (the runner reads it from there). `--run` is the run directory name (relative to `workspace/runs/`). `--kind` is validated. Everything is recorded in the history and BOARD.md is regenerated.
 
-`kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given".
+### Prerequisites (`--depends`)
+
+```bash
+kb new aifactory feature "auto mode" --body - --depends 534,535,536,537
+kb set 538 --depends 534,535,536,537   # write it later; duplicates are dropped, order is kept
+kb set 538 --depends ''                # clear the prerequisites
+kb show 538                            # depends_on 534,535,536,537
+```
+
+Records, in a form a machine can read, the **prerequisite tickets** a ticket declares it must wait for (ADR-0077).
+The value is ticket numbers separated by commas; it shows up as `depends_on` in `kb show`, and changes are kept in
+`kb history`.
+
+A ticket with even one unfinished prerequisite (anything other than `done`) is **not picked next by the PM**. The PM
+skips it, looks at the next todo, and if every candidate is like that it answers "there are still tickets to finish
+first" (`blocked_by_dependency`). See `GET /api/pm` in the [console guide](../guides/console.md).
+
+- **Only people write it.** Prerequisites are never inferred from the free text of the ticket body (that produces both
+  false positives and misses).
+- **The numbers are not checked for existence.** You can name tickets that have not been filed yet, or tickets in
+  another project. The reading side treats a number that is not in the DB as "cannot be confirmed = unfinished", which
+  is the safe side, so such a ticket is not picked until the prerequisite is filed.
+- A ticket cannot depend on itself. Values that do not read as numbers (`12x`, `#534`, …) are refused.
+- Tickets without `--depends` behave exactly as before. A `kanban.db` that predates the column gets it added by `kb` on
+  startup.
+- `kb next` (and `dispatch`, which uses it) does not look at prerequisites. Dispatch a ticket directly and it runs even
+  with prerequisites outstanding.
+
+`kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
 
 ### append
 

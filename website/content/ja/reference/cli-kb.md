@@ -3,12 +3,12 @@
 `kanban/bin/kb` は、チケットの作成、状態の更新、履歴の確認、runner の呼び出しを行う CLI です。状態と履歴を SQLite に保存します。Python 3 の標準ライブラリだけで動作します。
 
 ```
-kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
+kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--attach FILE]...
 kb list [--status S] [--pj P] [--all]
 kb show <id>
 kb start|review|done|reopen <id> [--note TEXT]
 kb block <id> --note TEXT
-kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]
+kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS]
 kb append <id> [--section S] [--text T]
 kb attach <id> <file>...
 kb attachments <id> [--json]
@@ -47,7 +47,7 @@ kb render
 ### new
 
 ```bash
-kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT]
+kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS]
 ```
 
 | 引数 | 意味 |
@@ -60,6 +60,7 @@ kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--id N] [--status S] [--
 | `--id` | 番号を指定（既定は `MAX(id)+1`、最小 100）。既にあればエラー |
 | `--status` | 初期状態（既定 todo） |
 | `--note` | メモ |
+| `--depends` | 先行票の番号をカンマ区切りで（例 `534,535`）。下の「先行条件」を参照 |
 
 `<id> <状態> <pj> <kind> <PR> <題名>` の 1 行と、本文ファイルのパスを出力します。ファイル名の slug は題名に含まれる ASCII 文字から作ります。該当する文字がなければ `kind` を使います。
 
@@ -88,7 +89,30 @@ kb set 204 --status review --pr 300 --run 2026-09-06-kumitate-204 --note "…" -
 
 `--pr` を変更すると、runner が参照する本文の `pr:` 行も更新されます。`--run` には、`workspace/runs/` からの相対パスで run ディレクトリ名を指定します。`--kind` は、指定した種別が存在するか確認されます。変更はすべて履歴に残り、`BOARD.md` が再生成されます。
 
-`kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。
+### 先行条件（`--depends`）
+
+```bash
+kb new aifactory feature "auto モード" --body - --depends 534,535,536,537
+kb set 538 --depends 534,535,536,537   # 後から書く。重複は落ち、並び順はそのまま
+kb set 538 --depends ''                # 先行条件を消す
+kb show 538                            # depends_on 534,535,536,537
+```
+
+チケットが「これが終わってから着手する」と定めている**先行票**を、機械が読める形で持たせます（ADR-0077）。
+値は票番号のカンマ区切りで、`kb show` に `depends_on` として出て、変更は `kb history` に残ります。
+
+未完了（`done` 以外）の先行票を 1 つでも持つチケットは、**管理役（PM）が次に選びません**。PM はその票を飛ばして
+次の todo を見て、候補が全部そうなら「先に終わらせるチケットが残っている」（`blocked_by_dependency`）と答えます。
+詳しくは[コンソール](../guides/console.md)の `GET /api/pm` を参照してください。
+
+- **書くのは人だけです。** 本文の自由文から先行票を推測することはしません（誤検知と取りこぼしの両方が出るため）。
+- **番号の存在は確かめません。** まだ起票していない票や他 PJ の票も書けます。読む側は、DB に無い番号を
+  「確かめられない = 未完了」として安全側に扱うので、その票は先行票を起票するまで選ばれません。
+- 自分自身を先行票にはできません。番号として読めない値（`12x` / `#534` など）も断ります。
+- `--depends` を書いていないチケットの扱いは今までどおりです。列が無かった頃の `kanban.db` には `kb` が起動時に足します。
+- `kb next`（と、それを使う `dispatch`）は先行条件を見ません。人が直に配車すれば、先行票が残っていても回ります。
+
+`kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。`depends_on` は `note` と同じ扱いです。
 
 ### append
 
