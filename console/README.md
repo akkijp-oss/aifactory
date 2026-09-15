@@ -52,6 +52,8 @@ journalctl -u aifactory-console -f
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
 | 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`。4 行それぞれに入力欄があり、ここから直せる。モデルは Agent → モデル名の 2 段で表示名から選ぶか、ID を直接入力する = ADR-0072）、PJ 定義の置き場、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める。工程詳細には**その工程の yml ブロックだけ**を出す編集欄があり、モデルの欄と画面の中で双方向に同期する（ファイル全体は出さない。`id` と担い手の種類は変えられない = ADR-0073） | workflow を開く、工程を開く、定義の原文を読む、モデルの経路を変える、工程の定義（その工程の yml ブロック）を変える（どちらも影響する工程を見てから保存する） |
 
+- 表示名は **AI Factory Manager**、識別子は `pm` のまま据え置き（`aifactory-pm.service` / `aifactory-pm.timer`・`com.aifactory.pm.plist`・`console/bin/pm-tick`・`GET /api/pm`・MCP の `pm_status` / `pm_tick`・`core.py` の `pm_*`・`logs/pm-decisions.jsonl`・画面のルート `#/pm`）。稼働中の systemd timer と公開済みの API 名を変えないため（#587）。
+
 ## MCP（AI セッションからの読み書き）
 
 `console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読んで、未設定の環境変数だけ補う。ssh 越し（`mcp-remote`）の非ログイン環境でも、systemd のコンソール（`EnvironmentFile`）と同じ secrets で子プロセスを起こすため（ADR-0030）。`GH_TOKEN` は GitHub App があれば空でよく、runner が `sandbox gh-app token <pj>` で払い出す。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
