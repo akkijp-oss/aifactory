@@ -2684,7 +2684,7 @@ def config_model_apply(b):
 
 # ---------- PM（管理役）の状態（ADR-0074。読むだけ・保存しない・何も起こさない）
 # 状態は保存せず毎回導く（決定 2）。ここに要るのは「PM の判断」だけで、材料（overview / board_runs /
-# run_detail / ticket_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
+# run_detail / kb_next / pm_pick_next / tickets_list / JobStore.running）はすべて既存の関数から取る（ADR-0015）。
 # ★この口の一番の約束は「取得できていない」と「0 件」を別の値で持つこと。読めなかったものを 0 件や
 #   null で返すと、確かめられていない状態がそのまま「順調」に見える。だから:
 #   - 板: readable / reason（ok / no_db / kb_failed）で分ける。counts は板の集計を読めたときだけ入れる
@@ -2797,7 +2797,8 @@ def pm_pick_next(next_row, pj=None, plans=None):
 
     `kb next` は todo を id 順に 1 件返すだけで、先行条件も一時停止も見ない（ADR-0077 / ADR-0078 の決定どおり
     薄いまま）。飛ばす判定を kb 側に持たせず core に置くのは ADR-0074 決定 1（判定の正本は core）のまま。
-    ★下見（ticket_next）も PM（pm_status）も dispatch もこの 1 か所を通る。規則を呼び手側に書き写さない。
+    ★下見（ticket_next）も PM（pm_status）もこの 1 か所を通る。dispatch は候補を自分で舐めるが、判定そのものは
+      同じ 2 つ（pm_unmet_deps / kb resumable の ready・hits_exceeded）を同じ順で使う。規則を呼び手側に書き写さない。
 
     飛ばすのは dispatch が板と run の記録だけで確かめられる 2 つ:
       1. 未完了の先行票がある（pm_unmet_deps。#573 / ADR-0078）
@@ -2882,7 +2883,7 @@ def pm_status(pj=None):
     """管理役（PM）の「いまの状態」と「次にやること」を、既存の記録だけから導いて返す（ADR-0074 決定 2 / 決定 4）。
 
     副作用なし: 何も起こさず（ticket_run も pr-automerge も呼ばない）、何も書かず、kanban.db も作らない
-    （`kb next` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
+    （`kb next` / `kb resumable` は kb 側で DB を作るので、DB がまだ無いときは呼ばない）。例外は外に出さない
     （PM の状態を読む口自体が落ちると、状態が分からないことすら分からなくなる）。
 
     pj を渡すとその PJ に絞る。省略すると全 PJ 横断で、どれか 1 つでも走っていれば waiting になる粗さがある。
