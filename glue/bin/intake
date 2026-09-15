@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """glue/bin/intake: 自由文の依頼を 1 枚のチケットにして kanban に起票する（ルーターの入口）。
 
-  glue/bin/intake <text-file|-> [--pj P] [--kind K] [--model M] [--attach FILE ...] [--dry-run]
+  glue/bin/intake <text-file|-> [--pj P] [--kind K] [--model M] [--depends IDS] [--attach FILE ...] [--dry-run]
 
 - 入力は自由文（音声書き起こし・チャットの貼り付け・箇条書き、何でも）。先頭 5 行に `pj: x` / `kind: y` があれば
   それを使う（決定的。LLM の判定より優先）。--pj / --kind はさらに優先
 - LLM（judgment クラス = workflow/kit/routes.env の MODEL_judgment）を 1 回だけ呼ぶ:
   決まっていない PJ・種別の判定と、runner が読める形（題名 + 完了条件）への整形。
   既に整った ticket.md を持っているなら intake を通さず `kb new --body` を直接使う
+- --depends は先行票の番号（カンマ区切り）をそのまま kb new --depends へ渡す。人が渡した値だけで、本文の自由文からは
+  依存を推測しない（#570 / ADR-0077）
 - --attach のファイルは起票したチケットに添付する（kb new --attach）。画像（png / jpg / gif / webp）は LLM にも見せ、
   本文の「## 現状」に画像から読み取れる事実を書かせる。起票はできて添付だけ失敗したときは id を出したうえで rc 2
 - 結果は kanban/bin/kb new で起票し、id を出す。--dry-run は起票せず判定結果（JSON）を出すだけ（添付はしない）

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
 
-  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--attach FILE]...
   kb list [--status S] [--pj P] [--all]
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
-  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]   # --note '' でメモを空に戻す
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
