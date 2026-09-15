@@ -1,0 +1,3 @@
+### Fixed
+- **gates: base での回し直しが、本実行の赤いゲートログを上書きしなくなった**。ゲートが赤いとき runner は同じゲートを base（`origin/<base>`）でも回して「元から赤いのか」を判定するが、出力先が本実行と同じ `~/gates/<名前>.log` だったため、診断のための再実行が診断対象（失敗の証拠）を消していた。「`FAIL` なのにログは全緑」という読めない証跡になり、2026-09-14 の run では誤診に gates 1 周（約 18 分）と調査を溶かした。base 側は `~/gates/<名前>.base.log` に分け、`code-gates-N.log` の `BASE-CHECK` 行と base 側ログの見出しもその正しいパスを指すようにした。「base でも赤いか」の判定（PASS/FAIL の読み取り）は変わらない。
+- **PJ の `gates.sh` は `gate()` を 1 行直してください**: 出力先を `"$HOME/gates/$name${GATES_LOG_SUFFIX:-}.log"` と書く（runner が base 確認のときだけ `.base` を渡す。本実行は未設定なので従来どおり `<名前>.log`）。`examples/projects/` の 2 本は対応済み。直していない PJ の run では `=== base check:` の中に `BASE-CHECK-LOG-MISSING <名前>` が 1 行出る（ゲートの判定は変わらない）。

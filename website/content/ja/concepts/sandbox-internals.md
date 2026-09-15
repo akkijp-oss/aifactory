@@ -110,7 +110,8 @@ flowchart LR
 | `/run/sandbox/env` | tmpfs。`TASK_ID` / `SANDBOX_PJ` / `SANDBOX_HOST` / `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` / `GH_REPO` / `GH_TOKEN_EXPIRES_AT`。`/etc/profile.d/sandbox.sh` がログイン時に読む |
 | `$SANDBOX_APP_DIR`（`/home/dev/app` など） | リポジトリの clone。依存・DB・seed はテンプレート由来。runner が作業ブランチを切る |
 | `~/work/<id>/` | 成果物置き場。`ticket.md` → `plan.md` → `report.md` … 。release 時に Mac へ回収 |
-| `~/gates/<name>.log` | ゲートのログ |
+| `~/gates/<name>.log` | ゲートのログ（本実行） |
+| `~/gates/<name>.base.log` | 同じゲートを base で回し直したときのログ。本実行の分を上書きしない |
 | `~/.local/bin/claude` | Claude Code |
 | `~/.local/share/mise/shims` | Ruby / Node |
 | systemd `sandbox-app.service` | アプリの常駐（:3000） |

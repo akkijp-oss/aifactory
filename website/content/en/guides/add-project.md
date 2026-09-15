@@ -127,7 +127,8 @@ mkdir -p "$HOME/gates"; rc=0
 SELECT="$*"   # with arguments, run only those gates (the runner uses this to check base)
 gate() { local name=$1; shift
   if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
-  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+  local log="$HOME/gates/$name${GATES_LOG_SUFFIX:-}.log"   # the runner passes .base when checking base
+  if "$@" > "$log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name${GATES_LOG_SUFFIX:-}.log)"; rc=1; fi
 }
 gate typecheck pnpm --filter @myapp/web typecheck
 gate lint      pnpm --filter @myapp/web lint
@@ -138,6 +139,8 @@ exit $rc
 Anything you want treated as information (red does not stop the run) should print `INFO` instead of going through `gate`, or be listed in `known_red_gates`. Most of the run time is spent here, so start with "the same as CI" and think about incremental runs later if it is too slow. For Rails, line up `gate rubocop bundle exec rubocop` / `gate rspec bundle exec rspec` in the same way.
 
 When a gate is red, the runner runs **only that gate** against base as well, and does not send it back to the implementer if it is red on base too. The `SELECT` line above is the contract that makes this possible (with no arguments everything runs, as before).
+
+`GATES_LOG_SUFFIX` is part of the same contract. The runner sets it to `.base` only when re-running against base, so the base output lands in `~/gates/<name>.base.log` and **the red log of the main run, `~/gates/<name>.log`, survives**. Hard-coding that path would let the diagnostic rerun erase what it is diagnosing.
 
 **Do not put dependency installs or migrations in the gates.** That is setup done before you measure quality, and a failure there belongs to a different audience (a red gate goes to the implementing agent, a failed setup goes to a human). Put setup in `prepare.sh` and name it in `project.yml` under `prepare`.
 

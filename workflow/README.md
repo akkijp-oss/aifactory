@@ -127,14 +127,20 @@ INFO strings red (also red on base; not a gate)
 PASS feature
 
 === base check: origin/develop
-BASE-CHECK origin/develop 675cdbc
-FAIL strings (~/gates/strings.log)
+BASE-CHECK origin/develop 675cdbc (logs: ~/gates/<name>.base.log)
+FAIL strings (~/gates/strings.base.log)
 ```
 
 残りに `FAIL` が無ければ gates は PASS で review へ進み、implement への戻しを消費しない。確かめたゲート名は run の記録
 （`state.json` の `known_red_gates`）に載り、`sandbox_status` が `project.yml` に人が書いた値と合わせて見せる。
 `project.yml` は書き換えない。base で全ゲートを回し直さないために、PJ の `gates.sh` は
 **引数があればその名前のゲートだけ走らせる**契約にしてある（引数なしは従来どおり全部）。
+
+base 側は**本実行とは別のファイル**（`~/gates/<名前>.base.log`）に書く。同じ名前に書くと、診断のための回し直しが
+診断対象（本実行の赤いログ）を消してしまうため（チケット 551）。runner は env `GATES_LOG_SUFFIX=.base` を
+base 確認の呼び出しにだけ渡し、PJ の `gates.sh` の `gate()` がそれを見る（未設定なら従来どおり `<名前>.log`）。
+`gate()` がこの env を見ていない PJ では、`=== base check:` の中に
+`BASE-CHECK-LOG-MISSING <名前>` が 1 行出る（判定は変えない。PJ の `gates.sh` を 1 行直す合図）。
 
 base を見に行けなかった回（未コミットの変更を退避できない、`origin/<base>` が無い）は `=== base check:` に
 `BASE-CHECK-SKIP` と理由が出て、判定はしない（実装役への依頼文もその回だけ言い切らない）。base を見た後に作業ブランチへ
