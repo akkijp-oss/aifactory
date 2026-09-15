@@ -116,9 +116,9 @@ tickets to finish first" (`blocked_by_dependency`). See `GET /api/pm` in the [co
 - Tickets without `--depends` behave exactly as before. A `kanban.db` that predates the column gets it added by `kb` on
   startup.
 - `kb next` looks at neither prerequisites nor paused tickets (it is just the low-level entry point that returns one todo in id
-  order). The rule lives in one place in `console/lib/core.py` (`pm_pick_next`), and the PM, [`dispatch`](cli-glue.md) and the
-  console's preview (`GET /api/next`) all go through it (ADR-0078 / ADR-0079). Run `kb run <id>` by hand and the ticket runs
-  even with prerequisites outstanding.
+  order). The prerequisite rule lives in one place in `console/lib/core.py` (`pm_unmet_deps`); [`dispatch`](cli-glue.md) calls it
+  directly, while the PM and the console's preview (`GET /api/next`) reach it through `pm_pick_next`, the entry point that picks
+  again (ADR-0078 / ADR-0079). Run `kb run <id>` by hand and the ticket runs even with prerequisites outstanding.
 
 `kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
 

@@ -2811,7 +2811,10 @@ def pm_pick_next(next_row, pj=None, plans=None):
       {"next": 票 or None, "reason": picked_next / no_todo / blocked_by_dependency / blocked_by_pause,
        "kb_next": 薄い kb next が返した生の id or None,
        "skipped_by_dependency": {票 id: {先行票 id: status}}, "skipped_by_pause": {票 id: {…PAUSE_FACTS}}}
-    ★DB や kb resumable を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない"""
+    ★DB や kb resumable を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない
+
+    `plans`（id → 一時停止の予定）を渡すと `pm_resume_plans` を呼ばずにそれを使う。呼び手が同じ tick で
+    既に引いているときに二度引かないための注入口で、今の呼び手は誰も渡していない（None なら自分で引く）。"""
     out = {"next": None, "reason": "no_todo",
            "kb_next": next_row.get("id") if isinstance(next_row, dict) else next_row,
            "skipped_by_dependency": {}, "skipped_by_pause": {}}
