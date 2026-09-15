@@ -230,6 +230,7 @@ def kb(*args, stdin=None):
 
 # ---------- runs
 RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)-(\d+)(?:-dry)?(?:-attempt\d+)?$")
+ATTEMPT_SUFFIX = re.compile(r"-attempt\d+$")   # 再走で退避された run の目印（workflow/bin/run が前回分を rename する）
 
 
 def ts_state(s):
@@ -273,7 +274,7 @@ def run_summary(d):
             "resume_step": s.get("resume_step"), "resumed_from": s.get("resumed_from"), "resume": resume_command(task, s),
             "human": s.get("human"), "merged": s.get("merged"),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
-            "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
+            "dry": d.name.endswith("-dry"), "attempt": bool(ATTEMPT_SUFFIX.search(d.name)),
             "mtime": ts_file(st if st.exists() else d)}
 
 
@@ -293,13 +294,21 @@ def run_liveness(s, jobs, tickets):
 
     runner は落ちるときに state.json へ finished を書けないことがある（take の失敗・SIGTERM・VM の再起動）。
     その run を実行中のまま出すと「待っていれば進む」と読ませるので、console が起動したジョブの終了と突き合わせる。
-    分からないものは running のまま（根拠の無い run を勝手に中断にしない）。"""
+    分からないものは running のまま（根拠の無い run を勝手に中断にしない）。
+
+    名前がずれる分（チケット 584）: 同じ名前で再走すると workflow/bin/run が前回の run を `-attemptN` へ退避するが、
+    起動したジョブの run_hint は退避前の名前のまま。退避された run はどのジョブとも名前が一致せず永久に「実行中」に
+    見えるので、退避前の名前（兄弟 run）を指すジョブも見る。退避より後に始まったジョブは退避後の run の runner なので除く。"""
     if s.get("status") != "running": return s
     name, task, mt = s["name"], s.get("task"), s.get("mtime")
+    base = ATTEMPT_SUFFIX.sub("", name)                        # 退避された run なら、退避前（兄弟 run）の名前
     cands = [j for j in jobs if j.get("kind") == "kb-run" and j.get("run_hint") == name]
     if not cands and task:   # run_hint を持たない古いジョブ: チケットが同じで、run の開始より前に始まっていないもの
         cands = [j for j in jobs if j.get("kind") == "kb-run" and not j.get("run_hint")
                  and str(j.get("ticket")) == str(task) and not after(s.get("started"), j.get("started"))]
+    if not cands and base != name:   # 退避された run: run_hint が退避前の名前のジョブだけ（別の名前のジョブには広げない）
+        cands = [j for j in jobs if j.get("kind") == "kb-run" and j.get("run_hint") == base
+                 and not after(j.get("started"), mt)]
     if cands:
         j = cands[0]                                            # JobStore.list() は開始の新しい順
         # state.json がジョブの終了より後に書かれていれば、別の runner が続きを回している（--resume 等）
@@ -307,8 +316,10 @@ def run_liveness(s, jobs, tickets):
             s["status"] = "abandoned"
             s["runner"] = {"id": j["id"], "label": j.get("label"), "state": j.get("state"), "rc": j.get("rc"), "finished": j.get("finished")}
         return s
-    t = tickets.get(name)   # ジョブの記録が無い run: 台帳が結果を反映済み（人間待ち）なら runner は終わっている
-    if t and t.get("status") == "blocked" and after(t.get("updated"), mt): s["status"] = "abandoned"
+    # ジョブの記録が無い run: 台帳が結果を反映済みなら runner は終わっている。完了（done）でも、その更新が
+    # run の最終書き込みより後なら同じこと（チケット 584 の実測: 票は done で PR も着地済み、run だけ running のまま）
+    t = tickets.get(name) or (tickets.get(base) if base != name else None)
+    if t and t.get("status") in ("blocked", "done") and after(t.get("updated"), mt): s["status"] = "abandoned"
     return s
 
 
@@ -2068,7 +2079,7 @@ def agent_step_rows(force=False):
             row = dict(c["row"])
             row.update({"run": d.name, "date": d.name[:10], "pj": st.get("pj") or m.group(1), "task": st.get("task") or m.group(2),
                         "workflow": st.get("workflow"), "step": fm.group(1), "index": int(fm.group(2)),
-                        "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
+                        "dry": d.name.endswith("-dry"), "attempt": bool(ATTEMPT_SUFFIX.search(d.name)),
                         "at": ts_file(f)})
             rows.append(row)
     for k in [k for k in _stats_mem if k not in seen]: del _stats_mem[k]; dirty = True

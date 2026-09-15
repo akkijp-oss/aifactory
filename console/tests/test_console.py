@@ -34,6 +34,13 @@ def free_port():
         s.bind(("127.0.0.1", 0)); return s.getsockname()[1]
 
 
+def core_module():
+    """console/lib/core.py をそのまま読み込む（HTTP を通さずに判定の関数だけ確かめるため）"""
+    sys.path.insert(0, str(REPO / "console" / "lib"))
+    import core
+    return core
+
+
 def load_module(jobs_dir):
     spec = importlib.util.spec_from_loader("console_mod", importlib.machinery.SourceFileLoader("console_mod", str(CONSOLE)))
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -1804,6 +1811,88 @@ class ApiTest(unittest.TestCase):
             i = app.index(fn); body = app[i:app.index("\n}", i)]
             self.assertIn("abandoned", body, f"{fn} が中断した run を実行中と分けていない")
         self.assertIn("T.outcome.runner_gone", app); self.assertIn("T.run.runnerGone", app)
+
+    # ---------- #584: 再走で -attemptN へ退避された run（起動したジョブの run_hint は退避前の名前のまま）
+    def _liveness_job(self, **over):
+        j = {"id": "20260909-164520-kb-run", "kind": "kb-run", "label": "kb run 9584", "ticket": 9584,
+             "run_hint": "2026-09-09-kumitate-9584", "started": "2026-09-09T16:45:20+09:00",
+             "finished": "2026-09-09T16:45:21+09:00", "rc": 1, "state": "failed"}
+        j.update(over); return j
+
+    def _liveness_run(self, name="2026-09-09-kumitate-9584-attempt1", **over):
+        s = {"name": name, "status": "running", "task": 9584, "runner": None, "mtime": "2026-09-09T16:45:20+09:00"}
+        s.update(over); return s
+
+    def test_run_liveness_reads_the_sibling_job_of_a_retired_attempt_run(self):
+        """★#584 の退行注入: 再走で `-attemptN` へ退避された run を、兄弟 run のジョブから中断と判定する。
+
+        workflow/bin/run は同じ名前の run があると前回分を `-attemptN` へ rename するが、起動したジョブの
+        run_hint は退避前の名前のまま。名前が一致しないだけで、死んだ記録が永久に「実行中」に貼り付いていた
+        （実測の例は 1 秒で rc=1 終了したジョブと、6 日間「開始から 141 時間」と出続けた run）。
+        直す前はこの検査が running を返して赤になる"""
+        core = core_module()
+        s = core.run_liveness(self._liveness_run(), [self._liveness_job()], {})
+        self.assertEqual(s["status"], "abandoned", "退避前の名前を指すジョブ（兄弟 run）を拾えていない")
+        self.assertEqual(s["runner"]["id"], "20260909-164520-kb-run")
+        self.assertEqual(s["runner"]["rc"], 1); self.assertEqual(s["runner"]["state"], "failed")
+
+    def test_run_liveness_still_keeps_runs_without_evidence_running(self):
+        """★#584: 兄弟の拾い方を足しても「根拠の無い run を勝手に中断にしない」約束（docstring）は変えない"""
+        core = core_module()
+        live = lambda *a: core.run_liveness(*a)["status"]
+        # 退避より後に始まったジョブは、退避後の run（今走っている兄弟）の runner なので根拠にしない
+        self.assertEqual(live(self._liveness_run(), [self._liveness_job(
+            id="20260909-171000-kb-run", started="2026-09-09T17:10:00+09:00", finished="2026-09-09T17:15:00+09:00")], {}),
+            "running", "退避より後に始まったジョブを、この run の runner として読んでいる")
+        # 走っている最中の兄弟ジョブも根拠にしない
+        self.assertEqual(live(self._liveness_run(), [self._liveness_job(
+            started="2026-09-09T17:10:00+09:00", finished=None, rc=None, state="running")], {}), "running")
+        # 別の票の run を指すジョブは拾わない（接頭辞が違う）
+        self.assertEqual(live(self._liveness_run(), [self._liveness_job(
+            run_hint="2026-09-09-kumitate-9585", ticket=9585)], {}), "running")
+        # 退避されていない名前の run では、今までどおり完全一致だけを見る
+        self.assertEqual(live(self._liveness_run(name="2026-09-09-kumitate-9584-b"), [self._liveness_job()], {}), "running")
+        self.assertEqual(live(self._liveness_run(), [], {}), "running")                      # ジョブも票も無ければ running
+        # 完全一致する run_hint（従来の型）は今までどおり中断
+        exact = core.run_liveness(self._liveness_run(name="2026-09-09-kumitate-9584"), [self._liveness_job()], {})
+        self.assertEqual(exact["status"], "abandoned"); self.assertEqual(exact["runner"]["id"], "20260909-164520-kb-run")
+        # ジョブの終了より後に state.json が書かれていれば、別の runner が続きを回している
+        self.assertEqual(live(self._liveness_run(mtime="2026-09-09T18:00:00+09:00"), [self._liveness_job()], {}), "running")
+        # 実行中に見えない run には触らない
+        self.assertEqual(live(self._liveness_run(status="finished"), [self._liveness_job()], {}), "finished")
+
+    def test_run_liveness_reads_a_ticket_that_moved_after_the_run(self):
+        """★#584: 票が done（blocked でない）でも、更新が run の最終書き込みより後なら runner は終わっている。
+
+        退避された run は票の run 列が退避前の名前なので、その名前でも台帳を引く"""
+        core = core_module()
+        tick = lambda **kw: {"2026-09-09-kumitate-9584": {"id": 9584, "status": "done", "updated": "2026-09-09T17:15:48+09:00", **kw}}
+        live = lambda *a: core.run_liveness(*a)["status"]
+        self.assertEqual(live(self._liveness_run(), [], tick()), "abandoned", "done の票の更新が run より後でも実行中のまま")
+        self.assertEqual(live(self._liveness_run(), [], tick(updated="2026-09-09T16:00:00+09:00")), "running")   # 更新が run より前
+        self.assertEqual(live(self._liveness_run(), [], tick(status="in_progress")), "running")                  # まだ実行中の票
+        self.assertEqual(live(self._liveness_run(name="2026-09-09-kumitate-9584"), [], tick(status="blocked")),
+                         "abandoned")                                                                            # 従来の blocked
+
+    def test_retired_attempt_run_is_abandoned_in_the_api(self):
+        """★#584 の完了条件: 退避された run が /api/runs と概況で「中断」に並ぶ（実行中に数えない）"""
+        base = f"2026-09-09-{PJ}-990"; name = base + "-attempt1"
+        self._fixture_run(name, self._state([], finished=None, elapsed_s=None, result=None, next="take",
+                                            current={"step": "take", "kind": "code", "since": "2020-01-02T01:00:00"}),
+                          {"ticket.md": "# 調査: 退避された run\n"})
+        self.addCleanup(shutil.rmtree, self.ws / "runs" / name, True)
+        jid = self._put_job("20200102-010000-kb-run", run_hint=base, ticket=self.seed, label=f"kb run {self.seed}",
+                            started="2020-01-02T01:00:00", finished="2020-01-02T01:00:01", rc=1, state="failed")
+        self.addCleanup(shutil.rmtree, self.tmp / "jobs" / jid, True)
+        old = time.mktime(time.strptime("2020-01-02T01:00:00", "%Y-%m-%dT%H:%M:%S"))
+        os.utime(self.ws / "runs" / name / "state.json", (old, old))
+        _, r = self.http.get("/api/runs")
+        row = next(x for x in r["runs"] if x["name"] == name)
+        self.assertEqual(row["status"], "abandoned", "退避された run が実行中のまま並んでいる")
+        self.assertEqual(row["runner"]["id"], jid)
+        _, o = self.http.get("/api/overview")
+        self.assertIn(name, [x["name"] for x in o["runs_abandoned"]["runs"]])
+        self.assertNotIn(name, [x["name"] for x in o["runs_active"]])
 
     def test_run_summary_fills_pj_and_task_from_the_run_name(self):
         """記録が欠けていても、run 名から PJ とチケット番号を補ってヘッダーの導線を出す（チケット 236）。
