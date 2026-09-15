@@ -2180,6 +2180,41 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(sorted(set(self.PM_REASON_CODES) - set(T["pm"]["reason"])), [], "判断ログの理由コードに文言の無いものがある")
         self.assertIn("other", T["pm"]["reason"], "この画面より新しい理由コードを受ける文言が無い")
 
+    def test_the_pm_vocabulary_is_one_set_in_core_and_in_the_strings(self):
+        """★語彙は core の 2 つのタプルと文言で 1 組（#570 で片方だけ更新した事故。#582 で語を足すときの網）。
+
+        core の語彙は実行時に照合されないので、片方に足し忘れても画面を見るまで誰も気づかない。
+        ここで両方を名指しで突き合わせ、足し忘れた側の名前が出るようにする"""
+        sys.path.insert(0, str(REPO / "console" / "lib"))
+        import core
+        self.assertEqual(sorted(core.PM_NEXT_REASONS), sorted(self.PM_NEXT_REASONS),
+                         "core.PM_NEXT_REASONS とこのテストの語彙がずれている（足したなら両方に足す）")
+        self.assertEqual(sorted(core.PM_REASON_CODES), sorted(self.PM_REASON_CODES),
+                         "core.PM_REASON_CODES とこのテストの語彙がずれている（足したなら両方に足す）")
+        # 「次にやること」の理由のうち、判断ログにも載る語は両方のタプルに要る（片方だけだと提案が語を受けられない）
+        for w in ("blocked_by_dependency", "blocked_by_pause"):
+            self.assertIn(w, core.PM_NEXT_REASONS, f"PM_NEXT_REASONS に {w} が無い")
+            self.assertIn(w, core.PM_REASON_CODES, f"PM_REASON_CODES に {w} が無い")
+
+    def test_pm_view_lists_what_each_paused_ticket_waits_for(self):
+        """★本票の完了条件: 一時停止で飛ばした票を「どの票が・何を待っているか」まで画面に出す（#582）。
+
+        理由の 1 文（T.pm.next[...]）だけだと、鍵の登録も利用枠の確認も人にしかできないのに、誰も何を
+        すればよいか分からない。JS を動かす基盤が無いので、他の PM 画面の検査と同じくソースを見る"""
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        r = app[app.index("function renderPm"):app.index("/* 配車のダイアログ")]
+        self.assertIn("skipped_by_pause", r, "飛ばした票（一時停止）を画面に出していない")
+        self.assertIn("T.pm.pause.", r, "何を待っているかの文言を画面が使っていない（語彙は strings.js が正本）")
+        nxt = r[r.index("const pausedBy"):r.index("/* 判断の記録")]
+        self.assertIn("nx.why", nxt, "同じ tick が積んだ材料ではなく、別の口から読み直している")
+        for w in ("ready", "retry_after", "resumable"):
+            self.assertNotIn(w, r, f"画面が一時停止の判定（{w}）を持っている（判定は core の 1 か所）")
+        T = load_strings()
+        self.assertEqual(sorted(set(("nokey", "hits", "quota")) - set(T["pm"]["pause"])), [],
+                         "一時停止の種類に文言の無いものがある")
+        self.assertNotEqual(T["pm"]["pause"]["nokey"], T["pm"]["pause"]["quota"],
+                            "「人が鍵を登録するまで解けない」と「時刻が来れば機械が回す」を同じ文言にしている")
+
     def test_pm_view_places_the_pending_controls_without_silently_disabling_them(self):
         """まだつながっていない操作は、黙って disabled にしない（Tab で届かず、理由も言えない）"""
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")

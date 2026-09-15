@@ -219,6 +219,54 @@ class KbResumePausedTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertFalse(self.calls.exists())
 
+    # ---------- 「一時停止の一覧を読めなかった」と「0 件」を分ける（#582）
+    def unreadable_env(self):
+        """`kb resumable` だけを読めなくする。上限回数が数として読めないので resume_plan が落ちる。
+           `kb list` / `kb show` / `kb next` は rc 0 のまま＝dispatch の他の口は生きている（1 か所だけを壊す）"""
+        self.paused_run(retry_after="future")
+        self.assertEqual(self.kb("sync", "931").returncode, 0)
+        env = dict(self.env, AIFACTORY_RESUME_MAX_HITS="abc")
+        self.assertNotEqual(self.kb("resumable", "--json", env=env).returncode, 0, "前提の取り違え（kb resumable が読めている）")
+        self.assertEqual(self.kb("list", "--status", "todo", env=env).returncode, 0, "壊し過ぎ（板そのものが読めない）")
+        return env
+
+    def test_dispatch_resume_paused_does_not_treat_an_unreadable_list_as_zero(self):
+        """★本票の完了条件: 一覧を読めなかったときに「一時停止 0 件」と同じ挙動にしない。
+
+        ★終了コードは 0 のまま検査する（1 にしない）。この口は 5 分ごとの timer
+          （aifactory-resume.timer / Type=oneshot・SuccessExitStatus 無指定）が叩くので、rc 1 だと
+          journal が 5 分ごとに赤で埋まり「本当の失敗」と見分けられなくなる。console/bin/pm-tick が
+          同じ理由で「今日は何もしない」を rc 0 に載せている（ADR-0074 決定 1 の運用）。
+          区別は rc ではなく「何も回していないこと」と「理由をログに出したこと」で示す。"""
+        env = self.unreadable_env()
+        r = self.dispatch("--resume-paused", env=env)
+        self.assertEqual(r.returncode, 0, "timer が叩く口なので rc は 0（理由はログで言う）\n" + r.stdout + r.stderr)
+        self.assertIn("読めなかった", r.stdout)
+        self.assertNotIn("今回せるものは無い", r.stdout, "読めなかったことを一時停止 0 件と同じ文で言っている")
+        self.assertFalse(self.calls.exists(), "確かめられていないのに runner を呼んでいる")
+        log = (self.ws / "logs" / "dispatch.log").read_text(encoding="utf-8")
+        self.assertIn("読めなかった", log, "配車ログに理由が残っていない（timer からは画面が無い）")
+
+    def test_plain_dispatch_stops_when_the_paused_list_is_unreadable(self):
+        """通常の配車も同じ。一時停止中か確かめられないまま、止めてある票を初めから回さない"""
+        env = self.unreadable_env()
+        r = self.dispatch("--once", env=env)
+        self.assertEqual(r.returncode, 0, "rc ではなく「回していないこと」で示す（上の test の理由と同じ）\n" + r.stdout + r.stderr)
+        self.assertIn("読めなかった", r.stdout)
+        self.assertFalse(self.calls.exists(), "一時停止中の票を、確かめないまま初めから回している")
+        self.assertEqual(self.show()["status"], "todo")
+
+    def test_dispatch_reads_the_paused_list_through_core(self):
+        """kb の呼び方と rc の見方は core の 1 か所（ADR-0015 / ADR-0078）。dispatch に写さない"""
+        src = DISPATCH.read_text(encoding="utf-8")
+        body = src[src.index("def resumable"):src.index("def lent_per_pj")]
+        self.assertIn("core.pm_resume_plans", body, "下見（core）と配車で kb resumable の読み方が 2 つに分かれている")
+        for w in ("json.loads", "--json"):
+            self.assertNotIn(w, body, f"dispatch が一時停止の一覧の読み方（{w}）を持っている")
+        catch = src[src.index("paused = "):src.index("while done < limit")]
+        self.assertNotIn("OSError", catch, "バイナリが無い（OSError）ことまで握ると、それも「0 件」になる")
+        self.assertNotIn("except Exception", catch, "何を握ったか分からない握り方をしている")
+
     def test_plain_dispatch_skips_a_paused_ticket_before_the_reset(self):
         self.paused_run(retry_after="future")
         self.kb("sync", "931")
