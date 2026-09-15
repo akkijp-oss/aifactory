@@ -72,7 +72,9 @@ dispatch [--pj P] [--once] [--max N] [--dry-run] [--wait [minutes]] [--resume-pa
 flowchart TD
   A[kb list --status todo, oldest first] --> B{Any left?}
   B -->|no| Z[Exit]
-  B -->|yes| C{project.yml exists?}
+  B -->|yes| P{All prerequisites (depends_on) done?}
+  P -->|no| Q[Log the reason and skip → next]
+  P -->|yes| C{project.yml exists?}
   C -->|no| D[kb block with the reason → next]
   C -->|yes| E{Pool has a free VM?<br>lent count in sandbox ls < 3}
   E -->|no| F[Skip this project → next<br>with --wait, run kb run --wait instead]
@@ -85,7 +87,8 @@ flowchart TD
 
 - Before it starts, `dispatch` calls `kb sync --all-review` once (passing `--pj` when given) so PRs a human merged or closed on GitHub land on the board (345 / ADR-0050). The result is one `sync …` line in `dispatch.log`. It is not called with `--dry-run` (which promises not to advance state) or `--resume-paused` (the 5-minute timer should not keep hitting GitHub)
 - Sequential. The next ticket does not start until the current one finishes
-- Makes no decisions. The kind is held by kanban
+- Makes no decision about the kind (kanban holds that). All it checks is the mechanical "can this run": `project.yml`, a free VM in the pool, a pause, prerequisites
+- A ticket with an unfinished (anything other than `done`) prerequisite (`depends_on`) is skipped rather than run, with the reason logged. The rule lives in one place in `console/lib/core.py` and the PM in the console goes through the same one (ADR-0077 / ADR-0078)
 - Pool size is `POOL_PER_PJ = 3` (match the number created with `40-pool.sh`)
 - `--dry-run` skips the pool check
 - `--wait` skips it too. Waiting happens in one place, the runner (`kb run --wait` → `workflow/bin/run --wait`; ADR-0031). A ticket that runs out of time goes back to `todo`, so the next `dispatch` can pick it up again
@@ -102,6 +105,7 @@ The same lines on standard output and in `workspace/logs/dispatch.log`.
 [run kumitate/204 …]
 [dispatch] end   204 kumitate bug rc=0 status=review 1830s
 [dispatch] 205 myapp bug: no project.yml → blocked
+[dispatch] 208 kumitate: 先行票 206=todo が未完了 → 飛ばす
 [dispatch] 206 kumitate: 利用枠切れで一時停止中（2026-09-09T15:00:00+09:00 以降に続きを回す）→ 飛ばす
 [dispatch] start 207 kumitate feature empty-state copy… [続き: implement から origin/sandbox/207-feature-wip・利用枠切れ 1 回目]
 [dispatch] no todo left (or all skipped). exit

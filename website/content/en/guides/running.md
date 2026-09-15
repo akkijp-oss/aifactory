@@ -27,12 +27,13 @@ glue/bin/dispatch --dry-run              # assemble prompts only, no VM
 glue/bin/dispatch --wait 60              # do not skip a full pool: wait up to 60 minutes for a free VM
 ```
 
-dispatch makes no decisions. It checks only two things.
+dispatch makes no decision about the kind (kanban holds that). All it checks is the mechanical "can this run", three things.
 
 - The project has **no** `project.yml` (in `$AIFACTORY_WORKSPACE/projects/<pj>/`, or `examples/projects/<pj>/` as a fallback) → mark `blocked` (with the reason in the note) and move on
 - **All** of the project's pool (3 VMs) is lent out → skip the project and look for the next project's todo
+- The ticket has an **unfinished (anything other than `done`) prerequisite (`depends_on`)** → skip it with the reason logged and move to the next todo (the rule lives in one place in `console/lib/core.py`, the same one the PM in the console goes through; ADR-0078)
 
-`--wait` drops the second check and lets `kb run --wait <minutes>` wait for a free VM instead. When you want to push more tickets through than the pool holds, nobody has to watch for runs to finish and start the next one by hand.
+`--wait` drops the pool check and lets `kb run --wait <minutes>` wait for a free VM instead. When you want to push more tickets through than the pool holds, nobody has to watch for runs to finish and start the next one by hand.
 
 It is sequential. The next ticket does not start until the current one finishes. A run whose gates take 60 minutes makes the others wait.
 

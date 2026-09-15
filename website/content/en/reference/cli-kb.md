@@ -102,9 +102,9 @@ Records, in a form a machine can read, the **prerequisite tickets** a ticket dec
 The value is ticket numbers separated by commas; it shows up as `depends_on` in `kb show`, and changes are kept in
 `kb history`.
 
-A ticket with even one unfinished prerequisite (anything other than `done`) is **not picked next by the PM**. The PM
-skips it, looks at the next todo, and if every candidate is like that it answers "there are still tickets to finish
-first" (`blocked_by_dependency`). See `GET /api/pm` in the [console guide](../guides/console.md).
+A ticket with even one unfinished prerequisite (anything other than `done`) is **not picked next, by the PM or by
+`dispatch`**. The PM skips it, looks at the next todo, and if every candidate is like that it answers "there are still
+tickets to finish first" (`blocked_by_dependency`). See `GET /api/pm` in the [console guide](../guides/console.md).
 
 - **Only people write it.** Prerequisites are never inferred from the free text of the ticket body (that produces both
   false positives and misses).
@@ -114,8 +114,9 @@ first" (`blocked_by_dependency`). See `GET /api/pm` in the [console guide](../gu
 - A ticket cannot depend on itself. Values that do not read as numbers (`12x`, `#534`, …) are refused.
 - Tickets without `--depends` behave exactly as before. A `kanban.db` that predates the column gets it added by `kb` on
   startup.
-- `kb next` (and `dispatch`, which uses it) does not look at prerequisites. Dispatch a ticket directly and it runs even
-  with prerequisites outstanding.
+- `kb next` does not look at prerequisites (it is just the low-level entry point that returns one todo in id order). The rule lives in one
+  place in `console/lib/core.py`, and both the PM and [`dispatch`](cli-glue.md) go through it (ADR-0078). Run `kb run
+  <id>` by hand and the ticket runs even with prerequisites outstanding.
 
 `kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
 

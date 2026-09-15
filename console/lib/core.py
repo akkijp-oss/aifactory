@@ -2744,6 +2744,15 @@ def _pm_unmet_deps(ids):
     return {str(i): found.get(i) for i in ids if found.get(i) != "done"}
 
 
+def pm_unmet_deps(row):
+    """票 1 行から「まだ終わっていない先行票」を {先行票 id(str): status or None} で返す（#570 / #573）。
+
+    ★先行条件を判定する唯一の口。console（pm_status）も glue/bin/dispatch もここを通る。
+      規則（depends_on の読み方・done 以外は未完了・DB に無い id は未完了）を呼び手側に書き写さない（ADR-0015 / ADR-0078）。
+    空 dict なら回してよい。DB を引けないときは例外を上へ出す（「依存なし」に倒さない）"""
+    return _pm_unmet_deps(_pm_deps(row))
+
+
 def _pm_pick_next(next_row, pj=None):
     """`kb next` の 1 件から、未完了の先行票を持つ票を飛ばして次の候補を決める（#570）。
 
@@ -2753,14 +2762,14 @@ def _pm_pick_next(next_row, pj=None):
     ★DB を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない"""
     skipped = {}
     if not isinstance(next_row, dict): return next_row, skipped, False
-    unmet = _pm_unmet_deps(_pm_deps(next_row))
+    unmet = pm_unmet_deps(next_row)
     if not unmet: return next_row, skipped, False        # depends_on を持たない票はここで抜ける（今までどおり）
     skipped[str(next_row["id"])] = unmet                 # キーを文字列で揃える理由は _pm_unmet_deps を参照
     q, a = "SELECT * FROM tickets WHERE status = 'todo'", ()
     if pj: q, a = q + " AND pj = ?", (pj,)
     for r in rows(q + " ORDER BY id", a):
         if str(r["id"]) in skipped: continue
-        unmet = _pm_unmet_deps(_pm_deps(r))
+        unmet = pm_unmet_deps(r)
         if not unmet: return r, skipped, False
         skipped[str(r["id"])] = unmet
     return None, skipped, True                           # todo は在るが、どれも先行票を待っている
