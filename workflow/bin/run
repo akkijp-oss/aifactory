@@ -757,7 +757,7 @@ class Run:
         # この環境に無いと宣言された能力（project.yml の capabilities）と、チケットの完了条件の食い違い。
         # 宣言が無い PJ・false が 1 つも無い PJ では節ごと出ない（computer_use 節と同じ「有るときだけ足す」方式。チケット 552）
         section = self.capability_section()
-        if section: parts += [section, ""]
+        if section: parts += ["", section, ""]
         parts += ["", "## チケット", "", self.ticket.strip(), ""]
         # 添付は本文に入らない（正本は workspace の attachments/）。場所と名前だけ案内する（チケット 353）
         att = self.state.get("attachments") or []

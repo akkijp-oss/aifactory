@@ -29,6 +29,19 @@ INTAKE = REPO / "glue" / "bin" / "intake"
 
 sys.path.insert(0, str(REPO / "lib"))
 import aifactory_capabilities as caps   # noqa: E402
+import yaml                             # noqa: E402
+
+
+def example_declared(pj):
+    """同梱の examples の宣言を、置き場の解決（AIFACTORY_WORKSPACE）を通さずに直接読む。
+
+    `load_declared()` は `aifactory_paths.PROJECT_DIRS`（= workspace/projects → examples の順）を引くので、
+    運用中の機械では workspace 側の定義が examples を影にする。ここで見たいのは「同梱の定義が何を宣言しているか」
+    なので、走らせた機械の workspace に左右されない読み方をする（`load_declared()` の経路自体は
+    `KbNewTest` が一時 workspace を渡した別プロセスで見ている）。
+    """
+    py = REPO / "examples" / "projects" / pj / "project.yml"
+    return caps.declared(yaml.safe_load(py.read_text(encoding="utf-8")))
 
 spec = importlib.util.spec_from_loader("capabilities_run", importlib.machinery.SourceFileLoader("capabilities_run", str(REPO / "workflow/bin/run")))
 run = importlib.util.module_from_spec(spec)
@@ -121,21 +134,21 @@ class ScanTest(unittest.TestCase):
 
     def test_examples_declare_what_this_repository_measured(self):
         """同梱の PJ 定義が宣言を持っている（完了条件 1 番目の読み口はここ）"""
-        self.assertEqual(caps.load_declared("aifactory"),
+        self.assertEqual(example_declared("aifactory"),
                          {"browser": False, "docker": False, "egress": True, "gui": False})
         # kumitate の egress は未実測なので書いていない（＝照合しない）
-        self.assertNotIn("egress", caps.load_declared("kumitate"))
+        self.assertNotIn("egress", example_declared("kumitate"))
         self.assertEqual(caps.load_declared("そんな-pj-は-無い"), {})
 
     def test_a_ticket_that_only_talks_about_browsers_does_not_warn(self):
         """★誤検知の見本。#552 の票自身は「ブラウザで目視」「docker compose」を**例として**挙げるが、
         完了条件はどれも実行可能である。全体を走査すると 8 行当たるところが、節に絞ると 0 行になる
         （2026-09-15 に #552 の本文で実測。節を絞る設計の根拠）"""
-        r = caps.scan(TICKET_552, caps.load_declared("aifactory"))
+        r = caps.scan(TICKET_552, example_declared("aifactory"))
         self.assertEqual(r["scope"], "完了条件")
         self.assertEqual(r["hits"], [], [h["text"] for h in r["hits"]])
         # 節が無い票（全体を走査する）なら、同じ本文がすべて誤検知として当たる
-        whole = caps.scan(TICKET_552.replace("## 完了条件", "## 受け入れ"), caps.load_declared("aifactory"))
+        whole = caps.scan(TICKET_552.replace("## 完了条件", "## 受け入れ"), example_declared("aifactory"))
         self.assertEqual(whole["scope"], "body")
         self.assertGreater(len(whole["hits"]), 0)
 
