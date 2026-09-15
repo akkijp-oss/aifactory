@@ -58,6 +58,26 @@ class WindowsBackendTest(unittest.TestCase):
         self.assertIn('--strict-mcp-config',cmd)
         self.assertIn("--mcp-config 'C:/work/lease/work/210/computer-mcp.json'",cmd)
 
+    def test_the_sweep_excludes_dependency_files_and_writes_a_body(self):
+        """掃き寄せの除外は lib（aifactory_sweep）から読む。PowerShell 版に glob も文言も写さない（チケット 572）"""
+        r=self.make_run();captured=[]
+        r.sb=lambda script,**kw:(captured.append(script),'')[1]
+        r.save_agent_changes()
+        script=captured[0]
+        self.assertIn("git add -u -- ':/'",script)
+        self.assertIn("':(top,glob,exclude)**/package.json'",script)
+        self.assertIn("':(top,glob,exclude)**/pnpm-lock.yaml'",script)
+        self.assertEqual(script.count(' -m '),2)                      # 本文ゼロをやめる（subject + body）
+        self.assertIn('572',script)
+        self.assertIn("Select-String '^\\?\\?'",script)              # 未追跡の報告は今までどおり
+
+    def test_the_sweep_exclude_list_comes_from_the_project(self):
+        r=self.make_run();r.project['sweep_exclude']=[];captured=[]
+        r.sb=lambda script,**kw:(captured.append(script),'')[1]
+        r.save_agent_changes()
+        self.assertIn("git add -u -- ':/';",captured[0])
+        self.assertNotIn('package.json',captured[0])
+
     def test_run_paths_isolate_lease(self):
         r=self.make_run();r.root='C:/work';r.task='210';r.paths('lease-2')
         self.assertEqual(r.project['app_dir'],'C:/work/lease-2/app')
