@@ -119,6 +119,10 @@ def acquire_lease(run, worker, lease):
 def backend(Run):
     class MacRun(Run):
         backend_label = "Mac VM"
+        # guest_path_prelude() が保険として足す固定列挙（ADR-0076）。ゲストが自分で PATH を答えられない
+        # ときだけ効く。新しい道具を通したいときにここへ足さない（ゲスト側の /etc/profile.d か
+        # 版管理ツールに入れる）。linux backend は同じ前置きを継承して、この値だけ差し替える
+        PATH_FALLBACK = "/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin"
         # pull backend が kit/workflows/*.yml の code step をどう扱うかの対応表。分類は 3 つ:
         #   run         … この backend が実装している
         #   noop        … 対応しないが素通りさせる（True を返す。Windows の sync-base）
@@ -179,9 +183,31 @@ def backend(Run):
             self.configure_computer()
             return super().run_agent(step, retry_note)
 
+        def guest_path_prelude(self):
+            """ゲストの PATH は「ゲスト自身に答えさせる」（ADR-0076）。制御系は道具を列挙しない。
+
+            列挙方式は「新しい版管理ツールを入れるたびに backend を直す」設計で、直し忘れた 1 か所が
+            「その道具だけ存在しないゲスト」になる（#549 の go がこれ。mise の shims が macos / linux の
+            どちらの列挙にも無かった）。順序に意味があるので、足すときは下のコメントごと読むこと。
+
+            1. ログイン環境を起点にする。macOS の worker は `tart exec ... /bin/bash -lc` なので
+               既にログインシェルで、ここは何もしない（再 source すると path_helper が PATH を
+               並べ替えて /opt/homebrew/bin が後ろへ下がる）。linux-pull の worker は
+               `/bin/bash --noprofile --norc -c` で起動するので、ここで /etc/profile を読んで
+               管理者がゲスト側 /etc/profile.d/*.sh に置いた PATH を通す（ADR-0071 の go.sh もこれで効く）
+            2. 固定列挙は「ログイン環境が PATH を出せないゲスト」向けの保険として残すだけ。
+               新しい道具のために増やさない。Ubuntu の /etc/profile は PATH を上書きしてから
+               profile.d を読むので、この export は 1 の後でなければ消される
+            3. 版管理ツール自身に訊く。mise が居れば shims を PATH の先頭へ入れる。
+               `if` 文にするのは、末尾が偽の `&&` だと前置き全体の rc を汚すため
+            """
+            return ("shopt -q login_shell || { test -r /etc/profile && . /etc/profile; }; "
+                    f"export PATH={self.PATH_FALLBACK}:$PATH; "
+                    'if command -v mise >/dev/null 2>&1; then eval "$(mise activate bash --shims 2>/dev/null)"; fi; ')
+
         def command(self, cmd):
-            return ("export PATH=/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH; "
-                    f"export SANDBOX_APP_DIR={shlex.quote(self.project['app_dir'])}; "
+            return (self.guest_path_prelude()
+                    + f"export SANDBOX_APP_DIR={shlex.quote(self.project['app_dir'])}; "
                     f"if test -f {shlex.quote(self.env_file)}; then source {shlex.quote(self.env_file)}; fi; " + cmd)
 
         def preserve_command(self):

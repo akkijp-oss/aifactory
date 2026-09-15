@@ -87,3 +87,4 @@
 - [0073: console から直せるのは「その工程の yml ブロック 1 つ」まで。id と担い手の種類は固定する](0073-console-edits-one-step-block-of-a-workflow.md)
 - [0074: 管理役（PM）は console の中の `pm_tick()` として動かす。tick は 1 段だけ進める oneshot で、マージの判断は持たない](0074-pm-loop-runs-inside-console-as-a-oneshot-tick.md)
 - [0075: base 確認は自分のログ（`~/gates/<名前>.base.log`）に書く。run が残す証跡は後続の処理で壊さない](0075-base-check-writes-its-own-gate-log.md)
+- [0076: ゲストの PATH はゲストが答える。ログイン環境を起点に版管理ツール（mise）へ訊き、制御系は道具を列挙しない](0076-guest-path-is-answered-by-the-guest.md)

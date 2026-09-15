@@ -2,7 +2,6 @@
 import fcntl
 import os
 import pathlib
-import shlex
 import uuid
 from macos import acquire_lease, backend as pull_backend, Client
 
@@ -13,6 +12,11 @@ def backend(Run):
         # code step の対応表は macos と同じものをそのまま継承する（command() が POSIX で gh も同じように入っている）。
         # automerge も kit/steps/pr-automerge.sh を guest の中で走らせる macos の実装で動く（チケット 386）。
         # ここで CODE_STEPS を上書きすると macos に足した step が linux で落ちるので、意図して定義しない
+        # PATH の決め方（guest_path_prelude）も同じ理由で継承する。列挙を backend ごとに書くと、
+        # 片方だけ直した道具が「もう片方の backend では存在しない」ことになる（#549 の go）。
+        # 差し替えるのは保険の固定列挙だけ（ADR-0076）。この worker は
+        # /bin/bash --noprofile --norc -c で起動するので、ゲスト側の PATH は前置きの /etc/profile で入る
+        PATH_FALLBACK = '/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.cargo/bin'
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -25,11 +29,6 @@ def backend(Run):
             self.project['app_dir'] = f'{self.root}/{lease}/app'
             self.work = f'{self.root}/{lease}/work/{self.task}'
             self.env_file = self.work + '/runtime.env'
-
-        def command(self, cmd):
-            return ('export PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.cargo/bin; '
-                    f'export SANDBOX_APP_DIR={shlex.quote(self.project["app_dir"])}; '
-                    f'if test -f {shlex.quote(self.env_file)}; then source {shlex.quote(self.env_file)}; fi; ' + cmd)
 
         def take(self):
             if self.dry:
