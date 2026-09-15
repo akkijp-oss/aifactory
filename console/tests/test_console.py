@@ -1954,6 +1954,28 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(d["decisions"], []); self.assertIsNone(d["run"])
         self.assertFalse((ws / "kanban" / "kanban.db").exists(), "読むだけの口が DB を作っている")
 
+    def test_pm_status_says_the_board_is_unreadable_even_while_a_run_is_going(self):
+        """板を読めていないことは状態より先に言う。走行中でも next.reason は board_unreadable（waiting に隠さない）。
+
+        next は「次が無い理由」を持つ欄なので、ticket が null なのが「走行中だから今は選ばない」なのか
+        「板を読めていないから分からない」なのかが next だけで分かること。"""
+        ws = self.tmp / "pm-noboard-ws"; (ws / "runs" / "2026-09-14-pm-noboard-775").mkdir(parents=True, exist_ok=True)
+        (ws / "runs" / "2026-09-14-pm-noboard-775" / "state.json").write_text(json.dumps(
+            {"pj": "pm-noboard", "task": "775", "workflow": "feature", "branch": "sandbox/x", "base": "main",
+             "started": "2026-09-14T09:00:00", "next": "implement", "loops": {}, "history": [],
+             "current": {"step": "implement", "kind": "agent", "since": "2026-09-14T09:10:00"}}), encoding="utf-8")
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws), "CONSOLE_JOBS": str(self.tmp / "pm-noboard-jobs")}
+        code = ("import json, sys; sys.path.insert(0, %r); import core; print(json.dumps(core.pm_status(), ensure_ascii=False))"
+                % str(REPO / "console" / "lib"))
+        r = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["state"], "waiting")                            # run は動いているので状態はそのまま
+        self.assertFalse(d["board"]["readable"]); self.assertEqual(d["board"]["reason"], "no_db")
+        self.assertEqual(d["next"]["reason"], "board_unreadable")          # 「走行中だから」で上書きしない
+        self.assertIsNone(d["next"]["ticket"]); self.assertFalse(d["next"]["launchable"])
+        self.assertEqual(d["runs"]["active_n"], 1); self.assertEqual(d["runs"]["reason"], "ok")
+
     def test_pm_decision_is_not_copied_into_the_http_layer(self):
         """判定は core.py に 1 つだけ（ADR-0015）。bin/console と bin/mcp は core の関数を呼ぶ 1 行しか持たない"""
         console_src = (REPO / "console" / "bin" / "console").read_text(encoding="utf-8")

@@ -2779,11 +2779,15 @@ def pm_status(pj=None):
     _pm_fact(why, "state", state)
 
     # --- 次にやること。ticket には状態にかかわらず kb next の結果を入れ、起こしてよいかは launchable で言う
-    reason = {"landing": "landing_observed", "waiting": "run_running"}.get(state)
-    if reason is None:
-        if not board["readable"]: reason = "board_unreadable"
-        elif state == "blocked": reason = "needs_human"
-        else: reason = "picked_next" if next_row else "no_todo"
+    if not board["readable"]:
+        reason = "board_unreadable"                              # 板が読めないことは状態より先に言う（waiting / landing に隠すと、
+                                                                 # ticket が null なのが「今は選ばない」なのか「分からない」なのか読めなくなる）
+    elif state in ("landing", "waiting"):
+        reason = "landing_observed" if state == "landing" else "run_running"
+    elif state == "blocked":
+        reason = "needs_human"
+    else:
+        reason = "picked_next" if next_row else "no_todo"
     nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
     try: decisions = pm_decisions()
     except Exception: decisions = []

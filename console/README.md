@@ -137,11 +137,15 @@ GET  /api/tickets[?pj=]            一覧      GET /api/tickets/<id>   本文・
 GET  /api/next[?pj=]               配車で次に回る todo（kb next --json。無ければ null）。配車ダイアログが押す前に見せる
 GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()。読み取りのみで何も起動しない。ADR-0074）
      state は idle / waiting / landing / blocked の 4 つで、保存せず既存の記録から毎回導く
-     ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed。読めていなければ counts は null）、
+     ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed）、
        runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は
        picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable
+     counts が null になるのは no_db のときだけ（kb_failed は sqlite から読めた件数が入るので、counts の有無を
+       board.readable の代わりに使わない。板を読めたかは board.reason を見る）
+     next.reason は板を読めたかを先に見るので、waiting / landing でも板が読めていなければ board_unreadable になる
      next.launchable が真なのは picked_next のときだけ。next.ticket が null でも「順調」の意味にはならない
-     pj を省くと全 PJ 横断（どれか 1 つでも走っていれば waiting）。counts は overview と同じく常に全 PJ
+     pj を省くと全 PJ 横断（どれか 1 つでも走っていれば waiting、直近の止まった run が 1 本詰まっていれば blocked）
+     counts は overview と同じく常に全 PJ
 GET  /api/tickets/<id>/sync-preview[?run=]   状態同期の下見（kb sync --dry-run。前後の状態とメモ、run の後にチケットが更新されたか）
 POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|append|sync, ...}
      append は {text, section?} で本文の末尾に追記（history に body の行が残る）。set の note はキーがあれば空文字列でも渡す（= メモを消す）
