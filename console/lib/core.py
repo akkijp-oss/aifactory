@@ -1239,7 +1239,7 @@ def tickets_list(pj=None, status=None, all_=True):
 
 
 def ticket_next(pj=None):
-    """配車で次に回る todo を 1 件（kb next --json）。画面が「配車する」を押す前に影響を見せるために使う。無ければ None"""
+    """画面が「配車する」を押す前に見せる下見を 1 件（kb next --json）。実際に回る票は dispatch が kb list + kb show で選び直す。無ければ None"""
     rc, out, err = kb("next", *(["--pj", pj] if pj else []), "--json")
     if rc != 0: raise ApiError((err or out).strip() or f"kb next が失敗 rc={rc}")
     out = out.strip()

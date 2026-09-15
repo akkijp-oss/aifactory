@@ -72,7 +72,7 @@ kb list --status review          # 状態で絞る
 kb list --pj kumitate --all      # PJ で絞る。--all で done も
 kb show 204                      # 全項目 + 本文
 kb next                          # 最も古い todo を 1 件
-kb next --pj kumitate --json     # JSON（dispatch や外部ツール向け。path に本文の絶対パス）
+kb next --pj kumitate --json     # JSON（コンソールの下見 GET /api/next・PM・外部ツール向け。path に本文の絶対パス。dispatch は使わない）
 kb resumable [--pj P] [--json]   # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む。ADR-0043）
 ```
 

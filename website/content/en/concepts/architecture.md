@@ -55,7 +55,7 @@ Sections know nothing about each other's internals. All they know are these inte
 
 | Boundary | Contract |
 |---|---|
-| glue → kanban | File with `kb new <pj> <kind> <title> --body`; fetch with `kb list --status todo` / `kb next --json` |
+| glue → kanban | File with `kb new <pj> <kind> <title> --body`; fetch with `kb list --status todo` / `kb show <id>` |
 | kanban → workflow | `kb run <id>` calls `workflow/bin/run <pj> <id> <workflow> <ticket.md>`. The result is `workspace/runs/<run>/state.json` |
 | workflow → sandbox | The five operations `sandbox take / ssh / url / reset / release` plus `ls`. Proxmox details stay inside |
 | workflow → project | `workspace/projects/<pj>/project.yml` and `gates.sh` (falling back to `examples/projects/<pj>/`). A project provides only "facts and policy" |

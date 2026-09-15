@@ -32,7 +32,7 @@ kb=kanban/bin/kb
 $kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--note TEXT] [--depends IDS]  # 起票。id が返る
 $kb list [--status S] [--pj P] [--all]                                  # 一覧（既定は done 以外）
 $kb show <id>                                                           # メタ + 本文
-$kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（glue のルーターが読む）
+$kb next [--pj P] [--json]                                              # 次に回す todo を 1 件（コンソールの下見 /api/next と PM が読む。dispatch は kb list + kb show）
 $kb resumable [--pj P] [--json]                                         # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む）
 $kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--wait [分]] # workflow/bin/run を呼び、結果で状態を進める
                                                                         # --wait は VM の空きを待つ（分。既定 60）。上限超過は todo に戻す
