@@ -11,7 +11,7 @@
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
   kb detach <id> <name>                          # 添付を 1 件消す
-  kb next [--pj P] [--json]                      # 次に回す todo を 1 件（glue のルーターが読む）
+  kb next [--pj P] [--json]                      # 次に回す todo を 1 件（コンソールの下見 /api/next と PM が読む。dispatch は kb list + kb show）
   kb resumable [--pj P] [--json]                 # 一時停止中（利用枠切れ / 鍵なし で todo に戻した）チケットと、続きを回せるか（解除時刻を過ぎた / 鍵が登録された。dispatch --resume-paused が読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
                                                  # --wait は VM のプールに空きが無いとき失敗せず空くまで待つ（分。既定 60）。上限を超えたら todo に戻す
