@@ -30,6 +30,7 @@ glue/bin/intake memo.txt --pj kumitate --kind bug   # 決まっている分は�
 printf 'pj: kumitate\nkind: chore\n依頼文…' | glue/bin/intake -   # 先頭行でも指定できる
 glue/bin/intake memo.txt --dry-run           # 起票せず判定 JSON を見る（添付はしない）
 glue/bin/intake memo.txt --attach 画面.png 表.csv   # 起票したチケットに添付する。画像は LLM にも見せる
+glue/bin/intake memo.txt --depends 534,535   # 先行票の番号をそのまま kb new --depends に渡す（人が渡した分だけ。本文からは推測しない）
 
 # 配車（todo → 実行）
 glue/bin/dispatch --once                     # 最も古い todo を 1 件回す

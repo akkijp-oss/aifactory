@@ -76,7 +76,7 @@ claude mcp reset-project-choices        # プロジェクト側（aifactory-loca
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れる）・一覧・1 件（本文・履歴・run・ジョブ。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | 起票（整った本文 / 自由文。intake はジョブ） |
 | `ticket_attach` / `ticket_detach` | 添付を 1 件足す（`content_base64` か ctl 上の `path`）/ 消す。`read_file` は画像を image で返す（4 MiB まで） |
-| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
+| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら run 記録にも転記する）/ set（`note` / `depends_on` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（既定は `dry_run: true` で書かず前後を返す。書くのは `dry_run: false` を明示したときだけ） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。dry_run 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、限られた根の下のファイル（agent-*.log 等）。`run_show` の `progress` に run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が付く |
 | `run_wait` | run の工程が変わる（`until: step`、既定）か終わる（`until: result`）まで待つ（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返す。ログ本文は含まない |
@@ -141,7 +141,8 @@ GET  /api/pm[?pj=]                 管理役（PM）の状態（core.pm_status()
      state は idle / waiting / landing / blocked の 4 つで、保存せず既存の記録から毎回導く
      ★「取得できていない」と「0 件」は別の値: board.readable / board.reason（ok / no_db / kb_failed）、
        runs.readable / runs.reason（ok / no_records / error）。next は常に object で、next.reason は
-       picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable
+       picked_next / no_todo / run_running / landing_observed / needs_human / board_unreadable /
+       blocked_by_dependency（未完了の先行票を持つ票しか無い。ADR-0077）
      counts は板の集計を読めたときだけ入る（読めなければ null。kb_failed には集計が読めた場合と読めなかった場合の
        両方があるので、counts の有無を board.readable の代わりに使わない。板を読めたかは board.readable /
        board.reason を見る）
@@ -162,7 +163,7 @@ POST /api/pm/tick {pj, dry}        管理役の 1 周（core.pm_tick()。ADR-007
      dry: true なら決めるだけで書かない。定期実行は aifactory-pm.timer（5 分ごと。console/bin/pm-tick を呼ぶ oneshot）
 GET  /api/tickets/<id>/sync-preview[?run=]   状態同期の下見（kb sync --dry-run。前後の状態とメモ、run の後にチケットが更新されたか）
 POST /api/tickets                  kb new    POST /api/tickets/<id>/action {action: start|review|done|reopen|block|set|append|sync, ...}
-     append は {text, section?} で本文の末尾に追記（history に body の行が残る）。set の note はキーがあれば空文字列でも渡す（= メモを消す）
+     append は {text, section?} で本文の末尾に追記（history に body の行が残る）。set の note / depends_on はキーがあれば空文字列でも渡す（= 消す）
      sync は既定で書かない（dry_run 既定 true。前後を返すだけ）。書くには dry_run: false を明示する
 POST /api/tickets/<id>/run         kb run をジョブで {dry_run, workflow, keep, resume}
 GET  /api/runs  /api/runs/<name>   実行記録  GET /api/file?path=&tail=|offset=   限られた根の下のファイル

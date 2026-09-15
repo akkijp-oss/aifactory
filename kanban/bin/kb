@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
 
-  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--attach FILE]...
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--attach FILE]...
   kb list [--status S] [--pj P] [--all]
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
-  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K]   # --note '' でメモを空に戻す
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     run     TEXT,
     note    TEXT,
     created TEXT NOT NULL,
-    updated TEXT NOT NULL
+    updated TEXT NOT NULL,
+    depends_on TEXT
 );
 CREATE TABLE IF NOT EXISTS history (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,10 +100,21 @@ CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 """
 
 
+# 既に在る DB に後から足した列。CREATE TABLE IF NOT EXISTS は既存テーブルを変えないので、ここで補う（570）
+ADDED_COLUMNS = (("depends_on", "TEXT"),)
+
+
 def db():
     ROOT.mkdir(parents=True, exist_ok=True); TICKETS.mkdir(exist_ok=True)
     c = sqlite3.connect(DB); c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON"); c.executescript(SCHEMA)
+    have = {r["name"] for r in c.execute("PRAGMA table_info(tickets)")}
+    for name, typ in ADDED_COLUMNS:
+        if name in have: continue
+        # 並んで走る kb が同時に足して duplicate column になりうる。「既にある」だけ握り、
+        # 足せていなければ後続の SELECT が落ちる（列が無いことを隠さない）
+        try: c.execute(f"ALTER TABLE tickets ADD COLUMN {name} {typ}")
+        except sqlite3.OperationalError: pass
     return c
 
 
@@ -116,12 +128,30 @@ def record(c, tid, field, old, new):
     c.execute("INSERT INTO history (ticket, at, field, old, new) VALUES (?,?,?,?,?)", (tid, now(), field, str(old) if old is not None else None, str(new) if new is not None else None))
 
 
+def parse_depends(v, tid=None):
+    """`--depends` の値を "534,535" の形に正規化する（570）。空（'' / 空白だけ）なら None ＝ 依存なし。
+
+    ★存在検査はしない。まだ起票していない票や他 PJ の票を先行条件に書けるようにするためで、
+      「DB に無い id」は読む側（core.pm_status）が安全側＝未完了として扱う。
+      自分自身を指すのだけは書き間違いと分かるので断る"""
+    if v is None: return None
+    ids = []
+    for w in re.split(r"[,\s]+", str(v).strip()):
+        if not w: continue
+        if not w.isdigit(): die(f"--depends は票番号をカンマ区切りで（'{w}' は数字ではない）")
+        n = int(w)
+        if tid is not None and n == tid: die(f"--depends に自分自身（{tid}）は書けない")
+        if n not in ids: ids.append(n)                       # 重複は並び順を保って落とす
+    return ",".join(str(n) for n in ids) or None
+
+
 def update(c, tid, transcribe=True, **fields):
     r = get(c, tid)
     for k, v in fields.items():
         if v is None: continue
         # 「未指定（None）＝触らない」の判定より後で空を潰す。--note '' はメモを消す指示なので DB は NULL に揃える
         if k == "note" and v == "": v = None
+        if k == "depends_on": v = parse_depends(v, tid)      # '' は依存を消す指示なので NULL に揃える（note と同じ）
         if k == "status" and v not in STATUSES: die(f"status は {STATUSES} のどれか")
         if k == "kind" and v not in kinds(): die(f"kind は {kinds()} のどれか")
         record(c, tid, k, r[k], v)
@@ -201,9 +231,11 @@ def cmd_new(a):
     if file.exists(): die(f"{file} が既にある")
     write_ticket(file, a.title, body, a.pr)
     t = now()
-    c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t))
+    deps = parse_depends(getattr(a, "depends", None), tid)
+    c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated, depends_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps))
     record(c, tid, "status", None, a.status)
+    if deps: record(c, tid, "depends_on", None, deps)
     c.commit(); render(c)
     print(fmt(get(c, tid))); print(f"     {file}")
     if getattr(a, "attach", None): attach_files(c, tid, a.attach)
@@ -238,7 +270,7 @@ def cmd_status(a, status):
 
 
 def cmd_set(a):
-    c = db(); r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind); render(c); print(fmt(r))
+    c = db(); r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind, depends_on=a.depends); render(c); print(fmt(r))
 
 
 def cmd_append(a):
@@ -795,12 +827,14 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("new"); p.add_argument("pj"); p.add_argument("kind"); p.add_argument("title")
     p.add_argument("--body"); p.add_argument("--pr", type=int); p.add_argument("--id", type=int); p.add_argument("--status", default="todo"); p.add_argument("--note")
+    p.add_argument("--depends", metavar="IDS", help="先行票の番号。カンマ区切り（例 534,535）。'' で消す。存在検査はしない")
     p.add_argument("--attach", action="append", metavar="FILE", help="起票と同時に添付する（複数可）")
     p = sp.add_parser("list"); p.add_argument("--status"); p.add_argument("--pj"); p.add_argument("--all", action="store_true")
     p = sp.add_parser("show"); p.add_argument("id", type=int)
     for name in ("start", "review", "done", "reopen", "block"):
         p = sp.add_parser(name); p.add_argument("id", type=int); p.add_argument("--note", required=(name == "block"))
     p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
+    p.add_argument("--depends", metavar="IDS", help="先行票の番号。カンマ区切り（例 534,535）。'' で消す。存在検査はしない")
     p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
     p = sp.add_parser("attach"); p.add_argument("id", type=int); p.add_argument("file", nargs="+", help="添付するファイル（コピーされる）")
     p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")

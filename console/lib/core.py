@@ -1312,10 +1312,14 @@ def ticket_action(tid, b):
         args = ["set", tid]
         # note だけは「キーが無い＝触らない / 空文字列＝消す」。他は空を未指定として無視する（kb が die するため）
         if "note" in b and b["note"] is not None: args += ["--note", b["note"]]
+        # depends_on も note と同じ扱い（キーが無い＝触らない / 空文字列＝消す）。list で来たら並びをそのまま繋ぐ
+        if "depends_on" in b and b["depends_on"] is not None:
+            dep = b["depends_on"]
+            args += ["--depends", ",".join(str(x) for x in dep) if isinstance(dep, (list, tuple)) else str(dep)]
         for k in ("status", "pr", "kind"):
             if b.get(k) not in (None, ""): args += [f"--{k}", b[k]]
         if b.get("run"): args += ["--run", b["run"]]
-        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run のどれかを指定してください")
+        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run / depends_on のどれかを指定してください")
     elif act == "append":
         text = b.get("text")
         if not text or not str(text).strip(): raise ApiError("追記する本文がありません。text に本文を入れてください")
@@ -1420,6 +1424,9 @@ def ticket_new(b):
     args = ["new", b["pj"], b["kind"], b["title"][:70], "--body", "-"]
     if b.get("pr"): args += ["--pr", str(b["pr"])]
     if b.get("note"): args += ["--note", b["note"]]
+    dep = b.get("depends_on")
+    if isinstance(dep, (list, tuple)): dep = ",".join(str(x) for x in dep)
+    if dep: args += ["--depends", str(dep)]                   # 形の検査（数字か・自分自身か）は kb の parse_depends が正本
     rc, out, err = kb(*args, stdin=b.get("body") or "")
     if rc != 0: raise ApiError((err or out).strip() or f"kb new が失敗 rc={rc}")
     tid = int(out.split()[0]) if out.split() and out.split()[0].isdigit() else None
@@ -2675,14 +2682,17 @@ PM_LANDING_NEXT = ("pr", "automerge")                            # 決定 2: sta
 PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout", "human_abandoned")
 # 「次にやること」の理由コード。前 4 つは決定 5 の判断ログの語彙をそのまま使い、後ろ 2 つは
 # 状態表示のためにここで足す（判断ログには書かない）
+# blocked_by_dependency は「未完了の先行票があるので選べない」＝確かめた結論。「読めていない」（board_unreadable）とも
+# 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）
 PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                   "requeue_proposed")
+                   "requeue_proposed", "blocked_by_dependency")
 # 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
 PM_MODES = ("propose", "auto")                       # auto は #538。本票は propose だけを受ける
 PM_ACTIONS = ("none", "run", "requeue")              # 判断ログの action。propose では実行しない（決めて書くだけ）
+# ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を 1 語足した。ここに無い語を PM が作らない
 PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                    "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                   "proposed", "approved", "skipped_by_steer", "paused")
+                   "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency")
 PM_REVIEW_RETRY_MAX = 2                              # 決定 3 の線②: review 由来の再投入は同じ票につき 2 回まで
 # PM がもう一度回してよい停止理由（決定 3）。ここに無い理由（pr_created / step_timeout / human_abandoned /
 # runner_gone / failed_before_start …）は「直す所が run の外」なので、PM は判断せず人に渡す
@@ -2707,6 +2717,53 @@ def pm_decisions(limit=20):
 def _pm_fact(why, key, value):
     """判断の材料を 1 つ足す。機械で読めた値だけを入れる（日本語の説明文は書かない。表示は strings.js が作る）"""
     why.append({"fact": key, "value": value})
+
+
+def _pm_deps(row):
+    """票が宣言した先行票の id 一覧（#570）。値は kb が "534,535" の形に正規化して入れているので、ここでは数だけ拾う。
+       NULL / 空文字列 / キー自体が無い（列を足す前の古い行）はすべて「依存なし」＝空"""
+    return [int(x) for x in re.findall(r"\d+", str((row or {}).get("depends_on") or ""))]
+
+
+def _pm_unmet_deps(ids):
+    """先行票のうち、まだ終わっていないものだけ {id: status}（#570）。
+
+    ★DB に無い id は status=None のまま「未完了」に数える。まだ起票していない票や他 PJ の票を先行条件に
+      書けるようにした（kb は存在検査をしない）結果で、確かめられないものを「終わった」側へ倒さない"""
+    if not ids: return {}
+    q = "SELECT id, status FROM tickets WHERE id IN (%s)" % ",".join("?" * len(ids))
+    found = {int(t["id"]): t["status"] for t in rows(q, tuple(ids))}
+    # ★キーは文字列にする。この dict は判断ログに JSON で載り、_pm_log は前の行（＝読み戻した JSON）と
+    #   突き合わせて同じ提案の重複を省く。int のキーのままだと読み戻しで str になって毎回「別の提案」に見え、
+    #   依存で止まっている間ずっと 5 分ごとに同じ行がログへ積まれる
+    return {str(i): found.get(i) for i in ids if found.get(i) != "done"}
+
+
+def _pm_pick_next(next_row, pj=None):
+    """`kb next` の 1 件から、未完了の先行票を持つ票を飛ばして次の候補を決める（#570）。
+
+    `kb next` は todo を id 順に 1 件返すだけで依存を見ない。判定を kb 側に持たせず core に置くのは
+    ADR-0074 決定 1（判定の正本は core、kb は状態を変える薄い CLI）のまま。
+    返り値: (選んだ票 or None, 飛ばした票 {票 id: {先行票 id: status}}, 依存で候補が尽きたか)
+    ★DB を引けないときは例外を上へ出す。「候補が無い」と「確かめられなかった」を混ぜない"""
+    skipped = {}
+    if not isinstance(next_row, dict): return next_row, skipped, False
+    unmet = _pm_unmet_deps(_pm_deps(next_row))
+    if not unmet: return next_row, skipped, False        # depends_on を持たない票はここで抜ける（今までどおり）
+    skipped[str(next_row["id"])] = unmet                 # キーを文字列で揃える理由は _pm_unmet_deps を参照
+    q, a = "SELECT * FROM tickets WHERE status = 'todo'", ()
+    if pj: q, a = q + " AND pj = ?", (pj,)
+    for r in rows(q + " ORDER BY id", a):
+        if str(r["id"]) in skipped: continue
+        unmet = _pm_unmet_deps(_pm_deps(r))
+        if not unmet: return r, skipped, False
+        skipped[str(r["id"])] = unmet
+    return None, skipped, True                           # todo は在るが、どれも先行票を待っている
+
+
+def _pm_why(why, key, default=None):
+    """why に積んだ材料を 1 つ読み戻す（判断は同じ tick の材料だけで組む＝板を 2 度読まない）"""
+    return next((f["value"] for f in reversed(why) if f["fact"] == key), default)
 
 
 def _pm_run(name):
@@ -2773,7 +2830,7 @@ def pm_status(pj=None):
     o, o_error = None, None
     try: o = overview(pj=pj)
     except Exception as e: o_error = str(e)
-    next_row = None
+    next_row, dep_skipped, dep_blocked, kb_next_id = None, {}, False, None
     if not board["db"]:
         board["reason"] = "no_db"                                # 空の workspace。「todo が 0 件」とは別の値
     elif o is None:
@@ -2782,9 +2839,19 @@ def pm_status(pj=None):
         board["counts"] = o["counts"]
         try:
             next_row = ticket_next(pj=pj)["next"]                # 0 件なら None、読めなければ ApiError（core.py の ticket_next）
+            kb_next_id = next_row.get("id") if isinstance(next_row, dict) else next_row   # kb next が返した生の id（依存で飛ばす前）
             board["readable"] = True; board["reason"] = "ok"
         except Exception as e:
             board["reason"] = "kb_failed"; board["error"] = str(e)
+        if board["readable"]:
+            # 票が宣言した先行条件（depends_on）を見て、未完了の先行票を持つ票は飛ばす（#570 / ADR-0077）。
+            # ここを引けなかったら「候補なし」ではなく「板を読めていない」に倒す（確かめた結論と混ぜない）
+            try:
+                next_row, dep_skipped, dep_blocked = _pm_pick_next(next_row, pj)
+            except Exception as e:
+                board["readable"] = False; board["reason"] = "kb_failed"; board["error"] = str(e)
+            else:
+                if dep_skipped: _pm_fact(why, "skipped_by_dependency", dep_skipped)
         try:
             bl = tickets_list(pj=pj, status="blocked")["tickets"]
             board["blocked"] = [{k: t.get(k) for k in ("id", "title", "pj")} for t in bl[:6]]
@@ -2792,7 +2859,8 @@ def pm_status(pj=None):
         except Exception:
             board["blocked_n"] = None                            # 読めなかったので「0 件」とは言わない
     _pm_fact(why, "board_reason", board["reason"])
-    _pm_fact(why, "kb_next", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)
+    _pm_fact(why, "kb_next", kb_next_id)                          # その口（kb next）が何を返したか。依存で絞る前の生の値
+    _pm_fact(why, "picked", (next_row or {}).get("id") if isinstance(next_row, dict) else next_row)   # 依存で絞った後に選んだ票
 
     # --- 材料 2: run の記録（overview と同じ絞り方＝board_runs）と、実行中の kb-run ジョブ
     runs_all = None
@@ -2853,8 +2921,11 @@ def pm_status(pj=None):
         reason = "requeue_proposed"
         t, rt = run_ev or {}, (run_ev or {}).get("ticket") or {}
         next_row = {"id": rt.get("id") or t.get("task"), "title": rt.get("title"), "pj": t.get("pj"), "status": rt.get("status")}
+    elif next_row:
+        reason = "picked_next"
     else:
-        reason = "picked_next" if next_row else "no_todo"
+        # 依存で選べないのは「確かめた結論」。todo が 1 件も無い（no_todo）とも、読めていない（board_unreadable）とも別の値
+        reason = "blocked_by_dependency" if dep_blocked else "no_todo"
     nxt = {"reason": reason, "ticket": next_row, "launchable": reason == "picked_next", "why": why}
     try: decisions = pm_decisions()
     except Exception: decisions = []
@@ -2949,6 +3020,13 @@ def pm_decide(pj=None, status=None):
         if pj: q, a = q + " AND pj = ?", (pj,)
         try: facts["todo_ids"] = [t["id"] for t in rows(q + " ORDER BY id", a)]
         except Exception: facts["todo_ids"] = None            # 読めなかったので「候補は 1 件だけだった」とは言わない
+        # 先行票を待っていて飛ばした票も残す（「なぜ他を選ばなかったか」の一部。#570）
+        facts["skipped_by_dependency"] = _pm_why(nxt.get("why") or [], "skipped_by_dependency", {})
+    elif nxt["reason"] == "blocked_by_dependency":
+        # todo は在るが、どれも未完了の先行票を待っている。板は読めているので state は idle のまま（確かめた結論）
+        action, code = "none", "blocked_by_dependency"
+        facts = {"why": "blocked_by_dependency",
+                 "skipped_by_dependency": _pm_why(nxt.get("why") or [], "skipped_by_dependency", {})}
     else: action, code, facts = "none", "no_todo", {}
     return {"pj": pj or run.get("pj"), "ticket": tid, "run": run.get("name") or None, "state": state,
             "action": action, "reason_code": code, "facts": facts, "mode": "propose"}
