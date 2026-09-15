@@ -93,6 +93,14 @@ GUI applications use `/home/aifactory-task` as their home, while ticket shells u
 
 In headless mode, press `Alt+F2` to open `gmrun` and launch an installed application by name. Use `Alt+Tab` to switch windows and `Alt+F4` to close them. Install suitable fonts for applications displaying Japanese.
 
+### How commands resolve on the guest
+
+PATH is decided by the same rule as the macOS worker: both share `guest_path_prelude()` in `workflow/lib/macos.py`. The guest itself answers; the runner does not enumerate tools ([ADR-0076](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0076-guest-path-is-answered-by-the-guest.md)).
+
+The worker starts work as `systemd-run ... /bin/bash --noprofile --norc -c '<command>'`, so the user's `~/.bashrc` and `~/.profile` are not read. The prelude therefore reads `/etc/profile` (and `/etc/profile.d/*.sh`) first, then prepends the fallback PATH (`/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.cargo/bin`), and finally evaluates what `mise activate bash --shims` answers when mise is present.
+
+**To add a tool on the guest, put it in `/etc/profile.d/*.sh`** (or leave it to a version manager such as mise) rather than extending the runner's fallback PATH.
+
 ## Operational scope
 
 The dedicated instance is the execution boundary. Worker credentials and journals remain root-only; only the separate desktop token is readable by the task user. Release removes the run workspace, but does not restore the OS, task user's home, desktop, clipboard, or applications started through the GUI. Use an unlocked session; do not add a screen locker to the dedicated headless desktop.

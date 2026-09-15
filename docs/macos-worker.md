@@ -128,13 +128,17 @@ display:
 `command -v` が何を見つけるかは、この形で決まる。
 
 - ワーカーはゲスト操作を `tart exec <guest> /bin/bash -lc '<command>'` で実行する（`workers/cmd/aifactory-worker/main.go`）。**ログインシェル**なので `~/.profile` を読む。上流イメージは `~/.profile` を `~/.zprofile` へのsymlinkにしてあるので、`~/.zprofile` が足すPATH（`node@24`、`PNPM_HOME`、`openjdk@17` など）も効く（上流のイメージ定義から。2026-09-10参照。この1文だけ実機で未確認なので、実機では `ls -l ~/.profile` と `command -v node` で確かめる）。`~/.bash_profile` や `~/.bash_login` を作るとこのsymlinkが読まれなくなるので、provisionで作らない。
-- runnerはその上で、コマンドの先頭に固定のPATHを足す（`workflow/lib/macos.py`）。
+- runnerはその上で、コマンドの先頭にPATHを組み立てる（`workflow/lib/macos.py` の `guest_path_prelude()`）。**ゲスト自身に答えさせる**形で、runnerは道具を列挙しない（[ADR-0076](adr/0076-guest-path-is-answered-by-the-guest.md)）。3段の順に効く。
+    1. ログイン環境を起点にする。macOSはワーカーが既にログインシェルなので、この段は何もしない（再sourceすると `path_helper` がPATHを並べ替えて `/opt/homebrew/bin` が後ろへ下がる）
+    2. 保険として固定のPATHを足す。**ログイン環境がPATHを答えられないゲストのための後方互換で、新しい道具を通すために増やさない**
 
-    ```
-    /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
-    ```
+        ```
+        /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
+        ```
 
-- `provision.sh` はこのPATHを継いだ `bash provision.sh` として走る。ログインシェルの子なので `~/.zprofile` の分もそのまま見える。
+    3. `mise` が居れば `mise activate bash --shims` の答えをevalし、shimsをPATHの先頭に入れる。上流イメージはmiseを入れるが `~/.zprofile` に有効化を書いていないので、この段がないとmiseの道具（`go` など）が見えない
+- 通したい道具は、runnerの固定PATHに足すのではなく**ゲスト側**に置く（`/etc/profile.d/*.sh`、またはmiseなどの版管理ツール）。
+- `provision.sh` はこのPATHを継いだ `bash provision.sh` として走る。ログインシェルの子なので `~/.zprofile` の分もそのまま見える。ただし **`provision.sh` の中で `export PATH=...` してもそのプロセスにしか効かない**。あとの工程にも効かせたいなら、ゲスト側の1か所（`/etc/profile.d/*.sh` かmise）に置く。
 
 ### 入っているもの
 
@@ -152,6 +156,8 @@ display:
 | Xcode | `xcodes` で導入し `xcode-select` で選択済み（Xcode入りの系統のみ） | `/Applications/Xcode_<版>.app` | 見える（`xcodebuild` は `/usr/bin` 経由） | 入れない |
 | claude | caskの `claude-code`（Xcode入りの系統）、または層2の公式スクリプト | `/opt/homebrew/bin/claude` か `$HOME/.local/bin/claude` | 見える | 無ければ入れる |
 | timeout（GNU） | brewのformula `coreutils`。**上流イメージには入っていない**。層2で入る | `/opt/homebrew/opt/coreutils/libexec/gnubin/timeout` | 見える | 無ければ入れる |
+
+miseの道具はrunnerが `mise activate bash --shims` で通す（上流イメージは `~/.zprofile` にmiseの有効化を書いていないため、ログインシェルだけでは通らない）。
 
 上流イメージにはほかに mise / rbenv / git-lfs / jq / yq / awscli / wget / unzip / zip / cmake / gcc / gitlab-runner / Tart Guest Agent が入る。Xcode入りの系統にはさらに openjdk@17 / xcodes / Android SDK / codex / amazon-q が入る。
 

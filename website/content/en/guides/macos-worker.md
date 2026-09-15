@@ -128,13 +128,17 @@ The name `latest` alone does not reproduce anything. Record the digest and the g
 What `command -v` finds follows from this.
 
 - The worker runs guest operations as `tart exec <guest> /bin/bash -lc '<command>'` (`workers/cmd/aifactory-worker/main.go`). That is a **login shell**, so it reads `~/.profile`. The upstream image makes `~/.profile` a symlink to `~/.zprofile`, so the PATH entries written there (`node@24`, `PNPM_HOME`, `openjdk@17`) apply too (from the upstream image definition, retrieved 2026-09-10; this one sentence is not verified on real hardware, so check it there with `ls -l ~/.profile` and `command -v node`). Creating `~/.bash_profile` or `~/.bash_login` stops that symlink from being read, so provisioning must not create them.
-- On top of that, the runner prefixes every command with a fixed PATH (`workflow/lib/macos.py`).
+- On top of that, the runner builds the PATH ahead of every command (`guest_path_prelude()` in `workflow/lib/macos.py`). The guest itself answers; the runner does not enumerate tools ([ADR-0076](https://github.com/akkijp-oss/aifactory/blob/main/docs/adr/0076-guest-path-is-answered-by-the-guest.md)). Three stages apply in order.
+    1. Start from the login environment. On macOS the worker already uses a login shell, so this stage does nothing (re-sourcing would let `path_helper` reorder PATH and push `/opt/homebrew/bin` further back).
+    2. Prepend a fixed PATH as a fallback. **This exists for backward compatibility with guests that cannot answer with a PATH; do not extend it to make a new tool reachable.**
 
-    ```
-    /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
-    ```
+        ```
+        /opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH
+        ```
 
-- `provision.sh` runs as `bash provision.sh` with that PATH inherited. As a child of the login shell it also sees what `~/.zprofile` added.
+    3. If `mise` is present, eval what `mise activate bash --shims` answers, putting the shims first on PATH. The upstream image installs mise but does not enable it in `~/.zprofile`, so without this stage the tools mise manages (`go`, for example) are invisible.
+- To make a tool reachable, put it on the **guest** side (`/etc/profile.d/*.sh`, or a version manager such as mise) rather than adding it to the runner's fixed PATH.
+- `provision.sh` runs as `bash provision.sh` with that PATH inherited. As a child of the login shell it also sees what `~/.zprofile` added. Note that **`export PATH=...` inside `provision.sh` only affects that one process**; to make it apply to later steps, put it in one place on the guest (`/etc/profile.d/*.sh` or mise).
 
 ### What is installed
 
@@ -152,6 +156,8 @@ The table below is derived from the upstream image definitions (`templates/base.
 | Xcode | Installed with `xcodes` and already selected with `xcode-select` (Xcode line only) | `/Applications/Xcode_<version>.app` | Yes, `xcodebuild` through `/usr/bin` | No |
 | claude | The `claude-code` cask (Xcode line) or the official script at layer 2 | `/opt/homebrew/bin/claude` or `$HOME/.local/bin/claude` | Yes | Install only if missing |
 | timeout (GNU) | The brew formula `coreutils`. **Not in the upstream image**; added at layer 2 | `/opt/homebrew/opt/coreutils/libexec/gnubin/timeout` | Yes | Install only if missing |
+
+Tools managed by mise are reached because the runner evaluates `mise activate bash --shims`; the upstream image does not enable mise in `~/.zprofile`, so a login shell alone does not reach them.
 
 The upstream image also carries mise, rbenv, git-lfs, jq, yq, awscli, wget, unzip, zip, cmake, gcc, gitlab-runner, and the Tart Guest Agent. The Xcode line adds openjdk@17, xcodes, the Android SDK, codex, and amazon-q.
 
