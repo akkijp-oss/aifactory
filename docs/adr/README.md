@@ -92,3 +92,4 @@
 - [0078: 配車（dispatch）も先行条件を見る。判定は core の 1 か所を通し、飛ばした理由を残す](0078-dispatch-reads-prerequisites-through-core.md)
 - [0079: 配車の下見は「実際に回る票」を見せる。選び直しは core の 1 か所（`pm_pick_next`）を通す](0079-preview-picks-the-same-ticket-as-dispatch.md)
 - [0080: 実行環境の「できないこと」は PJ 定義が宣言し、完了条件との照合は警告だけにする。判定は 1 か所、未宣言は照合しない](0080-environment-capabilities-are-declared-and-checked-as-a-warning.md)
+- [0081: 掃き寄せは救済であって成果物の判断ではない。依存ファイルは拾わず、拾ったものは必ず記録に残す](0081-the-sweep-is-a-rescue-and-does-not-carry-dependency-files.md)

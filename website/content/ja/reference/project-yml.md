@@ -23,6 +23,7 @@
 | `forbidden` | array | | エージェントがやってはいけないこと（プロジェクト固有） | 全役割の依頼文に「このプロジェクトで禁止」として追加 |
 | `workflow_overrides` | object | | ワークフロー名 → 上書き（v1 は `base_branch` のみ） | base の決定 |
 | `known_red_gates` | array | | base ブランチで既に失敗するゲート名（`gates.sh` の名前） | runner が FAIL を INFO（参考情報）として扱うように変更し、エージェントに「直せ」と戻さない |
+| `sweep_exclude` | array | | 掃き寄せで拾わないファイルの glob（既定は `**/package.json` と `**/pnpm-lock.yaml`。`[]` で除外なし） | 工程の終わりの掃き寄せコミットから外し、そのファイルを HEAD の内容へ戻す |
 | `auto_merge` | boolean / object | | ゲート緑・レビュー PASS・CI 緑の PR を runner が `base_branch` へマージする（既定は無効） | `pr` の後の `automerge` 工程を回す。無い場合はその工程ごと飛ばして人間に渡す |
 | `capabilities` | object | | この実行環境にある能力（`browser` / `docker` / `egress` / `gui`。すべて任意） | 票の完了条件と突き合わせて警告を出す。`false` が 1 つでもあれば依頼文に「この環境で検証できないこと」節を足す |
 
@@ -132,6 +133,38 @@ pnpm --filter @kumitate/db db:migrate
 ```
 
 失敗した場合、runner はエージェントを起動せずに終了します（`state.json` に `result: failed` と `failure: prepare`、工程の履歴は空、出力は `code-prepare.log`）。かんばんではチケットが `blocked` になります。macOS / Windows / Linux のワーカーでは、既存の `provision.sh` が毎回の貸出で同じ役目を果たします。
+
+## 掃き寄せ: sweep_exclude
+
+工程が終わるとき、runner は作業ツリーに残った**追跡済みの**未コミット変更を `sandbox: uncommitted changes by agent` というコミットで拾います（未追跡のファイルは拾いません）。時間上限や利用枠で工程が切られたとき、書きかけの実装を次の実行へ渡すための**救済**です。
+
+この救済は「何を成果物に載せるか」の判断ではありません。実装役は自分でコミットする約束なので、コミットされていない変更のうち**環境が書き換えただけのもの**（依存の解決をやり直した `pnpm-lock.yaml` や `package.json`）まで拾うと、意図していない依存の変更が PR に載ります（チケット 572 の事故: `@types/node` の downgrade が CI のテストを 18 件赤にしました）。
+
+そこで、既定では次のファイルを掃き寄せの対象から外し、作業ツリーごと HEAD の内容へ戻します。
+
+- `**/package.json`
+- `**/pnpm-lock.yaml`
+
+```yaml
+sweep_exclude:            # 既定を置き換える
+  - "**/package.json"
+  - "**/pnpm-lock.yaml"
+  - "**/uv.lock"
+```
+
+`sweep_exclude: []` と書くと除外なし（すべて拾う）になります。
+
+**意図した依存の変更は、実装役が自分で `git add` してコミットしてください。** 実装役が自分で `git add` 済みのファイルは、除外の対象になりません（意図が明示されているため）。
+
+掃き寄せが起きた工程では、次の 3 か所に事実が残ります（差分を開かないと気づけない状態をやめるため）。
+
+- 掃き寄せコミットの本文に、拾ったファイルと除外して戻したファイルの一覧
+- `state.json` の工程履歴の `swept`（コンソールと MCP の `outcome.swept`）
+- runner の標準出力（`[run] 掃き寄せ: …`）
+
+### 開始時の作業ツリーの検査
+
+runner は checkout の直後と `prepare` の直後に `git status` を確かめ、追跡済みのファイルが汚れていれば HEAD の内容へ戻してから最初のエージェントを起動します（未追跡のファイルは触りません）。VM のテンプレートや直前の実行が残した変更が、そのまま次の run の基準（baseline）になるのを防ぐためです。戻した事実は `state.json` の `dirty_at_start` に残り、`outcome.dirty_at_start` として読めます。run は止めません。
 
 ## base でも赤いゲート
 

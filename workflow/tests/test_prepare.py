@@ -11,6 +11,7 @@ checkout も prepare もローカルの本物の git / bash がそのまま動�
 - project.yml に prepare が無い PJ → 準備は走らない（code-prepare.log を作らない）
 - prepare が指すファイルが無い → VM を借りる前に止まる。借りた後に消えていた場合は PrepareFailed（VM を返す）
 - kb run 経由なら、チケットは実行中のまま残らず blocked になり、note に prepare と書いてある
+- 開始時（checkout / prepare の直後）に作業ツリーが汚れていたら HEAD へ戻し、state.json の `dirty_at_start` に残す（572）
 """
 import json
 import os
@@ -178,6 +179,38 @@ class PrepareTest(unittest.TestCase):
         with self.assertRaises(mod.PrepareFailed) as e:
             mod.Run.prepare(fake)
         self.assertIn("prepare が指すスクリプトが無い", str(e.exception))
+
+    # ---------- e: 開始時に作業ツリーが汚れていたら戻してから始める（チケット 572）
+    def test_a_dirty_worktree_is_restored_before_the_agent_starts(self):
+        """★退行注入: VM の作業ツリーを汚した状態で run を始める。前の便やテンプレートが残した追跡ファイルの
+        変更は、掃き寄せに拾われる前に HEAD へ戻し、戻したこと自体を記録に残す（黙って汚れた上で始めない）"""
+        self.project("dirtystart")
+        (self.app / "package.json").write_text('{"@types/node": "^20.17.6"}\n', encoding="utf-8")
+        git(self.app, "add", "package.json"); git(self.app, "commit", "-q", "-m", "依存")
+        git(self.app, "push", "-q", "origin", "HEAD:develop")
+        (self.app / "package.json").write_text('{"@types/node": "^22.20.2"}\n', encoding="utf-8")   # 汚れ
+        (self.app / "junk.db").write_text("x", encoding="utf-8")                                   # 未追跡は触らない
+        p, run_dir = self.run_runner("dirtystart", "906")
+        s = self.state(run_dir)
+        self.assertEqual(s.get("dirty_at_start"), [{"stage": "checkout", "restored": ["package.json"]}])
+        self.assertIn("^20.17.6", (self.app / "package.json").read_text(encoding="utf-8"))         # 戻っている
+        self.assertTrue((self.app / "junk.db").exists())
+        self.assertIn("開始時の作業ツリーが汚れていた", p.stdout)
+        self.assertTrue((self.vm / "claude-ran").exists(), p.stdout[-2000:])                       # run は止めない
+
+    def test_a_prepare_script_that_dirties_tracked_files_is_restored_too(self):
+        """prepare.sh（依存の入れ直し・migration）が追跡ファイルを書き換えた分も、agent の前に戻す"""
+        self.project("dirtyprep", prepare='#!/usr/bin/env bash\necho dirty > README.md\n')
+        p, run_dir = self.run_runner("dirtyprep", "907")
+        s = self.state(run_dir)
+        self.assertEqual([d["stage"] for d in s.get("dirty_at_start") or []], ["prepare"])
+        self.assertEqual((s["dirty_at_start"][0])["restored"], ["README.md"])
+        self.assertEqual((self.app / "README.md").read_text(encoding="utf-8"), "pj\n")
+
+    def test_a_clean_worktree_records_nothing(self):
+        self.project("cleanstart")
+        p, run_dir = self.run_runner("cleanstart", "908")
+        self.assertNotIn("dirty_at_start", self.state(run_dir))
 
     # ---------- d: 板の側（kb）でも「準備で止まった」と分かる
     def test_kb_run_blocks_the_ticket_and_says_prepare(self):

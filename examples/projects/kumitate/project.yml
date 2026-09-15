@@ -22,6 +22,7 @@ facts:
   - "CI のゲート: `pnpm tokens:check` / typecheck（dsl, db, generate, web, marketing）/ `pnpm --filter @kumitate/web lint` / `pnpm --filter @kumitate/marketing lint` / test（同 5 パッケージ）/ `pnpm --filter @kumitate/web test:dom`"
   - "個別テストは `pnpm --filter @kumitate/web exec vitest run <file>`"
   - "テストが生成する apps/kumitate/packages/db/.data/ 配下（turso のローカル DB）は追跡外。git add しない"
+  - "掃き寄せ（`sandbox: uncommitted changes by agent`）は package.json / pnpm-lock.yaml を既定で拾わず HEAD へ戻す（#572）。意図した依存の変更は自分で `git add` してコミットする"
   - "既知の問題（2026-09-06）: apps/web の calendar 表題テスト 2 件がフィクスチャ 2026-08 固定で時間依存"
   - "`tokens/` はデザイントークンの単一情報源。変えたら `pnpm tokens:build` して差分をコミット"
   - "大きな作業は管理役 / devteam の体制で行う運用（ルート CLAUDE.md）。sandbox の agent は 1 タスク 1 PR の小さな仕事を担う"
