@@ -110,7 +110,8 @@ Changing any of these deserves an ADR.
 | `/run/sandbox/env` | tmpfs. `TASK_ID` / `SANDBOX_PJ` / `SANDBOX_HOST` / `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN` / `GH_REPO` / `GH_TOKEN_EXPIRES_AT`. Read at login by `/etc/profile.d/sandbox.sh` |
 | `$SANDBOX_APP_DIR` (e.g. `/home/dev/app`) | The repository clone. Dependencies, database and seed come from the template. The runner creates the work branch |
 | `~/work/<id>/` | Artifacts: `ticket.md` → `plan.md` → `report.md` … Collected to the Mac on release |
-| `~/gates/<name>.log` | Gate logs |
+| `~/gates/<name>.log` | Gate logs (the main run) |
+| `~/gates/<name>.base.log` | Logs from re-running the same gate against base; never overwrites the main run's |
 | `~/.local/bin/claude` | Claude Code |
 | `~/.local/share/mise/shims` | Ruby / Node |
 | systemd `sandbox-app.service` | The app service (:3000) |

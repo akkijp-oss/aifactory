@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # examples/projects/kumitate/gates.sh: kumitate の品質ゲート（VM 内、$SANDBOX_APP_DIR で実行）。CI（ci.yml）と同じ組。
-#   全部通れば 0、どれか赤なら非0。結果は標準出力に 1 行ずつ。ログは ~/gates/<name>.log
+#   全部通れば 0、どれか赤なら非0。結果は標準出力に 1 行ずつ。ログは ~/gates/<name>.log（base 確認で回し直すときは ~/gates/<name>.base.log。env GATES_LOG_SUFFIX）
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 cd "${SANDBOX_APP_DIR:-$HOME/app/apps/kumitate}"
@@ -8,7 +8,8 @@ mkdir -p "$HOME/gates"; rc=0
 SELECT="$*"   # 引数があればその名前のゲートだけ走らせる（runner が base で赤いゲートだけ回し直すため。チケット 330）
 gate() { local name=$1; shift
   if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
-  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+  local log="$HOME/gates/$name${GATES_LOG_SUFFIX:-}.log"   # base 確認の回し直しは .base を渡してくる（本実行の赤いログを潰さない。#551）
+  if "$@" > "$log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name${GATES_LOG_SUFFIX:-}.log)"; rc=1; fi
 }
 # 依存の再取得と db:migrate は prepare.sh（project.yml の prepare）でゲートの前に済ませる。ゲートは「品質を測る」だけにする
 gate tokens-check pnpm tokens:check

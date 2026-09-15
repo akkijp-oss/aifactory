@@ -55,7 +55,8 @@ mkdir -p "$HOME/gates"; rc=0
 SELECT="$*"
 gate() { local name=$1; shift
   if [ -n "$SELECT" ]; then case " $SELECT " in *" $name "*) ;; *) return 0 ;; esac; fi
-  if "$@" > "$HOME/gates/$name.log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name.log)"; rc=1; fi
+  local log="$HOME/gates/$name${GATES_LOG_SUFFIX:-}.log"
+  if "$@" > "$log" 2>&1; then echo "PASS $name"; else echo "FAIL $name (~/gates/$name${GATES_LOG_SUFFIX:-}.log)"; rc=1; fi
 }
 check() { if [ -f "$1" ]; then echo "ok $1"; else echo "missing $1"; return 1; fi; }
 gate strings check strings-ok.txt
@@ -70,8 +71,9 @@ set -uo pipefail
 cd "${SANDBOX_APP_DIR:-$HOME/app}"
 mkdir -p "$HOME/gates"
 noisy() { local line; line="$(head -c 2000 /dev/zero | tr '\0' x)"; for i in $(seq 1 400); do echo "$i $line"; done; test -f noisy-ok.txt; }
-if noisy > "$HOME/gates/noisy.log" 2>&1; then echo "PASS noisy"; exit 0; fi
-echo "FAIL noisy (~/gates/noisy.log)"; exit 1
+log="$HOME/gates/noisy${GATES_LOG_SUFFIX:-}.log"
+if noisy > "$log" 2>&1; then echo "PASS noisy"; exit 0; fi
+echo "FAIL noisy (~/gates/noisy${GATES_LOG_SUFFIX:-}.log)"; exit 1
 """
 
 PROJECT = """name: basered
@@ -262,8 +264,11 @@ class GatesBaseRedTest(unittest.TestCase):
         self.assertNotIn("FAIL", self.verdict(r))       # 判定の行に赤は残らない（base の結果は === から先に残す）
         self.assertIn("PASS feature", txt)
         self.assertIn("=== base check: origin/develop", txt)
-        self.assertIn("--- strings.log on base (tail 30)", txt)
+        self.assertIn("--- strings.base.log on base (tail 30)", txt)
+        self.assertIn("FAIL strings (~/gates/strings.base.log)", txt)   # base 側は別名前空間に書く（#551）
+        self.assertNotIn("BASE-CHECK-LOG-MISSING", txt)
         self.assertIn("missing strings-ok.txt", txt)
+        self.assertTrue((self.vm / "gates" / "strings.base.log").is_file(), "base 確認の ~/gates/strings.base.log が無い")
         # INFO に落ちた分もログは work/ に残す（「元から赤い」の根拠。ただし依頼文には載せない。チケット 331）
         log = self.gate_log(r, "strings")
         self.assertIsNotNone(log, "INFO に落ちたゲートの work/gates/strings.log が無い")
@@ -313,6 +318,82 @@ class GatesBaseRedTest(unittest.TestCase):
         self.assertEqual((self.app / "scratch.txt").read_text(encoding="utf-8"), "メモ\n")
         self.assertEqual(git_out(self.app, "stash", "list").strip(), "")
         self.assertEqual(git_out(self.app, "rev-parse", "--abbrev-ref", "HEAD").strip(), r.branch)
+
+    # ---------- BASE-CHECK が本実行の赤いログを上書きしない（チケット 551）
+    def test_the_base_check_keeps_the_head_log_and_writes_its_own_base_log(self):
+        """診断のための再実行が診断対象を壊してはいけない（run が残す証跡は後続の処理で壊れない）。
+
+        base 確認は同じゲート名で走るので、出力先を分けないと VM の `~/gates/<名前>.log` が base の結果で
+        上書きされ、「FAIL なのにログは全緑」という読めない証跡になる（2026-09-14 kumitate #521 の誤診）。
+        本実行は `<名前>.log`、base 確認は `<名前>.base.log` に書く"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        def implement(n):
+            if n == 0:
+                git(self.app, "rm", "-q", "feature-ok.txt"); self.commit("feature-ok.txt を消した（壊した）")
+            else:
+                # 1 周目の gates の直後（2 周目の gates で上書きされる前）に VM の中を覗く
+                self.head_log = (self.vm / "gates" / "feature.log").read_text(encoding="utf-8")
+                b = self.vm / "gates" / "feature.base.log"
+                self.base_log = b.read_text(encoding="utf-8") if b.is_file() else None
+                self.red_txt = self.gates_txt(self.r)     # gates.txt は回ごとに上書きされる。赤かった回の分をここで取る
+                (self.app / "feature-ok.txt").write_text("feature-ok.txt\n", encoding="utf-8"); self.commit("戻した")
+        r = self.build(914, implement)
+        r.main()
+        # 本実行の赤い中身がそのまま残っている（base の緑で塗り潰されていない）
+        self.assertIn("missing feature-ok.txt", self.head_log,
+                      f"本実行の ~/gates/feature.log が base の結果で上書きされている: {self.head_log!r}")
+        self.assertNotIn("ok feature-ok.txt", self.head_log)
+        # base 確認の出力は別ファイルに在る（base では緑）
+        self.assertIsNotNone(self.base_log, "base 確認の ~/gates/feature.base.log が無い")
+        self.assertIn("ok feature-ok.txt", self.base_log)
+        # gates.txt の案内が正しいパスを指す
+        txt = self.red_txt
+        self.assertIn("=== base check: origin/develop", txt)
+        base_block = txt.split("=== base check: origin/develop", 1)[1]
+        self.assertIn("BASE-CHECK origin/develop", base_block)
+        self.assertIn("~/gates/<name>.base.log", base_block)
+        self.assertIn("PASS feature", base_block)
+        self.assertNotIn("BASE-CHECK-LOG-MISSING", txt)
+        # 判定と抜粋は従来どおり（挙動不変）
+        self.assertIn("FAIL feature", self.notes["implement"][1])
+        self.assertIn("missing feature-ok.txt", self.notes["implement"][1])
+        self.assertEqual(r.state["loops"]["gates->implement"], 1)
+
+    # ---------- PJ の gates.sh が契約を守っていないと 1 行言う（判定は変えない。チケット 551）
+    def test_a_pj_gates_that_ignores_the_log_suffix_is_reported(self):
+        """workspace/projects の私有 PJ はこの repo から直せない。黙って元の事故（上書き）に戻らないよう、
+        base 側のログが出ていない run では gates.txt に 1 行残す。FAIL にはしない（判定不変）"""
+        self.make_repo(["strings-ok.txt", "feature-ok.txt"])
+        (self.vm / "prepared").touch()
+        def implement(n):
+            if n == 0:
+                git(self.app, "rm", "-q", "feature-ok.txt"); self.commit("feature-ok.txt を消した（壊した）")
+            else:
+                self.red_txt = self.gates_txt(self.r)
+                (self.app / "feature-ok.txt").write_text("feature-ok.txt\n", encoding="utf-8"); self.commit("戻した")
+        r = self.build(915, implement)
+        # 出力先を固定した古い契約の gates.sh に差し替える
+        old = PJ_GATES.replace('${GATES_LOG_SUFFIX:-}', '')
+        self.assertNotEqual(old, PJ_GATES, "PJ_GATES が GATES_LOG_SUFFIX を見ていない")
+        (self.ws / "projects" / "basered" / "gates.sh").write_text(old, encoding="utf-8")
+        r.main()
+        self.assertIn("BASE-CHECK-LOG-MISSING feature", self.red_txt)
+        # 判定は不変: FAIL のまま implement へ 1 回戻る
+        self.assertIn("FAIL feature", self.notes["implement"][1])
+        self.assertEqual(r.state["loops"]["gates->implement"], 1)
+        self.assertEqual(self.steps(r), ["research", "design", "implement", "gates", "implement", "gates", "review", "sync", "pr"])
+
+    # ---------- examples の gates.sh が契約を守っている（VM 不要）
+    def test_example_gates_honor_the_log_suffix(self):
+        """`gate()` の契約は kit と PJ の間の取り決め。examples が古い版に戻ると、それを写した PJ が事故に戻る"""
+        found = sorted((REPO / "examples" / "projects").glob("*/gates.sh"))
+        self.assertTrue(found, "examples/projects/*/gates.sh が無い")
+        for f in found:
+            line = next((l for l in f.read_text(encoding="utf-8").splitlines()
+                         if '"$@" >' in l and "gates/" in l), None)
+            self.assertIsNotNone(line, f"{f}: gate() のログ出力行が読めない")
+            self.assertIn("GATES_LOG_SUFFIX", line, f"{f}: gate() が GATES_LOG_SUFFIX を見ていない（#551）: {line.strip()}")
 
     # ---------- A 型: 環境のずれは prepare で直る（kumitate の DB migration）
     def test_an_environment_gate_passes_when_prepare_sets_the_environment_up(self):
