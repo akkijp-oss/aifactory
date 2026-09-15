@@ -43,7 +43,7 @@ import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
 KIT = HERE / "kit"
-sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_workflow as wf
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_workflow as wf, aifactory_capabilities as caps
 
 def die(msg, code=1):
     print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
@@ -280,6 +280,31 @@ def review_verdict(text):
     head = (text or "").splitlines()[:1]
     if not head: return None
     return "PASS" if "PASS" in head[0] else "FAIL"
+
+
+# report.md の `## 未検証項目`（チケット 552）。実装役の良心に任せず、節が空なら「出力が無い」と同じ扱いにする。
+# 「無し」と書けば通る（空欄のまま出せないだけで、書くことを増やす仕掛けではない）
+UNVERIFIED_HEADING = re.compile(r"^(#{1,6})\s*未検証項目")
+
+
+def report_unverified(text):
+    """report.md に `## 未検証項目` があり、中身が 1 行でもあるか → (ok, 直し方)。
+
+    review_verdict() と同じく本文の字面だけを見る（VM も state も要らない）。見出しの次の見出しまでに
+    本文の行が 1 つも無ければ未記入。
+    """
+    lines = (text or "").splitlines()
+    start = level = None
+    for i, l in enumerate(lines):
+        m = UNVERIFIED_HEADING.match(l.strip())
+        if m: start, level = i + 1, len(m.group(1)); break
+    if start is None:
+        return False, "report.md に `## 未検証項目` が無い（この環境で確かめられなかった完了条件を文面のまま列挙する。無ければ「無し」と書く）"
+    for l in lines[start:]:
+        m = re.match(r"^(#{1,6})\s", l)
+        if m and len(m.group(1)) <= level: break
+        if l.strip(): return True, ""
+    return False, "report.md の `## 未検証項目` が空（確かめられなかった完了条件を文面のまま書く。無ければ「無し」と書く）"
 
 
 def review_severity(text):
@@ -729,6 +754,10 @@ class Run:
         parts += [f"- {x}" for x in p.get("facts", [])]
         if p.get("forbidden"): parts += ["", "### この PJ で禁止", ""] + [f"- {x}" for x in p["forbidden"]]
         if step["role"] == "reviewer" and p.get("review_points"): parts += ["", "### この PJ で必ず見る観点", ""] + [f"- {x}" for x in p["review_points"]]
+        # この環境に無いと宣言された能力（project.yml の capabilities）と、チケットの完了条件の食い違い。
+        # 宣言が無い PJ・false が 1 つも無い PJ では節ごと出ない（computer_use 節と同じ「有るときだけ足す」方式。チケット 552）
+        section = self.capability_section()
+        if section: parts += ["", section, ""]
         parts += ["", "## チケット", "", self.ticket.strip(), ""]
         # 添付は本文に入らない（正本は workspace の attachments/）。場所と名前だけ案内する（チケット 353）
         att = self.state.get("attachments") or []
@@ -756,6 +785,16 @@ class Run:
                       "（WIP でよい。メッセージ先頭に `wip:`）。上限で切られると未コミットの変更は次の attempt に渡らない"]
         parts += ["", "終わったら、何をしたかを 5 行以内で標準出力に報告して終了する。"]
         return "\n".join(parts).replace("~/work/<task>/", self.work + "/")
+
+    def capability_section(self):
+        """依頼文の「## この環境で検証できないこと」。判定も文面も lib/aifactory_capabilities.py が正本（チケット 552）"""
+        try:
+            decl = caps.declared(self.project)
+            if not decl: return ""
+            return caps.prompt_section(decl, caps.scan(self.ticket, decl)).rstrip()
+        except Exception as e:
+            self.log(f"capabilities: 照合できなかった（{type(e).__name__}: {e}）。依頼文に節を足さない")
+            return ""
 
     def diff_summary(self):
         return self.sb(f"cd $SANDBOX_APP_DIR && git diff --stat origin/{self.base}...HEAD && echo && git log --oneline origin/{self.base}..HEAD", check=False)
@@ -883,6 +922,11 @@ class Run:
         if "git" in step.get("outputs", []) and not self.has_changes():
             missing.append("git(コミットなし)")
         if missing: return False, f"出力が無い: {', '.join(missing)}"
+        # report.md を出す実装役（implement / resolve）は「未検証項目」を空欄のまま出せない（チケット 552）。
+        # ゲートが全緑でも、実ブラウザや docker が要る完了条件を満たした証拠にはならないため、そこを明示させる
+        if step["role"] == "implementer" and "report.md" in step.get("outputs", []):
+            ok, why = report_unverified(self.vm_read("report.md"))
+            if not ok: return False, why
         if step["role"] == "reviewer":
             body = self.vm_read("review.md")
             ok = review_verdict(body) == "PASS"

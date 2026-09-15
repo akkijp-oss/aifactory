@@ -91,3 +91,4 @@
 - [0077: 票の先行条件は人が書く 1 列（`depends_on`）にする。PM はそれだけを読み、本文の自由文は解釈しない](0077-ticket-prerequisites-are-a-column-the-pm-reads.md)
 - [0078: 配車（dispatch）も先行条件を見る。判定は core の 1 か所を通し、飛ばした理由を残す](0078-dispatch-reads-prerequisites-through-core.md)
 - [0079: 配車の下見は「実際に回る票」を見せる。選び直しは core の 1 か所（`pm_pick_next`）を通す](0079-preview-picks-the-same-ticket-as-dispatch.md)
+- [0080: 実行環境の「できないこと」は PJ 定義が宣言し、完了条件との照合は警告だけにする。判定は 1 か所、未宣言は照合しない](0080-environment-capabilities-are-declared-and-checked-as-a-warning.md)

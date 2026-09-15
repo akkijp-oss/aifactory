@@ -11,6 +11,7 @@
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
   kb detach <id> <name>                          # 添付を 1 件消す
+  kb capcheck [--pj P] [--all] [--json]          # 票の完了条件が PJ の能力宣言（project.yml の capabilities）と食い違う行を数える（DB は変えない）
   kb next [--pj P] [--json]                      # 次に回す todo を 1 件（コンソールの下見 /api/next と PM が読む。dispatch は kb list + kb show）
   kb resumable [--pj P] [--json]                 # 一時停止中（利用枠切れ / 鍵なし で todo に戻した）チケットと、続きを回せるか（解除時刻を過ぎた / 鍵が登録された。dispatch --resume-paused が読む）
   kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]   # workflow/bin/run を呼び、結果で状態を進める（--workflow は今回の実行方法だけ。kind は変えない）
@@ -36,7 +37,7 @@ import argparse, datetime, json, os, pathlib, re, sqlite3, subprocess, sys
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # kanban/
 REPO = HERE.parent                                              # repo root
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_capabilities as caps
 ROOT = paths.KB_ROOT
 DB = ROOT / "kanban.db"
 TICKETS = ROOT / "tickets"
@@ -238,18 +239,66 @@ def cmd_new(a):
     if deps: record(c, tid, "depends_on", None, deps)
     c.commit(); render(c)
     print(fmt(get(c, tid))); print(f"     {file}")
+    for w in capability_warnings(a.pj, body): print(f"[kb] warning: {w}", file=sys.stderr)
     if getattr(a, "attach", None): attach_files(c, tid, a.attach)
     return tid
 
 
-def cmd_list(a):
-    c = db(); q = "SELECT * FROM tickets WHERE 1=1"; p = []
-    if a.status: q += " AND status = ?"; p.append(a.status)
+def capability_warnings(pj, body):
+    """本文の完了条件が PJ の能力宣言と食い違う行（判定は lib/aifactory_capabilities.py が正本。チケット 552）。
+
+    警告するだけで起票は止めない。照合そのものが失敗しても 1 行の警告に丸める（起票を落とさない）。
+    """
+    try:
+        decl = caps.load_declared(pj)
+        if not decl: return []                       # 宣言が無い PJ は照合しない（false と未宣言は違う）
+        return caps.format_warnings(caps.scan(body, decl))
+    except Exception as e:
+        return [f"能力の照合ができなかった: {type(e).__name__}: {e}"]
+
+
+def select_tickets(c, a):
+    """`kb list` と同じ絞り込み（--status / --pj / --all）"""
+    q = "SELECT * FROM tickets WHERE 1=1"; p = []
+    if getattr(a, "status", None): q += " AND status = ?"; p.append(a.status)
     elif not a.all: q += " AND status != 'done'"
     if a.pj: q += " AND pj = ?"; p.append(a.pj)
-    rows = c.execute(q + " ORDER BY id", p).fetchall()
+    return c.execute(q + " ORDER BY id", p).fetchall()
+
+
+def cmd_list(a):
+    c = db(); rows = select_tickets(c, a)
     for r in rows: print(fmt(r))
     if not rows: print("(なし)")
+
+
+def cmd_capcheck(a):
+    """実データでの当たり（＝誤検知を含む警告）を数える。DB も本文も変えない。
+
+    宣言の無い PJ の票は照合しないので scanned に数えない（「照合して 0 件」と「照合していない」を混ぜない）。
+    """
+    c = db(); rows = select_tickets(c, a)
+    decls, scanned, out = {}, 0, []
+    for r in rows:
+        pj = r["pj"]
+        if pj not in decls: decls[pj] = caps.load_declared(pj)
+        if not decls[pj]: continue
+        scanned += 1
+        f = ROOT / r["file"]
+        body = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+        res = caps.scan(body, decls[pj])
+        if res["hits"]: out.append((r, res))
+    if a.json:
+        print(json.dumps({"scanned": scanned, "hits": len(out), "skipped": len(rows) - scanned,
+                          "tickets": [{"id": r["id"], "pj": r["pj"], "title": r["title"], "scope": res["scope"],
+                                       "hits": res["hits"]} for r, res in out]}, ensure_ascii=False, indent=2))
+        return
+    for r, res in out:
+        print(fmt(r))
+        for w in caps.format_warnings(res)[:-1]: print(f"    {w}")
+    if not out: print("(当たり無し)")
+    print(f"hits {len(out)} / scanned {scanned}"
+          + (f"（宣言の無い PJ の票 {len(rows) - scanned} 件は照合していない）" if len(rows) - scanned else ""))
 
 
 def cmd_show(a):
@@ -839,6 +888,8 @@ def main():
     p = sp.add_parser("attach"); p.add_argument("id", type=int); p.add_argument("file", nargs="+", help="添付するファイル（コピーされる）")
     p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")
     p = sp.add_parser("detach"); p.add_argument("id", type=int); p.add_argument("name", help="kb attachments で出る名前")
+    p = sp.add_parser("capcheck"); p.add_argument("--pj"); p.add_argument("--status"); p.add_argument("--all", action="store_true")
+    p.add_argument("--json", action="store_true")
     p = sp.add_parser("next"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("resumable"); p.add_argument("--pj"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("run"); p.add_argument("id", type=int); p.add_argument("--workflow"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--keep", action="store_true"); p.add_argument("--resume", action="store_true")
@@ -861,6 +912,7 @@ def main():
     a = ap.parse_args()
     if a.cmd == "new": cmd_new(a)
     elif a.cmd == "list": cmd_list(a)
+    elif a.cmd == "capcheck": cmd_capcheck(a)
     elif a.cmd == "show": cmd_show(a)
     elif a.cmd in ("start", "review", "done", "reopen", "block"):
         cmd_status(a, {"start": "in_progress", "review": "review", "done": "done", "reopen": "todo", "block": "blocked"}[a.cmd])

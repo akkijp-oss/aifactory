@@ -182,7 +182,7 @@ TOOLS = [
      schema({"pj": STR, "dry": {**BOOL, "description": "決めるだけで判断ログに書かない"}}), t_pm_tick),
     ("ticket_list", "チケット一覧（既定は done 以外）。pj / status で絞る", schema({"pj": STR, "status": {"type": "string", "enum": core.STATUSES}, "all": {**BOOL, "description": "done も含める"}}), t_ticket_list),
     ("ticket_show", "チケット 1 件: メタ・本文・履歴・関連する run とジョブ。run があれば sync_preview（状態を合わせたときの前後）も付く", schema({"id": INT}, ["id"]), t_ticket_show),
-    ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR, "depends_on": {**STR, "description": "先行票の番号。カンマ区切り（例 534,535）。未完了の先行票がある票は PM が次に選ばない"}}, ["pj", "kind", "title"]), t_ticket_new),
+    ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う。完了条件が PJ の能力宣言（capabilities）と食い違うときは warnings[] に理由が入る（起票は止まらない）", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR, "depends_on": {**STR, "description": "先行票の番号。カンマ区切り（例 534,535）。未完了の先行票がある票は PM が次に選ばない"}}, ["pj", "kind", "title"]), t_ticket_new),
     ("ticket_attach", "チケットにファイルを 1 件添付する（kb attach）。runner が VM の ~/work/<id>/attachments/ に配り、依頼文にも名前が載る。"
      "content_base64 に中身をそのまま渡すか、path に ctl の上のファイル（ホームか /tmp の下・`.` で始まる要素を含まないもの）を指定する。どちらか一方。"
      "名前は保存時に整えられる（長さと Markdown の記法を落とす）ので、返りの added を見ること。秘密（トークン・鍵）は添付しない",
@@ -224,7 +224,7 @@ TOOLS = [
     ("read_file", "限られた場所のファイルを読む: 実行記録（runs/）/ チケット本文 / チケットの添付 / intake・dispatch のログ / workflow/kit/ / PJ 定義 / ジョブ記録。tail はバイト数。画像（png / jpg / gif / webp）は text ではなく image で返る（4 MiB まで）",
      schema({"path": {**STR, "description": "run_show / ticket_show / logs が返すパス（リポジトリ相対か絶対）。例 workspace/runs/2026-09-06-kumitate-206/agent-research-0.log。赤いゲートの中身は同 work/gates/<ゲート名>.log"}, "tail": INT, "offset": INT}, ["path"]), t_read_file),
     ("project_show", "PJ 定義 1 件: project.yml の本文（text）と読み取り結果（parsed）、schema 検証（valid / errors[]）、定義ディレクトリ直下のファイル一覧（files[] は name / size / executable、退避は backups[]）、"
-     "どちらの置き場から読んだか（source: workspace / examples）と書き先（writable_dir）、backend / worker、sandbox の準備状態（sandbox: pool_actual / lent / free / known_red_gates）", schema({"pj": STR}, ["pj"]), t_project_show),
+     "どちらの置き場から読んだか（source: workspace / examples）と書き先（writable_dir）、backend / worker、この環境にある能力の宣言（capabilities。書かれていないキーは未宣言）、sandbox の準備状態（sandbox: pool_actual / lent / free / known_red_gates）", schema({"pj": STR}, ["pj"]), t_project_show),
     ("project_read", "PJ 定義のファイルを 1 つ読む。file は project.yml / gates.sh / provision.sh / prepare.sh のどれか（パス区切りは不可）。"
      "workspace/projects/<pj>/ を先に見て、無ければ examples/projects/<pj>/ から読む（source に出る）",
      schema({"pj": STR, "file": {"type": "string", "enum": list(core.PROJECT_FILES)}}, ["pj", "file"]), t_project_read),
