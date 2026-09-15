@@ -1853,7 +1853,7 @@ class ApiTest(unittest.TestCase):
         # 退避されていない名前の run では、今までどおり完全一致だけを見る
         self.assertEqual(live(self._liveness_run(name="2026-09-09-kumitate-9584-b"), [self._liveness_job()], {}), "running")
         self.assertEqual(live(self._liveness_run(), [], {}), "running")                      # ジョブも票も無ければ running
-        # 完全一致する型（実測の sitebin 型）は今までどおり中断
+        # 完全一致する run_hint（従来の型）は今までどおり中断
         exact = core.run_liveness(self._liveness_run(name="2026-09-09-kumitate-9584"), [self._liveness_job()], {})
         self.assertEqual(exact["status"], "abandoned"); self.assertEqual(exact["runner"]["id"], "20260909-164520-kb-run")
         # ジョブの終了より後に state.json が書かれていれば、別の runner が続きを回している
