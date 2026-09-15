@@ -6,7 +6,7 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import datetime, fcntl, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import datetime, fcntl, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, sqlite3, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
@@ -1844,12 +1844,67 @@ class ApiTest(unittest.TestCase):
         self.assertIn(v["ticket"]["note"], (None, ""))
         self.assertTrue(any(h["field"] == "note" and h["old"] == "x" and not h["new"] for h in v["history"]))
 
+    # ---- 票の先行条件 depends_on（#570 / ADR-0077）。人が書く 1 列で、本文の自由文は機械が解釈しない
+    def test_ticket_depends_on_is_written_and_read_back_through_the_api(self):
+        """起票時にも後からでも先行票を書けて、一覧・詳細・履歴のどれからも読める（起票の口を増やさない）"""
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "chore", "title": "後続: depends_on の往復",
+                                                "body": "x\n\n## 完了条件\n- y", "depends_on": "901, 901 902"})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(v["ticket"]["depends_on"], "901,902")          # 重複は落ち、並び順は書いたまま
+        _, lst = self.http.get(f"/api/tickets?pj={PJ}")
+        self.assertEqual(next(t["depends_on"] for t in lst["tickets"] if t["id"] == tid), "901,902")
+        self.assertTrue(any(h["field"] == "depends_on" and h["new"] == "901,902" for h in v["history"]))
+        # list でも渡せる（MCP / 画面が並びをそのまま渡せる）
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "depends_on": [903, 904]})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["depends_on"], "903,904")
+        # note と同じ扱い: キーが無ければ触らない / 空文字列で消す
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["depends_on"], "903,904")
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "depends_on": ""})[0], 200)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertIsNone(v["ticket"]["depends_on"])
+        self.assertTrue(any(h["field"] == "depends_on" and h["old"] == "903,904" and not h["new"] for h in v["history"]))
+
+    def test_ticket_depends_on_refuses_what_it_cannot_read_as_ticket_numbers(self):
+        """票番号として読めない値は断る（後で読む側が推測しないで済むように、書く側で締める）"""
+        tid = self.todo_id()
+        for bad in ("12x", "#534", "534-535"):
+            st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "depends_on": bad})
+            self.assertEqual(st, 400, (bad, st, d))
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "depends_on": str(tid)})
+        self.assertEqual(st, 400, d)                                     # 自分自身を先行票にはできない
+
+    def test_kb_adds_depends_on_to_a_database_that_predates_the_column(self):
+        """運用中の kanban.db には列が無い。CREATE TABLE IF NOT EXISTS は既存表を変えないので、kb が足す（#570）"""
+        ws = self.tmp / "old-db-ws"; (ws / "kanban" / "tickets").mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(ws / "kanban" / "kanban.db")
+        con.executescript("""
+            CREATE TABLE tickets (id INTEGER PRIMARY KEY, pj TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'todo', file TEXT NOT NULL, pr INTEGER, run TEXT, note TEXT,
+              created TEXT NOT NULL, updated TEXT NOT NULL);
+            CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+              at TEXT NOT NULL, field TEXT NOT NULL, old TEXT, new TEXT);
+            INSERT INTO tickets VALUES (701, 'kumitate', 'chore', '列が無かった頃の票', 'todo',
+              'kanban/tickets/701-x.md', NULL, NULL, NULL, '2026-01-01T00:00:00', '2026-01-01T00:00:00');
+        """)
+        con.commit(); con.close()
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws)}
+        def kb(*args, stdin=None):
+            return subprocess.run([sys.executable, str(KB), *args], input=stdin, text=True, capture_output=True, env=env)
+        r = kb("new", PJ, "chore", "列を足した後の票", "--body", "-", "--id", "702", "--depends", "701", stdin="x\n")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("701", [l.split()[-1] for l in kb("show", "702").stdout.splitlines() if l.startswith("depends_on")])
+        # 既存の行は「依存なし」のまま（挙動が変わらない）。列が無いせいで落ちもしない
+        self.assertEqual([l.strip() for l in kb("show", "701").stdout.splitlines() if l.startswith("depends_on")], ["depends_on"])
+        self.assertEqual(json.loads(kb("next", "--pj", PJ, "--json").stdout)["id"], 701)
+
     # ---- PM（管理役）の状態: GET /api/pm（#535 / ADR-0074 決定 2・決定 4）
     # 一番の約束は「取得できていない」と「0 件」を別の値で持つこと。ここが同じ値だと、確かめられていない状態が
     # そのまま「順調」に見える。next を裸の null にしないのも同じ理由（null を「準備完了」と読ませない）
     PM_STATES = ("idle", "waiting", "landing", "blocked")
     PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
-                       "requeue_proposed")
+                       "requeue_proposed", "blocked_by_dependency")
 
     PM_ACTIONS = ("none", "run", "requeue")
 
@@ -2022,7 +2077,7 @@ class ApiTest(unittest.TestCase):
     # ADR-0074 決定 5 の理由コード。画面はこの語彙を日本語に直すだけで、app.js 側で語彙を作らない
     PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                        "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
-                       "proposed", "approved", "skipped_by_steer", "paused")
+                       "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
         """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
@@ -3714,6 +3769,159 @@ class PmTickTest(unittest.TestCase):
         plist = (REPO / "console" / "launchd" / "com.aifactory.pm.plist").read_text(encoding="utf-8")
         self.assertIn("<key>StartInterval</key><integer>300</integer>", plist)
         self.assertIn("com.aifactory.pm", (REPO / "console" / "bin" / "install.sh").read_text(encoding="utf-8"))
+
+
+class PmDependsTest(unittest.TestCase):
+    """票の先行条件（depends_on）と PM の候補選び（#570 / ADR-0077）。
+
+    実測で踏んだのはこれ: 本文に「先行票の着地後に起動する」と書いてある #538 を、pm_decide が
+    「今すぐ起動せよ」と提案した。`kb next` は todo を id 順に 1 件返すだけで、票が宣言した先行条件を
+    読んでいなかったからで、blocked の除外や状態の導出は正しく働いていた（欠けていたのは依存の概念だけ）。
+
+    ★テストごとに workspace を作り直す。id を自分で決めたいので種の票を置かず、VM も claude も使わない。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-pm-depends-test-"))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _ws(self):
+        ws = self.tmp / self.id().rsplit(".", 1)[-1]
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws
+
+    def _kb(self, ws, *args, stdin="x\n\n## 完了条件\n- y\n", ok=True):
+        r = subprocess.run([sys.executable, str(KB), *args], input=stdin, text=True, capture_output=True,
+                           env={**os.environ, "AIFACTORY_WORKSPACE": str(ws)})
+        if ok: self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        return r
+
+    def _new(self, ws, tid, *extra, status=None):
+        self._kb(ws, "new", PJ, "feature", f"テスト票 {tid}", "--body", "-", "--id", str(tid), *extra)
+        if status: self._kb(ws, "set", str(tid), "--status", status, stdin=None)
+
+    def _core(self, ws, body):
+        """一時 workspace を向いた別プロセスで core を触る（tick が run を起こさないことも同時に守る）"""
+        code = PM_TICK_PREAMBLE + textwrap.dedent(body)
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(ws), "CONSOLE_JOBS": str(ws / "jobs")}
+        r = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    def _pm(self, ws, pj=PJ):
+        d = self._core(ws, "out(core.pm_status(pj=%r))" % pj)
+        self.assertIn(d["next"]["reason"], ApiTest.PM_NEXT_REASONS, d["next"]["reason"])
+        self.assertIn(d["proposal"]["reason_code"], ApiTest.PM_REASON_CODES + (None,), d["proposal"]["reason_code"])
+        return d
+
+    # ---- 完了条件: 未完了の先行票を持つ票を picked_next にしない（本票が実データで踏んだ形）
+    def test_pm_does_not_pick_a_ticket_whose_prerequisites_are_not_done(self):
+        """#538 の再現。先行票 534-537 のうち 537 がまだ todo なら、次は 537 であって 538 ではない。
+
+        537 が done になって初めて 538 が選ばれる＝依存は「永久に選ばない」ではなく「順番を待つ」。"""
+        ws = self._ws()
+        for tid in (534, 535, 536, 537): self._new(ws, tid)
+        self._new(ws, 538, "--depends", "534,535,536,537")
+        for tid in (534, 535, 536): self._kb(ws, "done", str(tid), stdin=None)
+
+        d = self._pm(ws)
+        self.assertEqual(d["next"]["reason"], "picked_next")
+        self.assertEqual(d["next"]["ticket"]["id"], 537, "先行票が残っている 538 を選んでいる")
+        self.assertTrue(d["next"]["launchable"])
+        self.assertEqual(d["proposal"]["ticket"], 537)
+        # 537 は依存を持たないので「飛ばした」記録は空（依存の無い票の道筋を余計に飾らない）
+        self.assertEqual(d["proposal"]["facts"]["skipped_by_dependency"], {})
+
+        self._kb(ws, "done", "537", stdin=None)
+        d = self._pm(ws)
+        self.assertEqual((d["next"]["reason"], d["next"]["ticket"]["id"]), ("picked_next", 538))
+        self.assertEqual(d["proposal"]["action"], "run")
+
+    def test_pm_skips_the_blocked_one_and_picks_the_next_todo(self):
+        """先行票を待っている票は飛ばして、その次の todo を選ぶ（板全体を止めない）。飛ばした事実は facts に残る"""
+        ws = self._ws()
+        self._new(ws, 601)                                     # 先行票（todo のまま＝未完了）
+        self._new(ws, 602, "--depends", "601")                 # id 順では先だが、先行票が終わっていない
+        self._new(ws, 603)                                     # 依存なし
+        d = self._pm(ws)
+        self.assertEqual(d["next"]["ticket"]["id"], 601, "601 が todo の先頭（前提の取り違え）")
+
+        self._kb(ws, "block", "601", "--note", "人間待ち", stdin=None)   # 601 を todo から外し、602 を先頭にする
+        d = self._pm(ws)
+        self.assertEqual((d["next"]["reason"], d["next"]["ticket"]["id"]), ("picked_next", 603))
+        self.assertEqual(d["proposal"]["facts"]["skipped_by_dependency"], {"602": {"601": "blocked"}})
+
+    def test_pm_treats_an_unknown_prerequisite_as_not_done(self):
+        """DB に無い id を先行票に書いたら「確かめられない」＝未完了として扱う（安全側）。status は null で残す"""
+        ws = self._ws()
+        self._new(ws, 611, "--depends", "999")                 # 999 はまだ起票していない（kb は存在検査をしない）
+        self._new(ws, 612)
+        d = self._pm(ws)
+        self.assertEqual(d["next"]["ticket"]["id"], 612)
+        self.assertEqual(d["proposal"]["facts"]["skipped_by_dependency"], {"611": {"999": None}})
+
+    # ---- 完了条件: 依存で外した理由が固定語彙で残り、「読めていない」「0 件」と混ざらない
+    def test_pm_keeps_blocked_by_dependency_apart_from_no_todo_and_unreadable(self):
+        """依存で選べないのは「確かめた結論」。todo が 0 件（no_todo）とも、板を読めていない（board_unreadable）とも別の値"""
+        ws = self._ws()
+        self._new(ws, 621)
+        self._new(ws, 622, "--depends", "621")
+        self._kb(ws, "block", "621", "--note", "人間待ち", stdin=None)   # todo は 622 だけ。その先行票は未完了
+
+        d = self._pm(ws)
+        self.assertEqual(d["next"]["reason"], "blocked_by_dependency")
+        self.assertIsNone(d["next"]["ticket"], "選べないのに票を出すと、画面が「次はこれ」と読める")
+        self.assertFalse(d["next"]["launchable"])
+        self.assertEqual(d["state"], "idle", "板は読めている（依存で選べないことを人間待ちに格上げしない）")
+        self.assertTrue(d["board"]["readable"]); self.assertIsNotNone(d["board"]["counts"])
+        p = d["proposal"]
+        self.assertEqual((p["action"], p["reason_code"]), ("none", "blocked_by_dependency"))
+        self.assertEqual(p["facts"]["skipped_by_dependency"], {"622": {"621": "blocked"}})
+
+        # 3 つが別の値であること（既存の test_pm_status_tells_the_three_kinds_of_no_next_apart と同じ型）
+        dep = d["next"]["reason"]
+        zero = self._pm(ws, "nosuch-pj")["next"]["reason"]
+        empty = self._core(self.tmp / "empty-ws", "out(core.pm_status())")["next"]["reason"]
+        self.assertEqual((dep, zero, empty), ("blocked_by_dependency", "no_todo", "board_unreadable"))
+
+    def test_pm_leaves_tickets_without_depends_on_exactly_as_before(self):
+        """depends_on を書いていない票では、選び方も理由も facts の形も今までどおり（既存の板の挙動を変えない）"""
+        ws = self._ws()
+        self._new(ws, 631); self._new(ws, 632)
+        d = self._pm(ws)
+        self.assertEqual((d["next"]["reason"], d["next"]["ticket"]["id"]), ("picked_next", 631))
+        p = d["proposal"]
+        self.assertEqual((p["action"], p["reason_code"], p["facts"]["why"]), ("run", "proposed", "picked_next"))
+        self.assertEqual(p["facts"]["todo_ids"], [631, 632])
+        self.assertEqual(p["facts"]["skipped_by_dependency"], {})
+        self.assertNotIn("skipped_by_dependency", [f["fact"] for f in d["next"]["why"]], "飛ばしていないのに材料を積んでいる")
+
+    # ---- 完了条件: 依存で止まっている間、tick は run を起こさず、同じ提案でログを埋めない
+    def test_tick_logs_the_dependency_once_and_starts_nothing(self):
+        """5 分ごとの tick が依存で止まり続ける間、判断ログに同じ行を積み増さない（_pm_log の重複省き）。
+
+        ★facts のキーは JSON を往復しても変わらない形にしてある。int のキーのままだと読み戻しで str になり、
+          毎回「別の提案」に見えて 5 分ごとにログが伸びる。"""
+        ws = self._ws()
+        self._new(ws, 641)
+        self._new(ws, 642, "--depends", "641")
+        self._kb(ws, "block", "641", "--note", "人間待ち", stdin=None)
+
+        first = self._core(ws, "out(core.pm_tick(pj=%r))" % PJ)          # ticket_run / JobStore.start は呼ばれたら落ちる
+        self.assertTrue(first["ticked"])
+        self.assertEqual(first["proposal"]["reason_code"], "blocked_by_dependency")
+        self.assertEqual(first["proposal"]["action"], "none")
+        second = self._core(ws, "out(core.pm_tick(pj=%r))" % PJ)
+        self.assertTrue(second["same_as_last"], "同じ提案なのに判断ログへ 2 行目を書いている")
+        self.assertFalse(second["logged"])
+
+        lines = [json.loads(l) for l in (ws / "logs" / "pm-decisions.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(lines[0]["reason_code"], "blocked_by_dependency")
+        self.assertEqual(lines[0]["facts"]["skipped_by_dependency"], {"642": {"641": "blocked"}})
 
 
 if __name__ == "__main__":

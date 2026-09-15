@@ -93,6 +93,26 @@ class IntakeAttachTest(unittest.TestCase):
         self.assertEqual(self.claude_args()[self.claude_args().index("--tools") + 1], "Read")
         self.assertFalse((self.ws / "kanban" / "tickets").exists() and list((self.ws / "kanban" / "tickets").glob("*.md")))
 
+    def test_depends_is_passed_through_to_kb_new(self):
+        """`--depends` は人が渡した値をそのまま kb new へ素通しする（#570）。
+
+        ★LLM には書かせない: 本文の自由文から先行票を推測すると、誤検知と取りこぼしの両方が出る。
+          だから intake が LLM に渡す prompt は今までどおりで、依存は人が明示した分だけ入る。"""
+        r = self.intake("--depends", "534,535")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        tid = int(r.stdout.split()[0])
+        show = subprocess.run([sys.executable, str(KB), "show", str(tid)], text=True, capture_output=True, env=self.env)
+        self.assertEqual(show.returncode, 0, show.stderr)
+        self.assertIn("depends_on 534,535", show.stdout)
+        self.assertNotIn("534", self.claude_args()[1], "依存の値を LLM への prompt に混ぜている")
+
+    def test_without_depends_the_ticket_has_none(self):
+        """渡さなければ依存なし（既存の起票の挙動を変えない）"""
+        r = self.intake()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        show = subprocess.run([sys.executable, str(KB), "show", r.stdout.split()[0]], text=True, capture_output=True, env=self.env)
+        self.assertEqual([l.strip() for l in show.stdout.splitlines() if l.startswith("depends_on")], ["depends_on"])
+
     def test_missing_attachment_is_refused_before_calling_the_llm(self):
         r = self.intake("--attach", self.tmp / "ない.png")
         self.assertEqual(r.returncode, 1)
