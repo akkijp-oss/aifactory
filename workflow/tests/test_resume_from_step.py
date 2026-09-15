@@ -41,7 +41,8 @@ PLAN = "# 計画: 続きから回す\n\n- 分岐を 1 つ足す\n"
 RESEARCH = "# 調査: 既存の resume\n\n- take() が resume で丸ごと return する\n"
 
 # 偽の claude。依頼文の 1 行目（`# 依頼: … / step: <id> / role: <役割>）`）から step を見分け、その step の出力だけ書く。
-# implement は「実装した」ことにするため追跡済みのファイルも直す（runner が `git` の出力を確かめるので、コミットが要る）
+# implement は「実装した」ことにするため追跡済みのファイルも直す（runner が `git` の出力を確かめるので、コミットが要る）。
+# report.md には `## 未検証項目` が要る（空欄では runner が受け取らない。チケット 552 / ADR-0080）
 FAKE_CLAUDE = r"""#!/bin/bash
 echo '{"type":"system","subtype":"init","model":"fake-claude","tools":[],"cwd":"'"$PWD"'"}'
 step=$(printf '%s' "$2" | head -1 | sed -n 's/.*step: \([a-z-]*\) .*/\1/p')
@@ -52,6 +53,7 @@ case "$step" in
   *)
     if [ "$IMPLEMENT" = "fail" ]; then echo "実装が途中で落ちた"; exit 1; fi
     printf '# 実装報告: 直した\n' > "$WORK/report.md"
+    [ "$REPORT" = "no-unverified" ] || printf '## 未検証項目\n無し\n' >> "$WORK/report.md"
     printf 'kumitate\n直した\n' > README.md ;;
 esac
 echo "step=$step の出力を書いた"
@@ -181,6 +183,20 @@ class ResumeFromStepTest(unittest.TestCase):
             return real_sh(cmd, check=check, capture=capture, input_text=input_text, env=env)
         run.sh = fake_sh
         self.addCleanup(lambda: setattr(run, "sh", real_sh))
+
+    def test_a_report_without_the_unverified_section_is_not_accepted(self):
+        """`## 未検証項目` が無い `report.md` は「出力が無い」と同じ扱いで人へ戻る（チケット 552 / ADR-0080）。
+
+        ゲートが全部緑でも、実ブラウザや docker が要る完了条件を満たした証拠にはならない。その区別を
+        実装役の良心ではなく runner が持つ、というのがこの決定の中身なので、ここで固定する。
+        """
+        self.setUpFakeTake()
+        self.setenv(REPORT="no-unverified")
+        r = self.build(948)
+        r.main()
+        self.assertEqual(self.done, ["research", "design", "implement"])   # gates へ進まない
+        self.assertEqual(r.state["result"], "human")
+        self.assertIn("未検証項目", r.state["error"])
 
     # ---------- 本命: implement からやり直す
     def test_from_implement_skips_research_and_design_and_carries_the_review(self):

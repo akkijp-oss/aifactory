@@ -13,6 +13,7 @@ kb append <id> [--section S] [--text T]
 kb attach <id> <file>...
 kb attachments <id> [--json]
 kb detach <id> <name>
+kb capcheck [--pj P] [--status S] [--all] [--json]
 kb next [--pj P] [--json]
 kb run <id> [--workflow W] [--dry-run] [--keep] [--resume] [--from [STEP]] [--branch B] [--force] [--wait [分]]
 kb sync <id> [--run DIR]
@@ -76,6 +77,16 @@ kb next --pj kumitate --json     # JSON（PM と外部ツール向け。path に
                                  # コンソールの下見 GET /api/next はこの返りを core で選び直してから見せます
 kb resumable [--pj P] [--json]   # 鍵の利用枠切れで一時停止中のチケットと、解除時刻を過ぎて続きを回せるか（dispatch --resume-paused が読む。ADR-0043）
 ```
+
+### capcheck（実行不能な完了条件を数える）
+
+```bash
+kb capcheck                      # done 以外の票。完了条件が PJ の能力宣言と食い違う行を出す
+kb capcheck --pj kumitate --all  # PJ で絞る。--all で done も
+kb capcheck --json               # hits / scanned / skipped と当たった行（誤検知率の測定用）
+```
+
+`project.yml` の `capabilities` が `false` と宣言した能力を、票の `## 完了条件` が求めているときに 1 行出します（ADR-0080）。DB も本文も変更しません。宣言を持たない PJ の票は `scanned` に数えません（「照合して 0 件」と「照合していない」を混ぜないため）。自由文の語句照合なので誤検知も取りこぼしも出ます。語彙を足すかどうかは、この出力を見てから決めてください。
 
 ### 状態を進める
 

@@ -47,6 +47,25 @@ BODY = """# 機能: iframe を出す
 - `pnpm test` が緑
 """
 
+# #552 の票の抜粋。実行不能な手段を**例として**挙げているが、完了条件はどれもこの環境で実行できる
+TICKET_552 = """# sandbox 環境の能力を project.yml で宣言する
+
+## あるべき仕様
+2. `intake` / `ticket_new` が完了条件を走査し、宣言と矛盾する要求（「ブラウザで目視」「docker compose で起動」
+   「外部から取得」）を起票時に警告する。
+
+### (a) 完了条件が未達のまま着地した（kumitate #526）
+票の完了条件に「ローカルの認証付き合成データとブラウザで実 iframe を検証」があった。run 環境にブラウザが無い。
+
+## 完了条件
+- backend ごとの能力宣言が定義に存在し、`project_show` で読める。
+- 実行不能な完了条件を含む票を `ticket_new` したとき警告が出る（ブロックはしない）。
+- `report.md` に未検証項目欄があり、空欄のまま提出できない。
+
+## 範囲外
+- 能力そのものを増やすこと（sandbox にブラウザや docker を入れるのは別の判断）。
+"""
+
 FAKE_CLAUDE = r"""#!/usr/bin/env python3
 import json, sys
 body = "背景です。\n\n## 完了条件\n- ブラウザで目視して確かめる\n- テストが緑\n"
@@ -107,6 +126,18 @@ class ScanTest(unittest.TestCase):
         # kumitate の egress は未実測なので書いていない（＝照合しない）
         self.assertNotIn("egress", caps.load_declared("kumitate"))
         self.assertEqual(caps.load_declared("そんな-pj-は-無い"), {})
+
+    def test_a_ticket_that_only_talks_about_browsers_does_not_warn(self):
+        """★誤検知の見本。#552 の票自身は「ブラウザで目視」「docker compose」を**例として**挙げるが、
+        完了条件はどれも実行可能である。全体を走査すると 8 行当たるところが、節に絞ると 0 行になる
+        （2026-09-15 に #552 の本文で実測。節を絞る設計の根拠）"""
+        r = caps.scan(TICKET_552, caps.load_declared("aifactory"))
+        self.assertEqual(r["scope"], "完了条件")
+        self.assertEqual(r["hits"], [], [h["text"] for h in r["hits"]])
+        # 節が無い票（全体を走査する）なら、同じ本文がすべて誤検知として当たる
+        whole = caps.scan(TICKET_552.replace("## 完了条件", "## 受け入れ"), caps.load_declared("aifactory"))
+        self.assertEqual(whole["scope"], "body")
+        self.assertGreater(len(whole["hits"]), 0)
 
     def test_warnings_say_the_match_may_be_wrong_and_never_ask_to_delete_the_condition(self):
         w = "\n".join(caps.format_warnings(caps.scan(BODY, OFF)))
