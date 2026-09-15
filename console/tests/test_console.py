@@ -2154,6 +2154,22 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(sorted(set(self.PM_REASON_CODES) - set(T["pm"]["reason"])), [], "判断ログの理由コードに文言の無いものがある")
         self.assertIn("other", T["pm"]["reason"], "この画面より新しい理由コードを受ける文言が無い")
 
+    def test_the_pm_vocabulary_is_one_set_in_core_and_in_the_strings(self):
+        """★語彙は core の 2 つのタプルと文言で 1 組（#570 で片方だけ更新した事故。#582 で語を足すときの網）。
+
+        core の語彙は実行時に照合されないので、片方に足し忘れても画面を見るまで誰も気づかない。
+        ここで両方を名指しで突き合わせ、足し忘れた側の名前が出るようにする"""
+        sys.path.insert(0, str(REPO / "console" / "lib"))
+        import core
+        self.assertEqual(sorted(core.PM_NEXT_REASONS), sorted(self.PM_NEXT_REASONS),
+                         "core.PM_NEXT_REASONS とこのテストの語彙がずれている（足したなら両方に足す）")
+        self.assertEqual(sorted(core.PM_REASON_CODES), sorted(self.PM_REASON_CODES),
+                         "core.PM_REASON_CODES とこのテストの語彙がずれている（足したなら両方に足す）")
+        # 「次にやること」の理由のうち、判断ログにも載る語は両方のタプルに要る（片方だけだと提案が語を受けられない）
+        for w in ("blocked_by_dependency", "blocked_by_pause", "blocked_by_key"):
+            self.assertIn(w, core.PM_NEXT_REASONS, f"PM_NEXT_REASONS に {w} が無い")
+            self.assertIn(w, core.PM_REASON_CODES, f"PM_REASON_CODES に {w} が無い")
+
     def test_pm_view_lists_what_each_paused_ticket_waits_for(self):
         """★本票の完了条件: 一時停止で飛ばした票を「どの票が・何を待っているか」まで画面に出す（#582）。
 
