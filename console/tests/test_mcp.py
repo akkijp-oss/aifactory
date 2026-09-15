@@ -102,6 +102,9 @@ class McpTest(unittest.TestCase):
         err, d = self.c.tool("run_show", name=name); self.assertFalse(err); self.assertIn("state.json", [f["name"] for f in d["files"]])
         path = next(f["path"] for f in d["files"] if f["name"] == "state.json")
         err, f = self.c.tool("read_file", path=path, tail=200); self.assertFalse(err); self.assertIn("text", f)
+        # 無い名前を読んだら、その run に在る名前が文言に付いて返る（呼び口を通しても落ちないこと。判定は core の 1 か所 #550）
+        err, msg = self.c.tool("read_file", path=path.rsplit("/", 1)[0] + "/agent-implement-0.log")
+        self.assertTrue(err); self.assertIn("見つかりません", msg); self.assertIn("state.json", msg)
         err, msg = self.c.tool("read_file", path="sandbox/bin/sandbox"); self.assertTrue(err)
         err, msg = self.c.tool("read_file", path="../.ssh/id_rsa"); self.assertTrue(err)
         for n in ("sandbox_status", "job_list", "logs", "config"):

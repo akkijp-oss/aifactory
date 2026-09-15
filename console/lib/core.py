@@ -657,10 +657,43 @@ def rel(p):
     return str(p.relative_to(REPO.resolve())) if p.is_relative_to(REPO.resolve()) else str(p)
 
 
+NOT_FOUND_LIST_MAX = 40   # 「無い」と言うときに併せて返す実在名の上限（*.jsonl が何百と並ぶ run でも応答が肥大しないように）
+
+
+def not_found_message(p, root=None):
+    """「無い」と言うときは、その場所に「在る」ものを一緒に言う（#537 の「『取得できていない』を『0 件』と同じ値にしない」と同じ精神）。
+       呼ぶ側（MCP 越しの管理役 AI）が名前を推測して叩き直さずに済むように、404 の文言そのものに実在する名前を載せる。
+
+       p から親へ辿って最初に実在するディレクトリ a を見つけ、その直下の名前だけを並べる（中身・サイズ・mtime は載せない。
+       再帰もしない）。root を渡すとそこで遡るのを止める（許可された根の外は列挙しない）。
+       a が p の親なら「ファイルが見つかりません」、途中のディレクトリが無いなら（run 自体が無い等）「ディレクトリが見つかりません」。
+       判定はここ 1 か所で、read_file（タプルで返す口）と ticket_attach_path（ApiError を投げる口）の両方から呼ぶ（ADR-0015）"""
+    p = pathlib.Path(p)
+    limit = pathlib.Path(root).resolve() if root is not None else None
+    a, miss = p.parent, None
+    while not a.is_dir():                     # 最初に実在するディレクトリまで遡る。miss は「最初に欠けた要素」
+        if a.parent == a or (limit is not None and (a == limit or not a.is_relative_to(limit))): miss, a = a, None; break
+        miss, a = a, a.parent
+    if miss is None: head = f"ファイルが見つかりません: {rel(p)}"
+    elif miss.exists(): head = f"ディレクトリではありません: {rel(miss)}"
+    else: head = f"ディレクトリが見つかりません: {rel(miss)}"
+    # 列挙してよいのは許可された根の中だけ。p が根そのもの（実在するディレクトリ）だと上の while に入らず
+    # 遡りの検査が 1 度も走らないので、ここでも見る（そうしないと根の親＝workspace 直下や / の名前が出る）
+    if a is None or (limit is not None and not a.is_relative_to(limit)): return head
+    try: ents = sorted((x for x in a.iterdir() if not x.name.startswith(".")), key=lambda x: x.name)
+    except OSError as e: return f"{head}。{rel(a)} の中を見られません（{e.strerror}）"
+    names = [x.name + ("/" if x.is_dir() else "") for x in ents]
+    if not names: return f"{head}。{rel(a)} は空です"
+    more = len(names) - NOT_FOUND_LIST_MAX
+    return (f"{head}。{rel(a)} にあるのは {len(names)} 件: " + ", ".join(names[:NOT_FOUND_LIST_MAX])
+            + (f"（ほか {more} 件）" if more > 0 else ""))
+
+
 def read_file(relpath, tail=None, offset=None):
     p = (REPO / relpath).resolve()   # 絶対パスならそのまま（workspace がリポジトリ外でもよい。根の検査は下）
-    if not any(p.is_relative_to(r.resolve()) for r in READ_ROOTS if r.exists()): return None, "この場所のファイルは表示できません（読めるのは runs / kanban/tickets / logs / workflow/kit / PJ 定義 / console/jobs の下だけです）"
-    if not p.is_file(): return None, "ファイルが見つかりません"
+    root = next((r.resolve() for r in READ_ROOTS if r.exists() and p.is_relative_to(r.resolve())), None)
+    if root is None: return None, "この場所のファイルは表示できません（読めるのは runs / kanban/tickets / logs / workflow/kit / PJ 定義 / console/jobs の下だけです）"
+    if not p.is_file(): return None, not_found_message(p, root)   # 無いと言うときは、その場所に在る名前を併せて返す（#550）
     size = p.stat().st_size
     if attachments.is_image(p.name):   # 画像はテキストにせず base64 で返す（MCP は image ブロック、画面は data: URL にする）
         if size > READ_IMAGE_MAX:
@@ -1423,9 +1456,10 @@ def ticket_attach_path(tid, path):
     p = p.resolve()
     if any(x.startswith(".") for x in p.parts):
         raise ApiError("`.` で始まる名前を含むパスは添付できません（設定や鍵の置き場を避けるためです）")
-    if not any(p.is_relative_to(r.resolve()) for r in ATTACH_PATH_ROOTS if r.exists()):
+    root = next((r.resolve() for r in ATTACH_PATH_ROOTS if r.exists() and p.is_relative_to(r.resolve())), None)
+    if root is None:
         raise ApiError("このパスは添付できません（添付できるのはホームディレクトリか /tmp の下だけです）")
-    if not p.is_file(): raise ApiError(f"ファイルが見つかりません: {p}", 404)
+    if not p.is_file(): raise ApiError(not_found_message(p, root), 404)   # read_file と同じ形で、その場所に在る名前を併せて返す（#550）
     return ticket_attach(tid, [(p.name, p.read_bytes())])
 
 
