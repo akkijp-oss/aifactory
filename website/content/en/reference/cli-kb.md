@@ -72,7 +72,7 @@ kb list --status review          # by state
 kb list --pj kumitate --all      # by project; --all includes done
 kb show 204                      # all fields + body
 kb next                          # the oldest todo
-kb next --pj kumitate --json     # JSON (for dispatch and external tools; path holds the body's absolute path)
+kb next --pj kumitate --json     # JSON (for the console preview GET /api/next, the PM and external tools; path holds the body's absolute path; dispatch does not use it)
 kb resumable [--pj P] [--json]   # tickets paused by the Claude usage limit, and whether their reset time has passed (read by dispatch --resume-paused; ADR-0043)
 ```
 
