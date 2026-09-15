@@ -217,6 +217,34 @@ class NextPreviewTest(unittest.TestCase):
         self.assertEqual((p["skipped_by_dependency"], p["skipped_by_pause"]), ({}, {}))
         self.assertEqual(p["next"]["status"], "todo")
 
+    def test_pm_and_the_preview_read_the_same_judgement(self):
+        """下見（GET /api/next）と PM（GET /api/pm）が同じ票・同じ理由を言う（判定は core の 1 か所）"""
+        self.new(991); self.new(992)
+        self.paused(991, retry_after="future")
+        code = PREAMBLE + ("out(core.pm_status(pj=%r))\n" % PJ)
+        r = subprocess.run([sys.executable, "-c", code], env=self.env, text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pm = json.loads(r.stdout.strip().splitlines()[-1])
+        p = self.preview()
+        self.assertEqual((pm["next"]["reason"], pm["next"]["ticket"]["id"]), (p["reason"], p["next"]["id"]))
+        facts = {f["fact"]: f["value"] for f in pm["next"]["why"]}
+        self.assertEqual(facts["skipped_by_pause"], p["skipped_by_pause"])
+        self.assertEqual((facts["kb_next"], facts["picked"]), (991, 992))
+        self.assertEqual(pm["proposal"]["facts"]["skipped_by_pause"], p["skipped_by_pause"])
+
+    def test_the_rule_is_not_copied_into_the_preview(self):
+        """★完了条件: 飛ばす判定は core の 1 か所（pm_pick_next）。ticket_next にも dispatch にも規則を書き写さない"""
+        import inspect
+        sys.path.insert(0, str(REPO / "console" / "lib")); import core
+        src = inspect.getsource(core.ticket_next)
+        self.assertIn("pm_pick_next", src)
+        for w in ("depends_on", "retry_after", "ready", "hits_exceeded", "resumable"):
+            self.assertNotIn(w, src, f"下見が判定の規則（{w}）を持っている")
+        # 時刻・回数の規則は kb の resume_plan が正本。core は ready / hits_exceeded の結果を読むだけ
+        pick = inspect.getsource(core.pm_pick_next) + inspect.getsource(core.pm_paused_skip)
+        for w in ("datetime", "retry_after", "RESUME"):
+            self.assertNotIn(w, pick, f"core が一時停止の規則（{w}）を kb から写している")
+
     def test_preview_has_no_todo_when_the_board_is_empty(self):
         """todo が 1 件も無いのは「確かめた 0 件」。飛ばした結果（blocked_by_*）と混ぜない"""
         p = self.preview(pj="no-such-pj")
