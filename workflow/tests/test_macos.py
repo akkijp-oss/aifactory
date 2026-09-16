@@ -504,18 +504,22 @@ class PullBackendKeyTest(unittest.TestCase):
     credentials() が env ファイルの source に落ちてその鍵を guest の runtime.env に書いていた。
     無効化済みの鍵が全工程・全モデルで使われ続けたので、
     「環境の鍵は guest に届かない」「系統ごとにプールから選ぶ」「鍵が無ければ書かずに止まる」を固定する。
+
+    偽 `sandbox` は **PATH の先頭**で当てる（#617）。呼ぶ側が名前で呼ぶので、絶対パスで本物に抜ける経路が無い。
     """
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
         self.tmp = pathlib.Path(tmp.name)
-        fake = self.tmp / 'sandbox' / 'bin' / 'sandbox'
-        fake.parent.mkdir(parents=True)
+        self.bin = self.tmp / 'bin'; self.bin.mkdir()
+        fake = self.bin / 'sandbox'
         fake.write_text(FAKE_SANDBOX, encoding='utf-8'); fake.chmod(0o755)
         self.calls = self.tmp / 'calls.jsonl'; self.calls.write_text('', encoding='utf-8')
         self.pool = self.tmp / 'pool.json'; self.set_pool('pool-a', 'pool-b')
-        old = macos.ROOT; macos.ROOT = self.tmp
-        self.addCleanup(setattr, macos, 'ROOT', old)
+        # 偽 sandbox は PATH の先頭で当てる（他のテストと同じ流儀。#617 で credentials() が名前呼びになった）
+        old_path = os.environ.get('PATH', '')
+        self.addCleanup(os.environ.__setitem__, 'PATH', old_path)
+        os.environ['PATH'] = f"{self.bin}:{old_path}"
         # runner の環境に残った古い鍵と、env ファイルの置き場（プール運用では鍵は入っていない）
         for k, v in (('FAKE_SANDBOX_CALLS', str(self.calls)), ('FAKE_POOL', str(self.pool)),
                      ('XDG_CONFIG_HOME', str(self.tmp / 'config')),
