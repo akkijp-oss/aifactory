@@ -31,7 +31,8 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = REPO / "workflow" / "bin" / "run"
 TESTS = REPO / "workflow" / "tests"
 # 票が「lib も対象に含めるか確かめる」と言うので含める。linux.py / windows.py は subprocess を直接呼ばず
-# （VM 操作は QEMU guest-agent の RPC 経由）、macos.py の 2 件は argv[0] が式なので「取れなかった」に落ちる。
+# （VM 操作は QEMU guest-agent の RPC 経由）、macos.py は `sandbox` を **名前で**呼ぶので普通に取れる
+# （#617 までは `str(ROOT / "sandbox" / "bin" / "sandbox")` の絶対パスで、PATH の偽装も この検査もすり抜けていた）。
 TARGETS = [RUNNER] + sorted((REPO / "workflow" / "lib").glob("*.py"))
 
 # 外部コマンドを起こす口。sh() / stream() は runner 内の薄い包み（workflow/bin/run:68 / :181）
@@ -203,6 +204,12 @@ class RunnerExternalCommandsTest(unittest.TestCase):
         found, _ = scan_targets()
         for name in sorted(ALLOWED):
             self.assertIn(name, found, f'"{name}" の呼び出しが 1 つも見えない。検査が空振りしていないか確かめること')
+        # macos.py の 2 件（gh-app token / keys pick）も名前で見えていること。絶対パスへ戻すとここが赤になる（#617）
+        macos_lines = [ln for f, ln in found["sandbox"] if f == "macos.py"]
+        self.assertGreaterEqual(len(macos_lines), 2,
+                                "macos.py の sandbox 呼びが名前で見えていない。argv[0] を "
+                                'str(ROOT / "sandbox" / ...) のような絶対パスに戻すと、テストの PATH 偽装も '
+                                f"この検査もすり抜ける（#617）。見えている行: {macos_lines}")
 
     def test_unresolved_calls_are_counted_not_failed(self):
         """リテラルで取れなかった argv[0] は FAIL にせず件数を出す（黙って見逃さないことが要件）"""
