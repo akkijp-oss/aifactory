@@ -51,3 +51,22 @@ def pr_state(pr, repo, timeout=20):
         return None, f"gh の出力を読めない: {e}"
     if not isinstance(info, dict): return None, "gh の出力が JSON のオブジェクトでない"
     return info, None
+
+
+def branch_sha(repo, branch, timeout=10):
+    """ブランチの tip の commit sha を GitHub に聞く（チケット 554）。戻り: (sha, None) か (None, 理由)。
+
+    票の引用が「いつ時点のコードか」を起票時に刻むために使う（config 編集の版ハッシュ `base_sha256` とは無関係）。
+    pr_state と同じく例外にせず理由の文字列で返す——呼ぶ側（kb new）は取れなければ刻まないだけで、起票は落とさない"""
+    cmd = ["gh", "api", f"repos/{repo}/commits/{branch}", "--jq", ".sha"]
+    try:
+        r = subprocess.run(cmd, text=True, capture_output=True, errors="replace", timeout=timeout)
+    except OSError as e:      # gh が PATH に無い
+        return None, scrub(str(e))[-300:]
+    except subprocess.TimeoutExpired:
+        return None, f"{timeout}s で応答が無い"
+    if r.returncode != 0:
+        return None, ([l.strip() for l in scrub(r.stderr or "").splitlines() if l.strip()] or [f"rc={r.returncode}"])[-1][:300]
+    sha = (r.stdout or "").strip().splitlines()[-1].strip() if (r.stdout or "").strip() else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha): return None, f"sha に読めない応答: {sha[:80] or '(空)'}"
+    return sha, None

@@ -735,6 +735,7 @@ class Run:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
         else:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
+        self.measure_base_distance()
         # checkout は「両方のコミットで同内容のファイルの局所変更」を持ち越す。テンプレートや前の便の汚れが
         # そのまま基準になるので、agent を入れる前に戻す（572）
         self.clean_start("checkout")
@@ -743,6 +744,23 @@ class Run:
         if self.from_step: self.carry_work()
         self.push_attachments()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
+
+    # 票が刻んだ起票時の base sha（kb の base_sha 列）の形。console の config 編集が使う `base_sha256`（版ハッシュ）とは別物
+    BASE_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+    def measure_base_distance(self):
+        """起票時の base sha から今の origin/<base> まで何 commit 進んだかを測って記録する（554）。
+
+        測れるのは base を fetch した後の VM の中だけ（制御系は PJ の clone を持たない）。
+        浅い fetch や force-push で sha を辿れないことがあるので、**失敗は距離 null**（＝分からない）にする——
+        0 に丸めると「ずれていない」と読めてしまい、この票が塞ごうとした事故そのものになる"""
+        sha = (self.refs.get("base_sha") or "").strip().lower()
+        if not sha or not self.BASE_SHA.fullmatch(sha): return
+        self.state["base_sha"] = sha
+        out = self.sb(f"cd $SANDBOX_APP_DIR && git rev-list --count {shlex.quote(sha)}..origin/{self.base}", check=False).strip()
+        last = out.splitlines()[-1].strip() if out.splitlines() else ""
+        self.state["base_distance"] = int(last) if last.isdigit() else None
+        self.save()
 
     def prepare(self):
         """project.yml の `prepare`（任意）を checkout の直後に 1 回だけ走らせる（チケット 330）。
@@ -941,7 +959,8 @@ class Run:
         # 宣言が無い PJ・false が 1 つも無い PJ では節ごと出ない（computer_use 節と同じ「有るときだけ足す」方式。チケット 552）
         section = self.capability_section()
         if section: parts += ["", section, ""]
-        parts += ["", "## チケット", "", self.ticket.strip(), ""]
+        # 古さの注意は本文の**前**（引用の行番号を読み始める前に読ませる）。参照の値は本文の後のまま（594）
+        parts += ["", "## チケット", ""] + self.staleness_lines() + [self.ticket.strip(), ""]
         parts += self.reference_lines()
         # 添付は本文に入らない（正本は workspace の attachments/）。場所と名前だけ案内する（チケット 353）
         att = self.state.get("attachments") or []
@@ -973,6 +992,19 @@ class Run:
     # 取得可否（kanban の related_issue_access。語彙は kb が正本）を依頼文の 1 語に言い換える表。
     # ここに書いてよいのは語の言い換えまでで、なぜ読めないか・どう振る舞うかの規則は役割文書が持つ（ADR-0015 / ADR-0084）
     ACCESS_WORD = {"unreadable": "取りに行かない", "readable": "取りに行ってよい"}
+
+    def staleness_lines(self):
+        """票の行番号が「いつ時点のものか」を依頼文の冒頭 1 行で知らせる（554）。
+
+        起票時の base sha を持たない票と、距離 0（base が進んでいない）の票では 1 行も足さない——
+        依頼文は既に長い。読み替えが要らない run に注意書きを増やさない"""
+        sha = self.state.get("base_sha") or self.refs.get("base_sha") or ""
+        if not sha: return []
+        n = self.state.get("base_distance")
+        if n is None:
+            return [f"- 注意: この票の行番号は起票時の base（{sha[:9]}）のもの。現在との距離は測れなかった。着手時に必ず自分で数え直すこと。", ""]
+        if n <= 0: return []
+        return [f"- 注意: この票の行番号は {n} commits 前（{sha[:9]}）のもの。着手時に必ず自分で数え直すこと。", ""]
 
     def reference_lines(self):
         """票メタの参照（kb が渡した値）を依頼文に出す行。参照を持たない票では 1 行も足さない（594）"""
@@ -1534,7 +1566,8 @@ if __name__ == "__main__":
         if f.startswith("--issue-access="): refs["issue_access"] = f.split("=", 1)[1]
         elif f.startswith("--issue="): refs["issue"] = f.split("=", 1)[1]
         elif f.startswith("--ticket="): refs["ticket"] = f.split("=", 1)[1]
-        elif f in ("--issue", "--issue-access", "--ticket"): die(f"{f}=<値> の形で指定すること")
+        elif f.startswith("--base-sha="): refs["base_sha"] = f.split("=", 1)[1]
+        elif f in ("--issue", "--issue-access", "--ticket", "--base-sha"): die(f"{f}=<値> の形で指定すること")
         elif f == "--wait": wait_s = 3600
         elif f.startswith("--wait="): wait_s = int(f.split("=", 1)[1])
         elif f == "--from": from_step = ""                       # step の指定なし＝前回の記録（resume_step）に任せる
