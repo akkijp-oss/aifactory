@@ -320,6 +320,22 @@ class RunProbeTest(unittest.TestCase):
         finally: kq.os.environ = real_env
         self.assertIn("5 時間枠", buf.getvalue()); self.assertNotIn("secret", buf.getvalue())
 
+    def test_cli_show_never_read_does_not_print_none(self):
+        """1 度も読めていない鍵で show を出すと、last_ok が None のまま人に出ていた（#616）"""
+        self.write([{"name": "a", "token": "tok-secret-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.probe = self.failing_probe
+        self.run_()
+        real_env, buf = kq.os.environ, io.StringIO()
+        try:
+            kq.os.environ = {**os.environ, **self.env}
+            with contextlib.redirect_stdout(buf): rc = kq.main(["show"])
+        finally: kq.os.environ = real_env
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("None", out, "読めた時刻が無いときに None と出さない")
+        self.assertIn("古い", out, "1 度も読めていないので古いと出る")
+        self.assertNotIn("secret", out)
+
 
 class SummarizeTest(unittest.TestCase):
     def row(self, **kw):

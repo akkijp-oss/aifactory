@@ -443,7 +443,7 @@ def main(argv=None):
                 print(fmt % (name, WINDOW_LABEL[w["key"]], f"{w['remaining_pct']:.0f}%", _fmt_dur(w["remain_s"]), w["status"] or "-", note))
             if s["error"]: print(fmt % (name, "-", "-", "-", "-", f"最後の観測は {s['error']}（値は前回のもの）"))
         # 試行と成功を並べる（試行だけ新しいのに「古い」と出る理由が読めるように。#616）
-        ok = f"・最後に読めたのは {v['last_ok']}" if v["last_ok"] != v["last_probed"] else ""
+        ok = f"・最後に読めたのは {v['last_ok'] or '一度もありません'}" if v["last_ok"] != v["last_probed"] else ""
         print(f"file: {v['db_file']}（最終観測 {v['last_probed'] or '-'}{ok}{'・古い' if v['stale'] else ''}）")
         return 0
     if a.cmd == "history":

@@ -91,7 +91,7 @@ const T = {
     "remaining": "残り {p}%", "resetIn": "リセットまで {t}", "period": "{from} → {to}",
     "exhausted": "枯渇（{at} に回復）", "windowEnd": "リセット待ち（次の観測で更新）", "willExhaust": "このペースだと約 {t} で枯渇",
     "statusWarn": "警告域", "statusRejected": "上限到達",
-    "probedAt": "{t}前に観測", "lastProbed": "最終観測 {t}前", "stale": "観測が古いので、timer が動いているか確かめてください。", "probing": "いま調べています",
+    "probedAt": "{t}前に観測", "lastProbed": "最終観測 {t}前", "stale": "最後に残量を読めてから 15 分以上たっています。timer と鍵（認証）を確かめてください。", "probing": "いま調べています",
     "notProbed": "まだ観測していません", "notProbedShort": "未観測", "unreadable": "読めません", "disabled": "使わない設定",
     "probeError": "最後の観測は読めませんでした（{e}）。値は前回のものです。",
     "authError": "認証が通りません。鍵が切れているかもしれません。トークンを入れ替えてください。",
