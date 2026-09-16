@@ -124,6 +124,17 @@ class InstallSystemdTest(unittest.TestCase):
         self.assertIn("Unit=aifactory-pm.service", timer)
         self.assertIn("WantedBy=timers.target", timer)
 
+    def test_keys_probe_timer_runs_the_lib_in_the_checkout_every_5_minutes(self):
+        """鍵の残量（利用枠）は checkout の lib/aifactory_keys_quota.py probe が 5 分ごとに観測する（ADR-0087）。ctl.env を読む（SANDBOX_KEYS 等）"""
+        self.assertEqual(self.run_install("--systemd").returncode, 0)
+        svc = (self.units / "aifactory-keys-probe.service").read_text()
+        self.assertIn(f"ExecStart=/usr/bin/python3 {REPO}/lib/aifactory_keys_quota.py probe", svc)
+        self.assertIn(f"WorkingDirectory={REPO}", svc)
+        self.assertIn(f"EnvironmentFile=-{self.home}/.config/aifactory/ctl.env", svc)
+        timer = (TEMPLATES / "aifactory-keys-probe.timer").read_text()
+        self.assertIn("OnUnitActiveSec=5min", timer)
+        self.assertIn("Unit=aifactory-keys-probe.service", timer)
+
     def test_idle_stop_timer_runs_every_15_minutes(self):
         """止まっている時間が長いほど節電になるが、次の take の待ちは増やせない。15 分ごと"""
         timer = (TEMPLATES / "aifactory-idle-stop.timer").read_text()

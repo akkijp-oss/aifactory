@@ -316,6 +316,33 @@ ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-dir
 .wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
 @media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
 
+/* 鍵の残量（利用枠。ADR-0087）。bar = 残量、縦線 = 窓の残り時間。色は残量の状態（ok / warn / alarm）にだけ使う */
+.hrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hrow h2 { margin-bottom: 10px; }
+.quota { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin: 6px 0 10px; }
+.qcard { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--panel); }
+.qcard .l, .qw .l { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.qcard .small { font-size: 12.5px; margin-top: 6px; }
+.qw { margin-top: 8px; }
+.qw .l { font-size: 12.5px; }
+.qw .l.help { font-size: 11.5px; margin-top: 2px; }
+.pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+.pct.ok { color: var(--done); }
+.pct.warn, .warn-ink, .qw .warn { color: var(--in_progress); background: none; border: 0; padding: 0; }
+.pct.alarm, .alarm, .qw .alarm { color: var(--blocked); }
+.tabular { font-variant-numeric: tabular-nums; }
+.meter { position: relative; height: 6px; margin: 4px 0 2px; background: var(--line-soft); border-radius: 3px; }
+.meter > i { display: block; height: 100%; border-radius: 3px; background: var(--done); }
+.meter > i.warn { background: var(--in_progress); }
+.meter > i.alarm { background: var(--blocked); }
+.meter > b { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink); opacity: .55; border-radius: 1px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .now { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .tick { font-size: 10.5px; fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 4px; font-size: 12.5px; }
+.legend .lg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
 /* AI Factory Manager（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
    「まだ分からない」は危険色を使わない——初期導入直後の console は正常にこの状態になるので、赤で「壊れている」と読ませない */
 .st.pm-unknown { background: var(--ground); color: var(--muted); border: 1px dashed var(--line); }

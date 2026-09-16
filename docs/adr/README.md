@@ -98,3 +98,4 @@
 - [0084: 票の参照は「外部 issue（取得可否つき）」と「内部の票番号」の 2 列に分ける。読めない参照は役割文書が名指しで断る](0084-ticket-references-are-split-into-external-issue-and-internal-number.md)
 - [0085: VM の成果物は「列挙 → 上限で選別 → 1 接続で取得 → 届いたか検証 → 記録」で回収する。落としたものは必ず理由が残る](0085-artifacts-are-listed-selected-and-verified.md)
 - [0086: 人が動くまで解けない一時停止だけが残った板でも PM の `state` は `idle` のまま。人の出番は状態ではなく facts と画面で伝える](0086-human-unblockable-pauses-stay-idle-in-the-pm.md)
+- [0087: 鍵プールの残量（利用枠）は制御系が定期的に観測し、「鍵」画面と `keys_list` に窓ごとの残り %・回復時刻・ペースを出す](0087-key-pool-quota-probe.md)
