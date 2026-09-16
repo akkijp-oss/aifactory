@@ -175,6 +175,7 @@ class KbSyncPrStateTest(unittest.TestCase):
 
     def test_an_existing_gh_token_is_used_without_calling_the_github_app(self):
         self.ticket(945, 300)
+        self.calls.unlink(missing_ok=True)      # 起票そのものも gh を使う（base sha の刻印。554）。見たいのは sync の分だけ
         r = self.kb("sync", "945", env=dict(self.env, GH_TOKEN="static"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.show(945)["status"], "done")

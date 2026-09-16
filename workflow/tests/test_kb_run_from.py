@@ -46,7 +46,7 @@ class KbRunFromTest(unittest.TestCase):
         self.env.pop("AIFACTORY_FROM_RUN", None)
         self.today = f"{datetime.date.today().isoformat()}-kumitate-905"
         self.prev = "2026-09-06-kumitate-905"
-        new = self.kb("new", "kumitate", "feature", "続きから回す", "--body", "-", "--id", "905", input_text=TICKET)
+        new = self.kb("new", "kumitate", "feature", "続きから回す", "--body", "-", "--id", "905", "--base-sha", "", input_text=TICKET)
         self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
 
     def kb(self, *args, input_text=None):
