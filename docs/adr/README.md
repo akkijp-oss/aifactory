@@ -102,3 +102,4 @@
 - [0088: 証明可能に死んでいる run でも `kb run-note` の門は開けない。記録上の後始末は退避で扱い、`finished` の有無という見方を 1 つに保つ](0088-provably-dead-runs-are-not-closed-through-the-run-note-gate.md)
 - [0089: console の左ナビは「頻度」ではなく「何をする画面か」で 3 群に分ける。見出しはリンクにせず、選択は色と `aria-current` の両方で示す](0089-console-nav-is-grouped-by-job-not-by-frequency.md)
 - [0090: 鍵残量の観測は「非可逆な指紋で世代を見分け、未知の枠ヘッダは生のまま控え、枯渇は `rejected` だけ」とし、1 周はファイルロックで直列化する](0090-key-quota-generation-raw-headers-and-exclusion.md)
+- [0091: 票は「起票時の base sha」を持ち、run は VM で距離を測って依頼文の 1 行で古さを知る](0091-ticket-carries-the-base-sha-it-was-filed-against.md)

@@ -62,6 +62,7 @@ kb new <pj> <kind> "<title>" [--body FILE|-] [--pr N] [--id N] [--status S] [--n
 | `--status` | Initial state (default todo) |
 | `--note` | Note |
 | `--depends` | Prerequisite ticket numbers, comma-separated (e.g. `534,535`). See "Prerequisites" below |
+| `--base-sha` | The base commit sha at filing time. Omitted, the tip of the project's `base_branch` is fetched with `gh`. See "The base sha a ticket was filed against" below |
 
 Output: one line `<id> <state> <pj> <kind> <PR> <title>` plus the body path. The file slug comes from the ASCII part of the title, or the kind if there is none.
 
@@ -164,6 +165,35 @@ body** (ADR-0084).
   HTTP API return them. **They do not appear in the brief handed to a run yet** (the runner only carries the body).
 
 `kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
+
+### The base sha a ticket was filed against (`--base-sha`)
+
+```bash
+kb new kumitate bug "a ticket with line numbers" --body -            # stamps the tip of base_branch
+kb new kumitate bug "a ticket with line numbers" --body - --base-sha 4fae3ce   # explicit (GitHub is not asked)
+kb set 554 --base-sha ''                                             # clear the stamp
+kb show 554                                                          # base_sha
+```
+
+The `path:line` quotes in a ticket body point at the code **as it was when the ticket was filed**. Base moves on, so by
+the time the run starts the line numbers have drifted (measured: #526 was 51 commits behind, #527 68, and #550's quotes
+into `core.py` had moved +104 lines within half a day of filing). The machine knows that difference, so the ticket
+carries "as of when" and the run is told (ADR-0091).
+
+- `base_sha` is the **tip commit of the target project's `base_branch`** (not a sha of aifactory itself). `kb new`
+  fetches it with `gh api repos/<repo>/commits/<base_branch>`. It is not a value a human writes into the body.
+- When it cannot be fetched (no `repo` / `base_branch`, no token, no `gh`, no answer within 10 seconds, an answer that is
+  not a sha) the stamp is simply **not written**. The ten-second cap covers **both** legs — issuing the token and the
+  `gh api` call — so filing never waits on either of them hanging. Filing still succeeds and one line,
+  `[kb] warn: base sha を記録できなかった: …`, goes to standard error. That marker is distinct from the capability
+  warning `[kb] warning:` that `ticket_new` collects into `warnings[]`.
+- Passing `--base-sha SHA` skips GitHub entirely (7-40 hex digits; anything else is refused).
+  `kb set <id> --base-sha ''` clears it. Changes are kept in `kb history`.
+- `kb run` hands the value to the runner, which runs `git rev-list --count <sha>..origin/<base>` on the VM and prints
+  **one line directly under `## チケット` in the brief** (see [run's `--base-sha`](cli-run.md)). A ticket whose base has
+  not moved, and an existing ticket without a `base_sha`, get no line at all.
+- It has nothing to do with the similarly named `base_sha256` (the version hash the console uses for config edits);
+  this one is a git commit sha.
 
 ### append
 

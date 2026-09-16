@@ -54,7 +54,7 @@ class KbResumePausedTest(unittest.TestCase):
         for k in ("AIFACTORY_FROM_RUN", "AIFACTORY_RESUME_MAX_HITS", "AIFACTORY_RESUME_BACKOFF_MIN"): self.env.pop(k, None)
         self.today = f"{datetime.date.today().isoformat()}-kumitate-931"
         self.prev = "2026-09-06-kumitate-931"
-        new = self.kb("new", "kumitate", "bug", "利用枠切れの続き", "--body", "-", "--id", "931", input_text=TICKET)
+        new = self.kb("new", "kumitate", "bug", "利用枠切れの続き", "--body", "-", "--id", "931", "--base-sha", "", input_text=TICKET)
         self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
 
     def kb(self, *args, input_text=None, env=None):

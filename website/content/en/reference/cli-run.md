@@ -4,7 +4,7 @@
 
 ```
 workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=name] [--wait[=seconds]]
-                 [--issue=URL] [--issue-access=word] [--ticket=number]
+                 [--issue=URL] [--issue-access=word] [--ticket=number] [--base-sha=SHA]
 ```
 
 | Argument | Meaning |
@@ -22,6 +22,9 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--issue=URL` | The ticket's external issue references (comma separated). Printed as values right after the `## チケット` section of the prompt. `kb run` passes the ticket's `related_issue` |
 | `--issue-access=word` | Whether those references can be fetched (`readable` / `unreadable`). The prompt says it in one phrase ("go ahead" / "do not fetch") |
 | `--ticket=number` | The internal ticket numbers this ticket refers to (comma separated). Printed as `#521` (numbers that do not exist on GitHub) |
+| `--base-sha=SHA` | The base commit sha the ticket was filed against. `kb run` passes the ticket's `base_sha`. After base is fetched the runner measures `git rev-list --count <SHA>..origin/<base>` and, if base has moved, prints one line **directly under** `## チケット`: "this ticket's line numbers are N commits old" |
+
+The distance for `--base-sha` is measured inside the VM (the control side has no clone of the project). When it can be measured, `state.json` keeps `base_sha` and `base_distance`. A ticket whose base has not moved (distance 0) and a ticket without a `base_sha` get no line at all. When a shallow fetch or a force-push makes the sha unreachable the distance is not rounded down to 0; the prompt says the distance could not be measured instead (`--dry-run` never borrows a VM, so it always says that). ADR-0091.
 
 The three reference options (`--issue` / `--issue-access` / `--ticket`) only **carry values**. Pass none of them and the prompt gets no extra line (a ticket without references reads exactly as before). The rule about when a reference may be fetched lives in the role file (`workflow/kit/roles/researcher.md`) and is never copied into the prompt (ADR-0015 / ADR-0084).
 
