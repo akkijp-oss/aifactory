@@ -6,7 +6,7 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import datetime, fcntl, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, sqlite3, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import datetime, fcntl, http.server, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, sqlite3, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
@@ -225,6 +225,156 @@ class KeysApiTest(unittest.TestCase):
     def test_post_needs_the_console_header(self):
         st, d = self.http.post("/api/keys", {"action": "add", "name": "x", "token": "y", "other": True}, header=False)
         self.assertEqual(st, 403, d)
+
+
+# 残量の観測（ADR-0085）の口を確かめるための偽 Anthropic。model が fable なら 7d_oi 付き、それ以外は 5h / 7d だけ。
+# トークン "bad-…" は 401（鍵切れ）。本物の API には触らない
+class FakeAnthropic(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0); body = json.loads(self.rfile.read(n) or b"{}")
+        tok = (self.headers.get("authorization") or "").replace("Bearer ", "")
+        self.server.calls.append({"model": body.get("model"), "tail4": tok[-4:], "beta": self.headers.get("anthropic-beta")})
+        if tok.startswith("bad-"):
+            out = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "x"}}).encode()
+            self.send_response(401); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out); return
+        reset5 = int(time.time()) + 3600; reset7 = int(time.time()) + 3 * 86400
+        h = {"anthropic-ratelimit-unified-5h-utilization": "0.40", "anthropic-ratelimit-unified-5h-reset": str(reset5), "anthropic-ratelimit-unified-5h-status": "allowed",
+             "anthropic-ratelimit-unified-7d-utilization": "0.10", "anthropic-ratelimit-unified-7d-reset": str(reset7), "anthropic-ratelimit-unified-7d-status": "allowed",
+             "anthropic-ratelimit-unified-status": "allowed", "anthropic-ratelimit-unified-representative-claim": "five_hour"}
+        if "fable" in (body.get("model") or ""):
+            h.update({"anthropic-ratelimit-unified-7d_oi-utilization": "0.75", "anthropic-ratelimit-unified-7d_oi-reset": str(reset7), "anthropic-ratelimit-unified-7d_oi-status": "allowed"})
+        out = b'{"id":"msg_x","type":"message","content":[]}'
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out)))
+        for k, v in h.items(): self.send_header(k, v)
+        self.end_headers(); self.wfile.write(out)
+
+
+class KeysQuotaApiTest(unittest.TestCase):
+    """鍵の残量（ADR-0085）: /api/keys の quota、/api/keys/history、/api/keys/probe（ジョブ）。観測は偽 Anthropic に向ける"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-keys-quota-test-"))
+        cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
+        cls.home = cls.tmp / "home"; cls.home.mkdir()
+        cls.keys = cls.tmp / "keys.json"; cls.state = cls.tmp / "state.json"; cls.state.write_text("{}", encoding="utf-8")
+        b = cls.tmp / "bin"; b.mkdir()
+        sb = b / "sandbox"; sb.write_text(FAKE_SANDBOX_KEYS, encoding="utf-8"); sb.chmod(0o755)
+        cls.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeAnthropic); cls.api.calls = []
+        threading.Thread(target=cls.api.serve_forever, daemon=True).start()
+        cls.port = free_port()
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs"), "HOME": str(cls.home),
+               "SANDBOX_STATE": str(cls.state), "SANDBOX_KEYS": str(cls.keys), "PATH": f"{b}:{os.environ.get('PATH', '')}",
+               "AIFACTORY_ANTHROPIC_BASE_URL": f"http://127.0.0.1:{cls.api.server_address[1]}",
+               "AIFACTORY_KEYS_PROBE_MODEL": "claude-haiku-4-5", "AIFACTORY_KEYS_PROBE_FULL_MODEL": "claude-fable-5-1"}
+        cls.proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(cls.port)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.http = Http(f"http://127.0.0.1:{cls.port}")
+        for _ in range(50):
+            try: cls.http.get("/api/keys"); break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate(); cls.proc.wait(timeout=10); cls.api.shutdown()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.keys.write_text(json.dumps({"keys": [
+            {"name": "fable-a", "token": "tok-fable-1111", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-09-09", "note": "", "allow": {"fable": True, "other": True}},
+            {"name": "opus-a", "token": "tok-opus-2222", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-09-09", "note": "", "allow": {"fable": False, "other": True}},
+            {"name": "dead-a", "token": "bad-3333", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-01-01", "note": "", "allow": {"fable": False, "other": True}},
+        ]}), encoding="utf-8")
+        self.wait_idle()
+        for f in self.tmp.glob("keys-quota.db*"): f.unlink()
+        self.api.calls.clear()
+
+    def wait_job(self, jid):
+        """終わったジョブ（job_view の job）と log の本文を返す"""
+        for _ in range(300):
+            _, d = self.http.get(f"/api/jobs/{jid}")
+            if d["job"].get("state") != "running": return d["job"], d["log"]["text"]
+            time.sleep(0.1)
+        raise AssertionError("ジョブが終わらない")
+
+    def wait_idle(self):
+        """前のテストが起こした観測のジョブが終わるまで待つ（DB を消す前に）"""
+        for _ in range(300):
+            _, v = self.http.get("/api/keys")
+            if v["quota"]["probing"] is None: return
+            time.sleep(0.1)
+
+    def test_view_before_any_probe(self):
+        st, v = self.http.get("/api/keys")
+        self.assertEqual(st, 200)
+        self.assertFalse(v["quota"]["exists"]); self.assertTrue(v["quota"]["stale"]); self.assertIsNone(v["quota"]["probing"])
+        self.assertEqual(v["quota"]["full_model"], "claude-fable-5-1")
+        self.assertTrue(all(k["quota"] is None for k in v["keys"]))
+        st, h = self.http.get("/api/keys/history?hours=24")
+        self.assertEqual(st, 200); self.assertEqual(h["points"], []); self.assertFalse(h["exists"])
+
+    def test_probe_job_then_quota_in_view(self):
+        st, r = self.http.post("/api/keys/probe", {})
+        self.assertEqual(st, 200); self.assertFalse(r["already"]); jid = r["job"]["id"]
+        self.assertEqual(r["job"]["kind"], "keys-probe")
+        # 動いている間は二重に起こさない
+        st, r2 = self.http.post("/api/keys/probe", {})
+        self.assertEqual(st, 200)
+        if r2["already"]: self.assertEqual(r2["job"]["id"], jid)
+        else: self.wait_job(r2["job"]["id"])   # 1 本目が既に終わっていたなら 2 本目が起きる。待ってから読む
+        j, log = self.wait_job(jid)
+        self.assertEqual(j["rc"], 1, "鍵切れの鍵が 1 本あるので rc は 1（他の鍵の観測は記録される）")
+        self.assertIn("[probe] fable-a: ok", log); self.assertIn("[probe] dead-a: NG HTTP 401 authentication_error", log)
+        for secret in ("tok-fable-1111", "tok-opus-2222", "bad-3333"): self.assertNotIn(secret, log)
+        self.assertNotIn("tok-", json.dumps(j))
+        # 偽 API には fable-a が Fable で、opus-a と dead-a は安いモデルで届く
+        models = {c["tail4"]: c["model"] for c in self.api.calls}
+        self.assertEqual(models, {"1111": "claude-fable-5-1", "2222": "claude-haiku-4-5", "3333": "claude-haiku-4-5"})
+        self.assertTrue(all(c["beta"] == "oauth-2025-04-20" for c in self.api.calls))
+        st, v = self.http.get("/api/keys")
+        q = v["quota"]; self.assertTrue(q["exists"]); self.assertFalse(q["stale"]); self.assertIsNotNone(q["last_probed"]); self.assertIsNone(q["probing"])
+        self.assertEqual(q["db_file"], str(self.tmp / "keys-quota.db")); self.assertTrue(OFFSET_ISO.match(q["last_probed"]), q["last_probed"])
+        by = {k["name"]: k["quota"] for k in v["keys"]}
+        f = by["fable-a"]
+        self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
+        w5, w7, oi = f["windows"]
+        self.assertEqual(w5["remaining_pct"], 60.0); self.assertEqual(oi["remaining_pct"], 25.0); self.assertEqual(f["binding"]["key"], "7d_oi")
+        self.assertTrue(0 < w5["remain_s"] <= 3600); self.assertTrue(OFFSET_ISO.match(w5["reset"])); self.assertTrue(OFFSET_ISO.match(w5["start"]))
+        self.assertFalse(w5["exhausted"]); self.assertFalse(w5["at_window_end"]); self.assertIsNone(f["error"]); self.assertFalse(f["stale"])
+        self.assertEqual([w["key"] for w in by["opus-a"]["windows"]], ["5h", "7d"], "Fable 許可の無い鍵は 7d_oi を持たない")
+        d = by["dead-a"]
+        self.assertEqual(d["error"], "HTTP 401 authentication_error"); self.assertEqual(d["windows"], []); self.assertIsNone(d["binding"])
+        st, h = self.http.get("/api/keys/history?hours=24")
+        real = [p for p in h["points"] if p["status"] != "window_start"]
+        self.assertEqual(sorted((p["name"], p["window"]) for p in real), [("fable-a", "5h"), ("fable-a", "7d"), ("fable-a", "7d_oi"), ("opus-a", "5h"), ("opus-a", "7d")])
+        starts = [p for p in h["points"] if p["status"] == "window_start"]
+        self.assertEqual(sorted((p["name"], p["window"]) for p in starts), [("fable-a", "5h"), ("opus-a", "5h")], "24 時間の内に始まった窓の始点だけ（7 日の窓の始点は 4 日前）")
+        self.assertTrue(all(p["remaining_pct"] == 100.0 for p in starts))
+        _, h8 = self.http.get("/api/keys/history?hours=192")
+        self.assertEqual(len([p for p in h8["points"] if p["status"] == "window_start"]), 5, "8 日ぶんなら 7 日の窓の始点も入る")
+        self.assertTrue(all(OFFSET_ISO.match(p["at"]) for p in h["points"]))
+        st, h1 = self.http.get("/api/keys/history?hours=24&name=opus-a")
+        self.assertTrue(h1["points"] and all(p["name"] == "opus-a" for p in h1["points"]))
+        # 2 周目（安いモデルだけ）でも Fable の枠は据え置かれる
+        self.api.calls.clear()
+        self.wait_job(self.http.post("/api/keys/probe", {"full": False})[1]["job"]["id"])
+        self.assertTrue(all(c["model"] == "claude-haiku-4-5" for c in self.api.calls))
+        _, v = self.http.get("/api/keys")
+        f = next(k["quota"] for k in v["keys"] if k["name"] == "fable-a")
+        self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
+
+    def test_mcp_keys_list_carries_quota(self):
+        """MCP の keys_list は console と同じ keys_view を返すので quota が載る（値は載らない）"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws), "CONSOLE_JOBS": str(self.tmp / "jobs"), "HOME": str(self.home),
+               "SANDBOX_STATE": str(self.state), "SANDBOX_KEYS": str(self.keys)}
+        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "keys_list", "arguments": {}}}
+        r = subprocess.run([sys.executable, str(REPO / "console" / "bin" / "mcp")], input=json.dumps(req) + "\n", text=True, capture_output=True, env=env, timeout=60)
+        out = json.loads(next(l for l in r.stdout.splitlines() if l.strip().startswith("{")))
+        text = out["result"]["content"][0]["text"]
+        self.assertIn('"quota"', text); self.assertIn('"7d_oi"', text); self.assertNotIn("tok-fable", text)
 
 
 class ApiTest(unittest.TestCase):

@@ -6,6 +6,7 @@
 #     aifactory-idle-stop   使われていないプール VM の停止（15 分ごと。252）
 #     aifactory-resume      鍵の利用枠切れで一時停止した run の続きを回す（5 分ごと。380）
 #     aifactory-pm          AI Factory Manager（PM）の 1 周（5 分ごと。537 / ADR-0074）。この版は提案を書くだけで run は起こさない
+#     aifactory-keys-probe  鍵プールの残量（利用枠）を観測する（5 分ごと。ADR-0085。console の「鍵」画面に出る）
 #   install.sh --remove   systemd の登録を外す
 #   macOS: シンボリックリンクだと launchd（gh-refresh）の bash が Documents 配下を読めず "Operation not permitted" になる（TCC）ので実体コピー。
 #   launchd の plist は sandbox/templates/launchd/（BUILD.md Step 0b）。リポジトリの sandbox/bin/sandbox を更新したら、もう一度これを実行する
@@ -14,7 +15,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$HOME/.local/bin"
 UNIT_DIR="${SANDBOX_UNIT_DIR:-/etc/systemd/system}"   # テストから差し替える
 # 登録する常駐。1 つにつき .service と .timer が sandbox/templates/systemd/ にある
-UNITS=(aifactory-gh-refresh aifactory-idle-stop aifactory-resume aifactory-pm)
+UNITS=(aifactory-gh-refresh aifactory-idle-stop aifactory-resume aifactory-pm aifactory-keys-probe)
 REPO="$(cd "$HERE/../.." && pwd)"                       # @@REPO@@（dispatch など、CLI のコピーではなく checkout を直接呼ぶ常駐用）
 SUDO=""; [[ $EUID -eq 0 ]] || SUDO="sudo"
 
@@ -33,8 +34,8 @@ do_systemd() {
   done
   $SUDO systemctl daemon-reload
   for u in "${UNITS[@]}"; do $SUDO systemctl enable --now "$u.timer" >/dev/null; done
-  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）/ aifactory-resume.timer（5 分ごと。利用枠切れで止まった run の続き）/ aifactory-pm.timer（5 分ごと。AI Factory Manager の提案。run は起こさない）"
-  echo "     ログ: journalctl -u aifactory-gh-refresh -u aifactory-idle-stop -u aifactory-resume -u aifactory-pm"
+  echo "[ok] systemd: aifactory-gh-refresh.timer（45 分ごと）/ aifactory-idle-stop.timer（15 分ごと。使われていない VM を止める）/ aifactory-resume.timer（5 分ごと。利用枠切れで止まった run の続き）/ aifactory-pm.timer（5 分ごと。AI Factory Manager の提案。run は起こさない）/ aifactory-keys-probe.timer（5 分ごと。鍵の残量を観測）"
+  echo "     ログ: journalctl -u aifactory-gh-refresh -u aifactory-idle-stop -u aifactory-resume -u aifactory-pm -u aifactory-keys-probe"
 }
 do_remove() {
   local u

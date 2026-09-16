@@ -764,25 +764,91 @@ async function viewSandbox() {
   schedule(viewSandbox, 10000);
 }
 
-/* ---------- 鍵（Claude の鍵プール。値は送るだけで、画面には末尾 4 文字しか出ない） */
-async function viewKeys() {
-  clearInterval(timer);
-  const d = await api('keys');
+/* ---------- 鍵（Claude の鍵プール。値は送るだけで、画面には末尾 4 文字しか出ない）
+   残量（利用枠）は keys-quota.db の観測値（ADR-0085）。残量% とペースはサーバーが出し、リセットまでの時間だけ画面で数え直す（観測の間も進む） */
+const QLEN = { '5h': 5 * 3600, '7d': 7 * 86400, '7d_oi': 7 * 86400 };   /* 窓の長さ（秒）。始点 = reset − 窓長 */
+const QCOLORS = ['#0b5d5d', '#6a4fbf', '#b86e00', '#2e7d4f', '#c23b3b', '#3b6fc2'];   /* 推移の線の色（鍵の順）。状態の色ではない */
+const keysChart = { window: '5h', hours: 24 };
+const fmtDurL = s => { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600); return h >= 24 ? tt(T.time.dayHour, { d: Math.floor(h / 24), h: h % 24 }) : fmtDur(s); };
+const qTone = p => p <= 10 ? 'alarm' : p <= 25 ? 'warn' : 'ok';   /* 残量 10% 以下は赤、25% 以下は橙 */
+const authErr = e => /\b(401|403)\b|authentication|permission/.test(e || '');
+function qWindow(w) {
+  const remainS = w.reset ? -sec(w.reset) : null, atEnd = remainS != null && remainS <= 0;
+  const pct = w.exhausted ? 0 : w.remaining_pct, tone = qTone(pct);
+  const timePct = remainS != null && !atEnd ? Math.max(0, Math.min(100, remainS / QLEN[w.key] * 100)) : null;
+  const note = w.exhausted ? tt(T.keys.exhausted, { at: w.reset ? fmtT(w.reset) : '-' }) : atEnd ? T.keys.windowEnd
+    : w.will_exhaust ? tt(T.keys.willExhaust, { t: fmtDurL(w.exhaust_in_s) }) : w.status === 'rejected' ? T.keys.statusRejected : w.status === 'allowed_warning' ? T.keys.statusWarn : '';
+  return `<div class="qw"><div class="l"><span>${esc(T.keys.window[w.key] || w.key)}</span><span class="tabular"><b class="pct ${tone}">${esc(tt(T.keys.remaining, { p: Math.round(pct) }))}</b>${remainS != null && !atEnd ? ` <span class="help">${esc(tt(T.keys.resetIn, { t: fmtDurL(remainS) }))}</span>` : ''}</span></div>
+    <div class="meter" title="${esc(T.help.quotaBar)}"><i class="${tone}" style="width:${Math.max(pct, pct > 0 ? 2 : 0)}%"></i>${timePct != null ? `<b style="left:${timePct}%"></b>` : ''}</div>
+    <div class="l help"><span>${w.start && w.reset ? esc(tt(T.keys.period, { from: fmtT(w.start), to: fmtT(w.reset) })) : ''}</span>${note ? `<span class="${w.exhausted || w.status === 'rejected' ? 'alarm' : 'warn'}">${esc(note)}</span>` : ''}</div></div>`;
+}
+function qCard(k) {
+  const q = k.quota;
+  const headline = `<div class="l"><span class="mono"><b>${esc(k.name)}</b> <span class="help">…${esc(k.tail4)}</span>${k.enabled ? '' : ` <span class="st stopped">${esc(T.keys.disabled)}</span>`}</span><span class="help">${q && q.probed ? esc(tt(T.keys.probedAt, { t: since(q.probed) })) : ''}</span></div>`;
+  if (!q) return `<div class="qcard">${headline}<div class="help top">${esc(T.keys.notProbed)}</div></div>`;
+  const err = q.error ? `<div class="${authErr(q.error) ? 'err' : 'warn'} small">${esc(authErr(q.error) ? T.keys.authError : tt(T.keys.probeError, { e: q.error }))}</div>` : '';
+  const oi = k.allow.fable && !q.windows.some(w => w.key === '7d_oi') ? `<div class="help">${esc(T.keys.oiPending)}</div>` : '';
+  return `<div class="qcard">${headline}${err}${q.windows.length ? q.windows.map(qWindow).join('') : `<div class="help top">${esc(T.keys.notProbed)}</div>`}${oi}</div>`;
+}
+/* 一覧の「残量」列: いちばん逼迫している窓だけ（詳しくは上のカード） */
+const qCell = k => { const b = k.quota && k.quota.binding; if (!b) return `<span class="help">${esc(k.quota && k.quota.error ? T.keys.unreadable : T.keys.notProbedShort)}</span>`; return `<b class="pct ${qTone(b.remaining_pct)}">${Math.round(b.remaining_pct)}%</b><div class="help nw">${esc(T.keys.window[b.key] || b.key)}</div>`; };
+function quotaPanel(d) {
+  const q = d.quota;
+  const status = q.probing ? `<a href="#/job/${esc(q.probing)}"><span class="dot pulse"></span>${esc(T.keys.probing)}</a>` : q.last_probed ? `${esc(tt(T.keys.lastProbed, { t: since(q.last_probed) }))}${q.stale ? ` <span class="alarm">${esc(T.keys.stale)}</span>` : ''}` : '';
+  return `<div class="panel"><div class="hrow"><h2>${esc(T.h.quota)}<small>${status}</small></h2><button type="button" data-act="key-probe" ${q.probing ? 'disabled' : ''}>${esc(T.btn.keyProbe)}</button></div>
+    ${q.error ? `<div class="err">${esc(tt(T.keys.dbError, { e: q.error }))}</div>` : ''}
+    ${!d.keys.length ? '' : !q.exists ? `<div class="help">${esc(T.empty.quota)}</div>` : `<div class="quota">${d.keys.map(qCard).join('')}</div>`}
+    <div class="help top">${esc(T.help.quota)}</div><div class="help">${esc(T.help.quotaBar)}</div><div class="help">${esc(T.help.quotaHow)}</div><div class="help">${esc(T.help.quotaTimer)}</div></div>`;
+}
+/* 残量の推移（SVG。ライブラリ無し）。x = 時刻（右端が今）、y = 残量%。鍵ごとに 1 本の線。status が window_start の点は合成した窓の始点（100%） */
+function quotaChartHtml(h) {
+  const win = keysChart.window, hours = keysChart.hours;
+  const btn = (act, v, cur, label) => `<button type="button" class="${v === cur ? 'primary' : ''}" data-act="${act}" data-v="${esc(v)}">${esc(label)}</button>`;
+  const controls = `<div class="row filters"><span class="btns">${Object.keys(QLEN).map(k => btn('keys-window', k, win, T.keys.window[k])).join('')}</span><span class="btns">${btn('keys-hours', '24', String(hours), T.keys.hours24)}${btn('keys-hours', '168', String(hours), T.keys.days7)}</span></div>`;
+  const W = 860, H = 220, L = 42, R = 12, Tp = 10, B = 26, now = Date.now() / 1000, lo = now - hours * 3600;
+  const x = t => L + (W - L - R) * Math.max(0, Math.min(1, (t - lo) / (now - lo))), y = p => Tp + (H - Tp - B) * (1 - Math.max(0, Math.min(100, p)) / 100);
+  const byName = {};
+  for (const p of h.points || []) { if (p.window !== win || p.ts < lo) continue; (byName[p.name] = byName[p.name] || []).push(p); }
+  const names = Object.keys(byName).sort();
+  if (!names.length) return controls + `<div class="help">${esc(T.empty.quotaChart)}</div><div class="help">${esc(T.help.quotaChart)}</div>`;
+  const grid = [0, 25, 50, 75, 100].map(p => `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}" class="grid"/><text x="${L - 6}" y="${y(p) + 4}" class="tick" text-anchor="end">${p}%</text>`).join('');
+  const stepS = (hours <= 24 ? 6 : 24) * 3600, ticks = [];
+  for (let t = Math.ceil(lo / stepS) * stepS; t <= now; t += stepS) ticks.push(`<line x1="${x(t)}" x2="${x(t)}" y1="${Tp}" y2="${H - B}" class="grid"/><text x="${x(t)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(fmtT(new Date(t * 1000).toISOString()))}</text>`);
+  const lines = names.map((n, i) => { const c = QCOLORS[i % QCOLORS.length], pts = byName[n];
+    const d = pts.map((p, k) => `${k ? 'L' : 'M'}${x(p.ts).toFixed(1)},${y(p.remaining_pct).toFixed(1)}`).join(' ');
+    const dots = pts.filter(p => p.status !== 'window_start').map(p => `<circle cx="${x(p.ts).toFixed(1)}" cy="${y(p.remaining_pct).toFixed(1)}" r="2.2" fill="${c}"><title>${esc(n)} ${esc(fmtT(p.at))} ${esc(tt(T.keys.remaining, { p: Math.round(p.remaining_pct) }))}</title></circle>`).join('');
+    return `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>${dots}`; }).join('');
+  const legend = names.map((n, i) => `<span class="lg"><i style="background:${QCOLORS[i % QCOLORS.length]}"></i><span class="mono">${esc(n)}</span></span>`).join('');
+  return `${controls}<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(T.h.quotaHistory)}">${grid}${ticks.join('')}<line x1="${x(now)}" x2="${x(now)}" y1="${Tp}" y2="${H - B}" class="now"/>${lines}</svg></div><div class="legend">${legend}</div><div class="help">${esc(T.help.quotaChart)}</div>`;
+}
+async function quotaChart() {
+  const el = $('keys-chart'); if (!el) return;
+  const h = await api(`keys/history?hours=${keysChart.hours}`);
+  if ($('keys-chart')) $('keys-chart').innerHTML = quotaChartHtml(h);
+}
+function keysLive(d) {
   const flag = (k, f) => `<input type="checkbox" data-act="key-flag" data-name="${esc(k.name)}" data-field="${esc(f)}" ${k.allow[f] ? 'checked' : ''} aria-label="${esc(f === 'fable' ? T.label.keyAllowFable : T.label.keyAllowOther)}">`;
   const rows = d.keys.map(k => `<tr><td class="mono">${esc(k.name)}${k.note ? `<div class="help">${esc(k.note)}</div>` : ''}</td>
       <td>${flag(k, 'fable')}</td><td>${flag(k, 'other')}</td>
       <td><input type="checkbox" data-act="key-enabled" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}" ${k.enabled ? 'checked' : ''} aria-label="${esc(T.th.keyEnabled)}"></td>
+      <td class="tabular">${qCell(k)}</td>
       <td class="mono">…${esc(k.tail4)}</td><td class="nw">${esc(k.issued || '')}</td><td class="nw">${k.last_launched ? `${fmtT(k.last_launched)}（${esc(since(k.last_launched))}）` : `<span class="help">${esc(T.keys.never)}</span>`}</td><td title="${esc(tt(T.keys.assigned, { n: k.uses }))}">${k.launches == null ? 0 : k.launches}</td>
       <td>${k.in_use.map(x => `<a href="#/ticket/${esc(x)}" class="mono">${esc(x)}</a>`).join('、')}</td>
       <td class="nw"><button data-act="key-token" data-name="${esc(k.name)}">${esc(T.btn.keyToken)}</button>
         <button class="danger" data-act="key-rm" data-name="${esc(k.name)}" data-inuse="${esc(k.in_use.join('、'))}">${esc(T.btn.keyRemove)}</button></td></tr>`).join('');
-  render(head(esc(T.nav.keys), T.sub.keys) + `
+  return quotaPanel(d) + `
     <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.keys.count, { n: d.keys.length }))}</small></h2>
       ${d.error ? `<div class="err">${esc(T.help.keysError)}</div>` : ''}
       <div class="help">${esc(T.help.keysHow)}</div>
-      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastLaunched)}</th><th class="nw">${esc(T.th.launches)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
+      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.quota)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastLaunched)}</th><th class="nw">${esc(T.th.launches)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
       <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysSameTask)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
       <div class="help">${esc(T.help.keysFile)} <span class="mono">${esc(d.keys_file)}</span></div></div>
+    <div class="panel"><h2>${esc(T.h.quotaHistory)}</h2><div id="keys-chart"></div></div>`;
+}
+async function viewKeys() {
+  clearInterval(timer);
+  const d = await api('keys');
+  render(head(esc(T.nav.keys), T.sub.keys) + `<div id="keys-live">${keysLive(d)}</div>
     <div class="panel"><h2>${esc(T.h.keyAdd)}<small>sandbox keys add</small></h2>
       <div class="row"><label class="field">${esc(T.label.keyName)}<input type="text" id="key-name" autocomplete="off" placeholder="${esc(T.label.keyNamePlaceholder)}"></label>
         <label class="field">${esc(T.label.keyNote)}<input type="text" id="key-note" autocomplete="off" placeholder="${esc(T.label.keyNotePlaceholder)}"></label></div>
@@ -790,6 +856,9 @@ async function viewKeys() {
       <div class="row"><label class="help check"><input type="checkbox" id="key-fable"> ${esc(T.label.keyAllowFable)}</label>
         <label class="help check"><input type="checkbox" id="key-other"> ${esc(T.label.keyAllowOther)}</label></div>
       <div class="actions"><button class="primary" data-act="key-add">${esc(T.btn.keyAdd)}</button><span class="help">${esc(T.help.keysSecret)}</span></div></div>`);
+  quotaChart();
+  /* 残量とリセットまでの時間は観測の間も進むので、登録の欄（下書き）を壊さずに上の部分だけ描き直す */
+  schedule(async () => { const d2 = await api('keys'); const live = $('keys-live'); if (live) live.innerHTML = keysLive(d2); quotaChart(); }, 30000);
 }
 
 /* ---------- 起票の下書き
@@ -1506,6 +1575,12 @@ const actions = {
     toast(esc(tt(T.msg.keyRemoved, { name })) + (r.reinject_jobs.length ? ' ' + esc(tt(T.msg.keyReinject, { n: r.reinject_jobs.length })) : ''));
     viewKeys();
   },
+  'key-probe': async () => {
+    const r = await api('keys/probe', {});
+    toast(esc(r.already ? T.msg.keyProbeRunning : T.msg.keyProbeStarted)); viewKeys();
+  },
+  'keys-window': el => { keysChart.window = el.dataset.v; quotaChart(); },
+  'keys-hours': el => { keysChart.hours = Number(el.dataset.v); quotaChart(); },
   'job-stop': async el => {
     const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });
     if (!ok) return; await api(`jobs/${el.dataset.id}/stop`, {}); toast(esc(T.msg.stopSent));
