@@ -150,7 +150,7 @@ class ReleaseArtifactsTest(unittest.TestCase):
         self.assertEqual((dest / "report.md").read_bytes(), b"r" * 60)   # *.md が先（優先順）
         self.assertFalse((dest / "big1.png").exists())
         self.assertEqual(self.skipped(r), {"big1.png": "total", "big2.png": "total"})
-        self.assertFalse(self.state(r)["artifacts_received"] is None)
+        self.assertTrue(self.state(r)["artifacts_received"])   # 「対象外がある」は回収の失敗ではない
 
     def test_count_limit_records_the_rest(self):
         self.limit("ARTIFACT_COUNT_MAX", 2)

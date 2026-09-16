@@ -346,7 +346,7 @@ def resume_start(state, steps):
     return start
 
 
-# ---- artifact の回収（チケット 557 / ADR-00XX）
+# ---- artifact の回収（チケット 557 / ADR-0085）
 # VM の ~/work/<task>/ に溜まった成果物（report.md / plan.md / research.md / 画像 / gates/*.log）を
 # runs/<run>/work/ へ運ぶ。以前は `scp -r` 1 発で、成否も上限も見ていなかった（届かなくても記録が残らず、
 # 「VM には在るのに read_file で見つからない」を後から切り分けられなかった）。いまは
