@@ -153,6 +153,37 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `POST /api/config/model` | 工程または共通経路の使用モデルを変える `{target, workflow, step, key, value, dry_run, base_sha256}`。既定は下見（1 バイトも書かない）。書くのは `dry_run: false` を明示したときだけで、`base_sha256`（読んだときの版）が必須。読んだときから変わっていれば 409 で何も書かない |
 | `GET /api/stats?days=7&pj=&dry=&tz=` | 工程ごとの消費統計（`total` / `by_model` / `by_step` / `by_day` / `by_pj` / `top`）。`tz` は日別と期間を切る時間帯（`+09:00` のようなオフセットか IANA 名。省略でサーバーの時間帯。読めない値はサーバーの時間帯に落ち、応答の `tz` に実際に使った時間帯が入る） |
 
+### 手元のファイルを添付する
+
+添付だけは `curl` でも送れます（`multipart/form-data` で `files` を複数）。
+
+```bash
+curl -s -H 'X-Console: 1' -F 'files=@画面.png' -F 'files=@仕様書.pdf' \
+  localhost:8765/api/tickets/204/attach
+```
+
+同じことを短く安全にやるのが `console/bin/attach` です。**あなたの端末で**実行します（リポジトリの checkout があればそれだけで動きます。Python 3 の標準ライブラリしか使いません）。
+
+```bash
+console/bin/attach 204 ~/Desktop/画面.png 仕様書.pdf
+# {"id": 204, "added": ["画面.png", "仕様書.pdf"], "attachments": [ ... ]}
+```
+
+| 設定 | 内容 |
+|---|---|
+| `AIFACTORY_CONSOLE_URL` | 送り先。既定は `http://127.0.0.1:8765`。制御系を Proxmox 上の LXC に置いた構成なら `http://ctl.<tenant>.sb.internal:8765` |
+| `CONSOLE_TOKEN` | 合言葉（コンソールが合言葉つきで動いているとき）。`ps` に出ないよう**引数では受けません** |
+
+どちらも環境変数か `~/.config/aifactory/mcp-remote.env`（[MCP の接続設定](#ai-セッションから使うmcp)と同じファイル）から読みます。`--url` を渡せば環境変数より優先されます。
+
+- **AI セッションにファイルの中身を通しません**。成功時の出力は応答の JSON 1 行（`id` / `added` / `attachments`）だけで、ファイルの中身・その base64・合言葉は出ません。出力の長さはファイルの大きさに比例しません。失敗時も理由 1 行だけを標準エラーに出して終了コード 1 で終わります
+- **MCP の `ticket_attach(path=...)` は、あなたの手元のファイルを読めません**。MCP サーバーは制御系（ctl）の中で動いているので、`path` は ctl の上のパスです。手元のファイルはこの CLI で送ってください
+- **添付先のチケット番号が要ります**。まだ起票していなければ、先に起票してから番号で添付します（`kb new` → `console/bin/attach <番号> <ファイル>`）
+- 上限（1 ファイル 20 MiB / 1 チケット合計 100 MiB）と名前の整えはサーバー側の判定がそのまま働きます。CLI は手元で判定しないので、断られたときの文面はコンソールが返したものです。実際に保存された名前は `added` で返ります
+- 同じファイルをもう一度送ると、上書きではなく `-2` が付いた 2 件目になります（`kb attach` と同じです）
+
+判断の記録は ADR-0091（[設計判断](../decisions/index.md)）です。
+
 ## AI セッションから使う（MCP）
 
 `.mcp.json` には **`aifactory-local`**（手元の workspace）と **`aifactory-ctl`**（Proxmox 上の制御系）の 2 つがあります。制御系を Proxmox 上の LXC に置いた構成（[貸出先ごとの環境（テナント）](tenants.md)）では `aifactory-ctl` を使うか、どのディレクトリからでも使えるよう user スコープで登録します（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`）。Codex CLI なら `codex mcp add aifactory -- <repo>/console/bin/mcp-remote`。stdio の MCP を話せるクライアントなら何でも同じ入口です。`console/bin/mcp-remote` が ssh 越しに LXC の MCP サーバーを起動するので、AI セッションは LXC 側の workspace と貸出状態をそのまま読み書きします。接続先は `~/.config/aifactory/mcp-remote.env` の `AIFACTORY_CTL`（既定 `aifactory@ctl.main.sb.internal`。別テナントは `aifactory@ctl.<tenant>.sb.internal`）、tailnet 未承認の間は `AIFACTORY_CTL_JUMP=<Proxmox ホストの ssh エイリアス>` です。追加後は `claude mcp reset-project-choices` で承認し直します。
@@ -168,7 +199,7 @@ claude mcp reset-project-choices   # 承認をやり直す
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れます）・一覧・1 件（本文・履歴・run・ジョブ・添付の一覧 `attachments`。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | チケット作成（整った本文 / 自由文。intake はジョブ） |
-| `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです） |
+| `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです）。**利用者の手元 PC のファイルは `path` では読めません**（この MCP は ctl の中で動いています）。その場合は手元で [`console/bin/attach`](#手元のファイルを添付する) を使ってもらってください |
 | `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` / `depends_on` / `related_issue` / `related_ticket` は空文字列で消します。`related_issue` を消すと取得可否（`related_issue_access`）も一緒に消えるので、`related_issue_access` だけを空文字列にすることはできません。参照の値は run の依頼文にそのまま出ます）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log`・チケットの添付など）。画像は image として返るので、そのまま見えます（4 MiB まで。それより大きいものはコンソールから開いてください）。`run_show` には `progress` が付き、run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が読めます。`read_file` はファイルが無いとき、同じ場所に実在する名前を併せて返します（run 自体が無いときは「ディレクトリが見つかりません」と言い分けます）。名前だけなので、`run_show` を引き直さずに正しい名前が分かります |

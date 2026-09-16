@@ -118,12 +118,13 @@ kanban/bin/kb new kumitate bug "不具合: 保存が効かない" --body ticket.
 - **トークン・鍵・`.env` の実値は添付しないでください。** `attachments/` は git 追跡外なので `bin/oss-check.sh` の秘密情報の検査対象ではありません
 - 添付を VM に運べるのは今のところ Proxmox backend だけです（macOS / Windows / Linux のワーカーは未対応）
 
-### Web コンソール・MCP・intake から添付する
+### Web コンソール・MCP・手元の CLI・intake から添付する
 
-CLI（`kb attach`）以外の 3 つの入口からも同じ置き場に添付できます。名前の整え方も上限も同じ判定を通ります。
+CLI（`kb attach`）以外の 4 つの入口からも同じ置き場に添付できます。名前の整え方も上限も同じ判定を通ります。
 
 - **Web コンソール**: 起票画面（左の「文章から整えて起票する」・右の「題名と完了条件を自分で書いて起票する」）とチケット画面に、ファイルを落とす領域があります。落とすか選ぶかのどちらでも、複数まとめて添付できます。チケット画面の一覧では画像がサムネイルで見え、その他はダウンロードのリンクです。`×` で 1 件消せます（確認のダイアログが出ます）。選んだファイルは下書きに残らないので、画面を離れると選び直しになります
-- **MCP**: `ticket_attach(id, name, content_base64)` で中身をそのまま渡せます（ssh 越しでも通ります）。ctl の上にあるファイルなら `ticket_attach(id, path)`。`ticket_show` の一覧に載り、`read_file` で画像として読み返せます。消すのは `ticket_detach(id, name)` です
+- **MCP**: `ticket_attach(id, name, content_base64)` で中身をそのまま渡せます（ssh 越しでも通ります）。ctl の上にあるファイルなら `ticket_attach(id, path)`。`ticket_show` の一覧に載り、`read_file` で画像として読み返せます。消すのは `ticket_detach(id, name)` です。**あなたの手元の PC にあるファイルは `path` では読めません**（MCP サーバーは制御系の中で動いていて、あなたの端末のファイルシステムを見られないためです）。次の `console/bin/attach` を使ってください
+- **手元の CLI**: `console/bin/attach <チケット番号> <ファイル>...` を**あなたの端末で**実行すると、ファイルをそのままコンソールの API へ送って添付します。中身も base64 も AI セッションの文脈やログには出ません。詳しくは [Web コンソール](console.md#手元のファイルを添付する)
 - **intake**: `glue/bin/intake memo.txt --attach 画面.png` のように渡すと、起票したチケットに添付します。画像は intake の LLM にも見せるので、本文の `## 現状` に画面から読み取れた事実が入ります
 
 !!! note "名前は整えられます"

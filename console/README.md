@@ -54,6 +54,15 @@ journalctl -u aifactory-console -f
 
 - 表示名は **AI Factory Manager**、識別子は `pm` のまま据え置き（`aifactory-pm.service` / `aifactory-pm.timer`・`com.aifactory.pm.plist`・`console/bin/pm-tick`・`GET /api/pm`・MCP の `pm_status` / `pm_tick`・`core.py` の `pm_*`・`logs/pm-decisions.jsonl`・画面のルート `#/pm`）。稼働中の systemd timer と公開済みの API 名を変えないため（#587）。
 
+## 手元のファイルを添付する（bin/attach）
+
+`console/bin/attach <チケット番号> <ファイル>...` を**利用者の端末で**実行すると、ファイルをそのまま `POST /api/tickets/<id>/attach`（multipart）へ送る。MCP は制御系（ctl）の中で動くので `ticket_attach(path=...)` は手元 PC のファイルを読めず、`content_base64` は中身を JSON-RPC の引数に載せてしまう。その穴だけを埋める薄い送信側で、上限（1 ファイル 20 MiB / 合計 100 MiB）も名前の sanitize も持たない（正本は `lib/aifactory_attachments.py`。ADR-0015 / ADR-0091）。
+
+- 成功: 応答の JSON 1 行（`id` / `added` / `attachments`）を stdout。失敗: 理由 1 行を stderr にして非 0。**中身・base64・合言葉・Authorization はどの出力にも出さない**（出力の長さはファイルの大きさに比例しない）
+- 設定は環境変数 → `~/.config/aifactory/mcp-remote.env` → 既定の順: `AIFACTORY_CONSOLE_URL`（既定 `http://127.0.0.1:8765`）、`CONSOLE_TOKEN`（`ps` に出ないので argv では受けない）。`--url` は環境変数より優先
+- 受け口・保存・履歴・runner への配布は無改修。既存 3 方式（multipart 直叩き / `content_base64` / `path`）もそのまま
+- テストは `console/tests/test_attach_cli.py`（エンコーダ単体・sha256 の突合・出力が漏らさないこと・認証・失敗）
+
 ## MCP（AI セッションからの読み書き）
 
 `console/bin/mcp` は同じ読み書きを MCP のツールとして出す stdio サーバー（標準ライブラリのみ）。起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読んで、未設定の環境変数だけ補う。ssh 越し（`mcp-remote`）の非ログイン環境でも、systemd のコンソール（`EnvironmentFile`）と同じ secrets で子プロセスを起こすため（ADR-0030）。`GH_TOKEN` は GitHub App があれば空でよく、runner が `sandbox gh-app token <pj>` で払い出す。リポジトリ直下の `.mcp.json` に **`aifactory-local`**（手元の workspace。VM 無しで試すとき）と **`aifactory-ctl`**（Proxmox 上の制御系。下記）の 2 つを登録してあるので、このリポジトリで Claude Code を開くと初回に承認を求められ、以後 `mcp__aifactory-local__*` / `mcp__aifactory-ctl__*` として使える。運用を制御系 LXC に寄せたら、どのディレクトリからでも使えるように **user スコープ**で `aifactory` の名前で登録するのが楽（`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`。プロジェクト側の 2 つは承認しなくてよい）。
@@ -119,6 +128,7 @@ console/
 ├── lib/core.py      # ★読み書きの正本（kanban の読み取り、runs、sandbox、JobStore、操作の判定）。console と mcp が共有
 ├── bin/console      # HTTP サーバー + JSON API（core の口）
 ├── bin/mcp          # MCP サーバー（stdio、core の口）。登録はリポジトリ直下の .mcp.json
+├── bin/attach       # 手元の端末から添付を送る CLI（POST /api/tickets/<id>/attach へ multipart。判定は持たない。ADR-0091）
 ├── bin/install.sh   # symlink と launchd（macOS）/ systemd（Linux）登録
 ├── launchd/         # plist の雛形（install.sh が埋める）
 ├── systemd/         # unit の雛形（install.sh --systemd が埋める。制御系 LXC 用）
