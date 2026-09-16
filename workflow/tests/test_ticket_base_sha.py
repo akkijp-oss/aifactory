@@ -228,7 +228,7 @@ class StalenessInTheBriefTest(BriefHarness):
         self.assertEqual(self.brief(refs={}), self.brief(refs=None))
         self.assertNotIn("- 注意: この票の行番号", self.brief())
 
-    def test_an_unmeasurable_distance_says_so_instead_of_pretending_it_is_zero(self):
+    def test_a_distance_that_cannot_be_counted_says_so_instead_of_pretending_it_is_zero(self):
         """0 に丸めると「ずれていない」と読めてしまい、この票が塞ごうとした事故そのものになる"""
         b = self.brief(refs={"base_sha": SHA}, state={"base_sha": SHA, "base_distance": None})
         self.assertIn(f"- 注意: この票の行番号は起票時の base（{SHA[:9]}）のもの。現在との距離は測れなかった。着手時に必ず自分で数え直すこと。", b)
