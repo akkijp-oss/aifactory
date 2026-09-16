@@ -4,6 +4,7 @@
 
 ```
 workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=name] [--wait[=seconds]]
+                 [--issue=URL] [--issue-access=word] [--ticket=number]
 ```
 
 | Argument | Meaning |
@@ -18,6 +19,11 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--from[=step]` | Redo a run that ended at `human` from the given step **on a new VM**. Without a step, uses the previous `resume_step`. The previous run is passed in the `AIFACTORY_FROM_RUN` environment variable (run names only; ADR-0036) |
 | `--branch=name` | The branch to continue from with `--from`. Defaults to the previous `wip_branch` |
 | `--wait[=seconds]` | When the pool has no free VM, wait for one and retry `sandbox take` (3600 seconds on its own; the retry interval is `AIFACTORY_WAIT_POLL_S` seconds, 30 by default) |
+| `--issue=URL` | The ticket's external issue references (comma separated). Printed as values right after the `## チケット` section of the prompt. `kb run` passes the ticket's `related_issue` |
+| `--issue-access=word` | Whether those references can be fetched (`readable` / `unreadable`). The prompt says it in one phrase ("go ahead" / "do not fetch") |
+| `--ticket=number` | The internal ticket numbers this ticket refers to (comma separated). Printed as `#521` (numbers that do not exist on GitHub) |
+
+The three reference options (`--issue` / `--issue-access` / `--ticket`) only **carry values**. Pass none of them and the prompt gets no extra line (a ticket without references reads exactly as before). The rule about when a reference may be fetched lives in the role file (`workflow/kit/roles/researcher.md`) and is never copied into the prompt (ADR-0015 / ADR-0084).
 
 ## Exit codes
 

@@ -4,6 +4,7 @@
 
 ```
 workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前] [--wait[=秒]]
+                 [--issue=URL] [--issue-access=語] [--ticket=番号]
 ```
 
 | 引数 | 意味 |
@@ -18,6 +19,11 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--from[=step]` | 人間待ちで終わった run を、**新しい VM** で指定の工程からやり直す。工程を省くと前回の `resume_step`。前回の run は環境変数 `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡す（ADR-0036） |
 | `--branch=名前` | `--from` のとき続きに使うブランチ。既定は前回の `wip_branch` |
 | `--wait[=秒]` | プールに空きがないとき、空くまで待って `sandbox take` をやり直す（単独なら 3600 秒。再試行の間隔は `AIFACTORY_WAIT_POLL_S` 秒、既定 30） |
+| `--issue=URL` | チケットの外部 issue の参照（カンマ区切り）。依頼文の「## チケット」の直後に値として出る。`kb run` が票の `related_issue` を渡す |
+| `--issue-access=語` | その参照を取りに行けるか（`readable` / `unreadable`）。依頼文には「取りに行ってよい」「取りに行かない」と 1 語で出る |
+| `--ticket=番号` | チケットが参照する内部票の番号（カンマ区切り）。依頼文には `#521` の形で出る（GitHub には無い番号） |
+
+参照の 3 つ（`--issue` / `--issue-access` / `--ticket`）は**値を運ぶだけ**です。渡さなければ依頼文に行が出ません（参照を持たないチケットの依頼文は今までどおり）。取りに行く / 行かないの規則そのものは役割文書（`workflow/kit/roles/researcher.md`）が持ち、依頼文には書き写しません（ADR-0015 / ADR-0084）。
 
 ## 終了コード
 
