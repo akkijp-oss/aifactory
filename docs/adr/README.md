@@ -96,3 +96,4 @@
 - [0082: MCP は配ったスキーマを入口で強制する。未知のキーと必須の抜けはツールエラーにし、値の型と意味の判定は core に残す](0082-mcp-enforces-its-declared-argument-schema.md)
 - [0083: 私有 PJ 名は 1 つ残らず検査語に載せ、書き換えられない既存 ADR だけをファイル名で名指しして例外にする](0083-private-project-names-are-all-in-the-pattern-and-old-adrs-are-named-exceptions.md)
 - [0084: 票の参照は「外部 issue（取得可否つき）」と「内部の票番号」の 2 列に分ける。読めない参照は役割文書が名指しで断る](0084-ticket-references-are-split-into-external-issue-and-internal-number.md)
+- [0086: 人が動くまで解けない一時停止だけが残った板でも PM の `state` は `idle` のまま。人の出番は状態ではなく facts と画面で伝える](0086-human-unblockable-pauses-stay-idle-in-the-pm.md)
