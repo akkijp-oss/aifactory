@@ -89,7 +89,7 @@ def t_project_write(a): return core.project_write(a.get("pj") or "", a.get("file
 
 def t_ticket_attach(a):
     """content_base64（中身をそのまま）か path（ctl の上のファイル）のどちらか一方で 1 件添付する。
-       手元 PC のファイルは（ここは ctl の中なので）読めない。利用者の端末から console/bin/attach で送ってもらう（ADR-0091）"""
+       手元 PC のファイルは（ここは ctl の中なので）読めない。利用者の端末から console/bin/attach で送ってもらう（ADR-0092）"""
     tid = arg_int(a, "id")
     b64, path = a.get("content_base64"), a.get("path")
     if bool(b64) == bool(path): raise core.ApiError("content_base64 か path のどちらか一方を指定してください")

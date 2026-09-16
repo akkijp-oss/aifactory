@@ -16,15 +16,20 @@ def scrub(text):
     return "\n".join(l for l in text.splitlines() if not SECRET_LINE.search(l))
 
 
-def ensure_gh_token(pj, repo="", log=None):
+def ensure_gh_token(pj, repo="", log=None, timeout=None):
     """`gh` を使う前に GH_TOKEN を用意する。空なら GitHub App（ADR-0008）から PJ のリポジトリ限定の
     1 時間トークンを払い出して自分の env に入れる（子プロセスの gh も継承する）。
-    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）"""
+    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）
+
+    `timeout`（秒）を渡すと上限を超えた払い出しを諦めて理由にする（既定は None ＝ 無期限で、既存の呼び手の挙動は変えない）。
+    人を待たせる経路——`kb new` の起票（554）——だけが秒数を渡す。`sandbox` が固まっても console / MCP / intake を止めない"""
     if os.environ.get("GH_TOKEN"): return None
     try:
-        r = subprocess.run(["sandbox", "gh-app", "token", pj], text=True, capture_output=True, errors="replace")
+        r = subprocess.run(["sandbox", "gh-app", "token", pj], text=True, capture_output=True, errors="replace", timeout=timeout)
     except OSError as e:      # sandbox が PATH に無い環境（この VM / CI）。落とさず理由にする
         return scrub(str(e))[-500:]
+    except subprocess.TimeoutExpired:
+        return f"{timeout}s で応答が無い"
     token = ([l.strip() for l in (r.stdout or "").splitlines() if l.strip()] or [""])[-1]
     if r.returncode != 0 or not token:
         return (scrub(r.stderr or "").strip() or f"rc={r.returncode}")[-500:]
@@ -51,3 +56,22 @@ def pr_state(pr, repo, timeout=20):
         return None, f"gh の出力を読めない: {e}"
     if not isinstance(info, dict): return None, "gh の出力が JSON のオブジェクトでない"
     return info, None
+
+
+def branch_sha(repo, branch, timeout=10):
+    """ブランチの tip の commit sha を GitHub に聞く（チケット 554）。戻り: (sha, None) か (None, 理由)。
+
+    票の引用が「いつ時点のコードか」を起票時に刻むために使う（config 編集の版ハッシュ `base_sha256` とは無関係）。
+    pr_state と同じく例外にせず理由の文字列で返す——呼ぶ側（kb new）は取れなければ刻まないだけで、起票は落とさない"""
+    cmd = ["gh", "api", f"repos/{repo}/commits/{branch}", "--jq", ".sha"]
+    try:
+        r = subprocess.run(cmd, text=True, capture_output=True, errors="replace", timeout=timeout)
+    except OSError as e:      # gh が PATH に無い
+        return None, scrub(str(e))[-300:]
+    except subprocess.TimeoutExpired:
+        return None, f"{timeout}s で応答が無い"
+    if r.returncode != 0:
+        return None, ([l.strip() for l in scrub(r.stderr or "").splitlines() if l.strip()] or [f"rc={r.returncode}"])[-1][:300]
+    sha = (r.stdout or "").strip().splitlines()[-1].strip() if (r.stdout or "").strip() else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha): return None, f"sha に読めない応答: {sha[:80] or '(空)'}"
+    return sha, None

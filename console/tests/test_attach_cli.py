@@ -1,4 +1,4 @@
-"""console/bin/attach（手元のファイルをコンソールの API へ直接送る CLI）のテスト（チケット 596。段階 1 = ADR-0091）。
+"""console/bin/attach（手元のファイルをコンソールの API へ直接送る CLI）のテスト（チケット 596。段階 1 = ADR-0092）。
 
   python3 -m unittest discover -s console/tests -p 'test_attach_cli.py' -v
 

@@ -8,4 +8,4 @@
   `http://127.0.0.1:8765`）、合言葉は `CONSOLE_TOKEN` で、どちらも環境変数か `~/.config/aifactory/mcp-remote.env`
   から読みます（合言葉は `ps` に出ないよう引数では受けません）。上限（1 ファイル 20 MiB / 合計 100 MiB）と
   名前の整えは今までどおりサーバー側の判定がそのまま働き、既存の 3 つの添付方法（multipart 直叩き /
-  `content_base64` / `path`）は変わりません（ADR-0091）。
+  `content_base64` / `path`）は変わりません（ADR-0092）。

@@ -5,7 +5,7 @@
 
 - MCP（console/bin/mcp）は制御系 LXC の中で動く（mcp-remote は ssh の stdio 中継）ので、ticket_attach(path=) は
   手元の PC のファイルを読めない。content_base64 は中身を MCP の引数に載せる。**手元のファイルはこの CLI で送る**
-- 送り先は既存の口 `POST /api/tickets/<id>/attach`（multipart/form-data）。受け口・保存・履歴は何も変えていない（ADR-0091）
+- 送り先は既存の口 `POST /api/tickets/<id>/attach`（multipart/form-data）。受け口・保存・履歴は何も変えていない（ADR-0092）
 - 判定（1 ファイル / 合計の上限・名前の sanitize）は lib/aifactory_attachments.py が正本。ここには数値も規則も持たない。
   上限超過は console が 413、名前の直しは保存側が行い、結果の名前は応答の added に載る
 - 出力: 成功なら stdout に応答の JSON 1 行（{"id", "added", "attachments"}）。**中身も base64 も出さない**ので、

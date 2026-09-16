@@ -188,7 +188,7 @@ Both are read from the environment, falling back to `~/.config/aifactory/mcp-rem
 - The limits (20 MiB per file, 100 MiB per ticket) and the name normalisation stay on the server side. The CLI checks nothing locally, so a refusal carries the console's own wording. The names that were actually saved come back in `added`
 - Sending the same file again adds a second attachment with `-2` appended rather than overwriting (same as `kb attach`)
 
-The decision is recorded in ADR-0091 ([Design decisions](../decisions/index.md)).
+The decision is recorded in ADR-0092 ([Design decisions](../decisions/index.md)).
 
 ## Using it from an AI session (MCP)
 

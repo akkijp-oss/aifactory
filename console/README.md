@@ -56,7 +56,7 @@ journalctl -u aifactory-console -f
 
 ## 手元のファイルを添付する（bin/attach）
 
-`console/bin/attach <チケット番号> <ファイル>...` を**利用者の端末で**実行すると、ファイルをそのまま `POST /api/tickets/<id>/attach`（multipart）へ送る。MCP は制御系（ctl）の中で動くので `ticket_attach(path=...)` は手元 PC のファイルを読めず、`content_base64` は中身を JSON-RPC の引数に載せてしまう。その穴だけを埋める薄い送信側で、上限（1 ファイル 20 MiB / 合計 100 MiB）も名前の sanitize も持たない（正本は `lib/aifactory_attachments.py`。ADR-0015 / ADR-0091）。
+`console/bin/attach <チケット番号> <ファイル>...` を**利用者の端末で**実行すると、ファイルをそのまま `POST /api/tickets/<id>/attach`（multipart）へ送る。MCP は制御系（ctl）の中で動くので `ticket_attach(path=...)` は手元 PC のファイルを読めず、`content_base64` は中身を JSON-RPC の引数に載せてしまう。その穴だけを埋める薄い送信側で、上限（1 ファイル 20 MiB / 合計 100 MiB）も名前の sanitize も持たない（正本は `lib/aifactory_attachments.py`。ADR-0015 / ADR-0092）。
 
 - 成功: 応答の JSON 1 行（`id` / `added` / `attachments`）を stdout。失敗: 理由 1 行を stderr にして非 0。**中身・base64・合言葉・Authorization はどの出力にも出さない**（出力の長さはファイルの大きさに比例しない）
 - 設定は環境変数 → `~/.config/aifactory/mcp-remote.env` → 既定の順: `AIFACTORY_CONSOLE_URL`（既定 `http://127.0.0.1:8765`）、`CONSOLE_TOKEN`（`ps` に出ないので argv では受けない）。`--url` は環境変数より優先
@@ -128,7 +128,7 @@ console/
 ├── lib/core.py      # ★読み書きの正本（kanban の読み取り、runs、sandbox、JobStore、操作の判定）。console と mcp が共有
 ├── bin/console      # HTTP サーバー + JSON API（core の口）
 ├── bin/mcp          # MCP サーバー（stdio、core の口）。登録はリポジトリ直下の .mcp.json
-├── bin/attach       # 手元の端末から添付を送る CLI（POST /api/tickets/<id>/attach へ multipart。判定は持たない。ADR-0091）
+├── bin/attach       # 手元の端末から添付を送る CLI（POST /api/tickets/<id>/attach へ multipart。判定は持たない。ADR-0092）
 ├── bin/install.sh   # symlink と launchd（macOS）/ systemd（Linux）登録
 ├── launchd/         # plist の雛形（install.sh が埋める）
 ├── systemd/         # unit の雛形（install.sh --systemd が埋める。制御系 LXC 用）
