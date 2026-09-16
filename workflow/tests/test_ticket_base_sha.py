@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -32,6 +33,14 @@ spec = importlib.util.spec_from_loader("base_sha_run", importlib.machinery.Sourc
 run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run)
 
+
+def load_kb():
+    """kb を「スクリプトとしてではなく」読み込む（fetch_base_sha を関数として直接呼ぶため）"""
+    spec = importlib.util.spec_from_loader("base_sha_kb", importlib.machinery.SourceFileLoader("base_sha_kb", str(KB)))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 SHA = "df252fbf0" + "a" * 31          # #526 が刻めていたら入っていたはずの値（40 桁）
 TOKEN = "ghs_fake_token_value"
 BODY = "# 引用を持つ票\n\n`live-app-pane.tsx:120` を直す。\n"
@@ -39,6 +48,7 @@ BODY = "# 引用を持つ票\n\n`live-app-pane.tsx:120` を直す。\n"
 # gh api repos/<repo>/commits/<branch> --jq .sha の代わり。応答は環境変数 SHA_OUT で差し替える
 FAKE_GH = r"""#!/usr/bin/env bash
 echo "gh $*" >> "$CALLS"
+if [ -n "${GH_SLEEP-}" ]; then sleep "$GH_SLEEP"; fi
 if [ -n "$GH_FAILS" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 echo "${SHA_OUT-}"
 """
@@ -201,6 +211,84 @@ class OldDatabaseTest(KbHarness):
         self.assertEqual(self.kb("set", 801, "--note", "x").returncode, 0)
 
 
+class StampingDoesNotWidenTheIdRaceTest(KbHarness):
+    """GitHub に聞くのは id を採番する前（554 のレビュー指摘 1）。
+
+    `kb new` は `SELECT MAX(id)` で id を決めてから INSERT する。その間にネットワーク（実運用で 1〜3 秒）を挟むと
+    同時に起票した 2 本が同じ id を採る窓がその分だけ広がり、片方が UNIQUE 違反で落ちて .md だけが孤児で残る。
+    採番の窓は刻印を入れる前と同じ（ms）ままであること"""
+
+    def new_async(self, title):
+        """id を指定しない起票（採番を kb に任せる＝窓が開く形）を 1 本起こす。
+
+        本文は stdin ではなくファイルで渡す——stdin で渡すと書き込みの順で 5 本が直列になり、窓が開かない"""
+        body = self.ws / "body.md"
+        if not body.exists(): body.write_text(BODY, encoding="utf-8")
+        return subprocess.Popen([sys.executable, str(KB), "new", PJ, "chore", title, "--body", str(body)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env={**self.env, "GH_SLEEP": "1"})
+
+    def test_tickets_filed_at_the_same_time_all_survive(self):
+        procs = [self.new_async(f"同時起票 {i}") for i in range(5)]
+        outs = [p.communicate() for p in procs]
+        for p, (out, err) in zip(procs, outs):
+            self.assertEqual(p.returncode, 0, out + err)
+            self.assertNotIn("Traceback", err)
+        con = sqlite3.connect(self.ws / "kanban" / "kanban.db")
+        ids = [r[0] for r in con.execute("SELECT id FROM tickets")]
+        shas = con.execute("SELECT COUNT(*) FROM tickets WHERE base_sha = ?", (SHA,)).fetchone()[0]
+        con.close()
+        files = list((self.ws / "kanban" / "tickets").glob("*.md"))
+        self.assertEqual(len(ids), 5)
+        self.assertEqual(len(set(ids)), 5, "同じ id を 2 本が採った")
+        self.assertEqual(shas, 5)                                   # 前に出しても刻印は落ちない
+        self.assertEqual(len(files), len(ids), "台帳に無い .md が残った（採番の窓で起票が落ちている）")
+
+
+class GithubCannotStallTheFilingTest(KbHarness):
+    """固まった `sandbox` / `gh` で起票が止まらない（554 のレビュー指摘 2）。
+
+    `kb new` は今までネットワークに触らない経路で、呼ぶ側（console の ticket_new / MCP / intake）は
+    子プロセスに上限を渡していない。上限は gh api の脚だけでなくトークンの払い出しにも要る"""
+
+    def test_a_hanging_token_command_becomes_a_reason_not_a_wait(self):
+        sys.path.insert(0, str(REPO / "lib")); self.addCleanup(sys.path.remove, str(REPO / "lib"))
+        import aifactory_gh
+        hang = self.bin / "sandbox"; hang.write_text("#!/usr/bin/env bash\nsleep 30\n"); hang.chmod(0o755)
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}"}; env.pop("GH_TOKEN", None)
+        old = dict(os.environ); os.environ.clear(); os.environ.update(env)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(old)))
+        t0 = time.monotonic()
+        why = aifactory_gh.ensure_gh_token(PJ, timeout=1)
+        self.assertLess(time.monotonic() - t0, 15, "上限が掛かっていない（払い出しが返るまで待っている）")
+        self.assertIn("1s", why)
+        self.assertNotIn("GH_TOKEN", os.environ)
+
+    def test_kb_puts_a_limit_on_both_legs_of_the_lookup(self):
+        """トークンの払い出しと gh api の両方に秒数が渡ること（片方だけでは固まる）"""
+        kb = load_kb()
+        seen = {}
+
+        def ensure(pj, repo="", log=None, timeout=None):
+            seen["token"] = timeout
+            os.environ["GH_TOKEN"] = "x"
+            return None
+
+        def branch_sha(repo, branch, timeout=None):
+            seen["api"] = timeout
+            return SHA, None
+
+        self.addCleanup(setattr, kb.gh, "ensure_gh_token", kb.gh.ensure_gh_token)
+        self.addCleanup(setattr, kb.gh, "branch_sha", kb.gh.branch_sha)
+        self.addCleanup(os.environ.pop, "GH_TOKEN", None)
+        kb.gh.ensure_gh_token, kb.gh.branch_sha = ensure, branch_sha
+        kb._GH_TOKENS.clear(); kb.GH_AMBIENT = ""
+        sha, why = kb.fetch_base_sha(PJ)
+        self.assertEqual((sha, why), (SHA, None))
+        self.assertTrue(seen.get("token"), "トークンの払い出しに上限が掛かっていない")
+        self.assertTrue(seen.get("api"), "gh api に上限が掛かっていない")
+
+
 class BriefHarness(unittest.TestCase):
     """build_prompt() だけを組み立てて読む土台（VM も claude も要らない）"""
 
@@ -230,6 +318,16 @@ class StalenessInTheBriefTest(BriefHarness):
         same = self.brief(refs={"base_sha": SHA}, state={"base_sha": SHA, "base_distance": 0})
         self.assertEqual(same, self.brief())
         self.assertNotIn("- 注意: この票の行番号", same)
+
+    def test_a_value_that_is_not_a_sha_never_reaches_the_brief(self):
+        """通常は kb が形を検査してから渡すが、手で起こした run でも読めない値を依頼文に書かない（554 のレビュー指摘 3）"""
+        self.assertIsNone(run.base_sha_or_none("not-a-sha-xxx"))
+        self.assertIsNone(run.base_sha_or_none(""))
+        self.assertIsNone(run.base_sha_or_none(None))
+        self.assertEqual(run.base_sha_or_none(" " + SHA.upper() + " "), SHA)
+        bad = self.brief(refs={"base_sha": "not-a-sha-xxx"}, state={"base_distance": 51})
+        self.assertEqual(bad, self.brief())
+        self.assertNotIn("not-a-sha", bad)
 
     def test_a_ticket_without_a_stamp_reads_exactly_as_before(self):
         """完了条件「既存票（sha を持たない）でも起動が壊れない」——欠損時は警告を出さないだけ"""

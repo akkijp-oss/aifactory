@@ -186,6 +186,7 @@ def parse_issue_access(v):
 
 
 BASE_SHA = re.compile(r"[0-9a-f]{7,40}")
+GH_TIMEOUT = 10   # 起票時の base sha を GitHub に聞く上限（秒）。トークンの払い出しと gh api の両方に掛ける（554）
 
 
 def parse_base_sha(v):
@@ -297,10 +298,18 @@ def cmd_new(a):
     # 形の検査は本文ファイルを作る前に（読めない値で書きかけの .md を残さない。554）
     stamped = getattr(a, "base_sha", None) is not None
     stamp = parse_base_sha(getattr(a, "base_sha", None))
+    # 本文が引用するコードが「いつ時点のものか」を機械が刻む（554）。明示 > 自動取得 > 刻まない。
+    # ★GitHub に聞くのは id を採番（db() の SELECT MAX(id)）する前。採番と INSERT の間にネットワーク（数秒）を挟むと
+    # 　同時起票が同じ id を採る窓がその分だけ広がり、片方が UNIQUE 違反で落ちて孤児の .md が残る
+    base_sha = stamp if stamped else new_base_sha(a.pj)
     body = ""
     if a.body == "-": body = sys.stdin.read()
     elif a.body: body = pathlib.Path(a.body).read_text(encoding="utf-8")
     c = db()
+    # 採番（SELECT MAX(id)）から INSERT までを 1 本の書き込みトランザクションにする。
+    # 並んで走る kb（intake と MCP と人手は同時に起票しうる）が同じ id を採って片方が落ちる窓を閉じる。
+    # 待つのは sqlite の busy timeout（既定 5 秒）で、この区間はネットワークを含まないので ms で終わる
+    c.execute("BEGIN IMMEDIATE")
     if a.id is not None:
         tid = int(a.id)
         if tid < MIN_ID: die(f"id は {MIN_ID} 以上（3 桁以上）")
@@ -310,18 +319,17 @@ def cmd_new(a):
         tid = max((m or 0) + 1, MIN_ID)
     file = TICKETS / f"{tid}-{a.pj}-{slugify(a.title) if slugify(a.title) != 'ticket' else a.kind}.md"
     if file.exists(): die(f"{file} が既にある")
-    write_ticket(file, a.title, body, a.pr)
     t = now()
     deps = parse_depends(getattr(a, "depends", None), tid)
     # 外部 issue（取得可否つき）と内部票番号は別の列に入れる（556 / ADR-0084）
     issue, access = issue_fields(getattr(a, "issue", None), getattr(a, "issue_access", None))
     issue, access = parse_issue_url(issue), parse_issue_access(access)
     rel = parse_ids(getattr(a, "ticket", None), tid, "--ticket")
-    # 本文が引用するコードが「いつ時点のものか」を機械が刻む（554）。明示 > 自動取得 > 刻まない
-    base_sha = stamp if stamped else new_base_sha(a.pj)
     c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated, depends_on,"
               " related_issue, related_issue_access, related_ticket, base_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps, issue, access, rel, base_sha))
+    # 本文を書くのは台帳に載せてから（途中で落ちても、どの票のものでもない .md を残さない）
+    write_ticket(file, a.title, body, a.pr)
     record(c, tid, "status", None, a.status)
     if deps: record(c, tid, "depends_on", None, deps)
     for k, v in (("related_issue", issue), ("related_issue_access", access), ("related_ticket", rel), ("base_sha", base_sha)):
@@ -726,9 +734,10 @@ def fetch_base_sha(pj):
     if not repo: return None, f"{pj} の project.yml に repo が無い"
     branch = base_branch_for(pj)
     if not branch: return None, f"{pj} の project.yml に base_branch が無い"
-    why = gh_ready(pj)
+    # トークンの払い出しにも上限を掛ける（起票は人が待っている。gh api の脚だけに掛けても sandbox が固まれば止まる）
+    why = gh_ready(pj, timeout=GH_TIMEOUT)
     if why: return None, f"GH_TOKEN を用意できない: {why}"
-    sha, why = gh.branch_sha(repo, branch)
+    sha, why = gh.branch_sha(repo, branch, timeout=GH_TIMEOUT)
     if why: return None, f"gh api repos/{repo}/commits/{branch} が失敗: {why}"
     return sha, None
 
@@ -903,17 +912,18 @@ def warn(msg):
     print(f"[kb] warn: {msg}", file=sys.stderr)
 
 
-def gh_ready(pj):
+def gh_ready(pj, timeout=None):
     """この PJ の repo に対して `gh` を使えるようにする。戻り: 使えない理由（使えるなら None）。
 
     GitHub App のトークンは PJ のリポジトリ限定（ADR-0008 / ADR-0030）なので、--all-review で PJ を跨ぐときに
-    前の PJ のトークンを使い回さない。払い出しは 1 PJ 1 回だけ（失敗も覚えて何度も sandbox を呼ばない）"""
+    前の PJ のトークンを使い回さない。払い出しは 1 PJ 1 回だけ（失敗も覚えて何度も sandbox を呼ばない）。
+    `timeout`（秒）は人を待たせる経路（起票。554）だけが渡す——`sandbox` が固まっても kb new を止めない"""
     if GH_AMBIENT:
         os.environ["GH_TOKEN"] = GH_AMBIENT
         return None
     if pj not in _GH_TOKENS:
         os.environ.pop("GH_TOKEN", None)
-        why = gh.ensure_gh_token(pj)
+        why = gh.ensure_gh_token(pj, timeout=timeout)
         _GH_TOKENS[pj] = (os.environ.get("GH_TOKEN") or "", why)
     token, why = _GH_TOKENS[pj]
     if why:

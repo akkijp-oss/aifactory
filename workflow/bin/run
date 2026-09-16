@@ -178,6 +178,18 @@ def ensure_gh_token(pj, repo=""):
     return gh.ensure_gh_token(pj, repo, log=lambda m: print(f"[run] {m}", flush=True))
 
 
+# 票が刻んだ起票時の base sha（kb の base_sha 列）の形。console の config 編集が使う `base_sha256`（版ハッシュ）とは別物
+BASE_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+
+def base_sha_or_none(v):
+    """`--base-sha=` の値を正規化する（554）。形が違えば None ＝ 受け取らない。
+
+    通常は kb が検査してから渡すが、手で起こした run でも読めない値を依頼文や git に届かせない"""
+    sha = (v or "").strip().lower()
+    return sha if BASE_SHA.fullmatch(sha) else None
+
+
 def stream(cmd, log_path, render=None, env=None):
     """子プロセスの出力を 1 行ずつ log_path に流す（console が追い読みできる）。render(line) が与えられれば、その戻り値
     （None なら書かない）を書く。戻り: (rc, 書いた全文)。step の途中経過を見えるようにするため（2026-09-06）"""
@@ -745,17 +757,14 @@ class Run:
         self.push_attachments()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
 
-    # 票が刻んだ起票時の base sha（kb の base_sha 列）の形。console の config 編集が使う `base_sha256`（版ハッシュ）とは別物
-    BASE_SHA = re.compile(r"[0-9a-f]{7,40}")
-
     def measure_base_distance(self):
         """起票時の base sha から今の origin/<base> まで何 commit 進んだかを測って記録する（554）。
 
         測れるのは base を fetch した後の VM の中だけ（制御系は PJ の clone を持たない）。
         浅い fetch や force-push で sha を辿れないことがあるので、**失敗は距離 null**（＝分からない）にする——
         0 に丸めると「ずれていない」と読めてしまい、この票が塞ごうとした事故そのものになる"""
-        sha = (self.refs.get("base_sha") or "").strip().lower()
-        if not sha or not self.BASE_SHA.fullmatch(sha): return
+        sha = base_sha_or_none(self.refs.get("base_sha"))
+        if not sha: return
         self.state["base_sha"] = sha
         out = self.sb(f"cd $SANDBOX_APP_DIR && git rev-list --count {shlex.quote(sha)}..origin/{self.base}", check=False).strip()
         last = out.splitlines()[-1].strip() if out.splitlines() else ""
@@ -998,7 +1007,7 @@ class Run:
 
         起票時の base sha を持たない票と、距離 0（base が進んでいない）の票では 1 行も足さない——
         依頼文は既に長い。読み替えが要らない run に注意書きを増やさない"""
-        sha = self.state.get("base_sha") or self.refs.get("base_sha") or ""
+        sha = base_sha_or_none(self.state.get("base_sha") or self.refs.get("base_sha"))
         if not sha: return []
         n = self.state.get("base_distance")
         if n is None:
@@ -1566,7 +1575,9 @@ if __name__ == "__main__":
         if f.startswith("--issue-access="): refs["issue_access"] = f.split("=", 1)[1]
         elif f.startswith("--issue="): refs["issue"] = f.split("=", 1)[1]
         elif f.startswith("--ticket="): refs["ticket"] = f.split("=", 1)[1]
-        elif f.startswith("--base-sha="): refs["base_sha"] = f.split("=", 1)[1]
+        # 起票時の base sha は kb が形を検査してから渡すが、手で起こした run でも同じ形だけを通す（554）。
+        # 通らない値は refs に入れない＝距離も測らず注意行も出さない（読めない sha を依頼文に書かない）
+        elif f.startswith("--base-sha="): refs["base_sha"] = base_sha_or_none(f.split("=", 1)[1])
         elif f in ("--issue", "--issue-access", "--ticket", "--base-sha"): die(f"{f}=<値> の形で指定すること")
         elif f == "--wait": wait_s = 3600
         elif f.startswith("--wait="): wait_s = int(f.split("=", 1)[1])

@@ -183,7 +183,8 @@ carries "as of when" and the run is told (ADR-0089).
 - `base_sha` is the **tip commit of the target project's `base_branch`** (not a sha of aifactory itself). `kb new`
   fetches it with `gh api repos/<repo>/commits/<base_branch>`. It is not a value a human writes into the body.
 - When it cannot be fetched (no `repo` / `base_branch`, no token, no `gh`, no answer within 10 seconds, an answer that is
-  not a sha) the stamp is simply **not written**. Filing still succeeds and one line,
+  not a sha) the stamp is simply **not written**. The ten-second cap covers **both** legs — issuing the token and the
+  `gh api` call — so filing never waits on either of them hanging. Filing still succeeds and one line,
   `[kb] warn: base sha を記録できなかった: …`, goes to standard error. That marker is distinct from the capability
   warning `[kb] warning:` that `ticket_new` collects into `warnings[]`.
 - Passing `--base-sha SHA` skips GitHub entirely (7-40 hex digits; anything else is refused).

@@ -16,15 +16,20 @@ def scrub(text):
     return "\n".join(l for l in text.splitlines() if not SECRET_LINE.search(l))
 
 
-def ensure_gh_token(pj, repo="", log=None):
+def ensure_gh_token(pj, repo="", log=None, timeout=None):
     """`gh` を使う前に GH_TOKEN を用意する。空なら GitHub App（ADR-0008）から PJ のリポジトリ限定の
     1 時間トークンを払い出して自分の env に入れる（子プロセスの gh も継承する）。
-    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）"""
+    戻り: 払い出せなかった理由（既にある / 払い出せたときは None）。トークンの値はログにも記録にも出さない（チケット 249）
+
+    `timeout`（秒）を渡すと上限を超えた払い出しを諦めて理由にする（既定は None ＝ 無期限で、既存の呼び手の挙動は変えない）。
+    人を待たせる経路——`kb new` の起票（554）——だけが秒数を渡す。`sandbox` が固まっても console / MCP / intake を止めない"""
     if os.environ.get("GH_TOKEN"): return None
     try:
-        r = subprocess.run(["sandbox", "gh-app", "token", pj], text=True, capture_output=True, errors="replace")
+        r = subprocess.run(["sandbox", "gh-app", "token", pj], text=True, capture_output=True, errors="replace", timeout=timeout)
     except OSError as e:      # sandbox が PATH に無い環境（この VM / CI）。落とさず理由にする
         return scrub(str(e))[-500:]
+    except subprocess.TimeoutExpired:
+        return f"{timeout}s で応答が無い"
     token = ([l.strip() for l in (r.stdout or "").splitlines() if l.strip()] or [""])[-1]
     if r.returncode != 0 or not token:
         return (scrub(r.stderr or "").strip() or f"rc={r.returncode}")[-500:]

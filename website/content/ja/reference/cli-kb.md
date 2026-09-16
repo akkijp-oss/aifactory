@@ -176,7 +176,8 @@ kb show 554                                             # base_sha
 - `base_sha` は**対象 PJ の `base_branch` の tip commit**です（aifactory 自身の sha ではありません）。
   `kb new` が `gh api repos/<repo>/commits/<base_branch>` で自動取得します。人が本文に書く値ではありません。
 - 取得できないとき（`repo` / `base_branch` が未定義、トークンを払い出せない、`gh` が無い、10 秒で応答が無い、
-  応答が sha に読めない）は**刻まないだけ**です。起票は成功し、`[kb] warn: base sha を記録できなかった: …` が
+  応答が sha に読めない）は**刻まないだけ**です。10 秒の上限はトークンの払い出しと `gh api` の**両方**に掛かるので、
+  どちらが固まっても起票は待たされません。起票は成功し、`[kb] warn: base sha を記録できなかった: …` が
   標準エラーに 1 行出ます。この印は能力照合の `[kb] warning:`（`ticket_new` が `warnings[]` に拾うもの）とは別です。
 - `--base-sha SHA` を書くと GitHub には聞きに行きません（16 進 7〜40 桁。読めない値は断ります）。
   `kb set <id> --base-sha ''` で消せます。変更は `kb history` に残ります。
