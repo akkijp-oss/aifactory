@@ -38,11 +38,14 @@ The *Keys* screen shows, above the table, the **remaining quota** of every key: 
 ```bash
 sandbox/bin/install.sh --systemd                 # register the timer (once, after ctl-update; installed with the other timers)
 python3 lib/aifactory_keys_quota.py probe --full # probe now (same as *Probe now* on the Keys screen)
+python3 lib/aifactory_keys_quota.py probe --wait 120  # wait up to 120 s if the timer is mid-round, then probe
 python3 lib/aifactory_keys_quota.py show         # remaining % and time to reset per key and window
 journalctl -u aifactory-keys-probe               # the timer's log
 ```
 
-- A key marked "authentication refused" has expired. Replace it with `sandbox keys token <name>`; the next probe reads it again.
+- The timer, *Probe now* and a local `probe` never overlap: rounds run one at a time (ADR-0090). A `probe` that hits a running round says another probe is in progress and exits without sending anything (this is not a failure); *Probe now* queues behind the timer.
+- **"Exhausted" is shown only for a window the API actually refused** (ADR-0090). A window with 1% left is not called exhausted, and small remainders are printed with one decimal (for example 0.5%). The colours are unchanged: red at 10% or less, amber at 25% or less.
+- A key marked "authentication refused" has expired. Replace it with `sandbox keys token <name>`; the next probe reads it again. A replaced key does not inherit the old key's quota or history (even if the last 4 characters of the token are the same).
 - "At this pace, exhausted in about n" extrapolates the average consumption since the window started up to the reset time. Add another key if you are in a hurry.
 - MCP `keys_list` carries the same numbers (`keys[].quota`), so an AI operator can read how much each key has left.
 

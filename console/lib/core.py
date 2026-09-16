@@ -1831,7 +1831,7 @@ def keys_view():
                      "launches": k.get("launches") or 0,
                      "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
     # 残量（利用枠）は keys.json の隣の keys-quota.db から読むだけ（書くのは timer / ジョブの probe。ADR-0087）。
-    # 鍵ごとの quota は {probed, stale, error, windows: [{key: 5h|7d|7d_oi, remaining_pct, reset, start, remain_s, will_exhaust, …}], binding}。
+    # 鍵ごとの quota は {probed, ok, stale, error, windows: [{key: 5h|7d|7d_oi, remaining_pct, reset, start, remain_s, will_exhaust, …}], binding}。
     # まだ観測が無い鍵は None（鍵を足した直後・timer 未登録）
     q = keyq.view(keys_file=path)
     for k in keys: k["quota"] = q["keys"].get(k["name"])
@@ -1839,7 +1839,7 @@ def keys_view():
     return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
             # 用途ごとの候補数。0 の用途を要る run は「鍵なし」で一時停止する（env ファイルの鍵には落ちない。ADR-0060）
             "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")},
-            "quota": {"db_file": q["db_file"], "exists": q["exists"], "error": q["error"], "last_probed": q["last_probed"], "stale": q["stale"],
+            "quota": {"db_file": q["db_file"], "exists": q["exists"], "error": q["error"], "last_probed": q["last_probed"], "last_ok": q["last_ok"], "stale": q["stale"],
                       "cheap_model": q["cheap_model"], "full_model": q["full_model"], "probing": probing}}
 
 
@@ -1851,12 +1851,21 @@ def keys_history_view(hours=24, name=None):
 
 def keys_probe(b=None):
     """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = Fable 許可の鍵は Fable でも叩いて 7d_oi を取る）。
-    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す"""
+    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す。
+
+    二重に起こさない判定は JobStore のロックの中でやる（他の start と同じ書き方。外で running() を見ると、
+    同時に押された 2 つがどちらも「実行中は無い」と読んで 2 本起きる）。JobStore を通らない systemd の timer とは
+    probe 側のファイルロックで排他するので、--wait を付けて timer の後ろに並ばせる（手動は必ず新しい値が欲しい）"""
     b = b or {}
-    for j in JobStore.running():
-        if j.get("kind") == "keys-probe": return {"job": j, "already": True}
-    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"])
-    return {"job": JobStore.start("keys-probe", cmd, "keys probe"), "already": False}
+    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"]) + ["--wait", "120"]
+    busy = lambda j: "残量を調べるジョブが実行中です" if j.get("kind") == "keys-probe" else None   # noqa: E731
+    try:
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
+    except Conflict:
+        j = next((j for j in JobStore.running() if j.get("kind") == "keys-probe"), None)
+        if j: return {"job": j, "already": True}
+        # 判定の直後に終わっていた: 1 回だけやり直す（それでも衝突するなら 409 のまま上げる）
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
 
 
 def keys_apply(b):

@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
-const KEYS = { b: 'board', p: 'pm', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', t: 'stats', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
+const KEYS = { b: 'board', i: 'intake', p: 'pm', r: 'runs', j: 'jobs', l: 'logs', t: 'stats', s: 'sandbox', k: 'keys', c: 'config' };   // g + 頭文字で移動（並びはナビの 3 群と同じ順。? の一覧もこの順に出る）
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
@@ -770,7 +770,8 @@ const QLEN = { '5h': 5 * 3600, '7d': 7 * 86400, '7d_oi': 7 * 86400 };   /* 窓�
 const QCOLORS = ['#0b5d5d', '#6a4fbf', '#b86e00', '#2e7d4f', '#c23b3b', '#3b6fc2'];   /* 推移の線の色（鍵の順）。状態の色ではない */
 const keysChart = { window: '5h', hours: 24 };
 const fmtDurL = s => { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600); return h >= 24 ? tt(T.time.dayHour, { d: Math.floor(h / 24), h: h % 24 }) : fmtDur(s); };
-const qTone = p => p <= 10 ? 'alarm' : p <= 25 ? 'warn' : 'ok';   /* 残量 10% 以下は赤、25% 以下は橙 */
+const qTone = p => p <= 10 ? 'alarm' : p <= 25 ? 'warn' : 'ok';   /* 残量 10% 以下は赤、25% 以下は橙。枯渇の判定ではなく警告色（ADR-0090） */
+const qPct = p => p > 0 && p < 10 ? p.toFixed(1) : String(Math.round(p));   /* 残り 10% 未満は小数 1 桁（0.5% を「0%」と見せない） */
 const authErr = e => /\b(401|403)\b|authentication|permission/.test(e || '');
 function qWindow(w) {
   const remainS = w.reset ? -sec(w.reset) : null, atEnd = remainS != null && remainS <= 0;
@@ -778,7 +779,7 @@ function qWindow(w) {
   const timePct = remainS != null && !atEnd ? Math.max(0, Math.min(100, remainS / QLEN[w.key] * 100)) : null;
   const note = w.exhausted ? tt(T.keys.exhausted, { at: w.reset ? fmtT(w.reset) : '-' }) : atEnd ? T.keys.windowEnd
     : w.will_exhaust ? tt(T.keys.willExhaust, { t: fmtDurL(w.exhaust_in_s) }) : w.status === 'rejected' ? T.keys.statusRejected : w.status === 'allowed_warning' ? T.keys.statusWarn : '';
-  return `<div class="qw"><div class="l"><span>${esc(T.keys.window[w.key] || w.key)}</span><span class="tabular"><b class="pct ${tone}">${esc(tt(T.keys.remaining, { p: Math.round(pct) }))}</b>${remainS != null && !atEnd ? ` <span class="help">${esc(tt(T.keys.resetIn, { t: fmtDurL(remainS) }))}</span>` : ''}</span></div>
+  return `<div class="qw"><div class="l"><span>${esc(T.keys.window[w.key] || w.key)}</span><span class="tabular"><b class="pct ${tone}">${esc(tt(T.keys.remaining, { p: qPct(pct) }))}</b>${remainS != null && !atEnd ? ` <span class="help">${esc(tt(T.keys.resetIn, { t: fmtDurL(remainS) }))}</span>` : ''}</span></div>
     <div class="meter" title="${esc(T.help.quotaBar)}"><i class="${tone}" style="width:${Math.max(pct, pct > 0 ? 2 : 0)}%"></i>${timePct != null ? `<b style="left:${timePct}%"></b>` : ''}</div>
     <div class="l help"><span>${w.start && w.reset ? esc(tt(T.keys.period, { from: fmtT(w.start), to: fmtT(w.reset) })) : ''}</span>${note ? `<span class="${w.exhausted || w.status === 'rejected' ? 'alarm' : 'warn'}">${esc(note)}</span>` : ''}</div></div>`;
 }
@@ -791,7 +792,7 @@ function qCard(k) {
   return `<div class="qcard">${headline}${err}${q.windows.length ? q.windows.map(qWindow).join('') : `<div class="help top">${esc(T.keys.notProbed)}</div>`}${oi}</div>`;
 }
 /* 一覧の「残量」列: いちばん逼迫している窓だけ（詳しくは上のカード） */
-const qCell = k => { const b = k.quota && k.quota.binding; if (!b) return `<span class="help">${esc(k.quota && k.quota.error ? T.keys.unreadable : T.keys.notProbedShort)}</span>`; return `<b class="pct ${qTone(b.remaining_pct)}">${Math.round(b.remaining_pct)}%</b><div class="help nw">${esc(T.keys.window[b.key] || b.key)}</div>`; };
+const qCell = k => { const b = k.quota && k.quota.binding; if (!b) return `<span class="help">${esc(k.quota && k.quota.error ? T.keys.unreadable : T.keys.notProbedShort)}</span>`; const p = b.exhausted ? 0 : b.remaining_pct; return `<b class="pct ${qTone(p)}">${qPct(p)}%</b><div class="help nw">${esc(T.keys.window[b.key] || b.key)}</div>`; };
 function quotaPanel(d) {
   const q = d.quota;
   const status = q.probing ? `<a href="#/job/${esc(q.probing)}"><span class="dot pulse"></span>${esc(T.keys.probing)}</a>` : q.last_probed ? `${esc(tt(T.keys.lastProbed, { t: since(q.last_probed) }))}${q.stale ? ` <span class="alarm">${esc(T.keys.stale)}</span>` : ''}` : '';
@@ -1647,7 +1648,11 @@ const scrollPos = {};
 async function route() {
   const h = location.hash || '#/board'; if (lastRoute) scrollPos[lastRoute] = window.scrollY;
   prevRoute = lastRoute; lastRoute = h; clearInterval(timer);
-  document.querySelectorAll('.rail a[data-nav]').forEach(a => a.classList.toggle('active', h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'))));
+  document.querySelectorAll('.rail a[data-nav]').forEach(a => {
+    const on = h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'));
+    a.classList.toggle('active', on);
+    on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');   /* 選択中は色だけでなく支援技術にも伝える */
+  });
   const [path, q] = h.slice(1).split('?'); const seg = path.split('/').filter(Boolean);
   try {
     if (seg[0] === 'board' || !seg.length) await viewBoard();
