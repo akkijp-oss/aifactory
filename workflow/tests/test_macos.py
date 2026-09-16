@@ -242,7 +242,7 @@ class MacBackendTest(unittest.TestCase):
     def test_automerge_step_is_accepted_with_or_without_auto_merge(self):
         # ADR-0042 で全 workflow に automerge step が入った。auto_merge の無い PJ では runner が工程ごと飛ばし、
         # auto_merge のある PJ では guest の中で kit の script を走らせる（チケット 386）。どちらも起動前に拒否しない
-        # （asura #381 は auto_merge を書いた途端に起動前 ValueError で落ちていた）
+        # （#381 の PJ は auto_merge を書いた途端に起動前 ValueError で落ちていた）
         class Base:
             def __init__(self,wf,auto_merge=None):
                 self.wf=wf;self.project={'app_dir':'/Users/admin/app','worker':'mac1'}
