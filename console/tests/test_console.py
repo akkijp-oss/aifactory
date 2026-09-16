@@ -2137,6 +2137,30 @@ class ApiTest(unittest.TestCase):
         self.assertIsNone(v["ticket"]["depends_on"])
         self.assertTrue(any(h["field"] == "depends_on" and h["old"] == "903,904" and not h["new"] for h in v["history"]))
 
+    # ---- 票の参照 3 列（#556 / ADR-0084）。値を運ぶだけで、取りに行く / 行かないの規則は役割文書が持つ（#594）
+    def test_ticket_reference_columns_are_written_and_read_back_through_the_api(self):
+        issue = "https://github.com/akkijp/kumitate/issues/393"
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "chore", "title": "後続: 参照の往復",
+                                                "body": "x\n\n## 完了条件\n- y", "related_issue": issue,
+                                                "related_ticket": [521, 556]})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(v["ticket"]["related_issue"], issue)
+        self.assertEqual(v["ticket"]["related_issue_access"], "unreadable")   # 既定は安全側（kb が正本）
+        self.assertEqual(v["ticket"]["related_ticket"], "521,556")
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue_access": "readable"})
+        self.assertEqual(st, 200, d)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["related_issue_access"], "readable")
+        # note / depends_on と同じ扱い: キーが無ければ触らない / 空文字列で消す
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["related_ticket"], "521,556")
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue": ""})[0], 200)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertIsNone(v["ticket"]["related_issue"]); self.assertIsNone(v["ticket"]["related_issue_access"])
+        self.assertEqual(v["ticket"]["related_ticket"], "521,556")            # 別の列なので道連れにしない
+        # 値の形の検査は kb が正本（内部票番号を外部 issue の欄に書けない）
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue": "393"})[0], 400)
+
     def test_ticket_depends_on_refuses_what_it_cannot_read_as_ticket_numbers(self):
         """票番号として読めない値は断る（後で読む側が推測しないで済むように、書く側で締める）"""
         tid = self.todo_id()

@@ -667,6 +667,36 @@ class McpTest(unittest.TestCase):
         err, r = self.c.tool("ticket_action", id=tid, action="set", status="todo"); self.assertFalse(err, r)
         self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["depends_on"], "3")
 
+    def test_32_the_reference_columns_are_written_and_read_back(self):
+        """票の参照 3 列（#556）も MCP から書けて読める。スキーマに無いと #585 の検査が入口で弾く（#594）"""
+        issue = "https://github.com/akkijp/kumitate/issues/393"
+        err, r = self.c.tool("ticket_new", pj=PJ, kind="research", title="調査: mcp から参照を書く",
+                             body="x\n\n## 完了条件\n- y", related_ticket="521")
+        self.assertFalse(err, r); tid = r["id"]
+        self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["related_ticket"], "521")
+        err, r = self.c.tool("ticket_action", id=tid, action="set", related_issue=issue,
+                             related_issue_access="readable", related_ticket="521,556")
+        self.assertFalse(err, r)
+        t = self.c.tool("ticket_show", id=tid)[1]["ticket"]
+        self.assertEqual(t["related_issue"], issue)
+        self.assertEqual(t["related_issue_access"], "readable")
+        self.assertEqual(t["related_ticket"], "521,556")
+        # note / depends_on と同じ扱い: キーを渡さなければ触らない / 空文字列で消す
+        err, r = self.c.tool("ticket_action", id=tid, action="set", status="todo"); self.assertFalse(err, r)
+        self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["related_ticket"], "521,556")
+        err, r = self.c.tool("ticket_action", id=tid, action="set", related_ticket=""); self.assertFalse(err, r)
+        self.assertIn(self.c.tool("ticket_show", id=tid)[1]["ticket"]["related_ticket"], (None, ""))
+        # ただし取得可否だけを空文字列にはできない（kb の --issue-access は 2 語しか取らない。URL ごと --issue '' で消す）
+        err, msg = self.c.tool("ticket_action", id=tid, action="set", related_issue_access="")
+        self.assertTrue(err, msg); self.assertIn("issue-access", msg)
+        err, r = self.c.tool("ticket_action", id=tid, action="set", related_issue=""); self.assertFalse(err, r)
+        t = self.c.tool("ticket_show", id=tid)[1]["ticket"]
+        self.assertIn(t["related_issue"], (None, ""))
+        self.assertIn(t["related_issue_access"], (None, ""))   # URL を消すと可否も一緒に消える
+        # 値の形の検査は kb が正本（内部票番号を外部 issue の欄に書けない）
+        err, msg = self.c.tool("ticket_action", id=tid, action="set", related_issue="393")
+        self.assertTrue(err, msg); self.assertIn("--ticket", msg)
+
     def test_31_missing_required_key_is_rejected(self):
         """required も宣言だけにしない。欠けたキー名が文言に出る"""
         err, msg = self.c.tool("ticket_show"); self.assertTrue(err); self.assertIn("id", msg)

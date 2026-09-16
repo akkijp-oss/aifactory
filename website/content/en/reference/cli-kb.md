@@ -153,6 +153,10 @@ body** (ADR-0084).
   token injected into a sandbox gets 403 (`Resource not accessible by integration`) from the GitHub issues API, so not
   fetching a reference nobody has confirmed is the safe side. The researcher role brief carries the same line, so **a
   run does not fetch an issue URL even when the ticket body contains one; it works from the body and the code**.
+- `kb run` passes the values to the runner, which prints **one or two lines right after the `## チケット` section**
+  of every prompt (`related_issue_access` becomes one phrase: do not fetch it / you may fetch it). A ticket with
+  empty columns gets no such line. Only the values travel; the rule itself stays in the role file
+  (see [run's `--issue` / `--issue-access` / `--ticket`](cli-run.md)).
 - Neither the numbers nor the URLs are checked for existence. A ticket cannot name itself in `--ticket`.
 - **The free text of the body is never interpreted.** Existing tickets with a URL in the body are not migrated; new
   tickets are the ones that get structured. A `kanban.db` that predates the columns gets them added by `kb` on startup.

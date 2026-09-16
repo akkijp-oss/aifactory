@@ -1345,10 +1345,17 @@ def ticket_action(tid, b):
         if "depends_on" in b and b["depends_on"] is not None:
             dep = b["depends_on"]
             args += ["--depends", ",".join(str(x) for x in dep) if isinstance(dep, (list, tuple)) else str(dep)]
+        # 票メタの参照（556 の 3 列）も depends_on と同じ扱い。値を渡すだけで、形の検査（URL か・番号か・
+        # 取得可否の語）と既定は kb が正本（594 / ADR-0084）
+        for key, flag in (("related_issue", "--issue"), ("related_issue_access", "--issue-access"), ("related_ticket", "--ticket")):
+            if key in b and b[key] is not None:
+                v = b[key]
+                args += [flag, ",".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v)]
         for k in ("status", "pr", "kind"):
             if b.get(k) not in (None, ""): args += [f"--{k}", b[k]]
         if b.get("run"): args += ["--run", b["run"]]
-        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run / depends_on のどれかを指定してください")
+        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run / depends_on / "
+                                          "related_issue / related_issue_access / related_ticket のどれかを指定してください")
     elif act == "append":
         text = b.get("text")
         if not text or not str(text).strip(): raise ApiError("追記する本文がありません。text に本文を入れてください")
@@ -1459,6 +1466,11 @@ def ticket_new(b):
     dep = b.get("depends_on")
     if isinstance(dep, (list, tuple)): dep = ",".join(str(x) for x in dep)
     if dep: args += ["--depends", str(dep)]                   # 形の検査（数字か・自分自身か）は kb の parse_depends が正本
+    # 参照の 3 列（556）。起票のときから書ける。値の形と既定は kb が正本（594）
+    for key, flag in (("related_issue", "--issue"), ("related_issue_access", "--issue-access"), ("related_ticket", "--ticket")):
+        v = b.get(key)
+        if isinstance(v, (list, tuple)): v = ",".join(str(x) for x in v)
+        if v: args += [flag, str(v)]
     rc, out, err = kb(*args, stdin=b.get("body") or "")
     if rc != 0: raise ApiError((err or out).strip() or f"kb new が失敗 rc={rc}")
     tid = int(out.split()[0]) if out.split() and out.split()[0].isdigit() else None
