@@ -23,6 +23,10 @@ FIELD = "files"                      # console/bin/console の parse_multipart �
 HEADER_BAD = re.compile(r"[\x00-\x1f\x7f]")   # ヘッダーに直接書けない文字。名前そのものの締めは保存側（lib）が行う
 
 
+class Fail(Exception):
+    """利用者に見せる 1 行の理由（合言葉・ヘッダ・中身は入れない）"""
+
+
 def read_env_file(path=CONF):
     """KEY=VALUE を dict にするだけ（console/lib/core.py の read_ctl_env と同じ流儀）。値は出力しない。
        この CLI は手元の端末で動く＝ ctl の checkout を前提にできないので、core を import せず自前で読む"""
@@ -80,10 +84,6 @@ def read_files(paths):
         try: files.append((p.name, p.read_bytes()))
         except OSError as e: raise Fail(f"ファイルを読めません: {p}（{e.strerror or type(e).__name__}）")
     return files
-
-
-class Fail(Exception):
-    """利用者に見せる 1 行の理由（合言葉・ヘッダ・中身は入れない）"""
 
 
 def post(url, tid, files, token=None, timeout=300):
