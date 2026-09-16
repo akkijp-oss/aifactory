@@ -790,8 +790,12 @@ class Run:
                "for d in %s; do [ -d \"$d\" ] && find \"$d\" -mindepth 1 -printf '%%y\\t%%s\\t%%p\\0'; done; exit 0")
 
     def ssh_bytes(self, cmd, stdin=b"", timeout=120):
-        """VM で 1 コマンド走らせて stdout を bytes で受ける（`sh()` は text なので tar を通せない）"""
-        return subprocess.run(["ssh", *self.scp_opts(), f"dev@{self.vm_ip()}", cmd],
+        """VM で 1 コマンド走らせて stdout を bytes で受ける（`sh()` は text なので tar を通せない）。
+
+        経路は **`sandbox ssh`**（`sb()` / `run_remote()` と同じ）。`ssh` を直に呼ぶと VM への入り方が
+        2 通りになり、`~/.config/sandbox/env` の `SB_JUMP`（CLI だけが読む）を迂回するうえ、
+        PATH の偽 `sandbox` で VM を模す test が本物の ssh を掴んで timeout ぶん止まる"""
+        return subprocess.run(["sandbox", "ssh", self.task, cmd],
                               input=stdin, capture_output=True, timeout=timeout)
 
     def artifact_error(self, why):

@@ -2,9 +2,11 @@
 
   python3 -m unittest discover -s workflow/tests -v
 
-VM も claude も使わない。一時 dir を「VM の中」に見立て、PATH の先頭に偽の `ssh` / `sandbox` を置いて
-**本物の** `Run.collect_artifacts()` / `Run.release()` を回す（偽 ssh は最後の引数のコマンド中の `/home/dev` を
-`$VMROOT` に読み替えて bash に渡すだけなので、列挙の `find` も取得の `tar` も本物が動く）。
+VM も claude も使わない。一時 dir を「VM の中」に見立て、PATH の先頭に偽の `sandbox` を置いて
+**本物の** `Run.collect_artifacts()` / `Run.release()` を回す（偽 `sandbox ssh` は受け取ったコマンド中の
+`/home/dev` を `$VMROOT` に読み替えて bash に渡すだけなので、列挙の `find` も取得の `tar` も本物が動く）。
+VM への口は他の test と同じ `sandbox ssh` 1 本に揃える（`ssh` を直に呼ぶと、PATH の偽 `sandbox` で VM を
+模している他の test が本物の ssh を掴んで timeout ぶん止まる）。
 
 見るのはチケットの完了条件そのもの:
 - `work/` 直下の `*.md` と画像、`gates/` と `attachments/` の中身が **同じ相対パス・同じバイト列**で届く
@@ -31,13 +33,13 @@ spec = importlib.util.spec_from_loader("artifacts_run", importlib.machinery.Sour
 run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run)
 
-FAKE_SSH = r"""#!/usr/bin/env bash
-if [ -n "$FAKE_SSH_RC" ]; then echo "ssh: connect to host 10.77.1.1 port 22: Connection refused" >&2; exit "$FAKE_SSH_RC"; fi
-cmd="${@: -1}"
-exec bash -c "${cmd//\/home\/dev/$VMROOT}"
-"""
-
+# 偽 sandbox。`ssh` は受け取ったコマンド中の `/home/dev` を `$VMROOT` に読み替えて bash に渡すだけなので、
+# 列挙の `find` も取得の `tar` も本物が動く。`release` 等はログに残すだけ（VM を返したかを test が見る）
 FAKE_SANDBOX = r"""#!/usr/bin/env bash
+if [ "$1" = ssh ]; then
+  if [ -n "$FAKE_SSH_RC" ]; then echo "ssh: connect to host 10.77.1.1 port 22: Connection refused" >&2; exit "$FAKE_SSH_RC"; fi
+  shift 2; exec bash -c "${1//\/home\/dev/$VMROOT}"
+fi
 echo "$@" >> "$VMROOT/sandbox.log"
 """
 
@@ -48,7 +50,7 @@ class ReleaseArtifactsTest(unittest.TestCase):
         self.ws = pathlib.Path(d.name)
         self.vm = self.ws / "vm"; self.vm.mkdir()
         self.bin = self.ws / "bin"; self.bin.mkdir()
-        for name, body in (("ssh", FAKE_SSH), ("sandbox", FAKE_SANDBOX)):
+        for name, body in (("sandbox", FAKE_SANDBOX),):
             f = self.bin / name; f.write_text(body, encoding="utf-8"); f.chmod(0o755)
         old = {k: os.environ.get(k) for k in ("PATH", "VMROOT", "FAKE_SSH_RC")}
         os.environ.update(VMROOT=str(self.vm), PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}")
