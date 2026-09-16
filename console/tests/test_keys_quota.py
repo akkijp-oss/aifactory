@@ -102,6 +102,11 @@ class StoreTest(unittest.TestCase):
     def snap(self, headers, ts=NOW, model="m"):
         return kq.probe_key("tok", model, request=responder(200, headers), now=ts)
 
+    def fail(self, ts=NOW, status=500, *, net=False):
+        """読めなかった回のスナップ（窓は空・error だけ入る）"""
+        r = responder(error=urllib.error.URLError("boom")) if net else responder(status, {}, body=b"{}")
+        return kq.probe_key("tok", "m", request=r, now=ts)
+
     def test_full_then_cheap_keeps_oi(self):
         self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
         r = self.st.row("a"); self.assertEqual(r["w7d_oi_util"], 0.54); self.assertEqual(r["w7d_oi_ts"], NOW)
@@ -124,6 +129,50 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(r["error"], "HTTP 500"); self.assertEqual(r["probed_ts"], NOW + 60); self.assertEqual(r["ok_ts"], NOW)
         self.assertEqual(r["w5h_util"], 0.23, "失敗した回は窓の値を触らない")
         self.assertEqual(len(self.st.history(since=0)), 6, "失敗した回は履歴に行を足さない（実測 3 + 始点 3）")
+
+    def test_stale_follows_last_success_not_last_attempt(self):
+        """成功 → 連続失敗: probed_ts は毎回新しくなるが、古いのは残量の値なので stale は ok_ts 基準（#616）"""
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
+        for bad in (self.fail(NOW + 300, 500), self.fail(NOW + 600, 401), self.fail(NOW + 900, net=True), self.fail(NOW + 1200, 500)):
+            self.st.record("a", "1234", bad)
+        r = self.st.row("a")
+        self.assertEqual(r["probed_ts"], NOW + 1200, "失敗した回でも試行時刻は進む")
+        self.assertEqual(r["ok_ts"], NOW, "最後に読めたのは最初の 1 回だけ")
+        self.assertEqual(r["w5h_util"], 0.23, "表示される値は成功時のまま（据え置き）")
+        s = kq.summarize(r, now=NOW + 1200)
+        self.assertTrue(s["stale"], "成功から 1200 s（> STALE_S）なので古い")
+        self.assertEqual(s["ok"], kq.iso(NOW)); self.assertEqual(s["probed"], kq.iso(NOW + 1200))
+        # 失敗が始まったばかり（成功から 300 s）は古くない
+        self.assertFalse(kq.summarize(r, now=NOW + 300)["stale"])
+
+    def test_never_succeeded_key_is_stale(self):
+        """1 度も読めていない鍵は、試行が何度あっても古い"""
+        self.st.record("a", "1234", self.fail(NOW, 401))
+        r = self.st.row("a")
+        self.assertIsNone(r["ok_ts"]); self.assertEqual(r["probed_ts"], NOW)
+        s = kq.summarize(r, now=NOW)
+        self.assertTrue(s["stale"]); self.assertIsNone(s["ok"])
+        self.assertIsNone(self.st.last_ok_ts(), "成功が 1 度も無ければ last_ok_ts は None")
+
+    def test_last_ok_ts_is_the_newest_success(self):
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
+        self.st.record("b", "5678", self.snap(CHEAP_HEADERS, NOW + 300))
+        self.st.record("b", "5678", self.fail(NOW + 9000, 500))
+        self.assertEqual(self.st.last_probe_ts(), NOW + 9000, "試行はいちばん新しい失敗")
+        self.assertEqual(self.st.last_ok_ts(), NOW + 300, "成功はいちばん新しい ok_ts")
+
+    def test_oi_window_age_is_visible_via_fable_probed(self):
+        """窓ごとの鮮度: 安い回だけ成功が続くと 7d_oi は据え置きのまま古くなる。
+        鍵の stale は 5h / 7d が新鮮なので False で、7d_oi が古いことは fable_probed と ok の差でしか分からない
+        （窓ごとの stale フラグは今の構造には無い。#616 では構造を変えない）"""
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
+        for t in (NOW + 300, NOW + 600, NOW + 900, NOW + 1200):
+            self.st.record("a", "1234", self.snap(CHEAP_HEADERS, t))
+        s = kq.summarize(self.st.row("a"), now=NOW + 1200)
+        self.assertFalse(s["stale"], "5h / 7d は毎回読めているので鍵としては新鮮")
+        self.assertEqual(s["fable_probed"], kq.iso(NOW), "7d_oi は Fable の回でしか更新されない")
+        self.assertEqual(s["ok"], kq.iso(NOW + 1200))
+        self.assertIn("7d_oi", [w["key"] for w in s["windows"]], "据え置きの 7d_oi は出続ける（値は古い）")
 
     def test_history_rows_and_window_start(self):
         self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
@@ -178,6 +227,11 @@ class RunProbeTest(unittest.TestCase):
         self.calls.append((token, model))
         return REAL_PROBE(token, model, request=responder(200, FABLE_HEADERS if model == "fable-m" else CHEAP_HEADERS), now=now)
 
+    def failing_probe(self, token, model, *, base_url, timeout, now):
+        """読めない回（HTTP 500）。probed_ts だけが進む"""
+        self.calls.append((token, model))
+        return REAL_PROBE(token, model, request=responder(500, {}, body=b"{}"), now=now)
+
     def run_(self, mode="auto", now=NOW):
         return kq.run_probe(mode=mode, env=self.env, probe=self.probe, now=now)
 
@@ -230,6 +284,23 @@ class RunProbeTest(unittest.TestCase):
         self.assertEqual(len([p for p in h["points"] if p["status"] != kq.WINDOW_START]), 3)
         self.assertEqual(next(p for p in h["points"] if p["window"] == "7d_oi" and p["status"] != kq.WINDOW_START)["remaining_pct"], 46.0)
 
+    def test_view_stale_follows_last_success(self):
+        """パネル全体（view）の stale も最後に読めた時刻が基準。鍵ごと（summarize）と食い違わないこと（#616）"""
+        self.write([{"name": "f", "token": "tf", "enabled": True, "allow": {"fable": True, "other": True}}])
+        self.run_()                                       # 1 周だけ成功
+        self.probe = self.failing_probe                   # 以後は読めない
+        for t in (NOW + 300, NOW + 600, NOW + 900, NOW + 1200):
+            self.run_(now=t)
+        v = kq.view(env=self.env, now=NOW + 1200)
+        self.assertEqual(v["last_probed"], kq.iso(NOW + 1200), "試行は続いている")
+        self.assertEqual(v["last_ok"], kq.iso(NOW), "読めたのは最初の 1 回だけ")
+        self.assertTrue(v["stale"], "パネル全体が古いと出る")
+        self.assertTrue(v["keys"]["f"]["stale"], "鍵ごとも古いと出る（パネルと食い違わない）")
+        self.assertEqual(v["keys"]["f"]["error"], "HTTP 500")
+        # 失敗が始まったばかり（成功から 300 s）はどちらも古くない
+        v = kq.view(env=self.env, now=NOW + 300)
+        self.assertFalse(v["stale"]); self.assertFalse(v["keys"]["f"]["stale"])
+
     def test_cli_probe_prints_names_only(self):
         self.write([{"name": "a", "token": "tok-secret-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
         env = {**os.environ, **self.env}
@@ -248,6 +319,22 @@ class RunProbeTest(unittest.TestCase):
             with contextlib.redirect_stdout(buf): kq.main(["show"])
         finally: kq.os.environ = real_env
         self.assertIn("5 時間枠", buf.getvalue()); self.assertNotIn("secret", buf.getvalue())
+
+    def test_cli_show_never_read_does_not_print_none(self):
+        """1 度も読めていない鍵で show を出すと、last_ok が None のまま人に出ていた（#616）"""
+        self.write([{"name": "a", "token": "tok-secret-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.probe = self.failing_probe
+        self.run_()
+        real_env, buf = kq.os.environ, io.StringIO()
+        try:
+            kq.os.environ = {**os.environ, **self.env}
+            with contextlib.redirect_stdout(buf): rc = kq.main(["show"])
+        finally: kq.os.environ = real_env
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("None", out, "読めた時刻が無いときに None と出さない")
+        self.assertIn("古い", out, "1 度も読めていないので古いと出る")
+        self.assertNotIn("secret", out)
 
 
 class SummarizeTest(unittest.TestCase):
@@ -286,7 +373,9 @@ class SummarizeTest(unittest.TestCase):
         s = kq.summarize(self.row(w5h_util=None, w7d_util=None, error="HTTP 401 authentication_error", ok_ts=None), now=NOW)
         self.assertEqual(s["windows"], []); self.assertIsNone(s["binding"]); self.assertEqual(s["error"], "HTTP 401 authentication_error")
         self.assertIsNone(kq.summarize(None))
-        self.assertTrue(kq.summarize(self.row(probed_ts=NOW - 1000), now=NOW)["stale"])
+        # stale は「最後に読めた時刻」が基準。試行が新しくても成功が古ければ古い（#616）
+        self.assertTrue(kq.summarize(self.row(probed_ts=NOW, ok_ts=NOW - 1000), now=NOW)["stale"])
+        self.assertFalse(kq.summarize(self.row(probed_ts=NOW - 1000, ok_ts=NOW - 100), now=NOW)["stale"])
 
 
 if __name__ == "__main__":

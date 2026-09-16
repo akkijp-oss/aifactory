@@ -39,7 +39,7 @@ DEFAULT_FULL_MODEL = "claude-fable-5-1"      # 7d_oi はこのモデルでしか
 DEFAULT_FULL_INTERVAL_S = 900                # Fable で叩く間隔（コスト節約のため安い回より長く）
 DEFAULT_KEEP_DAYS = 30
 DEFAULT_BASE_URL = "https://api.anthropic.com"
-STALE_S = 900                                # 最後の観測がこれより古ければ「古い」（timer が 5 分ごとなので 3 回分）
+STALE_S = 900                                # 最後に「読めた」観測がこれより古ければ「古い」（timer が 5 分ごとなので 3 回分）
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS key_quota (
@@ -251,6 +251,11 @@ class Store:
         r = self.c.execute("SELECT MAX(probed_ts) AS t FROM key_quota").fetchone()
         return r["t"] if r else None
 
+    def last_ok_ts(self):
+        """最後にヘッダが読めた時刻（試行ではなく成功）。鮮度の判定はこちらを使う（#616）"""
+        r = self.c.execute("SELECT MAX(ok_ts) AS t FROM key_quota").fetchone()
+        return r["t"] if r else None
+
     def history(self, hours=24, name=None, since=None):
         """probed_ts 昇順（同秒は id 順）。since を渡せば hours より優先"""
         lo = since if since is not None else now_ts() - hours * 3600
@@ -346,8 +351,10 @@ def summarize(row, now=None):
         windows.append(window_summary(float(u), row.get(col + "_reset_ts"), row.get(col + "_status"), k, now))
     live = [w for w in windows if not w["at_window_end"]] or windows
     binding = min(live, key=lambda w: w["remaining_pct"]) if live else None
-    probed_ts = row.get("probed_ts")
-    return {"probed": iso(probed_ts), "ok": iso(row.get("ok_ts")), "stale": probed_ts is None or now - float(probed_ts) > STALE_S,
+    probed_ts, ok_ts = row.get("probed_ts"), row.get("ok_ts")
+    # stale は「最後に読めた時刻（ok_ts）」が基準。試行時刻（probed_ts）だと失敗が続く間も新鮮に見え、
+    # 据え置きの古い残量を「新しい」と言ってしまう（#616）
+    return {"probed": iso(probed_ts), "ok": iso(ok_ts), "stale": ok_ts is None or now - float(ok_ts) > STALE_S,
             "model": row.get("model"), "http_status": row.get("http_status"), "error": row.get("error"),
             "status": row.get("status"), "claim": row.get("claim"), "overage_status": row.get("overage_status"), "overage_reason": row.get("overage_reason"),
             "fable_probed": iso(row.get("w7d_oi_ts")), "windows": windows,
@@ -355,21 +362,24 @@ def summarize(row, now=None):
 
 
 def view(keys_file=None, db_file=None, *, env=None, now=None):
-    """読むだけ（console / MCP 用）: 名前 → summarize。DB が無ければ exists: False"""
+    """読むだけ（console / MCP 用）: 名前 → summarize。DB が無ければ exists: False。
+    パネル全体の stale も鍵ごとと同じく「最後に読めた時刻」が基準（食い違わせない。#616）"""
     env = os.environ if env is None else env
     kp = pathlib.Path(keys_file) if keys_file else keys_path(env)
     dp = pathlib.Path(db_file) if db_file else quota_db_path(kp, env)
     now = now if now is not None else now_ts()
-    out = {"db_file": str(dp), "exists": dp.exists(), "error": None, "last_probed": None, "stale": True, "keys": {},
+    # last_probed = 最後に試みた時刻、last_ok = 最後に読めた時刻。stale は last_ok が基準（#616）
+    out = {"db_file": str(dp), "exists": dp.exists(), "error": None, "last_probed": None, "last_ok": None, "stale": True, "keys": {},
            "cheap_model": settings(env)["cheap_model"], "full_model": settings(env)["full_model"]}
     if not dp.exists(): return out
     try:
         st = Store(dp, read_only=True)
         try:
             for name, row in st.current().items(): out["keys"][name] = summarize(row, now)
-            t = st.last_probe_ts()
+            t, t_ok = st.last_probe_ts(), st.last_ok_ts()
         finally: st.close()
-        out["last_probed"] = iso(t); out["stale"] = t is None or now - float(t) > STALE_S
+        out["last_probed"] = iso(t); out["last_ok"] = iso(t_ok)
+        out["stale"] = t_ok is None or now - float(t_ok) > STALE_S
     except sqlite3.Error as e:
         out["error"] = f"{type(e).__name__}: {e}"
     return out
@@ -432,7 +442,9 @@ def main(argv=None):
                 note = "枯渇" if w["exhausted"] else ("リセット待ち" if w["at_window_end"] else (f"このペースだと約 {_fmt_dur(w['exhaust_in_s'])} で枯渇" if w["will_exhaust"] else ""))
                 print(fmt % (name, WINDOW_LABEL[w["key"]], f"{w['remaining_pct']:.0f}%", _fmt_dur(w["remain_s"]), w["status"] or "-", note))
             if s["error"]: print(fmt % (name, "-", "-", "-", "-", f"最後の観測は {s['error']}（値は前回のもの）"))
-        print(f"file: {v['db_file']}（最終観測 {v['last_probed'] or '-'}{'・古い' if v['stale'] else ''}）")
+        # 試行と成功を並べる（試行だけ新しいのに「古い」と出る理由が読めるように。#616）
+        ok = f"・最後に読めたのは {v['last_ok'] or '一度もありません'}" if v["last_ok"] != v["last_probed"] else ""
+        print(f"file: {v['db_file']}（最終観測 {v['last_probed'] or '-'}{ok}{'・古い' if v['stale'] else ''}）")
         return 0
     if a.cmd == "history":
         h = history_view(hours=a.hours, name=a.name)
