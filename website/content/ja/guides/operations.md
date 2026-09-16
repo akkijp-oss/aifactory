@@ -33,6 +33,21 @@ sandbox reinject <id>                                # 実行中の VM に今の
 
 **要る用途の鍵がプールに無いと、run は一時停止します**（ADR-0046）。VM は取らず、チケットは未着手に戻り、メモに「Claude の鍵が無いので一時停止（必要: …）」と出ます。「鍵」画面で鍵を登録すると、5 分ごとの timer が初めから回し直します。鍵を全部「有効」から外せば工場は止まり、戻せば再開する、という使い方ができます。
 
+### 鍵の残量（利用枠）を見る
+
+「鍵」画面の上の**残量（利用枠）**に、鍵ごとの 5 時間枠 / 7 日枠（全体）/ 7 日枠（Fable）の残り %・リセットまでの時間・ペースからの枯渇予測が出ます（ADR-0087）。制御系の timer `aifactory-keys-probe.timer` が 5 分ごとに、鍵ごとに小さな問い合わせを 1 回送って応答の利用枠を読みます（安いモデルで 5 分ごと、Fable 許可の鍵は 15 分ごとに Fable でも。Fable の枠は Fable で問い合わせたときだけ分かります）。鍵の値は記録に出ません。
+
+```bash
+sandbox/bin/install.sh --systemd                 # timer を登録する（ctl-update の後に 1 回。他の timer と一緒に入る）
+python3 lib/aifactory_keys_quota.py probe --full # 今すぐ観測する（「鍵」画面の「いま調べる」と同じ）
+python3 lib/aifactory_keys_quota.py show         # 鍵 × 窓の残り % とリセットまでの時間
+journalctl -u aifactory-keys-probe               # timer のログ
+```
+
+- 「認証が通りません」と出た鍵は切れています。`sandbox keys token <名前>` で入れ替えると、次の観測から読めます。
+- 「このペースだと約 n で枯渇」は、窓の始点からの平均の消費ペースをリセット時刻まで延ばした見込みです。急ぐなら別の鍵を足します。
+- MCP の `keys_list` にも同じ数字（`keys[].quota`）が載るので、AI の運転係も「どの鍵がどれだけ使えるか」を読めます。
+
 ### 鍵の選ばれ方
 
 鍵は制御系の `~/.config/sandbox/keys.json` に名前を付けて並べておき、VM を貸し出すとき（`take`）に系統ごとに 1 本ずつ選んで渡します。VM に渡る Claude の鍵の出どころはこのプールだけで、`~/.config/sandbox/env` や `pj/<pj>.env` に残った `CLAUDE_CODE_OAUTH_TOKEN` は読まれません（`sandbox token show` が `[stale]` で挙げるので消してください。ADR-0060）。

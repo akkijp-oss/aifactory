@@ -8,7 +8,7 @@ import base64, contextlib, datetime, fcntl, hashlib, json, os, pathlib, re, shut
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_workflow as wfdef
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_workflow as wfdef, aifactory_keys_quota as keyq
 STATIC = HERE / "static"
 JOBS = paths.JOBS                                              # テストでは CONSOLE_JOBS で差し替える
 KB = REPO / "kanban" / "bin" / "kb"
@@ -1818,9 +1818,33 @@ def keys_view():
                      # launches = runner が実際にその鍵で claude を起動した回数（uses は take / reinject で割り当てた回数。使用量の目安は launches）
                      "launches": k.get("launches") or 0,
                      "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
+    # 残量（利用枠）は keys.json の隣の keys-quota.db から読むだけ（書くのは timer / ジョブの probe。ADR-0087）。
+    # 鍵ごとの quota は {probed, stale, error, windows: [{key: 5h|7d|7d_oi, remaining_pct, reset, start, remain_s, will_exhaust, …}], binding}。
+    # まだ観測が無い鍵は None（鍵を足した直後・timer 未登録）
+    q = keyq.view(keys_file=path)
+    for k in keys: k["quota"] = q["keys"].get(k["name"])
+    probing = next((j["id"] for j in JobStore.running() if j.get("kind") == "keys-probe"), None)
     return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
             # 用途ごとの候補数。0 の用途を要る run は「鍵なし」で一時停止する（env ファイルの鍵には落ちない。ADR-0060）
-            "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")}}
+            "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")},
+            "quota": {"db_file": q["db_file"], "exists": q["exists"], "error": q["error"], "last_probed": q["last_probed"], "stale": q["stale"],
+                      "cheap_model": q["cheap_model"], "full_model": q["full_model"], "probing": probing}}
+
+
+def keys_history_view(hours=24, name=None):
+    """残量の履歴（「鍵」画面のグラフ用）。点は {name, window, remaining_pct, reset, status, at}。status が window_start の点は合成した窓の始点"""
+    hours = max(1, min(int(hours or 24), 24 * 31))
+    return keyq.history_view(keys_file=SANDBOX_KEYS, hours=hours, name=name or None)
+
+
+def keys_probe(b=None):
+    """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = Fable 許可の鍵は Fable でも叩いて 7d_oi を取る）。
+    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す"""
+    b = b or {}
+    for j in JobStore.running():
+        if j.get("kind") == "keys-probe": return {"job": j, "already": True}
+    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"])
+    return {"job": JobStore.start("keys-probe", cmd, "keys probe"), "already": False}
 
 
 def keys_apply(b):
