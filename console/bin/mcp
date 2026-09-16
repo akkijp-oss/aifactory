@@ -88,7 +88,8 @@ def t_project_write(a): return core.project_write(a.get("pj") or "", a.get("file
 
 
 def t_ticket_attach(a):
-    """content_base64（中身をそのまま）か path（ctl の上のファイル）のどちらか一方で 1 件添付する"""
+    """content_base64（中身をそのまま）か path（ctl の上のファイル）のどちらか一方で 1 件添付する。
+       手元 PC のファイルは（ここは ctl の中なので）読めない。利用者の端末から console/bin/attach で送ってもらう（ADR-0092）"""
     tid = arg_int(a, "id")
     b64, path = a.get("content_base64"), a.get("path")
     if bool(b64) == bool(path): raise core.ApiError("content_base64 か path のどちらか一方を指定してください")
@@ -186,7 +187,8 @@ TOOLS = [
     ("ticket_new", "整った本文でチケットを起票する（kb new）。自由文なら intake を使う。完了条件が PJ の能力宣言（capabilities）と食い違うときは warnings[] に理由が入る（起票は止まらない）", schema({"pj": STR, "kind": {"type": "string", "description": "chore / bug / feature / hotfix / research / merge-pr"}, "title": STR, "body": {**STR, "description": "Markdown。末尾に『## 完了条件』"}, "pr": INT, "note": STR, "depends_on": {**STR, "description": "先行票の番号。カンマ区切り（例 534,535）。未完了の先行票がある票は PM が次に選ばない"}, "related_issue": {**STR, "description": "外部 issue の URL。カンマ区切り（例 https://github.com/o/r/issues/1）。内部票の番号は related_ticket へ"}, "related_issue_access": {**STR, "description": "外部 issue を取りに行けるか。readable / unreadable の 2 語。書かなければ unreadable"}, "related_ticket": {**STR, "description": "参照する内部票の番号。カンマ区切り（例 393,521）。GitHub には無い番号"}}, ["pj", "kind", "title"]), t_ticket_new),
     ("ticket_attach", "チケットにファイルを 1 件添付する（kb attach）。runner が VM の ~/work/<id>/attachments/ に配り、依頼文にも名前が載る。"
      "content_base64 に中身をそのまま渡すか、path に ctl の上のファイル（ホームか /tmp の下・`.` で始まる要素を含まないもの）を指定する。どちらか一方。"
-     "名前は保存時に整えられる（長さと Markdown の記法を落とす）ので、返りの added を見ること。秘密（トークン・鍵）は添付しない",
+     "名前は保存時に整えられる（長さと Markdown の記法を落とす）ので、返りの added を見ること。秘密（トークン・鍵）は添付しない。"
+     "利用者の手元 PC にあるファイルは path では読めない（この MCP は ctl の中で動く）。その場合は手元で console/bin/attach <番号> <ファイル> を使ってもらう",
      schema({"id": INT, "name": {**STR, "description": "添付する名前。content_base64 のときは必須"},
              "content_base64": {**STR, "description": "中身を base64 で。1 ファイル 20 MiB / チケット合計 100 MiB まで"},
              "path": {**STR, "description": "ctl の上のファイルの絶対パス（例 /tmp/画面.png）"}}, ["id"]), t_ticket_attach),

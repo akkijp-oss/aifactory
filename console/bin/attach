@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""console/bin/attach: 手元の端末にあるファイルを、Web コンソールの API へそのまま送ってチケットに添付する（Python 3 標準ライブラリのみ）。
+
+  console/bin/attach 596 ~/Desktop/画面.png [別のファイル...]
+
+- MCP（console/bin/mcp）は制御系 LXC の中で動く（mcp-remote は ssh の stdio 中継）ので、ticket_attach(path=) は
+  手元の PC のファイルを読めない。content_base64 は中身を MCP の引数に載せる。**手元のファイルはこの CLI で送る**
+- 送り先は既存の口 `POST /api/tickets/<id>/attach`（multipart/form-data）。受け口・保存・履歴は何も変えていない（ADR-0092）
+- 判定（1 ファイル / 合計の上限・名前の sanitize）は lib/aifactory_attachments.py が正本。ここには数値も規則も持たない。
+  上限超過は console が 413、名前の直しは保存側が行い、結果の名前は応答の added に載る
+- 出力: 成功なら stdout に応答の JSON 1 行（{"id", "added", "attachments"}）。**中身も base64 も出さない**ので、
+  ファイルの大きさに比例して長くならない。失敗は stderr に理由の 1 行だけで非 0（合言葉・ヘッダは出さない）
+- 設定（環境変数 → ~/.config/aifactory/mcp-remote.env → 既定）:
+    AIFACTORY_CONSOLE_URL   コンソールの URL   既定 http://127.0.0.1:8765（ctl なら http://ctl.<tenant>.sb.internal:8765）
+    CONSOLE_TOKEN           合言葉             未設定なら付けない（127.0.0.1 専用の既定では不要。ADR-0013 / ADR-0021）
+  合言葉は argv で受けない（ps に出るため）
+"""
+import argparse, json, os, pathlib, re, secrets, sys, urllib.error, urllib.parse, urllib.request
+
+CONF = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or (pathlib.Path.home() / ".config")) / "aifactory" / "mcp-remote.env"
+DEFAULT_URL = "http://127.0.0.1:8765"
+FIELD = "files"                      # console/bin/console の parse_multipart が拾う欄名（名前付きの part をファイルとして数える）
+HEADER_BAD = re.compile(r"[\x00-\x1f\x7f]")   # ヘッダーに直接書けない文字。名前そのものの締めは保存側（lib）が行う
+
+
+class Fail(Exception):
+    """利用者に見せる 1 行の理由（合言葉・ヘッダ・中身は入れない）"""
+
+
+def read_env_file(path=CONF):
+    """KEY=VALUE を dict にするだけ（console/lib/core.py の read_ctl_env と同じ流儀）。値は出力しない。
+       この CLI は手元の端末で動く＝ ctl の checkout を前提にできないので、core を import せず自前で読む"""
+    p = pathlib.Path(path)
+    if not p.exists(): return {}
+    out = {}
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line: continue
+        k, v = (x.strip() for x in line.split("=", 1))
+        if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2: v = v[1:-1]
+        if k and v: out.setdefault(k, v)
+    return out
+
+
+def setting(name, default=None, conf=None):
+    """環境変数が空でなければそれ。無ければ設定ファイル、それも無ければ既定"""
+    v = os.environ.get(name)
+    if v: return v
+    return (conf if conf is not None else read_env_file()).get(name) or default
+
+
+def header_filename(name):
+    """Content-Disposition の filename= に書ける形にする（制御文字を落とし、`\\` と `"` を逃がす）。
+       これはヘッダーを壊さないための最小限で、名前の締め（パス区切り・Markdown・長さ）は保存側の sanitize が正本"""
+    return HEADER_BAD.sub("", str(name)).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def encode_multipart(files, field=FIELD):
+    """files=[(ファイル名, バイト列)] を multipart/form-data に組む → (Content-Type, 本体)。
+
+    ファイル名は生の UTF-8 バイトでヘッダーに書く（ブラウザーと同じ。受け側の utf8() が latin-1 経由で読み直す）。
+    境界がどれかの中身に現れたら引き直す（中身を書き換えない）"""
+    while True:
+        b = "aifactory-" + secrets.token_hex(16)
+        if not any(b.encode() in data for _, data in files): break
+    out = bytearray()
+    for name, data in files:
+        out += b"--" + b.encode() + b"\r\n"
+        out += (f'Content-Disposition: form-data; name="{field}"; filename="{header_filename(name)}"').encode("utf-8")
+        # 種類は名前から保存側（lib の guess_type）が決める。ここは常に octet-stream にして、
+        # 受け側の email が part を中身として解き直す種類（message/rfc822 など）に踏み込ませない
+        out += b"\r\nContent-Type: application/octet-stream\r\n\r\n" + data + b"\r\n"
+    out += b"--" + b.encode() + b"--\r\n"
+    return f"multipart/form-data; boundary={b}", bytes(out)
+
+
+def read_files(paths):
+    """送るファイルを読む。無い・通常ファイルでない・読めないものがあれば 1 件も送らずに止める"""
+    files = []
+    for s in paths:
+        p = pathlib.Path(s).expanduser()
+        if not p.exists(): raise Fail(f"ファイルがありません: {p}")
+        if not p.is_file(): raise Fail(f"通常のファイルではありません: {p}")
+        try: files.append((p.name, p.read_bytes()))
+        except OSError as e: raise Fail(f"ファイルを読めません: {p}（{e.strerror or type(e).__name__}）")
+    return files
+
+
+def post(url, tid, files, token=None, timeout=300):
+    ctype, body = encode_multipart(files)
+    dest = url.rstrip("/") + f"/api/tickets/{int(tid)}/attach"
+    headers = {"Content-Type": ctype, "X-Console": "1", "Content-Length": str(len(body))}
+    if token: headers["Authorization"] = f"Bearer {token}"     # 例外にもログにも出さない
+    req = urllib.request.Request(dest, data=body, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r: return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try: msg = (json.loads(e.read().decode("utf-8")) or {}).get("error") or ""
+        except Exception: msg = ""
+        raise Fail(f"{e.code}: {msg or '添付できませんでした'}")
+    except urllib.error.URLError as e:
+        u = urllib.parse.urlsplit(dest)                        # URL をそのまま出さない（合言葉を URL に書く使い方があるため）
+        where = (u.hostname or "?") + (f":{u.port}" if u.port else "")
+        raise Fail(f"コンソールに接続できません（{where}）: {getattr(e, 'reason', e)}")
+    except (ValueError, OSError) as e:
+        raise Fail(f"応答を読めませんでした: {type(e).__name__}")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="attach", description="手元のファイルをチケットに添付する（コンソールの API へ直接送る）")
+    ap.add_argument("id", type=int, help="チケット番号")
+    ap.add_argument("file", nargs="+", help="送るファイル（複数可）")
+    ap.add_argument("--url", help=f"コンソールの URL（既定: $AIFACTORY_CONSOLE_URL / {DEFAULT_URL}）")
+    a = ap.parse_args(argv)
+    conf = read_env_file()
+    try:
+        files = read_files(a.file)
+        d = post(a.url or setting("AIFACTORY_CONSOLE_URL", DEFAULT_URL, conf), a.id, files, token=setting("CONSOLE_TOKEN", None, conf))
+    except Fail as e:
+        print(str(e), file=sys.stderr); return 1
+    print(json.dumps(d, ensure_ascii=False))     # 中身・base64・合言葉は入らない（応答は id / added / attachments だけ）
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

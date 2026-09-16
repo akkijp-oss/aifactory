@@ -159,6 +159,37 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `POST /api/config/model` | change the model of a step or of a shared route `{target, workflow, step, key, value, dry_run, base_sha256}`. A preview by default (writes nothing). It writes only with an explicit `dry_run: false`, and `base_sha256` (the version you read) is required; if the file changed since, it answers 409 and writes nothing |
 | `GET /api/stats?days=7&pj=&dry=&tz=` | per-step consumption statistics (`total` / `by_model` / `by_step` / `by_day` / `by_pj` / `top`). `tz` is the time zone the by-day table and the period are cut in (an offset such as `+09:00`, or an IANA name; the server's zone when omitted. An unreadable value falls back to the server's zone, and the `tz` field of the response says which zone was actually used) |
 
+### Attaching a file from your own machine
+
+Attachments can also be sent with `curl` (`multipart/form-data`, `files` repeated).
+
+```bash
+curl -s -H 'X-Console: 1' -F 'files=@screen.png' -F 'files=@spec.pdf' \
+  localhost:8765/api/tickets/204/attach
+```
+
+`console/bin/attach` does the same thing in one line. Run it **on your own machine** (a checkout of the repository is all it needs; it uses only the Python 3 standard library).
+
+```bash
+console/bin/attach 204 ~/Desktop/screen.png spec.pdf
+# {"id": 204, "added": ["screen.png", "spec.pdf"], "attachments": [ ... ]}
+```
+
+| Setting | Meaning |
+|---|---|
+| `AIFACTORY_CONSOLE_URL` | Where to send. Defaults to `http://127.0.0.1:8765`; with the control plane in an LXC on Proxmox, `http://ctl.<tenant>.sb.internal:8765` |
+| `CONSOLE_TOKEN` | The shared secret, when the console runs with one. **Never taken as an argument**, so it does not show up in `ps` |
+
+Both are read from the environment, falling back to `~/.config/aifactory/mcp-remote.env` (the same file as [the MCP connection settings](#using-it-from-an-ai-session-mcp)). `--url` overrides the environment.
+
+- **The file contents never reach the AI session.** On success the only output is one line of JSON (`id` / `added` / `attachments`); the bytes, their base64 and the shared secret are not printed. The length of the output does not grow with the size of the file. On failure it prints one line of explanation on stderr and exits 1
+- **MCP `ticket_attach(path=...)` cannot read files on your machine.** The MCP server runs inside the control plane (ctl), so `path` is a path over there. Use this CLI for local files
+- **You need the ticket number first.** If the ticket does not exist yet, file it and then attach by number (`kb new` → `console/bin/attach <id> <file>`)
+- The limits (20 MiB per file, 100 MiB per ticket) and the name normalisation stay on the server side. The CLI checks nothing locally, so a refusal carries the console's own wording. The names that were actually saved come back in `added`
+- Sending the same file again adds a second attachment with `-2` appended rather than overwriting (same as `kb attach`)
+
+The decision is recorded in ADR-0092 ([Design decisions](../decisions/index.md)).
+
 ## Using it from an AI session (MCP)
 
 `.mcp.json` carries two servers: **`aifactory-local`** (the workspace on this machine) and **`aifactory-ctl`** (the control plane on Proxmox). With the control plane in an LXC on Proxmox ([Tenants](tenants.md)), use `aifactory-ctl`, or register it at user scope so it works from any directory (`claude mcp add --scope user aifactory -- <repo>/console/bin/mcp-remote`). Codex CLI: `codex mcp add aifactory -- <repo>/console/bin/mcp-remote`. Any client that speaks stdio MCP can use the same entry point. `console/bin/mcp-remote` starts the MCP server inside the LXC over ssh, so the AI session reads and writes the LXC's workspace and lending state directly. The target comes from `~/.config/aifactory/mcp-remote.env`: `AIFACTORY_CTL` (default `aifactory@ctl.main.sb.internal`; another tenant is `aifactory@ctl.<tenant>.sb.internal`) and, while the tailnet route is not yet approved, `AIFACTORY_CTL_JUMP=<ssh alias of the Proxmox host>`. Run `claude mcp reset-project-choices` once to approve the new server.
@@ -174,7 +205,7 @@ claude mcp reset-project-choices   # approve again
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | Overview (`pj` narrows the run lists), list, one ticket (body, history, runs, jobs, the `attachments` listing; plus `sync_preview` when the ticket has a run) |
 | `ticket_new` / `intake` | File a ticket (well-formed body / free text; intake is a job) |
-| `ticket_attach` / `ticket_detach` | Add one attachment (pass the bytes in `content_base64`, or point at a file on the control host with `path` — one or the other) / remove one. `path` may only point under your home directory or `/tmp`, and may not contain a name starting with `.` (so config and key directories stay out of reach) |
+| `ticket_attach` / `ticket_detach` | Add one attachment (pass the bytes in `content_base64`, or point at a file on the control host with `path` — one or the other) / remove one. `path` may only point under your home directory or `/tmp`, and may not contain a name starting with `.` (so config and key directories stay out of reach). **Files on the user's own machine cannot be reached with `path`** (this MCP server runs inside ctl); ask them to run [`console/bin/attach`](#attaching-a-file-from-your-own-machine) there instead |
 | `ticket_action` | start / review / done / reopen / block (`done` and `set` with `pr` also transcribe the same thing as `run_action` onto the linked run when it is still waiting on a human) / set (an empty string clears `note`, `depends_on`, `related_issue` and `related_ticket`; clearing `related_issue` clears the access flag `related_issue_access` with it, so `related_issue_access` cannot be cleared on its own; the reference values are printed in the run's prompt) / append (append to the end of the body; `text` required, `section` optional) / sync (`sync` defaults to `dry_run: true` and only returns the before/after; it writes only when you pass `dry_run: false`) |
 | `ticket_run` / `dispatch` | kb run (lends a VM and goes to a PR; `dry_run` available) / run todos in order. Both are jobs |
 | `run_list` / `run_show` / `read_file` | Run records and files under the allowed roots (`agent-*.log`, ticket attachments and so on). Images come back as an image block, so you can see them (up to 4 MiB; open anything larger from the console). `run_show` also carries `progress`: the elapsed seconds for the run and for each step, the step running now, and the PASS / FAIL / INFO listing from `work/gates.txt`. When a file is not there, `read_file` also tells you the names that do exist in the same place (and says "directory not found" instead when the run itself is missing), so you can find the right name without asking `run_show` again |

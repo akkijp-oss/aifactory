@@ -118,12 +118,13 @@ On `kb run`, the attachments are placed in `~/work/<id>/attachments/` on the VM 
 - **Do not attach tokens, keys or real `.env` values.** `attachments/` is not tracked by git, so it is not scanned for secrets by `bin/oss-check.sh`
 - Only the Proxmox backend copies attachments to the VM for now (macOS, Windows and Linux workers are not covered)
 
-### Attaching from the web console, MCP and intake
+### Attaching from the web console, MCP, your own machine and intake
 
-Three more entry points write to the same place as `kb attach`, and go through the same checks for names and size limits.
+Four more entry points write to the same place as `kb attach`, and go through the same checks for names and size limits.
 
 - **Web console**: both panels of the filing screen and the ticket screen have a drop area. Drop files on it or pick them; several at a time is fine. The ticket screen shows images as thumbnails and everything else as a download link, and `×` removes one (with a confirmation dialog). Picked files are not kept in the draft, so leaving the screen means picking them again
-- **MCP**: `ticket_attach(id, name, content_base64)` passes the bytes directly, which works over ssh. For a file that already sits on the control host, use `ticket_attach(id, path)`. It shows up in `ticket_show`, and `read_file` reads images back as images. `ticket_detach(id, name)` removes one
+- **MCP**: `ticket_attach(id, name, content_base64)` passes the bytes directly, which works over ssh. For a file that already sits on the control host, use `ticket_attach(id, path)`. It shows up in `ticket_show`, and `read_file` reads images back as images. `ticket_detach(id, name)` removes one. **A file on your own PC cannot be reached with `path`** — the MCP server runs inside the control plane and cannot see your machine's filesystem. Use `console/bin/attach` below
+- **A CLI on your own machine**: `console/bin/attach <ticket id> <file>...` run **on your machine** sends the file straight to the console API and attaches it. Neither the bytes nor their base64 reach the AI session's context or the ordinary logs. See [the web console guide](console.md#attaching-a-file-from-your-own-machine)
 - **intake**: `glue/bin/intake memo.txt --attach screen.png` attaches to the ticket it files. Images are also shown to the intake LLM, so facts read off the screenshot land in the `## 現状` (current state) section of the body
 
 !!! note "Names get normalised"
