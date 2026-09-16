@@ -392,7 +392,9 @@ def _still_the_same_key(keys_file, name, fp):
 
     通信は数秒かかる。その間に console から鍵を差し替えられると、戻ってきた応答は**前の鍵**の残量なので、
     新しい鍵の残量として保存してはいけない（その回は捨てる。次の周で forget が効いて履歴も切り替わる）"""
-    cur = next((k for k in load_keys(keys_file) if str(k["name"]) == name), None)
+    try: keys = load_keys(keys_file)
+    except Exception: return None   # 書き換えの途中で読めなかった: 判断できないので 1 周目の読みのまま進む（次の周で指紋が合わなければ捨てる）
+    cur = next((k for k in keys if str(k["name"]) == name), None)
     if cur is None: return "removed-during-probe"
     if cur.get("enabled") is False: return "disabled-during-probe"
     if fingerprint(str(cur.get("token") or "")) != fp: return "replaced-during-probe"
