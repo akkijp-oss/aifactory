@@ -79,7 +79,7 @@ kanban/bin/kb run 204 --wait             # プールに空きがなければ、�
 | `agent-<step>-<n>.log` | エージェントの実行中（逐次） | `claude -p` のイベントを人が読める形にしたもの（時刻、ツール呼び出し ▶、結果の先頭 ↳、最後に result と費用） |
 | `agent-<step>-<n>.jsonl` | エージェントの実行中（逐次） | 同じイベントの生 JSON（デバッグ用） |
 | `code-<step>-<n>.log` | スクリプトの実行中（逐次） | gates / pr の出力 |
-| `work/` | release 時 | VM から回収した成果物（チケットの添付は `work/attachments/`） |
+| `work/` | release 時 | VM から回収した成果物（`work/` 直下の `report.md` などと画像、赤いゲートのログは `work/gates/`、チケットの添付は `work/attachments/`）。1 ファイル 4 MiB・合計 32 MiB・256 件までで、超えた分と運べなかった分は `state.json` の `artifacts_skipped` に理由つきで残ります（ADR-0085） |
 
 `state.json` の `current` に今動いている工程とログ名が入るので、ログは工程の途中でも `tail -f` で追えます。ブラウザなら [Web コンソール](console.md) の run 画面が同じログを自動で開きます。
 
