@@ -1851,12 +1851,21 @@ def keys_history_view(hours=24, name=None):
 
 def keys_probe(b=None):
     """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = Fable 許可の鍵は Fable でも叩いて 7d_oi を取る）。
-    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す"""
+    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す。
+
+    二重に起こさない判定は JobStore のロックの中でやる（他の start と同じ書き方。外で running() を見ると、
+    同時に押された 2 つがどちらも「実行中は無い」と読んで 2 本起きる）。JobStore を通らない systemd の timer とは
+    probe 側のファイルロックで排他するので、--wait を付けて timer の後ろに並ばせる（手動は必ず新しい値が欲しい）"""
     b = b or {}
-    for j in JobStore.running():
-        if j.get("kind") == "keys-probe": return {"job": j, "already": True}
-    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"])
-    return {"job": JobStore.start("keys-probe", cmd, "keys probe"), "already": False}
+    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"]) + ["--wait", "120"]
+    busy = lambda j: "残量を調べるジョブが実行中です" if j.get("kind") == "keys-probe" else None   # noqa: E731
+    try:
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
+    except Conflict:
+        j = next((j for j in JobStore.running() if j.get("kind") == "keys-probe"), None)
+        if j: return {"job": j, "already": True}
+        # 判定の直後に終わっていた: 1 回だけやり直す（それでも衝突するなら 409 のまま上げる）
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
 
 
 def keys_apply(b):
