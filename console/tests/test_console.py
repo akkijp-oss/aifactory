@@ -2204,8 +2204,8 @@ class ApiTest(unittest.TestCase):
         """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
         html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span><b id="n-pm"></b></a>', html,
-                      "ナビの項目が既存と同じ形になっていない")
+        self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span></a>', html,
+                      "ナビの項目が既存と同じ形になっていない（件数札は置かない。#588）")
         self.assertLess(html.index('data-nav="board"'), html.index('data-nav="pm"'))
         self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "AI Factory Manager はボードの直後（頻度順）")
         self.assertIn("p: 'pm'", app, "g p の割り当てが無い（? の一覧にも載らない）")
@@ -2240,10 +2240,34 @@ class ApiTest(unittest.TestCase):
         self.assertLessEqual(estimate, usable,
                              f"左ナビに収まらない見積り: {estimate:.1f}px > {usable:.1f}px。"
                              "名前は短縮せず、.rail / .shell の幅か font-size で解くこと（#586）")
-        # ラベルは列の幅をバッジと分け合わない: #n-pm は refreshNav が一度も書かないので常に空（幅 0）
+        # ラベルは列の幅をバッジと分け合わない: AI Factory Manager の項目にはバッジの要素自体が無い（#588 で外した）
+        html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
+        pm_link = re.search(r'<a href="#/pm" data-nav="pm".*?</a>', html, re.S)
+        self.assertTrue(pm_link, "index.html に #/pm のナビ項目が無い")
+        self.assertNotIn("<b", pm_link.group(0),
+                         "#/pm にバッジを戻したら、ラベルに使える幅が減るのでこの見積りを見直す（#586 / #588）")
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         nav = app[app.index("async function refreshNav"):app.index("function schedule")]
         self.assertNotIn("n-pm", nav, "#n-pm にバッジを書き始めたら、ラベルに使える幅が減るのでこの見積りを見直す")
+
+    def test_every_nav_badge_declared_in_html_is_written_by_refresh_nav(self):
+        """左ナビの件数札は「置いたなら書かれる」（#588）。宣言と代入の集合を両方向で突き合わせる。
+
+        JS を動かす基盤が無いのでソースを突き合わせる。誰も書かない札は初期状態の空文字のままなので、
+        読む人には「常に 0 件」と見分けが付かない（#535 / #536 と同根の「取得できていない」≠「0 件」）。
+        将来 6 つ目の札を足したときも、宣言だけ・代入だけのどちらの片落ちもここで止まる。
+        """
+        html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        declared = set(re.findall(r'<b id="(n-[a-z-]+)"', html))
+        self.assertTrue(declared, "index.html に件数札の宣言が 1 つも見つからない（検査が空回りしている）")
+        nav = app[app.index("async function refreshNav"):app.index("function schedule")]
+        written = set(re.findall(r"\$\('(n-[a-z-]+)'\)\.textContent\s*=", nav))
+        self.assertEqual(declared - written, set(),
+                         f"宣言されているが refreshNav が書かない札: {sorted(declared - written)}。"
+                         "値を入れないなら要素を置かない（置けば常に 0 件と見分けが付かない）")
+        self.assertEqual(written - declared, set(),
+                         f"refreshNav が書くが index.html に無い札: {sorted(written - declared)}")
 
     def test_pm_view_keeps_unknown_apart_from_zero_and_never_contradicts_itself(self):
         """「取得できていない」を「0 件」「順調」と同じ見え方にしない。同じ画面の中で矛盾もさせない"""

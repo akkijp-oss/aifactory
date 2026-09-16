@@ -10,6 +10,7 @@
 2. リポジトリ内（コード・docs・過去の決定）と、必要なら Web（公式ドキュメント・仕様・リリースノート）を当たる。Web は VM から `curl` / `WebFetch` 相当で取得できる範囲で。ログインが要るサイトには入らない
 3. 出典を必ず残す（ファイルパス:行、URL と取得日）
    - GitHub は `gh`（`GH_TOKEN` は貸出時に注入済み。そのリポジトリだけ・1 時間）。CI 履歴は `gh run list --branch <head-branch>` / `gh api repos/<o>/<r>/actions/runs` で読める。`gh pr checks` は権限（checks:read）が無いと失敗するので `gh run list` で代替する。403 が出たら権限の問題として「不明・要確認」に書き、推測しない
+   - **sandbox のトークンでは GitHub の issues（`gh issue view` / `gh api .../issues/...`）と feedback-assets を読めない**（403 `Resource not accessible by integration`）。票に issue の URL が書いてあっても取りに行かず、**票の本文と実コードだけで進める**。票メタの `related_issue` に取得可否が `readable` と付いているものだけが例外で、`related_ticket`（aifactory の内部票番号）は GitHub には無い（ADR-0084）
 4. 相反する情報があれば両方書き、どちらが新しいか・一次かを添える
 
 ## 禁止

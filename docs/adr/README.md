@@ -94,3 +94,5 @@
 - [0080: 実行環境の「できないこと」は PJ 定義が宣言し、完了条件との照合は警告だけにする。判定は 1 か所、未宣言は照合しない](0080-environment-capabilities-are-declared-and-checked-as-a-warning.md)
 - [0081: 掃き寄せは救済であって成果物の判断ではない。依存ファイルは拾わず、拾ったものは必ず記録に残す](0081-the-sweep-is-a-rescue-and-does-not-carry-dependency-files.md)
 - [0082: MCP は配ったスキーマを入口で強制する。未知のキーと必須の抜けはツールエラーにし、値の型と意味の判定は core に残す](0082-mcp-enforces-its-declared-argument-schema.md)
+- [0083: 私有 PJ 名は 1 つ残らず検査語に載せ、書き換えられない既存 ADR だけをファイル名で名指しして例外にする](0083-private-project-names-are-all-in-the-pattern-and-old-adrs-are-named-exceptions.md)
+- [0084: 票の参照は「外部 issue（取得可否つき）」と「内部の票番号」の 2 列に分ける。読めない参照は役割文書が名指しで断る](0084-ticket-references-are-split-into-external-issue-and-internal-number.md)

@@ -129,6 +129,31 @@ kb show 538                            # depends_on 534,535,536,537
   下見（`GET /api/next`）は選び直しの口 `pm_pick_next` 経由で通ります（ADR-0078 / ADR-0079）。
   `kb run <id>` を人が直に打てば、先行票が残っていても回ります。
 
+### 参照（`--issue` / `--ticket`）
+
+```bash
+kb new aifactory chore "続き" --body - --ticket 521          # aifactory の内部票番号
+kb set 556 --issue https://github.com/akkijp/kumitate/issues/393   # 外部 issue の URL
+kb set 556 --issue-access readable                          # run が取りに行ってよい参照だけに付ける
+kb set 556 --issue ''                                       # URL と取得可否を一緒に消す
+kb show 556                                                 # related_issue / related_issue_access / related_ticket
+```
+
+票が指す先が「run から読めるもの」か「読めないもの」かを、**本文の文字列ではなく構造で**分けます（ADR-0084）。
+
+- `related_issue` は**外部 issue の URL**（`http(s)://…`。カンマ区切りで複数可）、`related_ticket` は
+  **aifactory の内部票番号**（カンマ区切り）です。内部番号を `--issue` に書くと断り、`--ticket` を案内します。
+  逆に URL を `--ticket` に書くこともできません。
+- `related_issue_access` は `readable` / `unreadable` の 2 語だけで、**書かなければ `unreadable`** になります。
+  sandbox に注入するトークンは GitHub の issues に 403（`Resource not accessible by integration`）を返すので、
+  確かめていない参照は取りに行かせないのが安全側です。researcher の役割文書にも同じことが 1 行入っていて、
+  **run は票に URL が書いてあっても取りに行かず、本文と実コードだけで進めます**。
+- 番号や URL の存在は確かめません。自分自身の番号を `--ticket` に書くことはできません。
+- **本文の自由文は解釈しません。** 本文に URL が埋まっている既存票の移行もしません（新しい起票から構造化します）。
+  列が無かった頃の `kanban.db` には `kb` が起動時に足します。
+- 値は `kb show` に出て、変更は `kb history` に残り、MCP / HTTP API の `ticket_show` / `ticket_list` からも読めます。
+  **依頼文（run に渡す文面）にはまだ出ません**（runner が VM に運ぶのは本文だけです）。
+
 `kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。`depends_on` は `note` と同じ扱いです。
 
 ### append
@@ -261,7 +286,7 @@ kb sync --all-review [--pj P] [--dry-run]
 
 ```bash
 kb sync --all-review              # review のチケット全件（全 PJ）
-kb sync --all-review --pj asura   # PJ を絞る
+kb sync --all-review --pj <PJ 名>  # PJ を絞る
 kb sync --all-review --dry-run    # 書かずに、変わる予定のチケットを 1 件 1 行の JSON で出す
 ```
 
