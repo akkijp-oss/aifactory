@@ -373,6 +373,25 @@ class RunProbeTest(unittest.TestCase):
         self.assertEqual(st.row("a")["tail4"], "1111", "末尾は同じまま")
         self.assertTrue(all(x["probed_ts"] != NOW for x in st.history(since=0, name="a")), "入れ替え前の実測は残らない")
 
+    def test_history_view_after_token_swap_has_only_the_new_generation(self):
+        """表示用の履歴（history_view）が世代を跨がない: 入れ替えた鍵は新しい契約の点だけ、他の鍵はそのまま。
+
+        表示側（グラフ）に fp を持たせて線を切る必要が無いのは、旧世代の行が DB に残らないから（ADR-0090 決定 1）。
+        その「グラフに渡る点」の側から確かめる（Store の中身ではなく、画面と CLI が読む形で）"""
+        self.write([{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}},
+                    {"name": "b", "token": "tok-bbb-2222", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_()
+        # 同じ名前・同じ末尾 4 文字・別のトークン（同名再登録）
+        self.write([{"name": "a", "token": "tok-ccc-1111", "enabled": True, "allow": {"fable": False, "other": True}},
+                    {"name": "b", "token": "tok-bbb-2222", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_(now=NOW + 300)
+        h = kq.history_view(env=self.env, hours=24, now=NOW + 300)
+        real = lambda name: sorted({p["ts"] for p in h["points"] if p["name"] == name and p["status"] != kq.WINDOW_START})   # noqa: E731
+        self.assertEqual(real("a"), [NOW + 300], "入れ替え前の点がグラフに渡っている（別の契約と線でつながる）")
+        self.assertEqual(real("b"), [NOW, NOW + 300], "入れ替えていない鍵の履歴まで消している")
+        self.assertTrue(all("fp" not in p for p in h["points"]), "指紋は DB の内部だけ（表示には出さない）")
+        self.assertNotIn("tok-", json.dumps(h, ensure_ascii=False))
+
     def test_same_token_keeps_its_history(self):
         self.write([{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
         self.run_(); self.run_(now=NOW + 300)
