@@ -79,7 +79,7 @@ The terminal prints `[run <pj>/<id> <elapsed s>] <step>: PASS/FAIL → <next>` p
 | `agent-<step>-<n>.log` | During an agent step (streamed) | The `claude -p` event stream in readable form (timestamps, tool calls ▶, the head of each result ↳, and the final result with cost) |
 | `agent-<step>-<n>.jsonl` | During an agent step (streamed) | The same events as raw JSON (for debugging) |
 | `code-<step>-<n>.log` | During a code step (streamed) | Output of gates / pr |
-| `work/` | On release | Artifacts collected from the VM (ticket attachments under `work/attachments/`) |
+| `work/` | On release | Artifacts collected from the VM (`report.md` and images directly under `work/`, red gate logs under `work/gates/`, ticket attachments under `work/attachments/`). Up to 4 MiB per file, 32 MiB in total and 256 files; whatever is over the limit or fails to arrive is listed with a reason in `artifacts_skipped` in `state.json` (ADR-0085) |
 
 `current` in `state.json` names the step that is running and its log file, so you can `tail -f` a log in the middle of a step. In a browser, the run screen of the [Web console](console.md) opens the same log automatically.
 
