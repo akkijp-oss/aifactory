@@ -265,7 +265,7 @@ Only two fields decide this: `state` and `mergedAt`. Marking a ticket `done` by 
 
 ```bash
 kb sync --all-review              # every ticket in review, across all projects
-kb sync --all-review --pj asura   # narrow to one project
+kb sync --all-review --pj <project>  # narrow to one project
 kb sync --all-review --dry-run    # print one JSON line per ticket that would change, without writing
 ```
 
