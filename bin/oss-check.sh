@@ -6,10 +6,14 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 rc=0
 # パターン（自分自身の本文に一致しないように分割して組み立てる）
+# PAT の私有 PJ 名は、制御系の project_show / sandbox_status が返す PJ 一覧と突き合わせて並べる（#592。公開してよい PJ 以外は全部載せる）
 SECRET_PAT="ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9-]{10,}|PVEAPIToken""=[^ ]+=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|BEGIN (RSA|OPENSSH|EC) PRIVATE"" KEY"
 # ALLOW: kumitate / akkijp/kumitate は公開許可済みのサンプル、akkijp-oss/aifactory はこのリポジトリ、10.77.x は文書上の既定例、100.64.0.0/10 は Tailscale の CGNAT 範囲（固有情報ではない）
-PAT='秋月|akki-pve|a1pve|a1mpve|pvexf|hokenss|kosuke19952000|marugoto|devboard|pcbcad|companyhub|granthub|zenkoku|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|iDRAC|homelab|mytask|オーナー指示'
+PAT='秋月|akki-pve|a1pve|a1mpve|pvexf|hokenss|kosuke19952000|marugoto|devboard|pcbcad|companyhub|granthub|zenkoku|sitebin|asura|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|iDRAC|homelab|mytask|オーナー指示'
 ALLOW='100\.64\.0\.0/10|192\.168\.0\.0/16'
+# ALLOW_FILES: == 3 節だけ、ここに名指しした追跡ファイルを検査しない。私有 PJ 名を事実として書いた既存の ADR で、
+# この PJ は既存 ADR を書き換えないため直せない（ADR-0083）。ディレクトリ単位では除外しない（新しい ADR は検査したい）
+ALLOW_FILES='^docs/adr/0034-worker-log-limit-truncates-and-strips-images\.md$|^docs/adr/0049-pull-worker-lease-wait-is-pool-busy\.md$|^docs/adr/0050-pr-state-from-github-in-kb-sync\.md$|^docs/adr/0057-guest-display-resolution\.md$|^docs/adr/0059-pull-backend-code-steps-run-in-the-guest\.md$|^docs/adr/0066-control-sqlite-retries-the-transaction\.md$|^docs/adr/0068-guest-start-restarts-a-stopped-guest\.md$'
 
 if [[ "${1:-}" == "--staged" ]]; then
   # pre-commit 用: ステージされたファイルだけ（速い）。追跡禁止の置き場・秘密情報・固有名
@@ -35,7 +39,7 @@ secrets="$(git log -p --all | grep -nE "$SECRET_PAT" | head -5)"
 if [[ -n "$secrets" ]]; then echo "$secrets" | cut -c1-160; echo "NG  上の行を確認"; rc=1; else echo "ok"; fi
 
 echo "== 3. 環境固有・私有の名前（追跡ファイル）"
-hits="$(git ls-files -z | grep -zv '^bin/oss-check.sh$' | xargs -0 grep -nE "$PAT" 2>/dev/null | grep -vE "$ALLOW" )"
+hits="$(git ls-files -z | grep -zv '^bin/oss-check.sh$' | grep -zvE "$ALLOW_FILES" | xargs -0 grep -nE "$PAT" 2>/dev/null | grep -vE "$ALLOW" )"
 if [[ -n "$hits" ]]; then echo "$hits" | head -60; echo "NG  $(echo "$hits" | wc -l | tr -d ' ') 件"; rc=1; else echo "ok"; fi
 
 echo "== 4. 必須ファイル"
