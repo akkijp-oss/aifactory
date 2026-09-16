@@ -409,8 +409,10 @@ class KeysQuotaApiTest(unittest.TestCase):
         要約の規則は lib の summarize() の 1 か所に置く（ADR-0087 決定 5）という契約を、退行で捕まえるための網。
         3 経路は別プロセスなので now が数秒ずれる。now に依らない項目は完全一致、残り秒と経過 % だけ許容差で見る"""
         self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        t0 = time.monotonic()
         _, v = self.http.get("/api/keys")
         mcp_text, cli_text = self.mcp_keys_list(), self.cli_show()
+        span = time.monotonic() - t0   # 3 経路を取り終えるまでの実時間。now のずれはこれを超えない
         m, c = json.loads(mcp_text), json.loads(cli_text)
         panel = lambda d: {x: d[x] for x in ("last_probed", "last_ok", "stale")}   # noqa: E731
         routes = {"console": ({k["name"]: k["quota"] for k in v["keys"]}, panel(v["quota"])),
@@ -423,15 +425,21 @@ class KeysQuotaApiTest(unittest.TestCase):
             for name in sorted(names):
                 self.assertEqual(self.stable(keys[name]), self.stable(routes["console"][0][name]),
                                  f"{route} の {name} の要約が console と違う（summarize() を通っていない経路がある）")
-        # now に依る項目は許容差で（3 経路の取得は数秒のうちに済むので、この幅を超えるなら計算が別物）
+        # now に依る項目は許容差で。幅は「3 経路を取るのにかかった実時間 + 2 秒」で、機械の速さに依らない
+        # （固定の秒数にすると、混んでいるときに落ちる。単位や式が別物なら窓長（5 時間・7 日）の規模でずれるので、この幅でも気づく）
+        tol = span + 2
         for name in sorted(names):
             ws = [routes[r][0][name]["windows"] for r in routes]
             for w in zip(*ws):
-                self.assertLessEqual(max(x["remain_s"] for x in w) - min(x["remain_s"] for x in w), 5, f"{name} の remain_s が食い違う")
-                self.assertLessEqual(max(x["elapsed_pct"] for x in w) - min(x["elapsed_pct"] for x in w), 0.2, f"{name} の elapsed_pct が食い違う")
-                self.assertEqual(len({x["will_exhaust"] for x in w}), 1, f"{name} の枯渇見込みの有無が経路で違う")
+                key, length = w[0]["key"], {"5h": 5 * 3600, "7d": 7 * 86400}[w[0]["key"].replace("_oi", "")]
+                self.assertLessEqual(max(x["remain_s"] for x in w) - min(x["remain_s"] for x in w), tol, f"{name} {key} の remain_s が食い違う")
+                self.assertLessEqual(max(x["elapsed_pct"] for x in w) - min(x["elapsed_pct"] for x in w), tol / length * 100 + 0.1,
+                                     f"{name} {key} の elapsed_pct が食い違う")
+                self.assertEqual(len({x["will_exhaust"] for x in w}), 1, f"{name} {key} の枯渇見込みの有無が経路で違う")
                 if w[0]["will_exhaust"]:
-                    self.assertLessEqual(max(x["exhaust_in_s"] for x in w) - min(x["exhaust_in_s"] for x in w), 30, f"{name} の exhaust_in_s が食い違う")
+                    # 枯渇までの秒数は経過時間に比例して伸びるので、now のずれが (1-u)/u 倍に拡大する（この窓では 3 倍まで）
+                    self.assertLessEqual(max(x["exhaust_in_s"] for x in w) - min(x["exhaust_in_s"] for x in w), tol * 3 + 1,
+                                         f"{name} {key} の exhaust_in_s が食い違う")
         # 具体値も 1 組だけ固定する（3 経路とも同じ数字であることを、形の一致だけに頼らずに示す）
         for route, (keys, _) in routes.items():
             f = keys["fable-a"]
