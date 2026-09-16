@@ -128,7 +128,7 @@ def backend(Run):
         #   noop        … 対応しないが素通りさせる（True を返す。Windows の sync-base）
         #   unsupported … 起動前に拒否する（実装が無いまま黙って PR を作らずに終わらせない）
         # code step を足す人は kit/steps/ に置くだけでなく 3 つの pull backend（macos / windows / linux）の
-        # この表も更新すること。忘れると workflow/tests/test_code_steps.py が赤くなる（チケット 386 / asura #381）
+        # この表も更新すること。忘れると workflow/tests/test_code_steps.py が赤くなる（チケット 386 / #381）
         CODE_STEPS = {"gates.sh": "run", "sync-base": "run", "pr-create.sh": "run",
                       "pr-automerge.sh": "run", "pr-merge.sh": "unsupported"}
 

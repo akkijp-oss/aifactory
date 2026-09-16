@@ -3,7 +3,7 @@
   python3 -m unittest discover -s workflow/tests -p 'test_code_steps.py' -v
 
 ADR-0042 で automerge step を全 workflow に足したとき、pull backend（macos / windows / linux）の対応表を
-更新し忘れたので、macos-pull の PJ が run を 1 つも始められなくなった（asura #381）。
+更新し忘れたので、macos-pull の PJ が run を 1 つも始められなくなった（#381）。
 再発を防ぐため「新しい code step を足して対応表を更新していない」をここで赤にする。
 
 分類は run（backend が実装している）/ noop（対応しないが素通りさせる）/ unsupported（起動前に拒否する）の 3 つ。

@@ -261,7 +261,7 @@ kb sync --all-review [--pj P] [--dry-run]
 
 ```bash
 kb sync --all-review              # review のチケット全件（全 PJ）
-kb sync --all-review --pj asura   # PJ を絞る
+kb sync --all-review --pj <PJ 名>  # PJ を絞る
 kb sync --all-review --dry-run    # 書かずに、変わる予定のチケットを 1 件 1 行の JSON で出す
 ```
 
