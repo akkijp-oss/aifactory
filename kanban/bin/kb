@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
 
-  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--attach FILE]...
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS] [--attach FILE]...
   kb list [--status S] [--pj P] [--all]
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
-  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS]   # --note '' でメモを空に戻す
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
@@ -26,6 +26,7 @@
 - pj    : $AIFACTORY_WORKSPACE/projects/<pj>/（無ければ examples/projects/<pj>/）がある PJ
 - kind  : workflow/kit/workflows/*.yml のうち `.` / `_` 始まりでないもの（chore / bug / feature / hotfix / research / merge-pr / docs）
 - status: todo → in_progress → review → done。人間待ちは blocked
+- 参照は 2 列に分ける: related_issue（外部 issue の URL。--issue-access で取得可否を付ける。既定は unreadable）と related_ticket（aifactory の内部票番号）。ADR-0084
 - チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
 - 添付は attachments/<id>/（本文には書かない。1 ファイル 20 MiB・1 チケット 100 MiB まで）。run のとき VM の ~/work/<id>/attachments/ に置かれる
 - DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
@@ -47,6 +48,10 @@ RUNNER = REPO / "workflow" / "bin" / "run"
 STATUSES = ["todo", "in_progress", "review", "blocked", "done"]
 STATUS_LABEL = {"todo": "未着手", "in_progress": "実行中", "review": "レビュー待ち", "blocked": "人間待ち", "done": "完了"}
 MIN_ID = 100   # DNS 名 task-{id}.sb.internal に使うため 3 桁以上
+# related_issue（外部 issue）の取得可否。sandbox のトークンは issues に 403 を返すので、書いていない参照は
+# 「取りに行かない」＝ unreadable に倒す（安全側。ADR-0084）
+ISSUE_ACCESS = ("readable", "unreadable")
+ISSUE_ACCESS_DEFAULT = "unreadable"
 
 
 def die(msg, code=1):
@@ -87,7 +92,10 @@ CREATE TABLE IF NOT EXISTS tickets (
     note    TEXT,
     created TEXT NOT NULL,
     updated TEXT NOT NULL,
-    depends_on TEXT
+    depends_on TEXT,
+    related_issue TEXT,
+    related_issue_access TEXT,
+    related_ticket TEXT
 );
 CREATE TABLE IF NOT EXISTS history (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 
 
 # 既に在る DB に後から足した列。CREATE TABLE IF NOT EXISTS は既存テーブルを変えないので、ここで補う（570）
-ADDED_COLUMNS = (("depends_on", "TEXT"),)
+ADDED_COLUMNS = (("depends_on", "TEXT"), ("related_issue", "TEXT"), ("related_issue_access", "TEXT"), ("related_ticket", "TEXT"))
 
 
 def db():
@@ -129,8 +137,8 @@ def record(c, tid, field, old, new):
     c.execute("INSERT INTO history (ticket, at, field, old, new) VALUES (?,?,?,?,?)", (tid, now(), field, str(old) if old is not None else None, str(new) if new is not None else None))
 
 
-def parse_depends(v, tid=None):
-    """`--depends` の値を "534,535" の形に正規化する（570）。空（'' / 空白だけ）なら None ＝ 依存なし。
+def parse_ids(v, tid=None, opt="--depends"):
+    """票番号を並べた値（`--depends` / `--ticket`）を "534,535" の形に正規化する（570）。空（'' / 空白だけ）なら None。
 
     ★存在検査はしない。まだ起票していない票や他 PJ の票を先行条件に書けるようにするためで、
       「DB に無い id」は読む側（core.pm_status）が安全側＝未完了として扱う。
@@ -139,11 +147,58 @@ def parse_depends(v, tid=None):
     ids = []
     for w in re.split(r"[,\s]+", str(v).strip()):
         if not w: continue
-        if not w.isdigit(): die(f"--depends は票番号をカンマ区切りで（'{w}' は数字ではない）")
+        if not w.isdigit(): die(f"{opt} は票番号をカンマ区切りで（'{w}' は数字ではない）")
         n = int(w)
-        if tid is not None and n == tid: die(f"--depends に自分自身（{tid}）は書けない")
+        if tid is not None and n == tid: die(f"{opt} に自分自身（{tid}）は書けない")
         if n not in ids: ids.append(n)                       # 重複は並び順を保って落とす
     return ",".join(str(n) for n in ids) or None
+
+
+def parse_depends(v, tid=None):
+    return parse_ids(v, tid, "--depends")
+
+
+def parse_issue_url(v):
+    """`--issue` の値を正規化する（556）。空（'' / 空白だけ）なら None ＝ 外部 issue の参照なし。
+
+    値は http(s) の URL をカンマ区切りで（複数可）。票番号（`393` / `#393`）は断る——
+    内部の番号は `--ticket` に書く列があり、**どちらの参照かを構造で分ける**のがこの 2 列の目的（ADR-0084）"""
+    if v is None: return None
+    urls = []
+    for w in re.split(r"[,\s]+", str(v).strip()):
+        if not w: continue
+        if not re.match(r"https?://\S+$", w):
+            die(f"--issue は外部 issue の URL（http(s)://…）で書く（'{w}' は URL ではない。aifactory の内部票番号なら --ticket）")
+        if w not in urls: urls.append(w)
+    return ",".join(urls) or None
+
+
+def parse_issue_access(v):
+    """`--issue-access` の値。空なら None ＝ 未記入。書けるのは ISSUE_ACCESS の 2 語だけ（自由文にしない）"""
+    if v is None: return None
+    s = str(v).strip()
+    if not s: return None
+    if s not in ISSUE_ACCESS: die(f"--issue-access は {list(ISSUE_ACCESS)} のどれか（'{s}' は読めない）")
+    return s
+
+
+def issue_fields(issue, access, cur_issue=None):
+    """`--issue` / `--issue-access` の組を (related_issue, related_issue_access) にする（556）。
+
+    - どちらも未指定（None）なら両方 None ＝ 触らない
+    - `--issue ''` は参照ごと消す（URL が無いのに取得可否だけ残さない）
+    - URL を書いて可否を書かなければ ISSUE_ACCESS_DEFAULT（unreadable）に倒す。
+      sandbox のトークンは issues に 403 を返すので、確かめていない参照は「取りに行かない」が安全側（ADR-0084）"""
+    url = parse_issue_url(issue)
+    if issue is not None and url is None:
+        if parse_issue_access(access): die("--issue '' は参照を消す指示なので --issue-access とは一緒に書けない")
+        return "", ""                                        # 消す（update が '' を NULL に揃える）
+    acc = parse_issue_access(access)
+    if acc is None:
+        return (None, None) if url is None else (url, ISSUE_ACCESS_DEFAULT)
+    if url is None and not cur_issue:
+        die("--issue-access は外部 issue の URL がある票にだけ書ける（--issue と一緒に指定する）")
+    return url, acc
 
 
 def update(c, tid, transcribe=True, **fields):
@@ -153,6 +208,9 @@ def update(c, tid, transcribe=True, **fields):
         # 「未指定（None）＝触らない」の判定より後で空を潰す。--note '' はメモを消す指示なので DB は NULL に揃える
         if k == "note" and v == "": v = None
         if k == "depends_on": v = parse_depends(v, tid)      # '' は依存を消す指示なので NULL に揃える（note と同じ）
+        if k == "related_issue": v = parse_issue_url(v)      # 以下 3 つも '' で消す（556）
+        if k == "related_issue_access": v = parse_issue_access(v)
+        if k == "related_ticket": v = parse_ids(v, tid, "--ticket")
         if k == "status" and v not in STATUSES: die(f"status は {STATUSES} のどれか")
         if k == "kind" and v not in kinds(): die(f"kind は {kinds()} のどれか")
         record(c, tid, k, r[k], v)
@@ -233,10 +291,17 @@ def cmd_new(a):
     write_ticket(file, a.title, body, a.pr)
     t = now()
     deps = parse_depends(getattr(a, "depends", None), tid)
-    c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated, depends_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps))
+    # 外部 issue（取得可否つき）と内部票番号は別の列に入れる（556 / ADR-0084）
+    issue, access = issue_fields(getattr(a, "issue", None), getattr(a, "issue_access", None))
+    issue, access = parse_issue_url(issue), parse_issue_access(access)
+    rel = parse_ids(getattr(a, "ticket", None), tid, "--ticket")
+    c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated, depends_on,"
+              " related_issue, related_issue_access, related_ticket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps, issue, access, rel))
     record(c, tid, "status", None, a.status)
     if deps: record(c, tid, "depends_on", None, deps)
+    for k, v in (("related_issue", issue), ("related_issue_access", access), ("related_ticket", rel)):
+        if v: record(c, tid, k, None, v)
     c.commit(); render(c)
     print(fmt(get(c, tid))); print(f"     {file}")
     for w in capability_warnings(a.pj, body): print(f"[kb] warning: {w}", file=sys.stderr)
@@ -319,7 +384,11 @@ def cmd_status(a, status):
 
 
 def cmd_set(a):
-    c = db(); r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind, depends_on=a.depends); render(c); print(fmt(r))
+    c = db()
+    issue, access = issue_fields(a.issue, a.issue_access, get(c, a.id)["related_issue"])
+    r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind, depends_on=a.depends,
+               related_issue=issue, related_issue_access=access, related_ticket=a.ticket)
+    render(c); print(fmt(r))
 
 
 def cmd_append(a):
@@ -877,6 +946,10 @@ def main():
     p = sp.add_parser("new"); p.add_argument("pj"); p.add_argument("kind"); p.add_argument("title")
     p.add_argument("--body"); p.add_argument("--pr", type=int); p.add_argument("--id", type=int); p.add_argument("--status", default="todo"); p.add_argument("--note")
     p.add_argument("--depends", metavar="IDS", help="先行票の番号。カンマ区切り（例 534,535）。'' で消す。存在検査はしない")
+    p.add_argument("--issue", metavar="URL", help="外部 issue の URL（http(s)://…。カンマ区切りで複数可）。'' で消す。内部の票番号は --ticket へ")
+    p.add_argument("--issue-access", metavar="A", choices=ISSUE_ACCESS,
+                   help=f"--issue を run が取りに行けるか {list(ISSUE_ACCESS)}（既定 {ISSUE_ACCESS_DEFAULT}。sandbox のトークンは issues を読めない）")
+    p.add_argument("--ticket", metavar="IDS", help="aifactory の内部票番号。カンマ区切り（例 393,521）。'' で消す。存在検査はしない")
     p.add_argument("--attach", action="append", metavar="FILE", help="起票と同時に添付する（複数可）")
     p = sp.add_parser("list"); p.add_argument("--status"); p.add_argument("--pj"); p.add_argument("--all", action="store_true")
     p = sp.add_parser("show"); p.add_argument("id", type=int)
@@ -884,6 +957,10 @@ def main():
         p = sp.add_parser(name); p.add_argument("id", type=int); p.add_argument("--note", required=(name == "block"))
     p = sp.add_parser("set"); p.add_argument("id", type=int); p.add_argument("--status"); p.add_argument("--pr", type=int); p.add_argument("--run"); p.add_argument("--note"); p.add_argument("--kind")
     p.add_argument("--depends", metavar="IDS", help="先行票の番号。カンマ区切り（例 534,535）。'' で消す。存在検査はしない")
+    p.add_argument("--issue", metavar="URL", help="外部 issue の URL（http(s)://…。カンマ区切りで複数可）。'' で消す。内部の票番号は --ticket へ")
+    p.add_argument("--issue-access", metavar="A", choices=ISSUE_ACCESS,
+                   help=f"--issue を run が取りに行けるか {list(ISSUE_ACCESS)}（既定 {ISSUE_ACCESS_DEFAULT}。sandbox のトークンは issues を読めない）")
+    p.add_argument("--ticket", metavar="IDS", help="aifactory の内部票番号。カンマ区切り（例 393,521）。'' で消す。存在検査はしない")
     p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
     p = sp.add_parser("attach"); p.add_argument("id", type=int); p.add_argument("file", nargs="+", help="添付するファイル（コピーされる）")
     p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")
