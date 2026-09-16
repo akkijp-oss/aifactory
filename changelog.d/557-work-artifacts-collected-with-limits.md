@@ -1,0 +1,2 @@
+### Fixed
+- **runner（Proxmox）: VM の成果物を「届いたか確かめて」回収する**。`report.md` / `plan.md` / `research.md` / 画像 / `gates/*.log` が `runs/<run>/work/` に同じ相対パスで揃い、Web コンソールと MCP の `read_file` から読める（画像は image で返る）。今までは `scp -r` の結果を見ていなかったので、運べていなくても記録が残らなかった。上限（1 ファイル 4 MiB / 合計 32 MiB / 256 件）を超えたものと運べなかったものは `state.json` の `artifacts_skipped` に理由付きで残り、回収の結果は `artifacts_received` / `artifacts_count` / `artifacts_bytes` / `artifacts_error` で分かる。VM 側に `work/` が無い（自死した run）は `artifacts_error: "no work dir"` として、運べなかった回と区別される（ADR-0085）
