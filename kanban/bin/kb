@@ -624,6 +624,12 @@ def cmd_run(a):
         if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
         render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
+    # 票メタの参照（556 の 3 列）を runner へ渡す。本文ファイルには書かず、値は毎回 DB から取る（594）。
+    # 取得可否が空の行（手で DB を直した場合）は既定に倒す——既定の置き場は kb の 1 か所のまま（ADR-0084）
+    if r["related_ticket"]: cmd.append(f"--ticket={r['related_ticket']}")
+    if r["related_issue"]:
+        cmd.append(f"--issue={r['related_issue']}")
+        cmd.append(f"--issue-access={r['related_issue_access'] or ISSUE_ACCESS_DEFAULT}")
     if getattr(a, "wait", None): cmd.append(f"--wait={int(a.wait * 60)}")   # 人は分で言い、runner は秒で待つ（242）
     if a.from_step is not None: cmd.append(f"--from={a.from_step}" if a.from_step else "--from")
     if a.from_branch: cmd.append(f"--branch={a.from_branch}")

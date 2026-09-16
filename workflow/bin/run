@@ -2,6 +2,7 @@
 """workflow/bin/run: workflow 定義（kit/workflows/<name>.yml）を読んで、sandbox VM の中で step を順に実行する runner（v1）。
 
   workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前] [--wait[=秒]]
+                   [--issue=URL] [--issue-access=語] [--ticket=番号]
 
 - pj        : $AIFACTORY_WORKSPACE/projects/<pj>/project.yml（無ければ examples/projects/<pj>/）がある PJ
 - task-id   : sandbox take に渡す ID（3 桁など）
@@ -33,6 +34,10 @@ agent が Claude の鍵の利用枠（5 時間 / 7 日の窓、429）で止ま�
 要る用途の Claude の鍵（workflow の agent step のモデルから fable / other を決めて `sandbox take --need=…` に渡す）が鍵プールに無ければ、
 take が「鍵なし:」で止まり、runner は `failure: "nokey"` で終わる（VM は取らない）。kb はチケットを todo に戻し、鍵が登録されると
 `dispatch --resume-paused` が初めから回し直す（ADR-0046）。
+
+--issue / --issue-access / --ticket は票メタの参照（kanban の related_issue / related_issue_access / related_ticket）を
+そのまま受け取り、依頼文の「## チケット」の直後に値として 1〜2 行出す（チケット 594）。渡さなければ行は出ない。
+運ぶのは値だけで、取りに行く / 行かないの判断の規則は役割文書（kit/roles/researcher.md）が持つ。
 
 チケットの添付（kb attach）は take のときに VM の ~/work/<task>/attachments/ へ置き、各 step の依頼文で場所を案内する（チケット 353）。
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
@@ -358,10 +363,13 @@ class Run:
     # 「その backend が実装していなくても起動を拒む必要がない step」でもあるので、pull backend の起動時検証も
     # ここを読む（判断を 2 か所に書かない。チケット 386）
     SKIPPABLE_CODE_STEPS = frozenset({"pr-automerge.sh"})
+    refs = {}       # 票メタの参照の既定（参照を持たない票。__init__ が必ず入れ直す。594）
 
-    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None):
+    def __init__(self, pj, task, wf_name, ticket, dry=False, keep=False, resume=False, wait_s=0, from_step=None, from_branch=None, refs=None):
         self.pj, self.task, self.wf_name, self.dry, self.keep, self.resume = pj, task, wf_name, dry, keep, resume
         self.wait_s = wait_s        # プールに空きが無いときに待つ上限（秒。0 なら待たずに失敗する）
+        # 票メタの参照（kb が DB の related_* をそのまま渡す。594）。値を運ぶだけで、解釈も既定値もここには置かない
+        self.refs = {k: v for k, v in (refs or {}).items() if v}
         # --from の再開（チケット 333）。--resume（貸出中の同じ VM で続ける）とは別経路で、新しい VM を取り直す
         self.from_step = self.from_branch = self.from_run = None
         self.from_state = {}
@@ -764,6 +772,7 @@ class Run:
         section = self.capability_section()
         if section: parts += ["", section, ""]
         parts += ["", "## チケット", "", self.ticket.strip(), ""]
+        parts += self.reference_lines()
         # 添付は本文に入らない（正本は workspace の attachments/）。場所と名前だけ案内する（チケット 353）
         att = self.state.get("attachments") or []
         if att:
@@ -790,6 +799,23 @@ class Run:
                       "（WIP でよい。メッセージ先頭に `wip:`）。上限で切られると未コミットの変更は次の attempt に渡らない"]
         parts += ["", "終わったら、何をしたかを 5 行以内で標準出力に報告して終了する。"]
         return "\n".join(parts).replace("~/work/<task>/", self.work + "/")
+
+    # 取得可否（kanban の related_issue_access。語彙は kb が正本）を依頼文の 1 語に言い換える表。
+    # ここに書いてよいのは語の言い換えまでで、なぜ読めないか・どう振る舞うかの規則は役割文書が持つ（ADR-0015 / ADR-0084）
+    ACCESS_WORD = {"unreadable": "取りに行かない", "readable": "取りに行ってよい"}
+
+    def reference_lines(self):
+        """票メタの参照（kb が渡した値）を依頼文に出す行。参照を持たない票では 1 行も足さない（594）"""
+        parts = []
+        if self.refs.get("ticket"):
+            ids = ", ".join("#" + t.strip().lstrip("#") for t in self.refs["ticket"].split(",") if t.strip())
+            if ids: parts += [f"- 参照（内部票。GitHub には無い）: {ids}"]
+        if self.refs.get("issue"):
+            urls = ", ".join(u.strip() for u in self.refs["issue"].split(",") if u.strip())
+            acc = self.refs.get("issue_access")
+            note = f"（取得可否: {acc} ＝ {self.ACCESS_WORD[acc]}）" if acc in self.ACCESS_WORD else (f"（取得可否: {acc}）" if acc else "")
+            if urls: parts += [f"- 参照（外部 issue）: {urls}{note}"]
+        return parts + [""] if parts else []
 
     def capability_section(self):
         """依頼文の「## この環境で検証できないこと」。判定も文面も lib/aifactory_capabilities.py が正本（チケット 552）"""
@@ -1333,8 +1359,13 @@ if __name__ == "__main__":
         runner = backend(Run)
     wait_s = 0
     from_step = from_branch = None
+    refs = {}
     for f in flags:
-        if f == "--wait": wait_s = 3600
+        if f.startswith("--issue-access="): refs["issue_access"] = f.split("=", 1)[1]
+        elif f.startswith("--issue="): refs["issue"] = f.split("=", 1)[1]
+        elif f.startswith("--ticket="): refs["ticket"] = f.split("=", 1)[1]
+        elif f in ("--issue", "--issue-access", "--ticket"): die(f"{f}=<値> の形で指定すること")
+        elif f == "--wait": wait_s = 3600
         elif f.startswith("--wait="): wait_s = int(f.split("=", 1)[1])
         elif f == "--from": from_step = ""                       # step の指定なし＝前回の記録（resume_step）に任せる
         elif f.startswith("--from="): from_step = f.split("=", 1)[1]
@@ -1345,4 +1376,4 @@ if __name__ == "__main__":
         # pull backend（macOS / Windows / Linux）は take を独自に持ち、wip ブランチからの checkout をしない（チケット 333 の範囲外）
         if project.get("backend") in ("macos-pull", "windows-pull", "linux-pull"): die("--from は sandbox backend の PJ だけで使える")
     sys.exit(runner(*args, dry="--dry-run" in flags, keep="--keep" in flags, resume="--resume" in flags, wait_s=wait_s,
-                    from_step=from_step, from_branch=from_branch).main())
+                    from_step=from_step, from_branch=from_branch, refs=refs).main())
