@@ -40,11 +40,14 @@ sandbox reinject <id>                                # 実行中の VM に今の
 ```bash
 sandbox/bin/install.sh --systemd                 # timer を登録する（ctl-update の後に 1 回。他の timer と一緒に入る）
 python3 lib/aifactory_keys_quota.py probe --full # 今すぐ観測する（「鍵」画面の「いま調べる」と同じ）
+python3 lib/aifactory_keys_quota.py probe --wait 120  # timer と重なっていたら最大 120 秒待ってから観測する
 python3 lib/aifactory_keys_quota.py show         # 鍵 × 窓の残り % とリセットまでの時間
 journalctl -u aifactory-keys-probe               # timer のログ
 ```
 
-- 「認証が通りません」と出た鍵は切れています。`sandbox keys token <名前>` で入れ替えると、次の観測から読めます。
+- timer と「いま調べる」と手元の `probe` は重なりません（1 周ずつ順番に走ります。ADR-0090）。重なった回の `probe` は「別のプローブが実行中」と言って何も叩かずに終わります（失敗ではありません）。「いま調べる」は timer の後ろに並んで待ちます。
+- **「枯渇」と出るのは、問い合わせが実際に断られた窓だけです**（ADR-0090）。残りが 1% でも断られていなければ枯渇とは出ず、残り 0.5% のように小数で出ます。残り 10% 以下が赤、25% 以下が橙、という色はそのままです。
+- 「認証が通りません」と出た鍵は切れています。`sandbox keys token <名前>` で入れ替えると、次の観測から読めます。入れ替えた鍵の残量と履歴は引き継ぎません（末尾 4 文字が同じ鍵に入れ替えても別物として扱います）。
 - 「このペースだと約 n で枯渇」は、窓の始点からの平均の消費ペースをリセット時刻まで延ばした見込みです。急ぐなら別の鍵を足します。
 - MCP の `keys_list` にも同じ数字（`keys[].quota`）が載るので、AI の運転係も「どの鍵がどれだけ使えるか」を読めます。
 
