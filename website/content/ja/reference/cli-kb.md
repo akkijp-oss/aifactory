@@ -171,7 +171,7 @@ kb show 554                                             # base_sha
 
 チケット本文の `path:line` は**起票時点のコード**を指します。base は進むので、起動する頃には行番号がずれています
 （実測: #526 は 51 commits・#527 は 68 commits ずれ、#550 は起票から半日で `core.py` の引用が +104 行ずれました）。
-差そのものは機械が知っているので、票に「いつ時点か」を刻んで run に伝えます（ADR-0089）。
+差そのものは機械が知っているので、票に「いつ時点か」を刻んで run に伝えます（ADR-0091）。
 
 - `base_sha` は**対象 PJ の `base_branch` の tip commit**です（aifactory 自身の sha ではありません）。
   `kb new` が `gh api repos/<repo>/commits/<base_branch>` で自動取得します。人が本文に書く値ではありません。

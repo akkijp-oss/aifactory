@@ -1,4 +1,4 @@
-"""票に「起票時の base sha」を機械が刻み、run が古さを依頼文の 1 行で知らせる（チケット 554 / ADR-0089）。
+"""票に「起票時の base sha」を機械が刻み、run が古さを依頼文の 1 行で知らせる（チケット 554 / ADR-0091）。
 
   python3 -m unittest discover -s workflow/tests -p 'test_ticket_base_sha.py' -v
 

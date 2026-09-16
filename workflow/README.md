@@ -79,7 +79,7 @@ workflow/bin/run kumitate 900 hotfix ticket.md --dry-run     # VM を触らず�
 
 - `--issue=URL` / `--issue-access=readable|unreadable` / `--ticket=番号` は票メタの参照（kanban の `related_issue` / `related_issue_access` / `related_ticket`）を受け取り、依頼文の「## チケット」の直後に**値として** 1〜2 行出す（`kb run` が DB から渡す）。渡さなければ行は出ない。運ぶのは値だけで、取りに行く / 行かないの規則は役割文書（`kit/roles/researcher.md`）が持つ（ADR-0084 / チケット 594）
 
-- `--base-sha=SHA` は票が刻んだ**起票時の base の commit sha**（kanban の `base_sha`）を受け取る（これも `kb run` が DB から渡す）。参照 3 つと違って出す位置は**本文の前**——「## チケット」の**直下**に置き、票の `path:line` が何 commits 前のものかを本文より先に読ませる。距離は制御系では出せない（PJ の clone を持たない）ので、base を fetch した直後の**VM の中**で `git rev-list --count <SHA>..origin/<base>` を 1 回測り、`state.json` に `base_sha` / `base_distance` を残す。浅い fetch や force-push で sha を辿れなければ**距離 0 に丸めず**「現在との距離は測れなかった」と書く（0 に丸めると「ずれていない」と読めてしまい、この票が塞ごうとした事故そのものになる）。距離 0 の票と sha を持たない票には 1 行も足さない（ADR-0089 / チケット 554）
+- `--base-sha=SHA` は票が刻んだ**起票時の base の commit sha**（kanban の `base_sha`）を受け取る（これも `kb run` が DB から渡す）。参照 3 つと違って出す位置は**本文の前**——「## チケット」の**直下**に置き、票の `path:line` が何 commits 前のものかを本文より先に読ませる。距離は制御系では出せない（PJ の clone を持たない）ので、base を fetch した直後の**VM の中**で `git rev-list --count <SHA>..origin/<base>` を 1 回測り、`state.json` に `base_sha` / `base_distance` を残す。浅い fetch や force-push で sha を辿れなければ**距離 0 に丸めず**「現在との距離は測れなかった」と書く（0 に丸めると「ずれていない」と読めてしまい、この票が塞ごうとした事故そのものになる）。距離 0 の票と sha を持たない票には 1 行も足さない（ADR-0091 / チケット 554）
 
 runner がやること: `sandbox take` → 作業ブランチ作成 → step を順に（agent は `claude -p --model <クラスのモデル> --output-format stream-json` を VM 内で実行、code は制御系で `kit/steps/*.sh`）→ transition → artifact 回収 → `sandbox release`。PR は `pr-create.sh` が作り、**マージは人間**（`project.yml` に `auto_merge` を書いた PJ だけ、次の `automerge` が条件を確かめて機械がマージする）。
 

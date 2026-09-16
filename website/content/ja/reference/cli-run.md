@@ -24,7 +24,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--ticket=番号` | チケットが参照する内部票の番号（カンマ区切り）。依頼文には `#521` の形で出る（GitHub には無い番号） |
 | `--base-sha=SHA` | 票が起票されたときの base の commit sha。`kb run` が票の `base_sha` を渡す。base を fetch した後に `git rev-list --count <SHA>..origin/<base>` で距離を測り、進んでいれば依頼文の「## チケット」の**直下**に「注意: この票の行番号は N commits 前（…）のもの」の 1 行を出す |
 
-`--base-sha` の距離は VM の中で測ります（制御系はプロジェクトの clone を持ちません）。測れたら `state.json` に `base_sha` と `base_distance` が残ります。base が進んでいない（距離 0）票と、`base_sha` を持たない票には 1 行も足しません。浅い fetch や force-push で sha を辿れないときは距離を 0 に丸めず、「現在との距離は測れなかった」と書きます（`--dry-run` は VM を借りないので常にこちらになります）。ADR-0089。
+`--base-sha` の距離は VM の中で測ります（制御系はプロジェクトの clone を持ちません）。測れたら `state.json` に `base_sha` と `base_distance` が残ります。base が進んでいない（距離 0）票と、`base_sha` を持たない票には 1 行も足しません。浅い fetch や force-push で sha を辿れないときは距離を 0 に丸めず、「現在との距離は測れなかった」と書きます（`--dry-run` は VM を借りないので常にこちらになります）。ADR-0091。
 
 参照の 3 つ（`--issue` / `--issue-access` / `--ticket`）は**値を運ぶだけ**です。渡さなければ依頼文に行が出ません（参照を持たないチケットの依頼文は今までどおり）。取りに行く / 行かないの規則そのものは役割文書（`workflow/kit/roles/researcher.md`）が持ち、依頼文には書き写しません（ADR-0015 / ADR-0084）。
 

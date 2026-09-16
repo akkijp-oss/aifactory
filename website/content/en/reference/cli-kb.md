@@ -178,7 +178,7 @@ kb show 554                                                          # base_sha
 The `path:line` quotes in a ticket body point at the code **as it was when the ticket was filed**. Base moves on, so by
 the time the run starts the line numbers have drifted (measured: #526 was 51 commits behind, #527 68, and #550's quotes
 into `core.py` had moved +104 lines within half a day of filing). The machine knows that difference, so the ticket
-carries "as of when" and the run is told (ADR-0089).
+carries "as of when" and the run is told (ADR-0091).
 
 - `base_sha` is the **tip commit of the target project's `base_branch`** (not a sha of aifactory itself). `kb new`
   fetches it with `gh api repos/<repo>/commits/<base_branch>`. It is not a value a human writes into the body.

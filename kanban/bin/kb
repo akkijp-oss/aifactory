@@ -27,7 +27,7 @@
 - kind  : workflow/kit/workflows/*.yml のうち `.` / `_` 始まりでないもの（chore / bug / feature / hotfix / research / merge-pr / docs）
 - status: todo → in_progress → review → done。人間待ちは blocked
 - 参照は 2 列に分ける: related_issue（外部 issue の URL。--issue-access で取得可否を付ける。既定は unreadable）と related_ticket（aifactory の内部票番号）。ADR-0084
-- base_sha は起票時の base（PJ の base_branch の tip）の commit sha。kb new が gh で自動で刻み、kb run が runner へ渡す（run が「何 commit 前の行番号か」を依頼文に出す）。ADR-0089
+- base_sha は起票時の base（PJ の base_branch の tip）の commit sha。kb new が gh で自動で刻み、kb run が runner へ渡す（run が「何 commit 前の行番号か」を依頼文に出す）。ADR-0091
 - チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
 - 添付は attachments/<id>/（本文には書かない。1 ファイル 20 MiB・1 チケット 100 MiB まで）。run のとき VM の ~/work/<id>/attachments/ に置かれる
 - DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
