@@ -99,6 +99,14 @@ class StampingTest(KbHarness):
         self.assertIn("gh api repos/akkijp/kumitate/commits/develop", self.calls_text())
         self.assertIn("gh-app token kumitate", self.calls_text())
 
+    def test_the_other_mouth_files_through_kb_so_it_gets_the_stamp_too(self):
+        """完了条件の「intake でも自動記録される」の根拠。intake も console も `kb new` を subprocess で呼ぶだけなので、
+        刻む実装は kb の 1 か所で足りる（ADR-0015）。ここが直接 INSERT に変わったらこの検査で気づく"""
+        for path, needle in ((REPO / "glue/bin/intake", '"new"'), (REPO / "console/lib/core.py", '"new"')):
+            src = path.read_text(encoding="utf-8")
+            self.assertIn(needle, src, path)
+            self.assertNotIn("INSERT INTO tickets", src, f"{path} が kb を通さずに票を作っている")
+
     def test_the_stamp_is_left_in_the_history(self):
         self.assertEqual(self.new().returncode, 0)
         self.assertIn("base_sha", self.kb("history", 700).stdout)
