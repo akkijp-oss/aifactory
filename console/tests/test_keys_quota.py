@@ -1,4 +1,4 @@
-"""鍵プールの残量観測（lib/aifactory_keys_quota.py。ADR-0085）:
+"""鍵プールの残量観測（lib/aifactory_keys_quota.py。ADR-0087）:
 
 - 応答ヘッダ `anthropic-ratelimit-unified-*` を 3 つの窓（5h / 7d / 7d_oi）として読む。7d_oi は Fable で叩いたときだけ返る
 - 429 はヘッダ付きの成功として読み、それ以外の 4xx / 5xx は理由（error.type）だけを残す。鍵の値はどこにも出ない

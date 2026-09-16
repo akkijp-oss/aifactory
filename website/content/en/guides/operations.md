@@ -33,7 +33,7 @@ Long-lived tokens from `claude setup-token` expire. When one does, the step stop
 
 ### Remaining quota of the keys
 
-The *Keys* screen shows, above the table, the **remaining quota** of every key: the 5-hour window, the 7-day window (all models) and the 7-day Fable window, each with the remaining %, the time to reset and a pace-based exhaustion forecast (ADR-0085). The control plane's timer `aifactory-keys-probe.timer` sends one tiny request per key every 5 minutes and reads the usage headers of the answer (a cheap model every 5 minutes; keys allowed for Fable are also asked with Fable every 15 minutes, since the Fable window is only reported when Fable is asked). Key values never appear in the records.
+The *Keys* screen shows, above the table, the **remaining quota** of every key: the 5-hour window, the 7-day window (all models) and the 7-day Fable window, each with the remaining %, the time to reset and a pace-based exhaustion forecast (ADR-0087). The control plane's timer `aifactory-keys-probe.timer` sends one tiny request per key every 5 minutes and reads the usage headers of the answer (a cheap model every 5 minutes; keys allowed for Fable are also asked with Fable every 15 minutes, since the Fable window is only reported when Fable is asked). Key values never appear in the records.
 
 ```bash
 sandbox/bin/install.sh --systemd                 # register the timer (once, after ctl-update; installed with the other timers)

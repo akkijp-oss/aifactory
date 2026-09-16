@@ -316,7 +316,7 @@ ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-dir
 .wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
 @media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
 
-/* 鍵の残量（利用枠。ADR-0085）。bar = 残量、縦線 = 窓の残り時間。色は残量の状態（ok / warn / alarm）にだけ使う */
+/* 鍵の残量（利用枠。ADR-0087）。bar = 残量、縦線 = 窓の残り時間。色は残量の状態（ok / warn / alarm）にだけ使う */
 .hrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .hrow h2 { margin-bottom: 10px; }
 .quota { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin: 6px 0 10px; }

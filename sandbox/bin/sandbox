@@ -12,7 +12,7 @@
 #                                               鍵ごとに「Fable に使う（--fable）」「Opus・Sonnet・Haiku に使う（--other）」を持ち、take がモデルごとに 1 本選ぶ。
 #                                               console の「鍵」画面（#/keys）と同じ keys.json を読み書きする。プールに無い用途は take が「鍵なし:」で止まる
 #   sandbox keys used <名前> / keys pick …      runner が呼ぶ口（起動の報告 / pull backend 向けの鍵の払い出し）。人が打つことはない
-#   （残量の観測は lib/aifactory_keys_quota.py probe。timer aifactory-keys-probe が 5 分ごとに呼び、keys.json の隣の keys-quota.db に書く。ADR-0085）
+#   （残量の観測は lib/aifactory_keys_quota.py probe。timer aifactory-keys-probe が 5 分ごとに呼び、keys.json の隣の keys-quota.db に書く。ADR-0087）
 #   sandbox token set|clear <pj|global> gh      GitHub の静的トークン（GitHub App が無いときのフォールバック）。Claude の鍵は置けない（sandbox keys へ）
 #   sandbox token rotate [claude|claude:<系統>|gh]  claude = 制御系の ctl.env の鍵（intake が claude -p を呼ぶのに使う）を差し替えて console を restart。
 #                                               gh = global・全 PJ・ctl.env の GH_TOKEN を差し替えて貸出中 VM に reinject --all。どちらもプールは触らない

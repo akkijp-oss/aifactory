@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""lib/aifactory_keys_quota.py: 鍵プールの残量（利用枠）を観測して記録する（ADR-0085）。
+"""lib/aifactory_keys_quota.py: 鍵プールの残量（利用枠）を観測して記録する（ADR-0087）。
 
   python3 lib/aifactory_keys_quota.py probe [--full|--cheap] [--json]   全部の有効な鍵を 1 周プローブして記録する
   python3 lib/aifactory_keys_quota.py show [--json]                     いまの残量（鍵 × 窓）を出す

@@ -1818,7 +1818,7 @@ def keys_view():
                      # launches = runner が実際にその鍵で claude を起動した回数（uses は take / reinject で割り当てた回数。使用量の目安は launches）
                      "launches": k.get("launches") or 0,
                      "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
-    # 残量（利用枠）は keys.json の隣の keys-quota.db から読むだけ（書くのは timer / ジョブの probe。ADR-0085）。
+    # 残量（利用枠）は keys.json の隣の keys-quota.db から読むだけ（書くのは timer / ジョブの probe。ADR-0087）。
     # 鍵ごとの quota は {probed, stale, error, windows: [{key: 5h|7d|7d_oi, remaining_pct, reset, start, remain_s, will_exhaust, …}], binding}。
     # まだ観測が無い鍵は None（鍵を足した直後・timer 未登録）
     q = keyq.view(keys_file=path)

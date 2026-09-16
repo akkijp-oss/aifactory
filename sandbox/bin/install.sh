@@ -6,7 +6,7 @@
 #     aifactory-idle-stop   使われていないプール VM の停止（15 分ごと。252）
 #     aifactory-resume      鍵の利用枠切れで一時停止した run の続きを回す（5 分ごと。380）
 #     aifactory-pm          AI Factory Manager（PM）の 1 周（5 分ごと。537 / ADR-0074）。この版は提案を書くだけで run は起こさない
-#     aifactory-keys-probe  鍵プールの残量（利用枠）を観測する（5 分ごと。ADR-0085。console の「鍵」画面に出る）
+#     aifactory-keys-probe  鍵プールの残量（利用枠）を観測する（5 分ごと。ADR-0087。console の「鍵」画面に出る）
 #   install.sh --remove   systemd の登録を外す
 #   macOS: シンボリックリンクだと launchd（gh-refresh）の bash が Documents 配下を読めず "Operation not permitted" になる（TCC）ので実体コピー。
 #   launchd の plist は sandbox/templates/launchd/（BUILD.md Step 0b）。リポジトリの sandbox/bin/sandbox を更新したら、もう一度これを実行する

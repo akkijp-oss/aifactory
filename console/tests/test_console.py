@@ -227,7 +227,7 @@ class KeysApiTest(unittest.TestCase):
         self.assertEqual(st, 403, d)
 
 
-# 残量の観測（ADR-0085）の口を確かめるための偽 Anthropic。model が fable なら 7d_oi 付き、それ以外は 5h / 7d だけ。
+# 残量の観測（ADR-0087）の口を確かめるための偽 Anthropic。model が fable なら 7d_oi 付き、それ以外は 5h / 7d だけ。
 # トークン "bad-…" は 401（鍵切れ）。本物の API には触らない
 class FakeAnthropic(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -252,7 +252,7 @@ class FakeAnthropic(http.server.BaseHTTPRequestHandler):
 
 
 class KeysQuotaApiTest(unittest.TestCase):
-    """鍵の残量（ADR-0085）: /api/keys の quota、/api/keys/history、/api/keys/probe（ジョブ）。観測は偽 Anthropic に向ける"""
+    """鍵の残量（ADR-0087）: /api/keys の quota、/api/keys/history、/api/keys/probe（ジョブ）。観測は偽 Anthropic に向ける"""
 
     @classmethod
     def setUpClass(cls):
