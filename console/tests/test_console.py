@@ -2375,13 +2375,14 @@ class ApiTest(unittest.TestCase):
                        "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
-        """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
+        """#/pm は「実行・監視」群の先頭に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
         html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span></a>', html,
                       "ナビの項目が既存と同じ形になっていない（件数札は置かない。#588）")
         self.assertLess(html.index('data-nav="board"'), html.index('data-nav="pm"'))
-        self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "AI Factory Manager はボードの直後（頻度順）")
+        self.assertLess(html.index('data-nav="intake"'), html.index('data-nav="pm"'),
+                        "ボード→起票（チケット群）の後、実行・監視群の先頭に AI Factory Manager（#595）")
         self.assertIn("p: 'pm'", app, "g p の割り当てが無い（? の一覧にも載らない）")
         self.assertIn("seg[0] === 'pm') await viewPm()", app, "#/pm のルートが無い")
         body = app[app.index("async function viewPm"):app.index("function renderPm")]
@@ -2442,6 +2443,53 @@ class ApiTest(unittest.TestCase):
                          "値を入れないなら要素を置かない（置けば常に 0 件と見分けが付かない）")
         self.assertEqual(written - declared, set(),
                          f"refreshNav が書くが index.html に無い札: {sorted(written - declared)}")
+
+    def test_rail_is_three_groups_in_ticket_order(self):
+        """左ナビは「チケット / 実行・監視 / 管理」の 3 群（#595）。10 項目の識別子は 1 つも増減しない。
+
+        JS を動かす基盤が無いのでソースを突き合わせる。DOM 順が Tab 順と表示順を兼ねるので、
+        群ごとの data-nav の並びを固定する。見出しは押せない目印であってリンクではない。
+        """
+        html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        rail = re.search(r"<nav class=\"rail\".*?</nav>", html, re.S)
+        self.assertTrue(rail, "index.html に <nav class=\"rail\"> が無い（検査が空回りしている）")
+        rail = rail.group(0)
+        groups = re.findall(r'<div class="rail-group".*?</div>', rail, re.S)
+        self.assertEqual(len(groups), 3, f"ナビの群が 3 つでない: {len(groups)}")
+        self.assertEqual([re.findall(r'data-nav="([a-z]+)"', g) for g in groups],
+                         [["board", "intake"], ["pm", "runs", "jobs", "logs", "stats"], ["sandbox", "keys", "config"]],
+                         "群の中身と順序がチケットの表と違う（チケット: ボード・起票 / 実行・監視: AI Factory Manager・実行記録・ジョブ・ログ・統計 / 管理: sandbox・鍵・設定）")
+        # 識別子は 1 つも増えず・減らず・綴りも変わらない: data-nav と href="#/<nav>" が 10 個で 1 対 1
+        navs = re.findall(r'<a href="#/([a-z]+)" data-nav="([a-z]+)"', rail)
+        self.assertEqual(len(navs), 10, f"ナビのリンクが 10 個でない: {len(navs)}")
+        self.assertEqual([h for h, _ in navs], [n for _, n in navs], "href と data-nav が食い違うリンクがある")
+        self.assertEqual(set(n for _, n in navs),
+                         {"board", "intake", "pm", "runs", "jobs", "logs", "stats", "sandbox", "keys", "config"})
+        self.assertEqual(set(re.findall(r'<b id="(n-[a-z-]+)"', rail)), {"n-board", "n-runs", "n-jobs", "n-sandbox"},
+                         "件数札の集合が変わっている（n-pm は #588 で外した。戻さない）")
+        # 見出しは <a> でなく、data-nav / href を持たない（押せる項目に見せない）
+        heads = re.findall(r"<[^>]*data-t=\"nav\.group\.[a-z]+\"[^>]*>", rail)
+        self.assertEqual(len(heads), 3, f"nav.group.* の見出しが 3 つでない: {heads}")
+        for h in heads:
+            self.assertTrue(h.startswith("<span"), f"見出しがリンクになっている: {h}")
+            self.assertNotIn("data-nav", h, f"見出しに data-nav が付いている: {h}")
+            self.assertNotIn("href", h, f"見出しに href が付いている: {h}")
+        # 見出しの文言は strings.js が正本（HTML に日本語を直書きしない）
+        self.assertEqual(re.findall(r"[ぁ-んァ-ン一-龥]{2,}", rail), [], "ナビに日本語の直書きがある（文言は strings.js の T へ）")
+        # 選択中は色だけでなく aria-current でも分かる。付け外しは route の 1 か所（HTML に直書きしない）
+        self.assertNotIn("aria-current", html, "aria-current を HTML に直書きしている（選択は route が付け外しする）")
+        route = app[app.index("async function route()"):app.index("const [path, q]")]
+        self.assertIn("setAttribute('aria-current', 'page')", route, "選択中のリンクに aria-current を付けていない")
+        self.assertIn("removeAttribute('aria-current')", route, "選択から外れたリンクの aria-current を外していない")
+        # g + 頭文字の行き先はナビの 10 項目と過不足なく一致する（? の一覧にだけ在る画面を作らない）
+        keys = dict(re.findall(r"(\w+): '([a-z]+)'", re.search(r"const KEYS = \{(.*?)\};", app).group(1)))
+        self.assertEqual(set(keys.values()), set(n for _, n in navs), "KEYS の行き先とナビの項目が食い違う")
+        # 低い画面でも末尾（設定・接続表示）へ届く。720px 以下は群ごとに折り返す
+        self.assertRegex(css, r"\.rail\s*\{[^}]*overflow-y:\s*auto", "画面が低いとき .rail が縦スクロールしない（末尾の項目に届かない）")
+        narrow = re.search(r"@media \(max-width: 720px\) \{.*?\n", css).group(0)
+        self.assertIn(".rail-group {", narrow, "720px 以下で群の折り返しを決めていない")
 
     def test_pm_view_keeps_unknown_apart_from_zero_and_never_contradicts_itself(self):
         """「取得できていない」を「0 件」「順調」と同じ見え方にしない。同じ画面の中で矛盾もさせない"""

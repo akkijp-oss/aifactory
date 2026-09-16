@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const tt = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o && o[k] != null) ? o[k] : '');   // 値は呼ぶ側で esc してから渡す
 const $ = id => document.getElementById(id);
 const STATUSES = ['todo', 'in_progress', 'review', 'blocked', 'done'];
-const KEYS = { b: 'board', p: 'pm', i: 'intake', r: 'runs', j: 'jobs', s: 'sandbox', t: 'stats', k: 'keys', l: 'logs', c: 'config' };   // g + 頭文字で移動
+const KEYS = { b: 'board', i: 'intake', p: 'pm', r: 'runs', j: 'jobs', l: 'logs', t: 'stats', s: 'sandbox', k: 'keys', c: 'config' };   // g + 頭文字で移動（並びはナビの 3 群と同じ順。? の一覧もこの順に出る）
 let timer = null, lastRoute = '', prevRoute = '';
 let kindDesc = {};   // 種別 → workflow の説明（未知の種別の保険。利用者向けの文は T.kind）
 const kindHelp = k => (T.kind && T.kind[k]) || kindDesc[k] || '';   // 種別を選ぶと出る「いつ選ぶか」
@@ -1647,7 +1647,11 @@ const scrollPos = {};
 async function route() {
   const h = location.hash || '#/board'; if (lastRoute) scrollPos[lastRoute] = window.scrollY;
   prevRoute = lastRoute; lastRoute = h; clearInterval(timer);
-  document.querySelectorAll('.rail a[data-nav]').forEach(a => a.classList.toggle('active', h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'))));
+  document.querySelectorAll('.rail a[data-nav]').forEach(a => {
+    const on = h.startsWith('#/' + a.dataset.nav) || (a.dataset.nav === 'board' && h.startsWith('#/ticket')) || (a.dataset.nav === 'runs' && h.startsWith('#/run/')) || (a.dataset.nav === 'jobs' && h.startsWith('#/job/'));
+    a.classList.toggle('active', on);
+    on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');   /* 選択中は色だけでなく支援技術にも伝える */
+  });
   const [path, q] = h.slice(1).split('?'); const seg = path.split('/').filter(Boolean);
   try {
     if (seg[0] === 'board' || !seg.length) await viewBoard();

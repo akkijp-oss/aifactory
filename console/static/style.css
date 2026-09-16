@@ -24,7 +24,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 
 .shell { display: grid; grid-template-columns: 196px 1fr; min-height: 100vh; }
 .col-main { min-width: 0; }
-.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); }
+.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+/* ナビは 3 群（チケット / 実行・監視 / 管理）。見出しは押せない目印なので、余白と控えめな字で群を示す（色は既存のものだけ） */
+.rail-group { display: flex; flex-direction: column; gap: 2px; }
+.rail-group + .rail-group { margin-top: 12px; }
+.rail-h { font-size: 11px; color: var(--muted); letter-spacing: .04em; padding: 0 10px 3px; }
 .rail a { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: var(--r); color: var(--ink); }
 .rail a:hover { background: var(--ground); text-decoration: none; }
 .rail a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -150,7 +154,7 @@ h2.step, legend.step { font-size: 13px; font-weight: 600; color: var(--muted); m
 .intake .actions.preview { margin: -6px 0 12px; }
 #new-preview-box { border: 1px solid var(--line-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 14px; background: var(--ground); }
 @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .board { grid-template-columns: repeat(2, 1fr); } .flow { grid-template-columns: 1fr 1fr; } .flow .gap { display: none; } }
-@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } .modes { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-group { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; align-items: center; } .rail-group + .rail-group { margin-top: 4px; } .rail-h { padding: 0 6px 0 10px; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } .modes { grid-template-columns: 1fr; } }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12.5px; }

@@ -12,6 +12,7 @@ const T = {
   "result": { "end": "終了", "human": "人間へ", "failed": "失敗（開始前）", "abandoned": "中断" },
   "time": { "sec": "{n} 秒", "min": "{n} 分", "hourMin": "{h} 時間 {m} 分", "dayHour": "{d} 日 {h} 時間", "unknown": "時刻の記録なし", "ahead": "開始が未来の時刻" },
   "nav": { "board": "ボード", "pm": "AI Factory Manager", "tickets": "チケットの一覧", "intake": "起票", "runs": "実行記録", "jobs": "ジョブ", "sandbox": "sandbox", "stats": "統計", "keys": "鍵", "logs": "ログ", "config": "設定",
+           "group": { "tickets": "チケット", "ops": "実行・監視", "admin": "管理" },
            "badgeScope": "この数字はすべての PJ の件数です。ボードで PJ を選んでも変わりません。", "updated": "更新 {t}（{tz}）", "tzDiffers": "記録の時刻は {tz} です。画面はこのブラウザーの時間帯に直しています。", "shortcuts": "? でショートカット" },
   "conn": { "on": "接続中", "off": "切断" },
   "power": { "running": "起動中", "stopped": "停止中", "idle": "節電で停止中", "candidate": "停止候補" },
