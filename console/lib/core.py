@@ -230,6 +230,7 @@ def kb(*args, stdin=None):
 
 # ---------- runs
 RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)-(\d+)(?:-dry)?(?:-attempt\d+)?$")
+ATTEMPT_SUFFIX = re.compile(r"-attempt\d+$")   # 再走で退避された run の目印（workflow/bin/run が前回分を rename する）
 
 
 def ts_state(s):
@@ -273,7 +274,7 @@ def run_summary(d):
             "resume_step": s.get("resume_step"), "resumed_from": s.get("resumed_from"), "resume": resume_command(task, s),
             "human": s.get("human"), "merged": s.get("merged"),
             "next": s.get("next"), "current": ts_keys(s.get("current"), "since"), "steps_done": len(hist), "last_ok": hist[-1]["ok"] if hist else None,
-            "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
+            "dry": d.name.endswith("-dry"), "attempt": bool(ATTEMPT_SUFFIX.search(d.name)),
             "mtime": ts_file(st if st.exists() else d)}
 
 
@@ -293,13 +294,21 @@ def run_liveness(s, jobs, tickets):
 
     runner は落ちるときに state.json へ finished を書けないことがある（take の失敗・SIGTERM・VM の再起動）。
     その run を実行中のまま出すと「待っていれば進む」と読ませるので、console が起動したジョブの終了と突き合わせる。
-    分からないものは running のまま（根拠の無い run を勝手に中断にしない）。"""
+    分からないものは running のまま（根拠の無い run を勝手に中断にしない）。
+
+    名前がずれる分（チケット 584）: 同じ名前で再走すると workflow/bin/run が前回の run を `-attemptN` へ退避するが、
+    起動したジョブの run_hint は退避前の名前のまま。退避された run はどのジョブとも名前が一致せず永久に「実行中」に
+    見えるので、退避前の名前（兄弟 run）を指すジョブも見る。退避より後に始まったジョブは退避後の run の runner なので除く。"""
     if s.get("status") != "running": return s
     name, task, mt = s["name"], s.get("task"), s.get("mtime")
+    base = ATTEMPT_SUFFIX.sub("", name)                        # 退避された run なら、退避前（兄弟 run）の名前
     cands = [j for j in jobs if j.get("kind") == "kb-run" and j.get("run_hint") == name]
     if not cands and task:   # run_hint を持たない古いジョブ: チケットが同じで、run の開始より前に始まっていないもの
         cands = [j for j in jobs if j.get("kind") == "kb-run" and not j.get("run_hint")
                  and str(j.get("ticket")) == str(task) and not after(s.get("started"), j.get("started"))]
+    if not cands and base != name:   # 退避された run: run_hint が退避前の名前のジョブだけ（別の名前のジョブには広げない）
+        cands = [j for j in jobs if j.get("kind") == "kb-run" and j.get("run_hint") == base
+                 and not after(j.get("started"), mt)]
     if cands:
         j = cands[0]                                            # JobStore.list() は開始の新しい順
         # state.json がジョブの終了より後に書かれていれば、別の runner が続きを回している（--resume 等）
@@ -307,8 +316,10 @@ def run_liveness(s, jobs, tickets):
             s["status"] = "abandoned"
             s["runner"] = {"id": j["id"], "label": j.get("label"), "state": j.get("state"), "rc": j.get("rc"), "finished": j.get("finished")}
         return s
-    t = tickets.get(name)   # ジョブの記録が無い run: 台帳が結果を反映済み（人間待ち）なら runner は終わっている
-    if t and t.get("status") == "blocked" and after(t.get("updated"), mt): s["status"] = "abandoned"
+    # ジョブの記録が無い run: 台帳が結果を反映済みなら runner は終わっている。完了（done）でも、その更新が
+    # run の最終書き込みより後なら同じこと（チケット 584 の実測: 票は done で PR も着地済み、run だけ running のまま）
+    t = tickets.get(name) or (tickets.get(base) if base != name else None)
+    if t and t.get("status") in ("blocked", "done") and after(t.get("updated"), mt): s["status"] = "abandoned"
     return s
 
 
@@ -384,6 +395,10 @@ def run_outcome(d, s, state, wf, files):
     if s.get("status") == "not_started": o["reason"] = "not_started"; return o
     state = state or {}
     hist = state.get("history") or []
+    # 掃き寄せ（`sandbox: uncommitted changes by agent`）が何を拾い、何を除外して戻したか。
+    # 差分を開かないと気づけない状態をやめるため、どの終わり方の run でも outcome に載せる（チケット 572）
+    o["swept"] = [{"step": h.get("step"), **(h.get("swept") or {})} for h in hist if h.get("swept")]
+    o["dirty_at_start"] = state.get("dirty_at_start") or []
     # runner が居なくなった run（チケット 236）: 待っても進まないことと、終わったジョブを先に言う
     if s.get("status") == "abandoned":
         o["reason"] = "runner_gone"; o["job"] = s.get("runner")
@@ -2064,7 +2079,7 @@ def agent_step_rows(force=False):
             row = dict(c["row"])
             row.update({"run": d.name, "date": d.name[:10], "pj": st.get("pj") or m.group(1), "task": st.get("task") or m.group(2),
                         "workflow": st.get("workflow"), "step": fm.group(1), "index": int(fm.group(2)),
-                        "dry": d.name.endswith("-dry"), "attempt": bool(re.search(r"-attempt\d+$", d.name)),
+                        "dry": d.name.endswith("-dry"), "attempt": bool(ATTEMPT_SUFFIX.search(d.name)),
                         "at": ts_file(f)})
             rows.append(row)
     for k in [k for k in _stats_mem if k not in seen]: del _stats_mem[k]; dirty = True
@@ -2710,7 +2725,10 @@ PM_BLOCKED_REASONS = ("pr_created", "loop_limit", "step_failed", "step_timeout",
 # 「候補が 0 件」（no_todo）とも別の値にする（ADR-0077／#570）。blocked_by_pause は「解除前の一時停止しか残っていない」。
 # 解け方は一時停止の種類で違う: 利用枠切れ（quota）は解除時刻が来れば timer（dispatch --resume-paused）が続きを回すが、
 # 鍵待ち（nokey）は人が鍵を登録するまで、回数超過（hits_exceeded）は人が枠を確かめるまで解けない（timer は拾わない）。
-# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）
+# 人の一時停止指示（reason の paused）とは別の意味なので流用しない（#581）。
+# ★人が動くまで解けない側（鍵待ち / 回数超過）も blocked_by_pause のまま言う。語は増やさない（ADR-0074 決定 2）。
+#   どちらなのかは facts の skipped_by_pause（paused / until / needed_keys / hits_exceeded）で読み、
+#   画面がそれを 1 票 1 行で出す（#582）。「格上げしない」は ja/en の guides/console.md に公開済みの契約
 PM_NEXT_REASONS = ("picked_next", "no_todo", "run_running", "landing_observed", "needs_human", "board_unreadable",
                    "requeue_proposed", "blocked_by_dependency", "blocked_by_pause")
 # 1 周（tick）の語彙。ADR-0074 決定 3 / 決定 5 の表をそのまま写し、ここに無い語を PM が作らない
@@ -2718,6 +2736,7 @@ PM_MODES = ("propose", "auto")                       # auto は #538。本票は
 PM_ACTIONS = ("none", "run", "requeue")              # 判断ログの action。propose では実行しない（決めて書くだけ）
 # ADR-0074 決定 5 の表に ADR-0077（#570）が blocked_by_dependency を、#581 が blocked_by_pause を 1 語ずつ足した。
 # ここに無い語を PM が作らない
+# ★語を足すときは PM_NEXT_REASONS と両方に入れる（片方だけだと文言・提案のどちらかが語を受けられない。#570 の事故）
 PM_REASON_CODES = ("no_todo", "picked_next", "run_running", "landing_observed", "merged_observed", "requeued",
                    "same_gate_fails", "review_retry_limit", "release_path", "risky_diff", "forbidden_hint",
                    "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
@@ -2802,6 +2821,17 @@ def pm_paused_skip(plan):
     return bool(plan) and bool(not plan.get("ready") or plan.get("hits_exceeded"))
 
 
+def pm_pause_needs_human(plan):
+    """その一時停止は「人が動くまで解けない」か（#582）。plan は resume_plan の返り（PAUSE_FACTS の抜粋でもよい）。
+
+    解け方は 2 つに分かれる:
+      - 利用枠切れ（quota）… 解除時刻が来れば timer（dispatch --resume-paused）が続きを回す＝人を呼ばない
+      - 鍵待ち（nokey）… 鍵プールに鍵が登録されるまで ready にならない＝人が登録するまで機械は一生拾わない
+      - 回数超過（hits_exceeded）… 人が枠を確かめるまで自動では回さない（ADR-0046）
+    ★ここも判定の結果（paused の種別 / hits_exceeded）を読むだけで、時刻や回数の規則は kb の resume_plan が正本"""
+    return bool(plan) and bool(plan.get("paused") == "nokey" or plan.get("hits_exceeded"))
+
+
 def pm_pick_next(next_row, pj=None, plans=None):
     """`kb next` の 1 件から、dispatch が飛ばす票を飛ばして「実際に回る票」を決める（#570 / #573 / #581）。
 
@@ -2848,9 +2878,10 @@ def pm_pick_next(next_row, pj=None, plans=None):
         if runnable(r):
             out["next"], out["reason"] = r, "picked_next"; return out
     # todo は在るが全部飛ばした。最後に飛ばした理由ではなく、先行条件で待っている票が 1 つでもあればそちらを言う
-    # （依存は「どの票を先に片付けるか」が板の上で人に見える。一時停止のうち機械が片付けるのは
-    #  解除時刻を待つ利用枠切れだけで、鍵待ち・回数超過は人が動くまで解けない＝skipped_by_pause の中身を見る）
-    out["reason"] = "blocked_by_dependency" if out["skipped_by_dependency"] else "blocked_by_pause"
+    # （依存は「どの票を先に片付けるか」が板の上で人に見える）。一時停止のうち機械が片付けるのは解除時刻を待つ
+    # 利用枠切れだけ。鍵待ち・回数超過も blocked_by_pause のまま言い、どちらなのかは facts で読ませる（#582）
+    if out["skipped_by_dependency"]: out["reason"] = "blocked_by_dependency"
+    else: out["reason"] = "blocked_by_pause"
     return out
 
 
@@ -3002,6 +3033,10 @@ def pm_status(pj=None):
             _pm_fact(why, "requeue_reason_code", requeue["reason_code"])
         _pm_fact(why, "last_run_reason", reason)
         _pm_fact(why, "last_run_ticket_status", ticket_status)
+    # ★人が動くまで解けない一時停止（鍵待ち / 回数超過）しか無い板でも state は idle のまま（ADR-0074 決定 2）。
+    #   「板は読めていて、確かめた結論として選べない」は人間待ちの blocked とは別の値で、
+    #   ja/en の guides/console.md が「blocked に格上げしない」と公開済みの契約にしている（#581）。
+    #   人の出番は状態ではなく、画面が skipped_by_pause の中身を 1 票 1 行で出すことで伝える（#582）
     _pm_fact(why, "state", state)
 
     # --- 次にやること。ticket には状態にかかわらず kb next の結果を入れ、起こしてよいかは launchable で言う

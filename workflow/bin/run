@@ -43,7 +43,7 @@ import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
 KIT = HERE / "kit"
-sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_workflow as wf, aifactory_capabilities as caps
+sys.path.insert(0, str(ROOT / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_gh as gh, aifactory_workflow as wf, aifactory_capabilities as caps, aifactory_sweep as sweep
 
 def die(msg, code=1):
     print(f"[run] error: {msg}", file=sys.stderr); sys.exit(code)
@@ -366,6 +366,7 @@ class Run:
         self.from_step = self.from_branch = self.from_run = None
         self.from_state = {}
         self.last_severity = None    # 直前の reviewer の FAIL の重さ（`severity: minor|major`）。transition() が読む
+        self.last_sweep = None       # 直前の step の掃き寄せで拾った / 除外したファイル（history に残す。572）
         self.project_dir = paths.project_dir(pj) or die(f"PJ {pj} の定義が無い（{' / '.join(str(d / pj) for d in paths.PROJECT_DIRS)}）")
         (self.project_dir / "project.yml").exists() or die(f"{self.project_dir}/project.yml が無い")
         self.project = load_yaml(self.project_dir / "project.yml")
@@ -626,7 +627,11 @@ class Run:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} {self.branch} && git checkout -q -B {self.branch} origin/{self.branch} && git log -1 --format='head: %h %s'")
         else:
             self.sb(f"cd $SANDBOX_APP_DIR && git fetch -q origin {self.base} && git checkout -q -B {self.branch} origin/{self.base} && git log -1 --format='base: %h %s'")
+        # checkout は「両方のコミットで同内容のファイルの局所変更」を持ち越す。テンプレートや前の便の汚れが
+        # そのまま基準になるので、agent を入れる前に戻す（572）
+        self.clean_start("checkout")
         self.prepare()
+        self.clean_start("prepare")     # prepare.sh（依存の入れ直し・migration）が追跡ファイルを書き換えた分も戻す
         if self.from_step: self.carry_work()
         self.push_attachments()
         self.sb(f"cat > {self.work}/ticket.md", input_text=self.ticket)
@@ -845,9 +850,60 @@ class Run:
                 "--dangerously-skip-permissions --output-format stream-json --verbose" + computer + " 2>&1 < /dev/null")
 
     def commit_tracked(self, message):
-        """追跡済みの未コミット変更だけをコミットする。未追跡は絶対に足さない（`git add -A` が生成物と DB を拾った罠）。
-        変更が無ければコミットは作らない（空のコミットを wip ブランチに残さない）"""
-        self.sb(f"cd $SANDBOX_APP_DIR && git add -u && (git diff --cached --quiet || git commit -q -m {shlex.quote(message)})", check=False)
+        """追跡済みの未コミット変更だけをコミットする（step 終わりの掃き寄せと、時間上限・利用枠で切られたときの救済）。
+        未追跡は絶対に足さない（`git add -A` が生成物と DB を拾った罠）。さらに依存ファイル（除外の規則は
+        lib/aifactory_sweep.py に 1 か所）は拾わず HEAD の内容へ戻す。環境が解決し直しただけの lock / manifest が
+        「意図した変更」として PR に載り、CI を 18 件赤にした（チケット 572）。
+        拾った / 戻した一覧は本文・stdout・state.json に残す（差分を開かないと気づけない状態をやめる）。
+        変更が無ければコミットは作らない（空のコミットを wip ブランチに残さない）。
+        `git add` が失敗した回（step を殺されて `.git/index.lock` が残った等）は **戻しもコミットもせず**記録だけ残す
+        （未コミットの実装は作業ツリーに残す。救済のための掃き寄せが救済対象を消さない）"""
+        app = "cd $SANDBOX_APP_DIR && "
+        excl = sweep.excludes(self.project)
+        specs = " ".join(shlex.quote(s) for s in sweep.add_pathspecs(excl))
+        dirty = sweep.status_paths(self.sb(app + sweep.STATUS_CMD, check=False))
+        if not dirty: return
+        # 「戻す対象」は **除外の glob だけ**で決める（判定は git 自身にさせる。同じ status を pathspec 付きで
+        # もう一度数え、消えた分が除外に当たったファイル）。`git add` の結果から逆算すると、add が失敗した回に
+        # 汚れ全部が「除外」になり、実装役の作業を worktree ごと消す（救済の場でこそ起きる）
+        kept = sweep.status_paths(self.sb(app + sweep.STATUS_CMD + f" -- {specs}", check=False))
+        pre_staged = sweep.nul_paths(self.sb(app + sweep.STAGED_CMD, check=False))
+        excluded = sweep.excluded_paths(dirty, kept, pre_staged)
+        if sweep.ADD_OK not in self.sb(app + f"git add -u -- {specs} && echo {sweep.ADD_OK}", check=False).split():
+            # add が通らなかった回は **何もしない**（戻しもコミットもしない）。未コミットの実装は作業ツリーに残る＝
+            # 変更前（`git add -u && (...|| git commit)`）と同じ安全側。黙って落とさず記録する
+            self.log(f"掃き寄せ（{message}）: git add が失敗した。戻しもコミットもしない（{', '.join(dirty[:20])}）")
+            print(sweep.add_failed_summary(message, dirty), flush=True)
+            self.last_sweep = {"message": message, "committed": [], "excluded": [], "add_failed": True, "dirty": dirty}
+            return
+        committed = sweep.nul_paths(self.sb(app + sweep.STAGED_CMD, check=False))
+        if excluded:
+            # 作業ツリーごと HEAD へ戻す。ここで戻さないと、gates と reviewer が測る木と push する木がずれる
+            # （#542 の実装役が手でやった復旧と同じ）。実パスを渡す（glob は一致 0 件の PJ で失敗する）
+            restore = " ".join(shlex.quote(s) for s in sweep.restore_pathspecs(excluded))
+            self.sb(app + f"git restore --source=HEAD --staged --worktree -- {restore}", check=False)
+        if committed:
+            self.sb(app + f"git commit -q -m {shlex.quote(message)} -m {shlex.quote(sweep.commit_body(committed, excluded))}", check=False)
+        if committed or excluded:
+            self.last_sweep = {"message": message, "committed": committed, "excluded": excluded}
+            print(sweep.summary(message, committed, excluded), flush=True)
+
+    def clean_start(self, stage):
+        """run の開始時（checkout の直後と prepare の直後）に作業ツリーが汚れていないか確かめ、汚れていれば HEAD へ戻す。
+
+        VM のテンプレートや前の便が残した追跡済みの変更が、そのまま次の便の「基準」になっていた（#542 の planner が
+        着手前に `@types/node` の downgrade を見つけた）。掃き寄せの除外とは独立に効く（除外を入れても、汚れが
+        残っていること自体が偽の baseline と誤診を生む）。未追跡は触らない（生成物・DB を消さない）。
+        run は止めない（テンプレート起因なら全便が止まる）。戻した事実は state.json の `dirty_at_start` に残す。
+        pull backend（macOS / Windows / Linux）の take は別実装なので対象外（チケット 572）"""
+        app = "cd $SANDBOX_APP_DIR && "
+        dirty = sweep.status_paths(self.sb(app + sweep.STATUS_CMD, check=False))
+        if not dirty: return
+        self.log(f"開始時の汚れ（{stage}）: {', '.join(dirty[:20])}")
+        print(sweep.dirty_summary(stage, dirty), flush=True)
+        self.sb(app + "git restore --source=HEAD --staged --worktree -- :/", check=False)
+        self.state.setdefault("dirty_at_start", []).append({"stage": stage, "restored": dirty})
+        self.save()
 
     def save_agent_changes(self):
         self.commit_tracked("sandbox: uncommitted changes by agent")
@@ -1177,6 +1233,7 @@ class Run:
                 continue
             self.last_fail = {}                     # 直前の step の失敗の内訳（timeout の目印と stdout の末尾）を持ち越さない
             self.last_severity = None               # 同上（前の review の severity を次の step の判断に持ち越さない）
+            self.last_sweep = None                  # 同上（前の step の掃き寄せの一覧を次の step の記録に混ぜない）
             self.base_check_broken = False          # 同上（gates.sh が base を見た後にツリーを戻せなかった、の目印）
             if "role" in step: ok, info = self.run_agent(step, retry_note)
             else: ok, info = self.run_code(step)
@@ -1188,6 +1245,8 @@ class Run:
             fail = self.last_fail if not ok else {}
             # 「時間上限で切られた」は「その step が失敗した」とは直し方が違う（上限を上げるか、チケットを小さくする）。
             # console と MCP がそれを区別できるよう history に目印を残す（チケット 329）
+            # 掃き寄せ（commit_tracked）が何を拾い、何を除外して戻したか。差分を開かずに気づける唯一の記録（572）
+            if self.last_sweep: entry["swept"] = self.last_sweep
             if fail.get("failure") in PAUSE_KINDS: entry.update({"failure": fail["failure"], "quota_type": fail.get("quota_type"), "retry_after": fail.get("retry_after")})
             elif fail.get("failure"): entry.update({"failure": fail["failure"], "timeout_min": fail.get("timeout_min")})
             self.state["history"].append(entry)

@@ -8,6 +8,7 @@
 - 動かす: 起票（intake / kb new）/ 状態遷移 / kb run / dispatch / sandbox ls・release / ジョブの停止と待機
 - 読み書きの正本は lib/core.py。Web コンソール（bin/console）と同じ関数を呼ぶので、どちらから動かしても同じジョブ記録（console/jobs/）に載る
 - MCP の実装は最小: initialize / ping / tools/list / tools/call / resources/list / resources/read。1 行 1 メッセージの JSON-RPC 2.0
+- tools/call の引数は check_args がスキーマどおりに検査する（未知のキー・必須の抜けはツールエラー。値の型と意味の判定は core）
 - 起動時に `~/.config/aifactory/ctl.env`（`AIFACTORY_CTL_ENV` で差し替え可）を読む。ssh の非ログイン環境でも console API と同じ secrets で動く
 - 待つだけの job_wait / run_wait は別スレッドで処理し、待っている間も他の呼び出しに即応する。それ以外は到着順に直列（ADR-0028 / ADR-0051）
 """
@@ -245,6 +246,24 @@ TOOLS = [
     ("config", "workflow の流れ、モデルの経路（routes.env）、役割、PJ 一覧、git status", schema({}), t_config),
 ]
 TOOL_MAP = {n: fn for n, _, _, fn in TOOLS}
+TOOL_SCHEMA = {n: sc for n, _, sc, _ in TOOLS}   # tools/list で配るスキーマがそのまま許可リスト（別表は作らない）
+
+
+def check_args(name, args):
+    """tools/call の引数を、tools/list で配った宣言どおりに入口で検査する（ADR-0082）。
+
+    見るのはキー名だけ: スキーマに無いキー（打ち間違い・古い呼び方）と required の抜け。
+    値の型と意味は今までどおり core / 各ハンドラの仕事（ADR-0015）。
+    null は「キーが在る」とみなして通す（core が is not None で見分けている）"""
+    sc = TOOL_SCHEMA.get(name) or {}
+    if not isinstance(args, dict): raise core.ApiError(f"ツール {name} の arguments は object で渡してください")
+    known = sc.get("properties") or {}
+    unknown = [k for k in args if k not in known]
+    if unknown:
+        raise core.ApiError(f"ツール {name} に無い項目: {', '.join(sorted(unknown))}。受け付けるのは: {', '.join(sorted(known))}")
+    missing = [k for k in sc.get("required") or () if k not in args]
+    if missing:
+        raise core.ApiError(f"ツール {name} に必要な項目がありません: {', '.join(missing)}")
 
 # ---------- annotations（tools/list に載せる手掛かり。MCP 2025-03-26 以降の任意項目で、古いクライアントは無視する）
 # readOnlyHint が無いツールを Claude Code は「並列に呼べない」とみなし、同じターンの呼び出しを直列に送る。
@@ -318,6 +337,7 @@ def handle(msg):
         fn = TOOL_MAP.get(name)
         if not fn: raise core.ApiError(f"未知のツール {name}", 404)
         try:
+            check_args(name, args)          # 宣言（additionalProperties: false / required）を入口で効かせる。黙って捨てない（#585）
             res = fn(args)
             # 画像などを自分で content に組んだツール（read_file の画像・computer_action）はそのまま返す
             if isinstance(res, dict) and "content" in res: return res

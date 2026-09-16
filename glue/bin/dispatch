@@ -57,10 +57,12 @@ SANDBOX_STATE = pathlib.Path(os.environ.get("SANDBOX_STATE") or (pathlib.Path.ho
 
 
 def resumable(pj=None):
-    """利用枠切れで一時停止中のチケット（id → 続きを回すのに要る事実と ready）。正本は kb（台帳 + run の state.json）"""
-    cmd = [str(KB), "resumable", "--json"] + (["--pj", pj] if pj else [])
-    try: return {int(p["id"]): p for p in json.loads(sh(cmd).stdout or "[]")}
-    except (ValueError, KeyError, TypeError): return {}
+    """利用枠切れ / 鍵待ちで一時停止中のチケット（id → 続きを回すのに要る事実と ready）。正本は kb（台帳 + run の state.json）。
+
+    ★kb の呼び方も rc の見方も core の 1 か所にある（ADR-0015 / ADR-0078）。ここに写さない。
+      読めなければ例外が上へ出る——「一時停止は 1 件も無い」に倒すと、止めてある票を初めから回すか、
+      timer が黙って何もしないかのどちらかになり、確かめていないことを確かめたように見せる（#582）"""
+    return core.pm_resume_plans(pj)
 
 
 def lent_per_pj():
@@ -92,7 +94,17 @@ def main():
     limit = 1 if a.once else (a.max or 10**9)
     done = 0; skip = set(); busy_pj = set()
     sync_review(a)
-    paused = resumable(a.pj)
+    # 一時停止の一覧を読めなかったら何も回さない（「0 件」に倒さない。#582）。下見（core.pm_pick_next）も同じ所で止まる。
+    # OSError（kb が無い）は握らない——それまで「0 件」にすると、直そうとしている取り違えを広げる
+    try: paused = resumable(a.pj)
+    except (core.ApiError, ValueError, KeyError, TypeError) as e:
+        # kb が traceback を吐いたときは末尾の 1 行（何が起きたか）だけ残す。冒頭を出すと理由が切れて読めない
+        # ★rc は 0。この口は 5 分ごとの timer（aifactory-resume.timer / Type=oneshot・SuccessExitStatus 無指定）が
+        #   叩くので、rc 1 を返すと journal が 5 分ごとに赤で埋まり「本当の失敗」と見分けられなくなる。
+        #   console/bin/pm-tick が同じ理由で「今日は何もしない」を rc 0 に載せている（ADR-0074 決定 1 の運用）
+        log("一時停止の一覧（kb resumable）を読めなかったので何も回さない: "
+            + ((str(e).strip().splitlines() or [""])[-1].strip()[:300] or type(e).__name__))
+        return 0
     if a.resume_paused:
         # 解除時刻を過ぎたものだけ（古い順）。回数超過は kb が blocked にしているはずだが、ここでも回さない
         queue = [p for p in sorted(paused.values(), key=lambda p: p["id"]) if p["ready"] and not p["hits_exceeded"]]
