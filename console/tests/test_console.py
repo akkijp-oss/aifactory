@@ -240,7 +240,8 @@ class FakeAnthropic(http.server.BaseHTTPRequestHandler):
             out = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "x"}}).encode()
             self.send_response(401); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out); return
         reset5 = int(time.time()) + 3600; reset7 = int(time.time()) + 3 * 86400
-        h = {"anthropic-ratelimit-unified-5h-utilization": "0.40", "anthropic-ratelimit-unified-5h-reset": str(reset5), "anthropic-ratelimit-unified-5h-status": "allowed",
+        # 5h の使用率は端数の出る値にする: 残量が 59.5% になるので、経路のどれかが丸めていれば契約テストが気づく
+        h = {"anthropic-ratelimit-unified-5h-utilization": "0.405", "anthropic-ratelimit-unified-5h-reset": str(reset5), "anthropic-ratelimit-unified-5h-status": "allowed",
              "anthropic-ratelimit-unified-7d-utilization": "0.10", "anthropic-ratelimit-unified-7d-reset": str(reset7), "anthropic-ratelimit-unified-7d-status": "allowed",
              "anthropic-ratelimit-unified-status": "allowed", "anthropic-ratelimit-unified-representative-claim": "five_hour"}
         if "fable" in (body.get("model") or ""):
@@ -342,7 +343,7 @@ class KeysQuotaApiTest(unittest.TestCase):
         f = by["fable-a"]
         self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
         w5, w7, oi = f["windows"]
-        self.assertEqual(w5["remaining_pct"], 60.0); self.assertEqual(oi["remaining_pct"], 25.0); self.assertEqual(f["binding"]["key"], "7d_oi")
+        self.assertEqual(w5["remaining_pct"], 59.5); self.assertEqual(oi["remaining_pct"], 25.0); self.assertEqual(f["binding"]["key"], "7d_oi")
         self.assertTrue(0 < w5["remain_s"] <= 3600); self.assertTrue(OFFSET_ISO.match(w5["reset"])); self.assertTrue(OFFSET_ISO.match(w5["start"]))
         self.assertFalse(w5["exhausted"]); self.assertFalse(w5["at_window_end"]); self.assertIsNone(f["error"]); self.assertFalse(f["stale"])
         self.assertEqual([w["key"] for w in by["opus-a"]["windows"]], ["5h", "7d"], "Fable 許可の無い鍵は 7d_oi を持たない")
@@ -367,16 +368,112 @@ class KeysQuotaApiTest(unittest.TestCase):
         f = next(k["quota"] for k in v["keys"] if k["name"] == "fable-a")
         self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
 
+    def child_env(self):
+        """MCP / CLI を console と同じ置き場に向けて起こすための env（鍵と DB の場所・モデル名を揃える）"""
+        return {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws), "CONSOLE_JOBS": str(self.tmp / "jobs"), "HOME": str(self.home),
+                "SANDBOX_STATE": str(self.state), "SANDBOX_KEYS": str(self.keys),
+                "AIFACTORY_KEYS_PROBE_MODEL": "claude-haiku-4-5", "AIFACTORY_KEYS_PROBE_FULL_MODEL": "claude-fable-5-1"}
+
+    def mcp_keys_list(self):
+        """MCP の keys_list を 1 回叩いて content[0].text（JSON の本文）を返す"""
+        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "keys_list", "arguments": {}}}
+        r = subprocess.run([sys.executable, str(REPO / "console" / "bin" / "mcp")], input=json.dumps(req) + "\n",
+                           text=True, capture_output=True, env=self.child_env(), timeout=60)
+        out = json.loads(next(l for l in r.stdout.splitlines() if l.strip().startswith("{")))
+        return out["result"]["content"][0]["text"]
+
+    def cli_show(self):
+        """CLI の `aifactory_keys_quota.py show --json`（console と同じ DB を読む）の標準出力を返す"""
+        r = subprocess.run([sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "show", "--json"],
+                           text=True, capture_output=True, env=self.child_env(), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    @staticmethod
+    def stable(q):
+        """now に依存する項目（残り秒・経過 %・枯渇までの秒数）を落とした形。別プロセスの now は数秒ずれる"""
+        if q is None: return None
+        drop = ("remain_s", "elapsed_pct", "exhaust_in_s")
+        return {**{k: v for k, v in q.items() if k != "windows"},
+                "windows": [{k: v for k, v in w.items() if k not in drop} for w in q["windows"]]}
+
     def test_mcp_keys_list_carries_quota(self):
         """MCP の keys_list は console と同じ keys_view を返すので quota が載る（値は載らない）"""
         self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
-        env = {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws), "CONSOLE_JOBS": str(self.tmp / "jobs"), "HOME": str(self.home),
-               "SANDBOX_STATE": str(self.state), "SANDBOX_KEYS": str(self.keys)}
-        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "keys_list", "arguments": {}}}
-        r = subprocess.run([sys.executable, str(REPO / "console" / "bin" / "mcp")], input=json.dumps(req) + "\n", text=True, capture_output=True, env=env, timeout=60)
-        out = json.loads(next(l for l in r.stdout.splitlines() if l.strip().startswith("{")))
-        text = out["result"]["content"][0]["text"]
+        text = self.mcp_keys_list()
         self.assertIn('"quota"', text); self.assertIn('"7d_oi"', text); self.assertNotIn("tok-fable", text)
+
+    def test_console_mcp_and_cli_agree_on_quota(self):
+        """同じ観測に対して「鍵」画面（/api/keys）・MCP keys_list・CLI show --json が同じ数字と同じ判定を出す。
+
+        要約の規則は lib の summarize() の 1 か所に置く（ADR-0087 決定 5）という契約を、退行で捕まえるための網。
+        3 経路は別プロセスなので now が数秒ずれる。now に依らない項目は完全一致、残り秒と経過 % だけ許容差で見る"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        t0 = time.monotonic()
+        _, v = self.http.get("/api/keys")
+        mcp_text, cli_text = self.mcp_keys_list(), self.cli_show()
+        span = time.monotonic() - t0   # 3 経路を取り終えるまでの実時間。now のずれはこれを超えない
+        m, c = json.loads(mcp_text), json.loads(cli_text)
+        panel = lambda d: {x: d[x] for x in ("last_probed", "last_ok", "stale")}   # noqa: E731
+        routes = {"console": ({k["name"]: k["quota"] for k in v["keys"]}, panel(v["quota"])),
+                  "mcp": ({k["name"]: k["quota"] for k in m["keys"]}, panel(m["quota"])),
+                  "cli": (c["keys"], panel(c))}
+        names = {"fable-a", "opus-a", "dead-a"}
+        for route, (keys, p) in routes.items():
+            self.assertEqual(set(keys), names, f"{route} が見ている鍵の集合が違う")
+            self.assertEqual(p, routes["console"][1], f"{route} のパネル（最終観測・最後に読めた時刻・古さ）が console と違う")
+            for name in sorted(names):
+                self.assertEqual(self.stable(keys[name]), self.stable(routes["console"][0][name]),
+                                 f"{route} の {name} の要約が console と違う（summarize() を通っていない経路がある）")
+        # now に依る項目は許容差で。幅は「3 経路を取るのにかかった実時間 + 2 秒」で、機械の速さに依らない
+        # （固定の秒数にすると、混んでいるときに落ちる。単位や式が別物なら窓長（5 時間・7 日）の規模でずれるので、この幅でも気づく）
+        tol = span + 2
+        for name in sorted(names):
+            ws = [routes[r][0][name]["windows"] for r in routes]
+            for w in zip(*ws):
+                key, length = w[0]["key"], {"5h": 5 * 3600, "7d": 7 * 86400}[w[0]["key"].replace("_oi", "")]
+                self.assertLessEqual(max(x["remain_s"] for x in w) - min(x["remain_s"] for x in w), tol, f"{name} {key} の remain_s が食い違う")
+                self.assertLessEqual(max(x["elapsed_pct"] for x in w) - min(x["elapsed_pct"] for x in w), tol / length * 100 + 0.1,
+                                     f"{name} {key} の elapsed_pct が食い違う")
+                self.assertEqual(len({x["will_exhaust"] for x in w}), 1, f"{name} {key} の枯渇見込みの有無が経路で違う")
+                if w[0]["will_exhaust"]:
+                    # 枯渇までの秒数は経過時間に比例して伸びるので、now のずれが (1-u)/u 倍に拡大する（この窓では 3 倍まで）
+                    self.assertLessEqual(max(x["exhaust_in_s"] for x in w) - min(x["exhaust_in_s"] for x in w), tol * 3 + 1,
+                                         f"{name} {key} の exhaust_in_s が食い違う")
+        # 具体値も 1 組だけ固定する（3 経路とも同じ数字であることを、形の一致だけに頼らずに示す）
+        for route, (keys, _) in routes.items():
+            f = keys["fable-a"]
+            self.assertEqual([(w["key"], w["remaining_pct"]) for w in f["windows"]], [("5h", 59.5), ("7d", 90.0), ("7d_oi", 25.0)], route)
+            self.assertEqual(f["binding"]["key"], "7d_oi", route); self.assertFalse(f["stale"], route)
+            self.assertEqual(keys["dead-a"]["error"], "HTTP 401 authentication_error", route)
+            self.assertEqual(keys["dead-a"]["windows"], [], route)
+        # 秘密と指紋は 3 経路のどこにも出ない（ADR-0090 決定 1）
+        for route, text in (("console", json.dumps(v)), ("mcp", mcp_text), ("cli", cli_text)):
+            for secret in ("tok-fable-1111", "tok-opus-2222", "bad-3333"): self.assertNotIn(secret, text, route)
+            self.assertNotIn('"fp"', text, route)
+
+    def test_history_after_key_swap_starts_over(self):
+        """同じ名前のまま鍵を入れ替えたら、履歴（グラフの元データ）に前の契約の点が 1 つも残らない。
+
+        表示側は世代を見分けなくてよい: 入れ替えを見つけた周が観測を打つ前にその鍵の履歴を捨てるので、
+        グラフに渡る点が世代を跨がない（ADR-0090 決定 1）。他の鍵の履歴は巻き添えにしない"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        real = lambda h, name: {p["ts"] for p in h["points"] if p["status"] != "window_start" and p["name"] == name}   # noqa: E731
+        _, h1 = self.http.get("/api/keys/history?hours=24")
+        before_f, before_o = real(h1, "fable-a"), real(h1, "opus-a")
+        self.assertTrue(before_f and before_o)
+        # 末尾 4 文字が同じ別のトークンに差し替える（tail4 の比較だけでは気づけない同名の入れ替え）
+        d = json.loads(self.keys.read_text(encoding="utf-8"))
+        next(k for k in d["keys"] if k["name"] == "fable-a")["token"] = "tok-fable-x-1111"
+        self.keys.write_text(json.dumps(d), encoding="utf-8")
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        _, h2 = self.http.get("/api/keys/history?hours=24")
+        after_f, after_o = real(h2, "fable-a"), real(h2, "opus-a")
+        self.assertTrue(after_f, "入れ替えた鍵の新しい観測は記録される")
+        self.assertEqual(after_f & before_f, set(), "入れ替え前の点が履歴に残っている（グラフが別の契約と線でつながる）")
+        self.assertTrue(before_o <= after_o, "入れ替えていない鍵の履歴まで消している")
+        self.assertGreater(len(after_o), len(before_o))
+        self.assertTrue(all("fp" not in p for p in h2["points"]), "履歴の点に指紋を出さない")
 
 
 class ApiTest(unittest.TestCase):
