@@ -9,6 +9,7 @@ VM も claude も使わない（一時 workspace と examples/projects/kumitate 
 - 取得可否は 2 語（`readable` / `unreadable`）で、書かなければ `unreadable` に倒す（sandbox のトークンは issues に 403 を返す）
 - 列が無かった頃の `kanban.db` には kb が足す。本文に URL が自由文で埋まっている既存票は今までどおり動く
 - researcher の依頼文には「issues は読めない」が必ず入る（正本は役割文書 1 枚）
+- 票が参照を持つときは、その**値**（URL・票番号・取得可否）が依頼文に出る。規則は写さない（チケット 594）
 """
 import importlib.machinery
 import importlib.util
@@ -166,22 +167,27 @@ class OldDatabaseTest(KbHarness):
         self.assertEqual(json.loads(self.kb("next", "--pj", PJ, "--json").stdout)["id"], 801)
 
 
-class ResearcherBriefTest(unittest.TestCase):
-    """★実測で確かめられるのはここまで（実 run での「取得試行 0 回」は ctl 側で見る）。
-       依頼文は役割文書をそのまま貼るので、researcher が受け取る文面に必ず入ることを合成した票で示す"""
+class BriefHarness(unittest.TestCase):
+    """build_prompt() だけを組み立てて読む土台（VM も claude も要らない）"""
 
-    def fake_run(self, ticket):
+    def fake_run(self, ticket, refs=None):
         """build_prompt() だけを動かす最小の Run（VM も workflow の読み込みも要らない）"""
         r = run.Run.__new__(run.Run)
         r.project = {"name": PJ, "repo": "akkijp/kumitate", "app_dir": "/home/dev/app", "stack": "Python"}
         r.ticket, r.title, r.wf_name = ticket, "内部番号の参照を持つ票", "chore"
         r.branch, r.base, r.work, r.dry = "sandbox/556-chore", "develop", "~/work/556", True
         r.state = {"attachments": []}
+        r.refs = {k: v for k, v in (refs or {}).items() if v}
         return r
 
-    def brief(self, ticket, role="researcher"):
+    def brief(self, ticket, role="researcher", refs=None):
         with contextlib.redirect_stdout(io.StringIO()):
-            return self.fake_run(ticket).build_prompt({"id": "research", "role": role, "outputs": ["research.md"]})
+            return self.fake_run(ticket, refs).build_prompt({"id": "research", "role": role, "outputs": ["research.md"]})
+
+
+class ResearcherBriefTest(BriefHarness):
+    """★実測で確かめられるのはここまで（実 run での「取得試行 0 回」は ctl 側で見る）。
+       依頼文は役割文書をそのまま貼るので、researcher が受け取る文面に必ず入ることを合成した票で示す"""
 
     def test_the_researcher_brief_says_issues_cannot_be_read(self):
         b = self.brief(BODY)
@@ -197,6 +203,67 @@ class ResearcherBriefTest(unittest.TestCase):
         self.assertIn("related_issue", lines[0])       # 例外（readable）と内部番号の行き先まで 1 行に収める
         self.assertIn("related_ticket", lines[0])
         self.assertNotIn("Resource not accessible by integration", (REPO / "workflow/bin/run").read_text(encoding="utf-8"))
+
+
+class ReferencesInTheBriefTest(BriefHarness):
+    """票メタの参照（3 列）が依頼文に**値として**出る（チケット 594）。規則は足さない——運ぶのは値だけ"""
+
+    def test_an_internal_ticket_number_is_carried_as_a_number(self):
+        b = self.brief(BODY, refs={"ticket": "393,521"})
+        self.assertIn("- 参照（内部票。GitHub には無い）: #393, #521", b)
+
+    def test_an_unreadable_issue_says_do_not_go_and_fetch_it(self):
+        """#556 の元の事象（403 を 4 回踏む）を塞ぐのはこの 1 行。URL と一緒に「取りに行かない」が読める"""
+        b = self.brief(BODY, refs={"issue": ISSUE, "issue_access": "unreadable"})
+        self.assertIn(f"- 参照（外部 issue）: {ISSUE}（取得可否: unreadable ＝ 取りに行かない）", b)
+
+    def test_a_readable_issue_says_it_may_be_fetched(self):
+        b = self.brief(BODY, refs={"issue": ISSUE, "issue_access": "readable"})
+        self.assertIn("取りに行ってよい", b)
+        self.assertNotIn("取りに行かない", b.split("## チケット")[1])
+
+    def test_a_ticket_without_references_reads_exactly_as_before(self):
+        """列を持たない既存票では参照の行も余計な空行も出ない（文字列として同一）"""
+        self.assertEqual(self.brief(BODY, refs={}), self.brief(BODY, refs=None))
+        self.assertNotIn("参照（", self.brief(BODY))
+
+    def test_the_brief_carries_values_not_the_rule(self):
+        """規則（なぜ読めないか）は役割文書 1 枚が正本。依頼文を組み立てる側に写さない（ADR-0015 / ADR-0084）"""
+        src = (REPO / "workflow/bin/run").read_text(encoding="utf-8")
+        for rule in ("403", "Resource not accessible", "issues は読めない"):
+            self.assertNotIn(rule, src)
+
+
+class DryRunBriefTest(KbHarness):
+    """完了条件の実測: 3 列を設定した票を dry-run で起動し、依頼文（prompt-*.md）に値が出ることを見る。
+       dry-run は VM も claude も使わない（take は添付を配るだけ）"""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("AIFACTORY_FROM_RUN", "AIFACTORY_RESUME_RUN"):
+            self.env.pop(k, None)
+
+    def prompt(self, tid):
+        r = self.kb("run", tid, "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        ds = list((self.ws / "runs").glob(f"*-{PJ}-{tid}-dry"))
+        self.assertEqual(len(ds), 1, ds)
+        ps = sorted(ds[0].glob("prompt-*.md"))
+        self.assertTrue(ps, list(ds[0].iterdir()))
+        return ps[0].read_text(encoding="utf-8")
+
+    def test_the_values_reach_the_brief_of_a_dry_run(self):
+        self.assertEqual(self.new("--issue", ISSUE, "--ticket", "521", tid=990).returncode, 0)
+        b = self.prompt(990)
+        self.assertIn(ISSUE, b)
+        self.assertIn("#521", b)
+        self.assertIn("取りに行かない", b)                      # 可否を書かなかった票は unreadable に倒れたまま渡る
+
+    def test_a_ticket_without_references_gets_no_extra_line(self):
+        self.assertEqual(self.new(tid=991).returncode, 0)
+        b = self.prompt(991)
+        self.assertNotIn("参照（", b)
+        self.assertIn("\n\nx\n\n## 出力（必須）", b)               # 本文の後ろに余計な空行も増えていない
 
 
 if __name__ == "__main__":

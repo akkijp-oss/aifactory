@@ -62,6 +62,7 @@ kb new <pj> <kind> "<題名>" [--body FILE|-] [--pr N] [--id N] [--status S] [--
 | `--status` | 初期状態（既定 todo） |
 | `--note` | メモ |
 | `--depends` | 先行票の番号をカンマ区切りで（例 `534,535`）。下の「先行条件」を参照 |
+| `--base-sha` | 起票時の base の commit sha。省略すると PJ の `base_branch` の tip を `gh` で自動取得します。下の「起票時の base sha」を参照 |
 
 `<id> <状態> <pj> <kind> <PR> <題名>` の 1 行と、本文ファイルのパスを出力します。ファイル名の slug は題名に含まれる ASCII 文字から作ります。該当する文字がなければ `kind` を使います。
 
@@ -148,6 +149,9 @@ kb show 556                                                 # related_issue / re
   sandbox に注入するトークンは GitHub の issues に 403（`Resource not accessible by integration`）を返すので、
   確かめていない参照は取りに行かせないのが安全側です。researcher の役割文書にも同じことが 1 行入っていて、
   **run は票に URL が書いてあっても取りに行かず、本文と実コードだけで進めます**。
+- 値は `kb run` が runner に渡し、**依頼文の「## チケット」の直後に 1〜2 行**出ます（`related_issue_access` は
+  「取りに行かない」「取りに行ってよい」の 1 語に言い換えます）。列が空の票では行が出ません。運ぶのは値だけで、
+  規則そのものは役割文書が持ちます（[run の `--issue` / `--issue-access` / `--ticket`](cli-run.md)）。
 - 番号や URL の存在は確かめません。自分自身の番号を `--ticket` に書くことはできません。
 - **本文の自由文は解釈しません。** 本文に URL が埋まっている既存票の移行もしません（新しい起票から構造化します）。
   列が無かった頃の `kanban.db` には `kb` が起動時に足します。
@@ -155,6 +159,32 @@ kb show 556                                                 # related_issue / re
   **依頼文（run に渡す文面）にはまだ出ません**（runner が VM に運ぶのは本文だけです）。
 
 `kb set 204 --note ''` はメモを空に戻します（DB では NULL）。項目を渡さなければその項目は変更しません。MCP と HTTP API（`console`）では、`note` は「キーがあれば空文字列でも渡す（= 消す）、キーがなければ触らない」として扱います。以前は空文字列を未指定として無視していました。`status` / `kind` / `pr` は従来どおり、空文字列を未指定として無視します。`depends_on` は `note` と同じ扱いです。
+
+### 起票時の base sha（`--base-sha`）
+
+```bash
+kb new kumitate bug "行番号を持つ票" --body -            # base_branch の tip を自動で刻む
+kb new kumitate bug "行番号を持つ票" --body - --base-sha 4fae3ce   # 明示（GitHub には聞きに行かない）
+kb set 554 --base-sha ''                                # 刻印を消す
+kb show 554                                             # base_sha
+```
+
+チケット本文の `path:line` は**起票時点のコード**を指します。base は進むので、起動する頃には行番号がずれています
+（実測: #526 は 51 commits・#527 は 68 commits ずれ、#550 は起票から半日で `core.py` の引用が +104 行ずれました）。
+差そのものは機械が知っているので、票に「いつ時点か」を刻んで run に伝えます（ADR-0091）。
+
+- `base_sha` は**対象 PJ の `base_branch` の tip commit**です（aifactory 自身の sha ではありません）。
+  `kb new` が `gh api repos/<repo>/commits/<base_branch>` で自動取得します。人が本文に書く値ではありません。
+- 取得できないとき（`repo` / `base_branch` が未定義、トークンを払い出せない、`gh` が無い、10 秒で応答が無い、
+  応答が sha に読めない）は**刻まないだけ**です。10 秒の上限はトークンの払い出しと `gh api` の**両方**に掛かるので、
+  どちらが固まっても起票は待たされません。起票は成功し、`[kb] warn: base sha を記録できなかった: …` が
+  標準エラーに 1 行出ます。この印は能力照合の `[kb] warning:`（`ticket_new` が `warnings[]` に拾うもの）とは別です。
+- `--base-sha SHA` を書くと GitHub には聞きに行きません（16 進 7〜40 桁。読めない値は断ります）。
+  `kb set <id> --base-sha ''` で消せます。変更は `kb history` に残ります。
+- `kb run` が値を runner へ渡し、runner が VM で `git rev-list --count <sha>..origin/<base>` を実行して
+  **依頼文の「## チケット」の直下に 1 行**出します（[run の `--base-sha`](cli-run.md)）。
+  base が進んでいない票と、`base_sha` を持たない既存票では 1 行も出ません。
+- 名前の似た `base_sha256`（コンソールの設定編集が使う版ハッシュ）とは無関係です。こちらは git の commit sha です。
 
 ### append
 

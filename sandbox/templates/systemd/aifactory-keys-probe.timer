@@ -1,0 +1,10 @@
+[Unit]
+Description=aifactory: probe the Claude key pool quota every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=aifactory-keys-probe.service
+
+[Install]
+WantedBy=timers.target

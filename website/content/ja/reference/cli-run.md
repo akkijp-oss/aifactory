@@ -4,6 +4,7 @@
 
 ```
 workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--resume] [--from[=step]] [--branch=名前] [--wait[=秒]]
+                 [--issue=URL] [--issue-access=語] [--ticket=番号] [--base-sha=SHA]
 ```
 
 | 引数 | 意味 |
@@ -18,6 +19,14 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 | `--from[=step]` | 人間待ちで終わった run を、**新しい VM** で指定の工程からやり直す。工程を省くと前回の `resume_step`。前回の run は環境変数 `AIFACTORY_FROM_RUN`（run 名の形だけ）で渡す（ADR-0036） |
 | `--branch=名前` | `--from` のとき続きに使うブランチ。既定は前回の `wip_branch` |
 | `--wait[=秒]` | プールに空きがないとき、空くまで待って `sandbox take` をやり直す（単独なら 3600 秒。再試行の間隔は `AIFACTORY_WAIT_POLL_S` 秒、既定 30） |
+| `--issue=URL` | チケットの外部 issue の参照（カンマ区切り）。依頼文の「## チケット」の直後に値として出る。`kb run` が票の `related_issue` を渡す |
+| `--issue-access=語` | その参照を取りに行けるか（`readable` / `unreadable`）。依頼文には「取りに行ってよい」「取りに行かない」と 1 語で出る |
+| `--ticket=番号` | チケットが参照する内部票の番号（カンマ区切り）。依頼文には `#521` の形で出る（GitHub には無い番号） |
+| `--base-sha=SHA` | 票が起票されたときの base の commit sha。`kb run` が票の `base_sha` を渡す。base を fetch した後に `git rev-list --count <SHA>..origin/<base>` で距離を測り、進んでいれば依頼文の「## チケット」の**直下**に「注意: この票の行番号は N commits 前（…）のもの」の 1 行を出す |
+
+`--base-sha` の距離は VM の中で測ります（制御系はプロジェクトの clone を持ちません）。測れたら `state.json` に `base_sha` と `base_distance` が残ります。base が進んでいない（距離 0）票と、`base_sha` を持たない票には 1 行も足しません。浅い fetch や force-push で sha を辿れないときは距離を 0 に丸めず、「現在との距離は測れなかった」と書きます（`--dry-run` は VM を借りないので常にこちらになります）。ADR-0091。
+
+参照の 3 つ（`--issue` / `--issue-access` / `--ticket`）は**値を運ぶだけ**です。渡さなければ依頼文に行が出ません（参照を持たないチケットの依頼文は今までどおり）。取りに行く / 行かないの規則そのものは役割文書（`workflow/kit/roles/researcher.md`）が持ち、依頼文には書き写しません（ADR-0015 / ADR-0084）。
 
 ## 終了コード
 

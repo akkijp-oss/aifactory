@@ -51,7 +51,7 @@ flowchart LR
 | 起票 | 入力中の下書き（依頼文・PJ・種別・題名・本文・PR 番号）と、選んでいる方式。ほかの画面へ寄り道して戻っても、再読み込みやブラウザーの戻るでも、方式を切り替えても残る（同じタブの中だけ。タブを閉じると消える）。復元したときは画面の上に「前回の下書きを復元しました。」が出る | 画面は「1. 方式を選ぶ → 2. 入力する → 3. 確かめて登録する」の順に並ぶ。方式は「文章から整えて起票する」（文章を LLM が題名と完了条件に整える。CLI は `intake`）と「題名と完了条件を自分で書いて起票する」（書いたものをそのまま起票する。CLI は `kb new`）の 2 つで、選んだ方のフォームだけが出る。主操作（強いボタン）は 1 つ。どちらも登録するだけで、実行は始まらない（末尾にそう書き、チケットの「実行する」とボードの「配車する」へ導く）。種別を選ぶと「いつ選ぶか」がその場に出て、PR 番号の欄は merge-pr のときだけ出る（他の種別では送られない）。本文欄には `## 背景` と `## 完了条件` の雛形が薄く見え、「表示を確かめる」で送る前に Markdown の見え方を確かめられる。文章から整える方式には「取り込む」の隣に「判定だけ見る」があり、こちらは起票せず判定だけを見る（依頼文は残るので、そのまま戻って取り込める）。配車はボードから。「下書きを捨てる」で明示的に消せる（トーストの「元に戻す」で書き戻せる）。送信できたときは、その方式の下書きだけが消える。PJ を選ぶと、その PJ に project.yml があるかを選択欄の下に出す（「実行できます」/「準備が必要」のバッジと説明。準備が必要なら置き場と sandbox 画面への導線が出る。起票そのものは止めない） |
 | ジョブ | このコンソールが起動した CLI の一覧。出力を 2 秒ごとに継続的な読み取り。終わると「次にすること」（できたチケットを開く、止まった run の状態を合わせる、など）と、ジョブの終了日時・チケットの今の状態の 1 行。ジョブの後にチケットが完了などへ動いていれば、案内は過去形になり主ボタンは「チケットを開く」 | 止める（プロセスグループに SIGTERM） |
 | 統計 | agent の工程ごとの消費を、run の生イベント（`agent-<工程>-<n>.jsonl` の result の usage と init のモデル名）から集める。期間（今日 / 7 日 / 30 日 / 全部）と PJ で絞り、上に工程数・ターン・キャッシュ読出・出力・費用換算・thinking のある工程の札。下にモデル別・工程別（工程 × モデル）・日別・PJ 別の表（工程数、平均ターン、平均分、入力、キャッシュ書込、キャッシュ読出、出力と見える文字数、thinking の回数と本文が見える回数・文字数、ツール呼出、費用換算と全体に占める割合、1 工程あたりと最大）、費用換算の高い工程の上位 20（run とログへ）、読み方。費用換算は claude CLI の `total_cost_usd` の合計で、利用枠（5 時間・7 日）の重みではない。Opus の thinking は本文が記録に出ず署名だけなので回数しか分からない。読んだ結果はジョブ記録の置き場の `stats-cache.json` に置き、変わったファイルだけ読み直す（チケット 382）。**日別と期間は工程の時刻を見る側の時間帯に直した日付で数える**（run 名の日付は `kb run` を起動した制御系＝UTC の日付なので、run 名の日付と集計日が違う行がある。基準の時間帯は日別の表に出る。ADR-0055） | 期間・PJ・dry-run を含めるかで絞る。上位 20 の行から run とログを開く |
-| 鍵 | Claude のトークン（`claude setup-token` の長期トークン）を「鍵」として複数登録しておく画面（制御系の `keys.json`）。名前とメモ・「Fable に使う」/「Opus・Sonnet に使う」のチェック・有効かどうか・トークンの末尾 4 文字・登録日・最後に起動した日時・起動回数（runner が実際にその鍵で `claude` を起動した回数。割り当て回数はマウスを乗せると出る）・使用中のチケット。トークンの値はどこにも出ない。表の下に、鍵の選び方（モデルごとに、有効でチェックの合う鍵のうち最後に使ってから一番時間が経った鍵）・実行中は途中で変わらないこと・合う鍵が無い run は一時停止し、登録すると自動で回し直すこと・有効を外したときの動きが書いてある | 鍵を登録する（名前・メモ・トークン・どのモデルに使うか。送ったあとトークンは画面に残らない）、チェックと「有効」の切り替え、トークンの入れ替え、削除（危険色のダイアログ。使用中のチケットがあれば名前の入力を求める）。有効を外す / 消すと、その鍵を使っている実行中の VM に別の鍵を入れ直すジョブ（`sandbox reinject`）が自動で起きる（動いている工程はそのまま終わり、次の工程から別の鍵に切り替わる） |
+| 鍵 | Claude のトークン（`claude setup-token` の長期トークン）を「鍵」として複数登録しておく画面（制御系の `keys.json`）。名前とメモ・「Fable に使う」/「Opus・Sonnet に使う」のチェック・有効かどうか・トークンの末尾 4 文字・登録日・最後に起動した日時・起動回数（runner が実際にその鍵で `claude` を起動した回数。割り当て回数はマウスを乗せると出る）・使用中のチケット。トークンの値はどこにも出ない。表の下に、鍵の選び方（モデルごとに、有効でチェックの合う鍵のうち最後に使ってから一番時間が経った鍵）・実行中は途中で変わらないこと・合う鍵が無い run は一時停止し、登録すると自動で回し直すこと・有効を外したときの動きが書いてある 表の上に**残量（利用枠）**があり、鍵ごとに 5 時間枠 / 7 日枠（全体）/ 7 日枠（Fable）の残り %・リセットまでの時間・窓の始点 → 終点・「このペースだと約 n で枯渇」などの一言を出す（バーの長さが残量、縦線が窓の残り時間。バーが線より左なら時間の進みより速く消費している。残り 10% 以下は赤、25% 以下は橙）。観測は制御系の timer（`aifactory-keys-probe.timer`。安いモデルで 5 分ごと、Fable で 15 分ごと。Fable の枠は Fable で問い合わせたときだけ分かる）で、最後に残量を読めた観測が 15 分より古ければその旨が出る（叩き続けていても読めない回が続けば「古い」と出る。表示している残量が最後に読めたときの値だから）。鍵切れ（認証が通らない）は run が止まる前にここに出る。一覧の「残量」列はいちばん逼迫している窓。表の下の**残量の推移**は鍵ごとの折れ線（窓と 24 時間 / 7 日を切り替え。5 時間枠はのこぎりの形になるのが普通）（ADR-0087） | 鍵を登録する（名前・メモ・トークン・どのモデルに使うか。送ったあとトークンは画面に残らない）、チェックと「有効」の切り替え、トークンの入れ替え、削除（危険色のダイアログ。使用中のチケットがあれば名前の入力を求める）。有効を外す / 消すと、その鍵を使っている実行中の VM に別の鍵を入れ直すジョブ（`sandbox reinject`）が自動で起きる（動いている工程はそのまま終わり、次の工程から別の鍵に切り替わる）。「いま調べる」でその場で観測する（ジョブ。実行中なら二重に起こさない） |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順）。`rc=` や見出しの無い数値ではなく、項目名と日本語で読める。表の下の「元のログを見る」に `workspace/logs/intake.log` / `workspace/logs/dispatch.log` の原文が畳んである。ログ形式は変えず、コンソール側で項目に分解している（ADR-0026） | チケット番号・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）。チケット番号のリンクでそのチケットへ |
 | 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`。4 行それぞれに入力欄があり、ここから直せる。モデルは Agent → モデル名の 2 段で表示名から選ぶか、ID を直接入力する）、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める。工程詳細には**その工程の yml ブロックだけ**を出す編集欄があり、モデルの欄と画面の中で双方向に同期する | workflow を開く、工程を開く、定義の原文を読む、モデルの経路を変える、工程の定義（その工程の yml ブロック）を変える（どちらも影響する工程を見てから保存する） |
 
@@ -114,7 +114,7 @@ run の画面は、実行中なら 5 秒ごとに更新され、**今動いて�
 - **読めるファイルは限られる**。workspace（`runs/`、`kanban/tickets/`、`logs/`、`projects/`）、`examples/projects/`、`workflow/kit/`、`console/jobs/` だけ。トークンの中身は表示しません
 - **確認の重さは操作の危険性に合わせています**。状態を進める・戻すは確認なしですぐ変わり、トーストの「元に戻す」で前の状態に戻せます。本番の run と配車は、何が起きるか（回るチケット、PJ、所要）を見せるダイアログを出します。状態同期は上書きになるので、前後の状態とメモを見せてから実行します。VM の返却とジョブの停止は危険色のダイアログで、その VM で run が動いていればチケット番号の入力を求めます
 - **日時はブラウザーの時間帯で表示します**。記録の時刻はオフセット付き（`2026-09-08T00:21:00+00:00`）で、経過時間は記録と「今」の差だけで決まるので、どの時間帯のブラウザーで見ても同じ値になり、実行中と終了後で飛びません。ナビの左下に表示に使っている時間帯を出し、記録がそれと違う時間帯なら添えて知らせます。時刻の記録が無い項目は空欄ではなく「時刻の記録なし」と出ます。判断の記録は ADR-0026（[設計判断](../decisions/index.md)）
-- ナビは使う頻度の順（ボード / AI Factory Manager / 起票 / 実行記録 / ジョブ / sandbox / 統計 / 鍵 / ログ / 設定）です。++g++ に続けて頭文字（++b++ ボード、++p++ AI Factory Manager、++i++ 起票、++r++ 実行記録、++j++ ジョブ、++s++ sandbox、++t++ 統計、++k++ 鍵、++l++ ログ、++c++ 設定）で移動でき、++question++ で一覧が出ます
+- **ナビは 3 つの群**に分かれています。**チケット**（ボード / 起票）、**実行・監視**（AI Factory Manager / 実行記録 / ジョブ / ログ / 統計）、**管理**（sandbox / 鍵 / 設定）です。群の見出しは目印なので押せません。++g++ に続けて頭文字（++b++ ボード、++i++ 起票、++p++ AI Factory Manager、++r++ 実行記録、++j++ ジョブ、++l++ ログ、++t++ 統計、++s++ sandbox、++k++ 鍵、++c++ 設定）で移動でき、++question++ で一覧が出ます。いま見ている画面の項目は背景色が変わります
 - 画面の文言の約束（ボタンは動詞、文は「ですます」、用語集）はリポジトリの `console/UX.md` にあります。判断の記録は ADR-0019
 
 ## API
@@ -136,7 +136,7 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `POST /api/pm/tick` | AI Factory Manager の 1 周（`core.pm_tick()`。ADR-0074 決定 1・決定 4）。`{pj, dry}`。**この版は提案だけです**: 状態を読み、次の一手と理由を決め、判断の記録（`$AIFACTORY_WORKSPACE/logs/pm-decisions.jsonl`）に 1 行書いて返ります。run は起こしませんし、マージもしません（run を起こすのは今までどおり `POST /api/tickets/<id>/run` です）。待ちません（run が終わるのを見るのは次の周です）。二重に回らないよう `jobs/.lock` を待たずに取るので、ほかの周と重なったら `{"ticked": false, "skipped": "locked"}` で何も書かずに返ります。`dry: true` なら決めるだけで書きません。同じ判断が続く間は行が増えません（5 分ごとの記録が同じ行で埋まらないようにしています） |
 | `GET /api/tickets/<id>/sync-preview[?run=]` | 状態同期の下見（`kb sync --dry-run`）。前後の状態とメモ、run の後にチケットが更新されたか |
 | `POST /api/tickets` | `kb new` |
-| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr, dry_run}`。`sync` は既定で書かず前後を返します（書くのは `dry_run: false` のときだけ） |
+| `POST /api/tickets/<id>/action` | `{action: start / review / done / reopen / block / set / sync, note, kind, pr, depends_on, related_issue, related_issue_access, related_ticket, dry_run}`。`sync` は既定で書かず前後を返します（書くのは `dry_run: false` のときだけ） |
 | `POST /api/tickets/<id>/run` | `kb run` をジョブで。`{dry_run, workflow, keep, resume, from_step, from_branch, wait}`（`from_step` は人間待ちで終わった run を新しい VM で続きから回す。空文字列なら記録の工程に任せる） |
 | `GET /api/runs` / `GET /api/runs/<name>` | 実行記録 |
 | `POST /api/runs/<name>/action` | 人間の後始末を実行記録に書く（`kb run-note`）。`{action: close / note, result: done / abandoned, pr, text}`。`close` は決着を初めて記録し、`note` は記録済みの説明を書き直します |
@@ -147,10 +147,42 @@ curl -s -H 'Content-Type: application/json' -H 'X-Console: 1' -X POST localhost:
 | `GET /api/sandbox` / `POST /api/sandbox/ls` / `POST /api/sandbox/release` | 貸出、一覧の取り直し、返却 `{task}` |
 | `POST /api/intake` / `POST /api/dispatch` | `{text, pj, kind, dry_run}` / `{pj, once, max, dry_run}` |
 | `GET /api/jobs` / `GET /api/jobs/<id>?offset=` / `POST /api/jobs/<id>/stop` | ジョブ一覧、出力の継続的な読み取り、停止 |
-| `GET /api/keys` / `POST /api/keys` | Claude の鍵プール（マスク済みの一覧 / `{action, name, …}` で追加・変更・差し替え・削除） |
+| `GET /api/keys` / `POST /api/keys` | Claude の鍵プール（マスク済みの一覧。`keys[].quota` に残量（利用枠）/ `{action, name, …}` で追加・変更・差し替え・削除） |
+| `GET /api/keys/history?hours=24&name=` / `POST /api/keys/probe` | 残量の履歴（グラフ用。`status` が `window_start` の点は合成した窓の始点）/ 残量をいま調べるジョブを起こす `{full}`（既定は Fable でも叩く） |
 | `GET /api/logs` / `GET /api/config` | intake / dispatch のログ / ワークフローと routes と git |
 | `POST /api/config/model` | 工程または共通経路の使用モデルを変える `{target, workflow, step, key, value, dry_run, base_sha256}`。既定は下見（1 バイトも書かない）。書くのは `dry_run: false` を明示したときだけで、`base_sha256`（読んだときの版）が必須。読んだときから変わっていれば 409 で何も書かない |
 | `GET /api/stats?days=7&pj=&dry=&tz=` | 工程ごとの消費統計（`total` / `by_model` / `by_step` / `by_day` / `by_pj` / `top`）。`tz` は日別と期間を切る時間帯（`+09:00` のようなオフセットか IANA 名。省略でサーバーの時間帯。読めない値はサーバーの時間帯に落ち、応答の `tz` に実際に使った時間帯が入る） |
+
+### 手元のファイルを添付する { #attach-local-file }
+
+添付だけは `curl` でも送れます（`multipart/form-data` で `files` を複数）。
+
+```bash
+curl -s -H 'X-Console: 1' -F 'files=@画面.png' -F 'files=@仕様書.pdf' \
+  localhost:8765/api/tickets/204/attach
+```
+
+同じことを短く安全にやるのが `console/bin/attach` です。**あなたの端末で**実行します（リポジトリの checkout があればそれだけで動きます。Python 3 の標準ライブラリしか使いません）。
+
+```bash
+console/bin/attach 204 ~/Desktop/画面.png 仕様書.pdf
+# {"id": 204, "added": ["画面.png", "仕様書.pdf"], "attachments": [ ... ]}
+```
+
+| 設定 | 内容 |
+|---|---|
+| `AIFACTORY_CONSOLE_URL` | 送り先。既定は `http://127.0.0.1:8765`。制御系を Proxmox 上の LXC に置いた構成なら `http://ctl.<tenant>.sb.internal:8765` |
+| `CONSOLE_TOKEN` | 合言葉（コンソールが合言葉つきで動いているとき）。`ps` に出ないよう**引数では受けません** |
+
+どちらも環境変数か `~/.config/aifactory/mcp-remote.env`（下の「AI セッションから使う（MCP）」の接続設定と同じファイル）から読みます。`--url` を渡せば環境変数より優先されます。
+
+- **AI セッションにファイルの中身を通しません**。成功時の出力は応答の JSON 1 行（`id` / `added` / `attachments`）だけで、ファイルの中身・その base64・合言葉は出ません。出力の長さはファイルの大きさに比例しません。失敗時も理由 1 行だけを標準エラーに出して終了コード 1 で終わります
+- **MCP の `ticket_attach(path=...)` は、あなたの手元のファイルを読めません**。MCP サーバーは制御系（ctl）の中で動いているので、`path` は ctl の上のパスです。手元のファイルはこの CLI で送ってください
+- **添付先のチケット番号が要ります**。まだ起票していなければ、先に起票してから番号で添付します（`kb new` → `console/bin/attach <番号> <ファイル>`）
+- 上限（1 ファイル 20 MiB / 1 チケット合計 100 MiB）と名前の整えはサーバー側の判定がそのまま働きます。CLI は手元で判定しないので、断られたときの文面はコンソールが返したものです。実際に保存された名前は `added` で返ります
+- 同じファイルをもう一度送ると、上書きではなく `-2` が付いた 2 件目になります（`kb attach` と同じです）
+
+判断の記録は ADR-0092（[設計判断](../decisions/index.md)）です。
 
 ## AI セッションから使う（MCP）
 
@@ -167,8 +199,8 @@ claude mcp reset-project-choices   # 承認をやり直す
 |---|---|
 | `overview` / `ticket_list` / `ticket_show` | 概況（`pj` で run の一覧を絞れます）・一覧・1 件（本文・履歴・run・ジョブ・添付の一覧 `attachments`。run があれば `sync_preview` も） |
 | `ticket_new` / `intake` | チケット作成（整った本文 / 自由文。intake はジョブ） |
-| `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです） |
-| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` は空文字列で消す）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
+| `ticket_attach` / `ticket_detach` | 添付を 1 件足します（中身を `content_base64` で渡すか、ctl の上のファイルを `path` で指す。どちらか一方）/ 1 件消します。`path` に指せるのはホームディレクトリか `/tmp` の下で、`.` で始まる名前を含まないものだけです（設定や鍵の置き場を避けるためです）。**利用者の手元 PC のファイルは `path` では読めません**（この MCP は ctl の中で動いています）。その場合は手元で [`console/bin/attach`](#attach-local-file) を使ってもらってください |
+| `ticket_action` | start / review / done / reopen / block（`done` と `set` の `pr` は、紐づく run が人間待ちのままなら `run_action` と同じ内容を run 記録にも転記します）/ set（`note` / `depends_on` / `related_issue` / `related_ticket` は空文字列で消します。`related_issue` を消すと取得可否（`related_issue_access`）も一緒に消えるので、`related_issue_access` だけを空文字列にすることはできません。参照の値は run の依頼文にそのまま出ます）/ append（本文の末尾に追記。`text` 必須・`section` 任意）/ sync（`sync` の既定は `dry_run: true`。書かずに前後を返します。書くのは `dry_run: false` を明示したときだけです） |
 | `ticket_run` / `dispatch` | kb run（VM を貸し出して PR まで。`dry_run` 可）/ todo を順に。どちらもジョブ |
 | `run_list` / `run_show` / `read_file` | 実行記録と、許可されたディレクトリ内のファイル（`agent-*.log`・チケットの添付など）。画像は image として返るので、そのまま見えます（4 MiB まで。それより大きいものはコンソールから開いてください）。`run_show` には `progress` が付き、run 全体と工程ごとの経過秒・今の工程・`work/gates.txt` の PASS / FAIL / INFO 一覧が読めます。`read_file` はファイルが無いとき、同じ場所に実在する名前を併せて返します（run 自体が無いときは「ディレクトリが見つかりません」と言い分けます）。名前だけなので、`run_show` を引き直さずに正しい名前が分かります |
 | `run_wait` | run の工程が変わる（`until: step`、既定）か run が終わる（`until: result`）まで待ちます（既定 60 秒・上限 300 秒）。変化した瞬間に `{changed, status, step, ok, next, result, pr_url, gate_fails, gates, reason, current, history}` を返します。ログ本文は含みません |

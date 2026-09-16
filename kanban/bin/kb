@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """kanban/bin/kb: aifactory のチケット台帳（SQLite 正本）。task-id の採番元。
 
-  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS] [--attach FILE]...
+  kb new <pj> <kind> <title> [--body FILE|-] [--pr N] [--id N] [--status S] [--note TEXT] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS] [--base-sha SHA] [--attach FILE]...
   kb list [--status S] [--pj P] [--all]
   kb show <id>
   kb start|review|done|reopen <id> [--note TEXT]
   kb block <id> --note TEXT
-  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS]   # --note '' でメモを空に戻す
+  kb set <id> [--status S] [--pr N] [--run DIR] [--note TEXT] [--kind K] [--depends IDS] [--issue URL] [--issue-access A] [--ticket IDS] [--base-sha SHA]   # --note '' でメモを空に戻す
   kb append <id> [--section S] [--text T]        # 本文の末尾に追記（--text が無ければ stdin）。history に残る
   kb attach <id> <file>...                       # 画像・PDF・CSV などを添付（コピー）。本文には書かない
   kb attachments <id> [--json]                   # 添付の一覧（名前・サイズ・種別・追加日時）
@@ -27,6 +27,7 @@
 - kind  : workflow/kit/workflows/*.yml のうち `.` / `_` 始まりでないもの（chore / bug / feature / hotfix / research / merge-pr / docs）
 - status: todo → in_progress → review → done。人間待ちは blocked
 - 参照は 2 列に分ける: related_issue（外部 issue の URL。--issue-access で取得可否を付ける。既定は unreadable）と related_ticket（aifactory の内部票番号）。ADR-0084
+- base_sha は起票時の base（PJ の base_branch の tip）の commit sha。kb new が gh で自動で刻み、kb run が runner へ渡す（run が「何 commit 前の行番号か」を依頼文に出す）。ADR-0091
 - チケット本文は tickets/<id>-<pj>-<slug>.md（1 行目が題名、`pr: N` 行は runner が読む）。runner にはこのパスをそのまま渡す
 - 添付は attachments/<id>/（本文には書かない。1 ファイル 20 MiB・1 チケット 100 MiB まで）。run のとき VM の ~/work/<id>/attachments/ に置かれる
 - DB は $AIFACTORY_WORKSPACE/kanban/kanban.db（git 追跡外。lib/aifactory_paths.py が置き場を決める）。ここには ID・状態・履歴だけ。本文はファイルが正
@@ -95,7 +96,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     depends_on TEXT,
     related_issue TEXT,
     related_issue_access TEXT,
-    related_ticket TEXT
+    related_ticket TEXT,
+    base_sha TEXT
 );
 CREATE TABLE IF NOT EXISTS history (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,7 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 
 
 # 既に在る DB に後から足した列。CREATE TABLE IF NOT EXISTS は既存テーブルを変えないので、ここで補う（570）
-ADDED_COLUMNS = (("depends_on", "TEXT"), ("related_issue", "TEXT"), ("related_issue_access", "TEXT"), ("related_ticket", "TEXT"))
+ADDED_COLUMNS = (("depends_on", "TEXT"), ("related_issue", "TEXT"), ("related_issue_access", "TEXT"), ("related_ticket", "TEXT"),
+                 ("base_sha", "TEXT"))
 
 
 def db():
@@ -182,6 +185,22 @@ def parse_issue_access(v):
     return s
 
 
+BASE_SHA = re.compile(r"[0-9a-f]{7,40}")
+GH_TIMEOUT = 10   # 起票時の base sha を GitHub に聞く上限（秒）。トークンの払い出しと gh api の両方に掛ける（554）
+
+
+def parse_base_sha(v):
+    """`--base-sha` の値。空（'' / 空白だけ）なら None ＝ 刻印なし（554）。
+
+    値は git の commit sha（16 進 7〜40 桁）。console の config 編集が使う `base_sha256`（版ハッシュ）とは
+    別物で、こちらは **対象 PJ の base branch の tip commit**。読めない値は黙って捨てず断る"""
+    if v is None: return None
+    s = str(v).strip().lower()
+    if not s: return None
+    if not BASE_SHA.fullmatch(s): die(f"--base-sha は git の commit sha（16 進 7〜40 桁）で書く（'{s}' は読めない）")
+    return s
+
+
 def issue_fields(issue, access, cur_issue=None):
     """`--issue` / `--issue-access` の組を (related_issue, related_issue_access) にする（556）。
 
@@ -211,6 +230,7 @@ def update(c, tid, transcribe=True, **fields):
         if k == "related_issue": v = parse_issue_url(v)      # 以下 3 つも '' で消す（556）
         if k == "related_issue_access": v = parse_issue_access(v)
         if k == "related_ticket": v = parse_ids(v, tid, "--ticket")
+        if k == "base_sha": v = parse_base_sha(v)            # '' で刻印を消す（554。手で訂正する口）
         if k == "status" and v not in STATUSES: die(f"status は {STATUSES} のどれか")
         if k == "kind" and v not in kinds(): die(f"kind は {kinds()} のどれか")
         record(c, tid, k, r[k], v)
@@ -275,10 +295,21 @@ def cmd_new(a):
     if a.pj not in pjs(): die(f"pj は {pjs()} のどれか")
     if a.kind not in kinds(): die(f"kind は {kinds()} のどれか")
     if a.status not in STATUSES: die(f"status は {STATUSES} のどれか")
+    # 形の検査は本文ファイルを作る前に（読めない値で書きかけの .md を残さない。554）
+    stamped = getattr(a, "base_sha", None) is not None
+    stamp = parse_base_sha(getattr(a, "base_sha", None))
+    # 本文が引用するコードが「いつ時点のものか」を機械が刻む（554）。明示 > 自動取得 > 刻まない。
+    # ★GitHub に聞くのは id を採番（db() の SELECT MAX(id)）する前。採番と INSERT の間にネットワーク（数秒）を挟むと
+    # 　同時起票が同じ id を採る窓がその分だけ広がり、片方が UNIQUE 違反で落ちて孤児の .md が残る
+    base_sha = stamp if stamped else new_base_sha(a.pj)
     body = ""
     if a.body == "-": body = sys.stdin.read()
     elif a.body: body = pathlib.Path(a.body).read_text(encoding="utf-8")
     c = db()
+    # 採番（SELECT MAX(id)）から INSERT までを 1 本の書き込みトランザクションにする。
+    # 並んで走る kb（intake と MCP と人手は同時に起票しうる）が同じ id を採って片方が落ちる窓を閉じる。
+    # 待つのは sqlite の busy timeout（既定 5 秒）で、この区間はネットワークを含まないので ms で終わる
+    c.execute("BEGIN IMMEDIATE")
     if a.id is not None:
         tid = int(a.id)
         if tid < MIN_ID: die(f"id は {MIN_ID} 以上（3 桁以上）")
@@ -288,7 +319,6 @@ def cmd_new(a):
         tid = max((m or 0) + 1, MIN_ID)
     file = TICKETS / f"{tid}-{a.pj}-{slugify(a.title) if slugify(a.title) != 'ticket' else a.kind}.md"
     if file.exists(): die(f"{file} が既にある")
-    write_ticket(file, a.title, body, a.pr)
     t = now()
     deps = parse_depends(getattr(a, "depends", None), tid)
     # 外部 issue（取得可否つき）と内部票番号は別の列に入れる（556 / ADR-0084）
@@ -296,17 +326,30 @@ def cmd_new(a):
     issue, access = parse_issue_url(issue), parse_issue_access(access)
     rel = parse_ids(getattr(a, "ticket", None), tid, "--ticket")
     c.execute("INSERT INTO tickets (id, pj, kind, title, status, file, pr, run, note, created, updated, depends_on,"
-              " related_issue, related_issue_access, related_ticket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps, issue, access, rel))
+              " related_issue, related_issue_access, related_ticket, base_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (tid, a.pj, a.kind, a.title, a.status, str(file.relative_to(ROOT)), a.pr, None, a.note, t, t, deps, issue, access, rel, base_sha))
+    # 本文を書くのは台帳に載せてから（途中で落ちても、どの票のものでもない .md を残さない）
+    write_ticket(file, a.title, body, a.pr)
     record(c, tid, "status", None, a.status)
     if deps: record(c, tid, "depends_on", None, deps)
-    for k, v in (("related_issue", issue), ("related_issue_access", access), ("related_ticket", rel)):
+    for k, v in (("related_issue", issue), ("related_issue_access", access), ("related_ticket", rel), ("base_sha", base_sha)):
         if v: record(c, tid, k, None, v)
     c.commit(); render(c)
     print(fmt(get(c, tid))); print(f"     {file}")
     for w in capability_warnings(a.pj, body): print(f"[kb] warning: {w}", file=sys.stderr)
     if getattr(a, "attach", None): attach_files(c, tid, a.attach)
     return tid
+
+
+def new_base_sha(pj):
+    """起票時の base sha を自動で刻む（554）。取れなければ None にして stderr に 1 行だけ理由を出す。
+
+    印は `[kb] warn:`——`[kb] warning:` は console の ticket_new が `warnings[]`（能力照合の当たり）として
+    拾う印なので、そちらと混ぜない（ADR-0084 / チケット 552）。**起票は絶対に落とさない**"""
+    sha, why = fetch_base_sha(pj)
+    if sha: return sha
+    print(f"[kb] warn: base sha を記録できなかった: {why}", file=sys.stderr)
+    return None
 
 
 def capability_warnings(pj, body):
@@ -387,7 +430,7 @@ def cmd_set(a):
     c = db()
     issue, access = issue_fields(a.issue, a.issue_access, get(c, a.id)["related_issue"])
     r = update(c, a.id, status=a.status, pr=a.pr, run=a.run, note=a.note, kind=a.kind, depends_on=a.depends,
-               related_issue=issue, related_issue_access=access, related_ticket=a.ticket)
+               related_issue=issue, related_issue_access=access, related_ticket=a.ticket, base_sha=a.base_sha)
     render(c); print(fmt(r))
 
 
@@ -624,6 +667,14 @@ def cmd_run(a):
         if a.workflow: record(c, a.id, "workflow", None, wf); c.commit()
         render(c)
     cmd = [str(RUNNER), r["pj"], str(r["id"]), wf, str(path)] + [f for f in ("--dry-run", "--keep", "--resume") if getattr(a, f[2:].replace("-", "_"))]
+    # 票メタの参照（556 の 3 列）を runner へ渡す。本文ファイルには書かず、値は毎回 DB から取る（594）。
+    # 取得可否が空の行（手で DB を直した場合）は既定に倒す——既定の置き場は kb の 1 か所のまま（ADR-0084）
+    if r["related_ticket"]: cmd.append(f"--ticket={r['related_ticket']}")
+    if r["related_issue"]:
+        cmd.append(f"--issue={r['related_issue']}")
+        cmd.append(f"--issue-access={r['related_issue_access'] or ISSUE_ACCESS_DEFAULT}")
+    # 起票時の base sha（554）。何 commit 前かを測るのは VM を借りた runner の側（kb は PJ の clone を持たない）
+    if r["base_sha"]: cmd.append(f"--base-sha={r['base_sha']}")
     if getattr(a, "wait", None): cmd.append(f"--wait={int(a.wait * 60)}")   # 人は分で言い、runner は秒で待つ（242）
     if a.from_step is not None: cmd.append(f"--from={a.from_step}" if a.from_step else "--from")
     if a.from_branch: cmd.append(f"--branch={a.from_branch}")
@@ -662,6 +713,33 @@ def repo_for(pj):
     if not (f and f.exists()): return ""
     m = re.search(r"^repo:\s*[\"']?([\w.-]+/[\w.-]+)[\"']?\s*$", f.read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else ""
+
+
+def base_branch_for(pj):
+    """PJ 定義の `base_branch`。無ければ ""。repo_for と同じく yaml は読み込まない（1 行だけ要る）"""
+    pd = paths.project_dir(pj) if pj else None
+    f = (pd / "project.yml") if pd else None
+    if not (f and f.exists()): return ""
+    m = re.search(r"^base_branch:\s*[\"\']?([\w./-]+)[\"\']?\s*$", f.read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else ""
+
+
+def fetch_base_sha(pj):
+    """起票時点の base（PJ の base branch の tip）の commit sha を GitHub に聞く（554）。
+
+    戻り: (sha, None) か (None, 理由)。kb は PJ の clone を持たない（git checkout をするのは VM の runner だけ）ので、
+    sync_pr と同じ `repo_for` → `gh_ready` → `gh` の道を使う。**失敗はすべて「刻まない」に倒す**——
+    起票を落とさないのが最優先で、sha が無い票は今までどおり動く（run が警告を出さないだけ）"""
+    repo = repo_for(pj)
+    if not repo: return None, f"{pj} の project.yml に repo が無い"
+    branch = base_branch_for(pj)
+    if not branch: return None, f"{pj} の project.yml に base_branch が無い"
+    # トークンの払い出しにも上限を掛ける（起票は人が待っている。gh api の脚だけに掛けても sandbox が固まれば止まる）
+    why = gh_ready(pj, timeout=GH_TIMEOUT)
+    if why: return None, f"GH_TOKEN を用意できない: {why}"
+    sha, why = gh.branch_sha(repo, branch, timeout=GH_TIMEOUT)
+    if why: return None, f"gh api repos/{repo}/commits/{branch} が失敗: {why}"
+    return sha, None
 
 
 def pr_url_for(pj, pr):
@@ -834,17 +912,18 @@ def warn(msg):
     print(f"[kb] warn: {msg}", file=sys.stderr)
 
 
-def gh_ready(pj):
+def gh_ready(pj, timeout=None):
     """この PJ の repo に対して `gh` を使えるようにする。戻り: 使えない理由（使えるなら None）。
 
     GitHub App のトークンは PJ のリポジトリ限定（ADR-0008 / ADR-0030）なので、--all-review で PJ を跨ぐときに
-    前の PJ のトークンを使い回さない。払い出しは 1 PJ 1 回だけ（失敗も覚えて何度も sandbox を呼ばない）"""
+    前の PJ のトークンを使い回さない。払い出しは 1 PJ 1 回だけ（失敗も覚えて何度も sandbox を呼ばない）。
+    `timeout`（秒）は人を待たせる経路（起票。554）だけが渡す——`sandbox` が固まっても kb new を止めない"""
     if GH_AMBIENT:
         os.environ["GH_TOKEN"] = GH_AMBIENT
         return None
     if pj not in _GH_TOKENS:
         os.environ.pop("GH_TOKEN", None)
-        why = gh.ensure_gh_token(pj)
+        why = gh.ensure_gh_token(pj, timeout=timeout)
         _GH_TOKENS[pj] = (os.environ.get("GH_TOKEN") or "", why)
     token, why = _GH_TOKENS[pj]
     if why:
@@ -950,6 +1029,7 @@ def main():
     p.add_argument("--issue-access", metavar="A", choices=ISSUE_ACCESS,
                    help=f"--issue を run が取りに行けるか {list(ISSUE_ACCESS)}（既定 {ISSUE_ACCESS_DEFAULT}。sandbox のトークンは issues を読めない）")
     p.add_argument("--ticket", metavar="IDS", help="aifactory の内部票番号。カンマ区切り（例 393,521）。'' で消す。存在検査はしない")
+    p.add_argument("--base-sha", metavar="SHA", help="起票時の base の commit sha（省略時は PJ の base_branch の tip を gh で自動取得）。'' で消す")
     p.add_argument("--attach", action="append", metavar="FILE", help="起票と同時に添付する（複数可）")
     p = sp.add_parser("list"); p.add_argument("--status"); p.add_argument("--pj"); p.add_argument("--all", action="store_true")
     p = sp.add_parser("show"); p.add_argument("id", type=int)
@@ -961,6 +1041,7 @@ def main():
     p.add_argument("--issue-access", metavar="A", choices=ISSUE_ACCESS,
                    help=f"--issue を run が取りに行けるか {list(ISSUE_ACCESS)}（既定 {ISSUE_ACCESS_DEFAULT}。sandbox のトークンは issues を読めない）")
     p.add_argument("--ticket", metavar="IDS", help="aifactory の内部票番号。カンマ区切り（例 393,521）。'' で消す。存在検査はしない")
+    p.add_argument("--base-sha", metavar="SHA", help="起票時の base の commit sha（省略時は PJ の base_branch の tip を gh で自動取得）。'' で消す")
     p = sp.add_parser("append"); p.add_argument("id", type=int); p.add_argument("--section", help="追記に付ける見出し。例 PM 補足"); p.add_argument("--text", help="無ければ stdin から読む")
     p = sp.add_parser("attach"); p.add_argument("id", type=int); p.add_argument("file", nargs="+", help="添付するファイル（コピーされる）")
     p = sp.add_parser("attachments"); p.add_argument("id", type=int); p.add_argument("--json", action="store_true")

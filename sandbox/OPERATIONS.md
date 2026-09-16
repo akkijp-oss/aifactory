@@ -181,6 +181,7 @@ sandbox token show                                  # 出どころの確認（�
 - 要る用途の鍵が無ければ `take` は VM を取らずに「鍵なし:」で止まり、run は一時停止して鍵の登録を待ちます（チケットは todo に戻り、鍵を登録すると timer が回し直す。ADR-0046）。プールが空でも env ファイルに鍵が残っていても同じです（env の鍵に落ちる経路は無い。ADR-0060）。
 - 鍵の値はどこにも表示しません。`keys list` も console も MCP も、名前と末尾 4 文字だけを出します。run のログには `key=CLAUDE_CODE_OAUTH_TOKEN_OPUS (pool: opus-a)` のように名前だけ残ります。
 - console の「鍵」画面から同じことができます。使わない設定にする / 消すと、その鍵を使っている貸出に `sandbox reinject` のジョブが自動で起きます。
+- 「鍵」画面の上には鍵ごとの**残量（利用枠）**（5 時間枠 / 7 日枠（全体）/ 7 日枠（Fable）の残り %・リセットまでの時間・枯渇予測）が出ます。制御系の timer `aifactory-keys-probe.timer`（`install.sh --systemd` で登録。5 分ごと）が `lib/aifactory_keys_quota.py probe` で観測し、`keys.json` の隣の `keys-quota.db` に記録します。手で見るなら `python3 lib/aifactory_keys_quota.py show`（ADR-0087）。timer・「いま調べる」・手元の `probe` は `keys-quota.db.lock` で 1 周ずつ直列に走り、重なった回の `probe` は何も叩かずに rc 0 で終わります（`--wait <秒>` で待たせられます）。「枯渇」と出るのは問い合わせが実際に断られた窓だけです（ADR-0090）。
 - `sandbox token show` が `[stale]` を出したら、古い運用で env / pj ファイルに書いた `CLAUDE_CODE_OAUTH_TOKEN*=` の行が残っています。使われませんが、`sed -i '/^CLAUDE_CODE_OAUTH_TOKEN/d' <file>` で消してください。
 
 ### intake の鍵（制御系の ctl.env。ADR-0029）

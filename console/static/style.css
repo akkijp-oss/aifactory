@@ -24,7 +24,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 
 .shell { display: grid; grid-template-columns: 196px 1fr; min-height: 100vh; }
 .col-main { min-width: 0; }
-.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); }
+.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+/* ナビは 3 群（チケット / 実行・監視 / 管理）。見出しは押せない目印なので、余白と控えめな字で群を示す（色は既存のものだけ） */
+.rail-group { display: flex; flex-direction: column; gap: 2px; }
+.rail-group + .rail-group { margin-top: 12px; }
+.rail-h { font-size: 11px; color: var(--muted); letter-spacing: .04em; padding: 0 10px 3px; }
 .rail a { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-radius: var(--r); color: var(--ink); }
 .rail a:hover { background: var(--ground); text-decoration: none; }
 .rail a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -150,7 +154,7 @@ h2.step, legend.step { font-size: 13px; font-weight: 600; color: var(--muted); m
 .intake .actions.preview { margin: -6px 0 12px; }
 #new-preview-box { border: 1px solid var(--line-soft); border-radius: var(--r); padding: 10px 14px; margin-bottom: 14px; background: var(--ground); }
 @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .board { grid-template-columns: repeat(2, 1fr); } .flow { grid-template-columns: 1fr 1fr; } .flow .gap { display: none; } }
-@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } .modes { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; } .rail-group { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; align-items: center; } .rail-group + .rail-group { margin-top: 4px; } .rail-h { padding: 0 6px 0 10px; } .rail-foot { display: none; } .board { grid-template-columns: 1fr; } .modes { grid-template-columns: 1fr; } }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12.5px; }
@@ -315,6 +319,33 @@ ul.wflist .tag { margin: 0 2px; }
 ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .wfbrief { color: var(--muted); font-size: 12.5px; white-space: pre-line; margin-top: 8px; }
 @media (max-width: 1100px) { dl.kv.wf { grid-template-columns: 1fr; gap: 2px; } dl.kv.wf dt { margin-top: 6px; } }
+
+/* 鍵の残量（利用枠。ADR-0087）。bar = 残量、縦線 = 窓の残り時間。色は残量の状態（ok / warn / alarm）にだけ使う */
+.hrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hrow h2 { margin-bottom: 10px; }
+.quota { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin: 6px 0 10px; }
+.qcard { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--panel); }
+.qcard .l, .qw .l { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.qcard .small { font-size: 12.5px; margin-top: 6px; }
+.qw { margin-top: 8px; }
+.qw .l { font-size: 12.5px; }
+.qw .l.help { font-size: 11.5px; margin-top: 2px; }
+.pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+.pct.ok { color: var(--done); }
+.pct.warn, .warn-ink, .qw .warn { color: var(--in_progress); background: none; border: 0; padding: 0; }
+.pct.alarm, .alarm, .qw .alarm { color: var(--blocked); }
+.tabular { font-variant-numeric: tabular-nums; }
+.meter { position: relative; height: 6px; margin: 4px 0 2px; background: var(--line-soft); border-radius: 3px; }
+.meter > i { display: block; height: 100%; border-radius: 3px; background: var(--done); }
+.meter > i.warn { background: var(--in_progress); }
+.meter > i.alarm { background: var(--blocked); }
+.meter > b { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink); opacity: .55; border-radius: 1px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .now { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .tick { font-size: 10.5px; fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 4px; font-size: 12.5px; }
+.legend .lg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 
 /* AI Factory Manager（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
    「まだ分からない」は危険色を使わない——初期導入直後の console は正常にこの状態になるので、赤で「壊れている」と読ませない */

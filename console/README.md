@@ -36,7 +36,7 @@ journalctl -u aifactory-console -f
 
 ## 画面
 
-ナビは頻度順（ボード / AI Factory Manager / 起票 / 実行記録 / ジョブ / sandbox / 統計 / 鍵 / ログ / 設定）。`g` + 頭文字で移動、`?` で一覧。画面と文言の約束は `UX.md`（ADR-0019）。
+ナビは 3 群（チケット: ボード / 起票、実行・監視: AI Factory Manager / 実行記録 / ジョブ / ログ / 統計、管理: sandbox / 鍵 / 設定）。`g` + 頭文字で移動、`?` で一覧。画面と文言の約束は `UX.md`（ADR-0019 / ADR-0089）。
 
 | 画面 | 見るもの | 動かすもの |
 |---|---|---|
@@ -47,12 +47,21 @@ journalctl -u aifactory-console -f
 | sandbox | 貸出中の VM（`~/.config/sandbox/state.json`。アプリの URL、その VM で動く run）と PJ の一覧（project.yml の有無、Claude の鍵が鍵プールにそろっているか、プールの定義 / 実体 / 貸出 / 空き）、プール VM の表（貸出先 / VM 名 / IP / PJ / 稼働状態 / 貸出から。取得時刻つき。失敗と未取得を分けて出す） | `sandbox ls`（Proxmox に ssh、数秒。取得中は表示）/ `sandbox release <task>`（危険色のダイアログ。run が動いていれば**チケット番号の入力**） |
 | 起票 | — | 自由文 → `glue/bin/intake` / 整った本文 → `kb new`（配車はボードへ移した） |
 | ジョブ | このコンソールが起動した CLI の一覧と出力（2 秒ごとに追い読み）。終わると**「次にすること」**（intake → できたチケットを開く / run 停止 → 状態を実行記録に合わせる / 返却 → sandbox） | 止める（ダイアログ。プロセスグループに SIGTERM） |
-| 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0044） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす |
+| 鍵 | Claude の鍵プール（`~/.config/sandbox/keys.json`）の一覧。名前・fable / fable 以外のフラグ・使うかどうか・末尾 4 文字・発行日・最終利用・使用回数・使っている貸出。値は出さない（ADR-0044）。上に**残量（利用枠）**: 鍵ごとに 5 時間枠 / 7 日枠（全体）/ 7 日枠（Fable）の残り %・リセットまでの時間・始点 → 終点・ペースからの枯渇予測を、`keys.json` の隣の `keys-quota.db`（timer `aifactory-keys-probe` が 5 分ごとに観測）から読む。下に**残量の推移**（SVG の折れ線。窓と期間を切り替え）。一覧の「残量」列はいちばん逼迫している窓（ADR-0087） | `sandbox keys add / set / token / rm`（子プロセス。ジョブには載せない）。使わない設定にする・消すと、その鍵を使っている貸出に `sandbox reinject` のジョブを起こす。「いま調べる」= `python3 lib/aifactory_keys_quota.py probe --full` をジョブで起こす（記録には名前と成否だけ） |
 | ログ | 起票と配車の記録を 1 つの表に（日時・処理・PJ・チケット・結果・理由、新しい順。ログ形式は変えずコンソール側で分解する = ADR-0027）。原文は表の下の「元のログを見る」に畳んで残す（`$AIFACTORY_WORKSPACE/logs/intake.log` / `dispatch.log`） | チケット番号（前方一致）・PJ・種類（起票 / 配車）で絞る（AND、条件は URL に残る）/ チケット番号のリンクでそのチケットへ |
 | /docs/ | ドキュメントサイト（ja / en）。工場の使い方を貸出先に渡すのに別ホスティングが要らない | — |
 | 設定 | ワークフローの一覧（名前・うまくいったときの流れ・うまくいかなかったときだけ回る工程）、モデルの経路（`routes.env`。4 行それぞれに入力欄があり、ここから直せる。モデルは Agent → モデル名の 2 段で表示名から選ぶか、ID を直接入力する = ADR-0072）、PJ 定義の置き場、`git status`。workflow の名前と工程は本物のリンクで、開くと工程の詳細（担い手・指示・読み書き・上限・分岐・実効モデル）が読める。工程詳細には**その工程の yml ブロックだけ**を出す編集欄があり、モデルの欄と画面の中で双方向に同期する（ファイル全体は出さない。`id` と担い手の種類は変えられない = ADR-0073） | workflow を開く、工程を開く、定義の原文を読む、モデルの経路を変える、工程の定義（その工程の yml ブロック）を変える（どちらも影響する工程を見てから保存する） |
 
 - 表示名は **AI Factory Manager**、識別子は `pm` のまま据え置き（`aifactory-pm.service` / `aifactory-pm.timer`・`com.aifactory.pm.plist`・`console/bin/pm-tick`・`GET /api/pm`・MCP の `pm_status` / `pm_tick`・`core.py` の `pm_*`・`logs/pm-decisions.jsonl`・画面のルート `#/pm`）。稼働中の systemd timer と公開済みの API 名を変えないため（#587）。
+
+## 手元のファイルを添付する（bin/attach）
+
+`console/bin/attach <チケット番号> <ファイル>...` を**利用者の端末で**実行すると、ファイルをそのまま `POST /api/tickets/<id>/attach`（multipart）へ送る。MCP は制御系（ctl）の中で動くので `ticket_attach(path=...)` は手元 PC のファイルを読めず、`content_base64` は中身を JSON-RPC の引数に載せてしまう。その穴だけを埋める薄い送信側で、上限（1 ファイル 20 MiB / 合計 100 MiB）も名前の sanitize も持たない（正本は `lib/aifactory_attachments.py`。ADR-0015 / ADR-0092）。
+
+- 成功: 応答の JSON 1 行（`id` / `added` / `attachments`）を stdout。失敗: 理由 1 行を stderr にして非 0。**中身・base64・合言葉・Authorization はどの出力にも出さない**（出力の長さはファイルの大きさに比例しない）
+- 設定は環境変数 → `~/.config/aifactory/mcp-remote.env` → 既定の順: `AIFACTORY_CONSOLE_URL`（既定 `http://127.0.0.1:8765`）、`CONSOLE_TOKEN`（`ps` に出ないので argv では受けない）。`--url` は環境変数より優先
+- 受け口・保存・履歴・runner への配布は無改修。既存 3 方式（multipart 直叩き / `content_base64` / `path`）もそのまま
+- テストは `console/tests/test_attach_cli.py`（エンコーダ単体・sha256 の突合・出力が漏らさないこと・認証・失敗）
 
 ## MCP（AI セッションからの読み書き）
 
@@ -119,6 +128,7 @@ console/
 ├── lib/core.py      # ★読み書きの正本（kanban の読み取り、runs、sandbox、JobStore、操作の判定）。console と mcp が共有
 ├── bin/console      # HTTP サーバー + JSON API（core の口）
 ├── bin/mcp          # MCP サーバー（stdio、core の口）。登録はリポジトリ直下の .mcp.json
+├── bin/attach       # 手元の端末から添付を送る CLI（POST /api/tickets/<id>/attach へ multipart。判定は持たない。ADR-0092）
 ├── bin/install.sh   # symlink と launchd（macOS）/ systemd（Linux）登録
 ├── launchd/         # plist の雛形（install.sh が埋める）
 ├── systemd/         # unit の雛形（install.sh --systemd が埋める。制御系 LXC 用）

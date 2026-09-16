@@ -31,6 +31,24 @@ Long-lived tokens from `claude setup-token` expire. When one does, the step stop
 
 **The pool is the only source of the keys a VM receives** (ADR-0060). `sandbox token set … claude` refuses and saves nothing, a `CLAUDE_CODE_OAUTH_TOKEN` line left in `~/.config/sandbox/env` or `pj/<pj>.env` is ignored (`sandbox token show` lists it as `[stale]` with the `sed` line that removes it), and there is no fallback to those files when the pool is empty. `sandbox token rotate claude` replaces only the key intake uses (`ctl.env`) and restarts the console; it does not touch the pool. Pool keys are replaced with `sandbox keys token <name>`.
 
+### Remaining quota of the keys
+
+The *Keys* screen shows, above the table, the **remaining quota** of every key: the 5-hour window, the 7-day window (all models) and the 7-day Fable window, each with the remaining %, the time to reset and a pace-based exhaustion forecast (ADR-0087). The control plane's timer `aifactory-keys-probe.timer` sends one tiny request per key every 5 minutes and reads the usage headers of the answer (a cheap model every 5 minutes; keys allowed for Fable are also asked with Fable every 15 minutes, since the Fable window is only reported when Fable is asked). Key values never appear in the records.
+
+```bash
+sandbox/bin/install.sh --systemd                 # register the timer (once, after ctl-update; installed with the other timers)
+python3 lib/aifactory_keys_quota.py probe --full # probe now (same as *Probe now* on the Keys screen)
+python3 lib/aifactory_keys_quota.py probe --wait 120  # wait up to 120 s if the timer is mid-round, then probe
+python3 lib/aifactory_keys_quota.py show         # remaining % and time to reset per key and window
+journalctl -u aifactory-keys-probe               # the timer's log
+```
+
+- The timer, *Probe now* and a local `probe` never overlap: rounds run one at a time (ADR-0090). A `probe` that hits a running round says another probe is in progress and exits without sending anything (this is not a failure); *Probe now* queues behind the timer.
+- **"Exhausted" is shown only for a window the API actually refused** (ADR-0090). A window with 1% left is not called exhausted, and small remainders are printed with one decimal (for example 0.5%). The colours are unchanged: red at 10% or less, amber at 25% or less.
+- A key marked "authentication refused" has expired. Replace it with `sandbox keys token <name>`; the next probe reads it again. A replaced key does not inherit the old key's quota or history (even if the last 4 characters of the token are the same).
+- "At this pace, exhausted in about n" extrapolates the average consumption since the window started up to the reset time. Add another key if you are in a hurry.
+- MCP `keys_list` carries the same numbers (`keys[].quota`), so an AI operator can read how much each key has left.
+
 **When the pool has no key for a purpose the run needs, the run pauses** (ADR-0046). No VM is taken, the ticket goes back to todo and its note says it is paused for lack of a key. Register a key on the *Keys* screen and the 5-minute timer starts the run over. Disabling every key stops the factory; enabling one resumes it.
 ### Running out of usage (the usage limit) resumes by itself
 

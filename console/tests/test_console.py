@@ -6,7 +6,7 @@
 - JobStore: モジュールとして読み込み、ロック内の二重起動ガード・停止・再起動後の復元を直接確かめる
 PJ は同梱の examples/projects/kumitate を使う（workspace/projects/ は空）。
 """
-import datetime, fcntl, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, sqlite3, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
+import datetime, fcntl, http.server, importlib.machinery, importlib.util, json, os, pathlib, re, shutil, signal, socket, sqlite3, stat, subprocess, sys, tempfile, textwrap, threading, time, unittest, urllib.error, urllib.parse, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CONSOLE = REPO / "console" / "bin" / "console"
@@ -225,6 +225,255 @@ class KeysApiTest(unittest.TestCase):
     def test_post_needs_the_console_header(self):
         st, d = self.http.post("/api/keys", {"action": "add", "name": "x", "token": "y", "other": True}, header=False)
         self.assertEqual(st, 403, d)
+
+
+# 残量の観測（ADR-0087）の口を確かめるための偽 Anthropic。model が fable なら 7d_oi 付き、それ以外は 5h / 7d だけ。
+# トークン "bad-…" は 401（鍵切れ）。本物の API には触らない
+class FakeAnthropic(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0); body = json.loads(self.rfile.read(n) or b"{}")
+        tok = (self.headers.get("authorization") or "").replace("Bearer ", "")
+        self.server.calls.append({"model": body.get("model"), "tail4": tok[-4:], "beta": self.headers.get("anthropic-beta")})
+        if tok.startswith("bad-"):
+            out = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "x"}}).encode()
+            self.send_response(401); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out); return
+        reset5 = int(time.time()) + 3600; reset7 = int(time.time()) + 3 * 86400
+        # 5h の使用率は端数の出る値にする: 残量が 59.5% になるので、経路のどれかが丸めていれば契約テストが気づく
+        h = {"anthropic-ratelimit-unified-5h-utilization": "0.405", "anthropic-ratelimit-unified-5h-reset": str(reset5), "anthropic-ratelimit-unified-5h-status": "allowed",
+             "anthropic-ratelimit-unified-7d-utilization": "0.10", "anthropic-ratelimit-unified-7d-reset": str(reset7), "anthropic-ratelimit-unified-7d-status": "allowed",
+             "anthropic-ratelimit-unified-status": "allowed", "anthropic-ratelimit-unified-representative-claim": "five_hour"}
+        if "fable" in (body.get("model") or ""):
+            h.update({"anthropic-ratelimit-unified-7d_oi-utilization": "0.75", "anthropic-ratelimit-unified-7d_oi-reset": str(reset7), "anthropic-ratelimit-unified-7d_oi-status": "allowed"})
+        out = b'{"id":"msg_x","type":"message","content":[]}'
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out)))
+        for k, v in h.items(): self.send_header(k, v)
+        self.end_headers(); self.wfile.write(out)
+
+
+class KeysQuotaApiTest(unittest.TestCase):
+    """鍵の残量（ADR-0087）: /api/keys の quota、/api/keys/history、/api/keys/probe（ジョブ）。観測は偽 Anthropic に向ける"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="aifactory-keys-quota-test-"))
+        cls.ws = cls.tmp / "ws"; cls.ws.mkdir()
+        cls.home = cls.tmp / "home"; cls.home.mkdir()
+        cls.keys = cls.tmp / "keys.json"; cls.state = cls.tmp / "state.json"; cls.state.write_text("{}", encoding="utf-8")
+        b = cls.tmp / "bin"; b.mkdir()
+        sb = b / "sandbox"; sb.write_text(FAKE_SANDBOX_KEYS, encoding="utf-8"); sb.chmod(0o755)
+        cls.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeAnthropic); cls.api.calls = []
+        threading.Thread(target=cls.api.serve_forever, daemon=True).start()
+        cls.port = free_port()
+        env = {**os.environ, "AIFACTORY_WORKSPACE": str(cls.ws), "CONSOLE_JOBS": str(cls.tmp / "jobs"), "HOME": str(cls.home),
+               "SANDBOX_STATE": str(cls.state), "SANDBOX_KEYS": str(cls.keys), "PATH": f"{b}:{os.environ.get('PATH', '')}",
+               "AIFACTORY_ANTHROPIC_BASE_URL": f"http://127.0.0.1:{cls.api.server_address[1]}",
+               "AIFACTORY_KEYS_PROBE_MODEL": "claude-haiku-4-5", "AIFACTORY_KEYS_PROBE_FULL_MODEL": "claude-fable-5-1"}
+        cls.proc = subprocess.Popen([sys.executable, str(CONSOLE), "--port", str(cls.port)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.http = Http(f"http://127.0.0.1:{cls.port}")
+        for _ in range(50):
+            try: cls.http.get("/api/keys"); break
+            except Exception: time.sleep(0.1)
+        else: raise RuntimeError("console が起動しない")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate(); cls.proc.wait(timeout=10); cls.api.shutdown()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.keys.write_text(json.dumps({"keys": [
+            {"name": "fable-a", "token": "tok-fable-1111", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-09-09", "note": "", "allow": {"fable": True, "other": True}},
+            {"name": "opus-a", "token": "tok-opus-2222", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-09-09", "note": "", "allow": {"fable": False, "other": True}},
+            {"name": "dead-a", "token": "bad-3333", "enabled": True, "uses": 0, "last_used": None, "issued": "2026-01-01", "note": "", "allow": {"fable": False, "other": True}},
+        ]}), encoding="utf-8")
+        self.wait_idle()
+        for f in self.tmp.glob("keys-quota.db*"): f.unlink()
+        self.api.calls.clear()
+
+    def wait_job(self, jid):
+        """終わったジョブ（job_view の job）と log の本文を返す"""
+        for _ in range(300):
+            _, d = self.http.get(f"/api/jobs/{jid}")
+            if d["job"].get("state") != "running": return d["job"], d["log"]["text"]
+            time.sleep(0.1)
+        raise AssertionError("ジョブが終わらない")
+
+    def wait_idle(self):
+        """前のテストが起こした観測のジョブが終わるまで待つ（DB を消す前に）"""
+        for _ in range(300):
+            _, v = self.http.get("/api/keys")
+            if v["quota"]["probing"] is None: return
+            time.sleep(0.1)
+
+    def test_view_before_any_probe(self):
+        st, v = self.http.get("/api/keys")
+        self.assertEqual(st, 200)
+        self.assertFalse(v["quota"]["exists"]); self.assertTrue(v["quota"]["stale"]); self.assertIsNone(v["quota"]["probing"])
+        self.assertEqual(v["quota"]["full_model"], "claude-fable-5-1")
+        self.assertTrue(all(k["quota"] is None for k in v["keys"]))
+        st, h = self.http.get("/api/keys/history?hours=24")
+        self.assertEqual(st, 200); self.assertEqual(h["points"], []); self.assertFalse(h["exists"])
+
+    def test_probe_job_then_quota_in_view(self):
+        st, r = self.http.post("/api/keys/probe", {})
+        self.assertEqual(st, 200); self.assertFalse(r["already"]); jid = r["job"]["id"]
+        self.assertEqual(r["job"]["kind"], "keys-probe")
+        # timer（JobStore を通らない）と重なったら、飛ばさずに後ろに並ぶ。手動は必ず新しい値が欲しい（#560）
+        self.assertIn("--wait", r["job"]["cmd"])
+        # 動いている間は二重に起こさない（判定は JobStore のロックの中。同時に押されても 2 本にならない）
+        st, r2 = self.http.post("/api/keys/probe", {})
+        self.assertEqual(st, 200)
+        if r2["already"]: self.assertEqual(r2["job"]["id"], jid)
+        else: self.wait_job(r2["job"]["id"])   # 1 本目が既に終わっていたなら 2 本目が起きる。待ってから読む
+        j, log = self.wait_job(jid)
+        self.assertEqual(j["rc"], 1, "鍵切れの鍵が 1 本あるので rc は 1（他の鍵の観測は記録される）")
+        self.assertIn("[probe] fable-a: ok", log); self.assertIn("[probe] dead-a: NG HTTP 401 authentication_error", log)
+        for secret in ("tok-fable-1111", "tok-opus-2222", "bad-3333"): self.assertNotIn(secret, log)
+        self.assertNotIn("tok-", json.dumps(j))
+        # 偽 API には fable-a が Fable で、opus-a と dead-a は安いモデルで届く
+        models = {c["tail4"]: c["model"] for c in self.api.calls}
+        self.assertEqual(models, {"1111": "claude-fable-5-1", "2222": "claude-haiku-4-5", "3333": "claude-haiku-4-5"})
+        self.assertTrue(all(c["beta"] == "oauth-2025-04-20" for c in self.api.calls))
+        st, v = self.http.get("/api/keys")
+        q = v["quota"]; self.assertTrue(q["exists"]); self.assertFalse(q["stale"]); self.assertIsNotNone(q["last_probed"]); self.assertIsNone(q["probing"])
+        self.assertEqual(q["db_file"], str(self.tmp / "keys-quota.db")); self.assertTrue(OFFSET_ISO.match(q["last_probed"]), q["last_probed"])
+        by = {k["name"]: k["quota"] for k in v["keys"]}
+        f = by["fable-a"]
+        self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
+        w5, w7, oi = f["windows"]
+        self.assertEqual(w5["remaining_pct"], 59.5); self.assertEqual(oi["remaining_pct"], 25.0); self.assertEqual(f["binding"]["key"], "7d_oi")
+        self.assertTrue(0 < w5["remain_s"] <= 3600); self.assertTrue(OFFSET_ISO.match(w5["reset"])); self.assertTrue(OFFSET_ISO.match(w5["start"]))
+        self.assertFalse(w5["exhausted"]); self.assertFalse(w5["at_window_end"]); self.assertIsNone(f["error"]); self.assertFalse(f["stale"])
+        self.assertEqual([w["key"] for w in by["opus-a"]["windows"]], ["5h", "7d"], "Fable 許可の無い鍵は 7d_oi を持たない")
+        d = by["dead-a"]
+        self.assertEqual(d["error"], "HTTP 401 authentication_error"); self.assertEqual(d["windows"], []); self.assertIsNone(d["binding"])
+        st, h = self.http.get("/api/keys/history?hours=24")
+        real = [p for p in h["points"] if p["status"] != "window_start"]
+        self.assertEqual(sorted((p["name"], p["window"]) for p in real), [("fable-a", "5h"), ("fable-a", "7d"), ("fable-a", "7d_oi"), ("opus-a", "5h"), ("opus-a", "7d")])
+        starts = [p for p in h["points"] if p["status"] == "window_start"]
+        self.assertEqual(sorted((p["name"], p["window"]) for p in starts), [("fable-a", "5h"), ("opus-a", "5h")], "24 時間の内に始まった窓の始点だけ（7 日の窓の始点は 4 日前）")
+        self.assertTrue(all(p["remaining_pct"] == 100.0 for p in starts))
+        _, h8 = self.http.get("/api/keys/history?hours=192")
+        self.assertEqual(len([p for p in h8["points"] if p["status"] == "window_start"]), 5, "8 日ぶんなら 7 日の窓の始点も入る")
+        self.assertTrue(all(OFFSET_ISO.match(p["at"]) for p in h["points"]))
+        st, h1 = self.http.get("/api/keys/history?hours=24&name=opus-a")
+        self.assertTrue(h1["points"] and all(p["name"] == "opus-a" for p in h1["points"]))
+        # 2 周目（安いモデルだけ）でも Fable の枠は据え置かれる
+        self.api.calls.clear()
+        self.wait_job(self.http.post("/api/keys/probe", {"full": False})[1]["job"]["id"])
+        self.assertTrue(all(c["model"] == "claude-haiku-4-5" for c in self.api.calls))
+        _, v = self.http.get("/api/keys")
+        f = next(k["quota"] for k in v["keys"] if k["name"] == "fable-a")
+        self.assertEqual([w["key"] for w in f["windows"]], ["5h", "7d", "7d_oi"])
+
+    def child_env(self):
+        """MCP / CLI を console と同じ置き場に向けて起こすための env（鍵と DB の場所・モデル名を揃える）"""
+        return {**os.environ, "AIFACTORY_WORKSPACE": str(self.ws), "CONSOLE_JOBS": str(self.tmp / "jobs"), "HOME": str(self.home),
+                "SANDBOX_STATE": str(self.state), "SANDBOX_KEYS": str(self.keys),
+                "AIFACTORY_KEYS_PROBE_MODEL": "claude-haiku-4-5", "AIFACTORY_KEYS_PROBE_FULL_MODEL": "claude-fable-5-1"}
+
+    def mcp_keys_list(self):
+        """MCP の keys_list を 1 回叩いて content[0].text（JSON の本文）を返す"""
+        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "keys_list", "arguments": {}}}
+        r = subprocess.run([sys.executable, str(REPO / "console" / "bin" / "mcp")], input=json.dumps(req) + "\n",
+                           text=True, capture_output=True, env=self.child_env(), timeout=60)
+        out = json.loads(next(l for l in r.stdout.splitlines() if l.strip().startswith("{")))
+        return out["result"]["content"][0]["text"]
+
+    def cli_show(self):
+        """CLI の `aifactory_keys_quota.py show --json`（console と同じ DB を読む）の標準出力を返す"""
+        r = subprocess.run([sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "show", "--json"],
+                           text=True, capture_output=True, env=self.child_env(), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    @staticmethod
+    def stable(q):
+        """now に依存する項目（残り秒・経過 %・枯渇までの秒数）を落とした形。別プロセスの now は数秒ずれる"""
+        if q is None: return None
+        drop = ("remain_s", "elapsed_pct", "exhaust_in_s")
+        return {**{k: v for k, v in q.items() if k != "windows"},
+                "windows": [{k: v for k, v in w.items() if k not in drop} for w in q["windows"]]}
+
+    def test_mcp_keys_list_carries_quota(self):
+        """MCP の keys_list は console と同じ keys_view を返すので quota が載る（値は載らない）"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        text = self.mcp_keys_list()
+        self.assertIn('"quota"', text); self.assertIn('"7d_oi"', text); self.assertNotIn("tok-fable", text)
+
+    def test_console_mcp_and_cli_agree_on_quota(self):
+        """同じ観測に対して「鍵」画面（/api/keys）・MCP keys_list・CLI show --json が同じ数字と同じ判定を出す。
+
+        要約の規則は lib の summarize() の 1 か所に置く（ADR-0087 決定 5）という契約を、退行で捕まえるための網。
+        3 経路は別プロセスなので now が数秒ずれる。now に依らない項目は完全一致、残り秒と経過 % だけ許容差で見る"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        t0 = time.monotonic()
+        _, v = self.http.get("/api/keys")
+        mcp_text, cli_text = self.mcp_keys_list(), self.cli_show()
+        span = time.monotonic() - t0   # 3 経路を取り終えるまでの実時間。now のずれはこれを超えない
+        m, c = json.loads(mcp_text), json.loads(cli_text)
+        panel = lambda d: {x: d[x] for x in ("last_probed", "last_ok", "stale")}   # noqa: E731
+        routes = {"console": ({k["name"]: k["quota"] for k in v["keys"]}, panel(v["quota"])),
+                  "mcp": ({k["name"]: k["quota"] for k in m["keys"]}, panel(m["quota"])),
+                  "cli": (c["keys"], panel(c))}
+        names = {"fable-a", "opus-a", "dead-a"}
+        for route, (keys, p) in routes.items():
+            self.assertEqual(set(keys), names, f"{route} が見ている鍵の集合が違う")
+            self.assertEqual(p, routes["console"][1], f"{route} のパネル（最終観測・最後に読めた時刻・古さ）が console と違う")
+            for name in sorted(names):
+                self.assertEqual(self.stable(keys[name]), self.stable(routes["console"][0][name]),
+                                 f"{route} の {name} の要約が console と違う（summarize() を通っていない経路がある）")
+        # now に依る項目は許容差で。幅は「3 経路を取るのにかかった実時間 + 2 秒」で、機械の速さに依らない
+        # （固定の秒数にすると、混んでいるときに落ちる。単位や式が別物なら窓長（5 時間・7 日）の規模でずれるので、この幅でも気づく）
+        tol = span + 2
+        for name in sorted(names):
+            ws = [routes[r][0][name]["windows"] for r in routes]
+            for w in zip(*ws):
+                key, length = w[0]["key"], {"5h": 5 * 3600, "7d": 7 * 86400}[w[0]["key"].replace("_oi", "")]
+                self.assertLessEqual(max(x["remain_s"] for x in w) - min(x["remain_s"] for x in w), tol, f"{name} {key} の remain_s が食い違う")
+                self.assertLessEqual(max(x["elapsed_pct"] for x in w) - min(x["elapsed_pct"] for x in w), tol / length * 100 + 0.1,
+                                     f"{name} {key} の elapsed_pct が食い違う")
+                self.assertEqual(len({x["will_exhaust"] for x in w}), 1, f"{name} {key} の枯渇見込みの有無が経路で違う")
+                if w[0]["will_exhaust"]:
+                    # 枯渇までの秒数は経過時間に比例して伸びるので、now のずれが (1-u)/u 倍に拡大する（この窓では 3 倍まで）
+                    self.assertLessEqual(max(x["exhaust_in_s"] for x in w) - min(x["exhaust_in_s"] for x in w), tol * 3 + 1,
+                                         f"{name} {key} の exhaust_in_s が食い違う")
+        # 具体値も 1 組だけ固定する（3 経路とも同じ数字であることを、形の一致だけに頼らずに示す）
+        for route, (keys, _) in routes.items():
+            f = keys["fable-a"]
+            self.assertEqual([(w["key"], w["remaining_pct"]) for w in f["windows"]], [("5h", 59.5), ("7d", 90.0), ("7d_oi", 25.0)], route)
+            self.assertEqual(f["binding"]["key"], "7d_oi", route); self.assertFalse(f["stale"], route)
+            self.assertEqual(keys["dead-a"]["error"], "HTTP 401 authentication_error", route)
+            self.assertEqual(keys["dead-a"]["windows"], [], route)
+        # 秘密と指紋は 3 経路のどこにも出ない（ADR-0090 決定 1）
+        for route, text in (("console", json.dumps(v)), ("mcp", mcp_text), ("cli", cli_text)):
+            for secret in ("tok-fable-1111", "tok-opus-2222", "bad-3333"): self.assertNotIn(secret, text, route)
+            self.assertNotIn('"fp"', text, route)
+
+    def test_history_after_key_swap_starts_over(self):
+        """同じ名前のまま鍵を入れ替えたら、履歴（グラフの元データ）に前の契約の点が 1 つも残らない。
+
+        表示側は世代を見分けなくてよい: 入れ替えを見つけた周が観測を打つ前にその鍵の履歴を捨てるので、
+        グラフに渡る点が世代を跨がない（ADR-0090 決定 1）。他の鍵の履歴は巻き添えにしない"""
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        real = lambda h, name: {p["ts"] for p in h["points"] if p["status"] != "window_start" and p["name"] == name}   # noqa: E731
+        _, h1 = self.http.get("/api/keys/history?hours=24")
+        before_f, before_o = real(h1, "fable-a"), real(h1, "opus-a")
+        self.assertTrue(before_f and before_o)
+        # 末尾 4 文字が同じ別のトークンに差し替える（tail4 の比較だけでは気づけない同名の入れ替え）
+        d = json.loads(self.keys.read_text(encoding="utf-8"))
+        next(k for k in d["keys"] if k["name"] == "fable-a")["token"] = "tok-fable-x-1111"
+        self.keys.write_text(json.dumps(d), encoding="utf-8")
+        self.wait_job(self.http.post("/api/keys/probe", {})[1]["job"]["id"])
+        _, h2 = self.http.get("/api/keys/history?hours=24")
+        after_f, after_o = real(h2, "fable-a"), real(h2, "opus-a")
+        self.assertTrue(after_f, "入れ替えた鍵の新しい観測は記録される")
+        self.assertEqual(after_f & before_f, set(), "入れ替え前の点が履歴に残っている（グラフが別の契約と線でつながる）")
+        self.assertTrue(before_o <= after_o, "入れ替えていない鍵の履歴まで消している")
+        self.assertGreater(len(after_o), len(before_o))
+        self.assertTrue(all("fp" not in p for p in h2["points"]), "履歴の点に指紋を出さない")
 
 
 class ApiTest(unittest.TestCase):
@@ -1987,6 +2236,30 @@ class ApiTest(unittest.TestCase):
         self.assertIsNone(v["ticket"]["depends_on"])
         self.assertTrue(any(h["field"] == "depends_on" and h["old"] == "903,904" and not h["new"] for h in v["history"]))
 
+    # ---- 票の参照 3 列（#556 / ADR-0084）。値を運ぶだけで、取りに行く / 行かないの規則は役割文書が持つ（#594）
+    def test_ticket_reference_columns_are_written_and_read_back_through_the_api(self):
+        issue = "https://github.com/akkijp/kumitate/issues/393"
+        st, d = self.http.post("/api/tickets", {"pj": PJ, "kind": "chore", "title": "後続: 参照の往復",
+                                                "body": "x\n\n## 完了条件\n- y", "related_issue": issue,
+                                                "related_ticket": [521, 556]})
+        self.assertEqual(st, 200, d); tid = d["id"]
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertEqual(v["ticket"]["related_issue"], issue)
+        self.assertEqual(v["ticket"]["related_issue_access"], "unreadable")   # 既定は安全側（kb が正本）
+        self.assertEqual(v["ticket"]["related_ticket"], "521,556")
+        st, d = self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue_access": "readable"})
+        self.assertEqual(st, 200, d)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["related_issue_access"], "readable")
+        # note / depends_on と同じ扱い: キーが無ければ触らない / 空文字列で消す
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "kind": "bug"})[0], 200)
+        self.assertEqual(self.http.get(f"/api/tickets/{tid}")[1]["ticket"]["related_ticket"], "521,556")
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue": ""})[0], 200)
+        _, v = self.http.get(f"/api/tickets/{tid}")
+        self.assertIsNone(v["ticket"]["related_issue"]); self.assertIsNone(v["ticket"]["related_issue_access"])
+        self.assertEqual(v["ticket"]["related_ticket"], "521,556")            # 別の列なので道連れにしない
+        # 値の形の検査は kb が正本（内部票番号を外部 issue の欄に書けない）
+        self.assertEqual(self.http.post(f"/api/tickets/{tid}/action", {"action": "set", "related_issue": "393"})[0], 400)
+
     def test_ticket_depends_on_refuses_what_it_cannot_read_as_ticket_numbers(self):
         """票番号として読めない値は断る（後で読む側が推測しないで済むように、書く側で締める）"""
         tid = self.todo_id()
@@ -2201,13 +2474,14 @@ class ApiTest(unittest.TestCase):
                        "proposed", "approved", "skipped_by_steer", "paused", "blocked_by_dependency", "blocked_by_pause")
 
     def test_pm_view_sits_in_the_rail_and_polls_one_endpoint(self):
-        """#/pm はボードの直後に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
+        """#/pm は「実行・監視」群の先頭に 1 項目、5 秒ポーリングで /api/pm だけを読む（通信方式を増やさない）"""
         html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
         app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('<a href="#/pm" data-nav="pm"><span data-t="nav.pm"></span></a>', html,
                       "ナビの項目が既存と同じ形になっていない（件数札は置かない。#588）")
         self.assertLess(html.index('data-nav="board"'), html.index('data-nav="pm"'))
-        self.assertLess(html.index('data-nav="pm"'), html.index('data-nav="intake"'), "AI Factory Manager はボードの直後（頻度順）")
+        self.assertLess(html.index('data-nav="intake"'), html.index('data-nav="pm"'),
+                        "ボード→起票（チケット群）の後、実行・監視群の先頭に AI Factory Manager（#595）")
         self.assertIn("p: 'pm'", app, "g p の割り当てが無い（? の一覧にも載らない）")
         self.assertIn("seg[0] === 'pm') await viewPm()", app, "#/pm のルートが無い")
         body = app[app.index("async function viewPm"):app.index("function renderPm")]
@@ -2268,6 +2542,53 @@ class ApiTest(unittest.TestCase):
                          "値を入れないなら要素を置かない（置けば常に 0 件と見分けが付かない）")
         self.assertEqual(written - declared, set(),
                          f"refreshNav が書くが index.html に無い札: {sorted(written - declared)}")
+
+    def test_rail_is_three_groups_in_ticket_order(self):
+        """左ナビは「チケット / 実行・監視 / 管理」の 3 群（#595）。10 項目の識別子は 1 つも増減しない。
+
+        JS を動かす基盤が無いのでソースを突き合わせる。DOM 順が Tab 順と表示順を兼ねるので、
+        群ごとの data-nav の並びを固定する。見出しは押せない目印であってリンクではない。
+        """
+        html = (REPO / "console" / "static" / "index.html").read_text(encoding="utf-8")
+        app = (REPO / "console" / "static" / "app.js").read_text(encoding="utf-8")
+        css = (REPO / "console" / "static" / "style.css").read_text(encoding="utf-8")
+        rail = re.search(r"<nav class=\"rail\".*?</nav>", html, re.S)
+        self.assertTrue(rail, "index.html に <nav class=\"rail\"> が無い（検査が空回りしている）")
+        rail = rail.group(0)
+        groups = re.findall(r'<div class="rail-group".*?</div>', rail, re.S)
+        self.assertEqual(len(groups), 3, f"ナビの群が 3 つでない: {len(groups)}")
+        self.assertEqual([re.findall(r'data-nav="([a-z]+)"', g) for g in groups],
+                         [["board", "intake"], ["pm", "runs", "jobs", "logs", "stats"], ["sandbox", "keys", "config"]],
+                         "群の中身と順序がチケットの表と違う（チケット: ボード・起票 / 実行・監視: AI Factory Manager・実行記録・ジョブ・ログ・統計 / 管理: sandbox・鍵・設定）")
+        # 識別子は 1 つも増えず・減らず・綴りも変わらない: data-nav と href="#/<nav>" が 10 個で 1 対 1
+        navs = re.findall(r'<a href="#/([a-z]+)" data-nav="([a-z]+)"', rail)
+        self.assertEqual(len(navs), 10, f"ナビのリンクが 10 個でない: {len(navs)}")
+        self.assertEqual([h for h, _ in navs], [n for _, n in navs], "href と data-nav が食い違うリンクがある")
+        self.assertEqual(set(n for _, n in navs),
+                         {"board", "intake", "pm", "runs", "jobs", "logs", "stats", "sandbox", "keys", "config"})
+        self.assertEqual(set(re.findall(r'<b id="(n-[a-z-]+)"', rail)), {"n-board", "n-runs", "n-jobs", "n-sandbox"},
+                         "件数札の集合が変わっている（n-pm は #588 で外した。戻さない）")
+        # 見出しは <a> でなく、data-nav / href を持たない（押せる項目に見せない）
+        heads = re.findall(r"<[^>]*data-t=\"nav\.group\.[a-z]+\"[^>]*>", rail)
+        self.assertEqual(len(heads), 3, f"nav.group.* の見出しが 3 つでない: {heads}")
+        for h in heads:
+            self.assertTrue(h.startswith("<span"), f"見出しがリンクになっている: {h}")
+            self.assertNotIn("data-nav", h, f"見出しに data-nav が付いている: {h}")
+            self.assertNotIn("href", h, f"見出しに href が付いている: {h}")
+        # 見出しの文言は strings.js が正本（HTML に日本語を直書きしない）
+        self.assertEqual(re.findall(r"[ぁ-んァ-ン一-龥]{2,}", rail), [], "ナビに日本語の直書きがある（文言は strings.js の T へ）")
+        # 選択中は色だけでなく aria-current でも分かる。付け外しは route の 1 か所（HTML に直書きしない）
+        self.assertNotIn("aria-current", html, "aria-current を HTML に直書きしている（選択は route が付け外しする）")
+        route = app[app.index("async function route()"):app.index("const [path, q]")]
+        self.assertIn("setAttribute('aria-current', 'page')", route, "選択中のリンクに aria-current を付けていない")
+        self.assertIn("removeAttribute('aria-current')", route, "選択から外れたリンクの aria-current を外していない")
+        # g + 頭文字の行き先はナビの 10 項目と過不足なく一致する（? の一覧にだけ在る画面を作らない）
+        keys = dict(re.findall(r"(\w+): '([a-z]+)'", re.search(r"const KEYS = \{(.*?)\};", app).group(1)))
+        self.assertEqual(set(keys.values()), set(n for _, n in navs), "KEYS の行き先とナビの項目が食い違う")
+        # 低い画面でも末尾（設定・接続表示）へ届く。720px 以下は群ごとに折り返す
+        self.assertRegex(css, r"\.rail\s*\{[^}]*overflow-y:\s*auto", "画面が低いとき .rail が縦スクロールしない（末尾の項目に届かない）")
+        narrow = re.search(r"@media \(max-width: 720px\) \{.*?\n", css).group(0)
+        self.assertIn(".rail-group {", narrow, "720px 以下で群の折り返しを決めていない")
 
     def test_pm_view_keeps_unknown_apart_from_zero_and_never_contradicts_itself(self):
         """「取得できていない」を「0 件」「順調」と同じ見え方にしない。同じ画面の中で矛盾もさせない"""

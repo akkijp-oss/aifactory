@@ -124,7 +124,7 @@ class DispatchDependsOnTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(KB), *args], input=input_text, text=True, capture_output=True, env=self.env)
 
     def new(self, tid, *extra, title="先行条件の確認"):
-        r = self.kb("new", "kumitate", "bug", title, "--body", "-", "--id", str(tid), *extra, input_text=TICKET)
+        r = self.kb("new", "kumitate", "bug", title, "--body", "-", "--id", str(tid), "--base-sha", "", *extra, input_text=TICKET)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def dispatch(self, *args):

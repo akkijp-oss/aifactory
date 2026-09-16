@@ -392,7 +392,8 @@ def backend(Run):
             self.scp_to(local, self.work + '/computer-mcp.json')
 
         def credentials(self):
-            r = subprocess.run([str(ROOT / "sandbox" / "bin" / "sandbox"), "gh-app", "token", self.pj], text=True, capture_output=True)
+            # argv[0] は名前で呼ぶ（絶対パスだとテストの PATH 偽装をすり抜け、#615 の検査にも届かない。#617）
+            r = subprocess.run(["sandbox", "gh-app", "token", self.pj], text=True, capture_output=True)
             token = r.stdout.strip()
             if r.returncode or not token.startswith("ghs_") or "\n" in token:
                 raise RuntimeError("cannot mint project-scoped GitHub token")
@@ -406,10 +407,10 @@ def backend(Run):
             （無効化した鍵が全工程・全モデルで使われ続けた。2026-09-10）。選び方は sandbox の `keys pick` 1 か所に置く。
             stdout は鍵の値そのものなので、ログにも例外文にも state にも入れない（残すのは選ばれた鍵の名前だけ）"""
             cur = ",".join(f"{g}={n}" for g, n in sorted((self.state.get("keys") or {}).items()) if n)
-            cmd = [str(ROOT / "sandbox" / "bin" / "sandbox"), "keys", "pick", "--pj", self.pj, "--task", str(self.task),
-                   "--need=" + ",".join(self.needed_keys()), "--json"]
-            if cur: cmd.append("--current=" + cur)
-            r = subprocess.run(cmd, text=True, capture_output=True)
+            # argv[0] は名前で、argv はその場に書く（変数に組むと #615 の検査から argv[0] が見えない。#617）
+            r = subprocess.run(["sandbox", "keys", "pick", "--pj", self.pj, "--task", str(self.task),
+                                "--need=" + ",".join(self.needed_keys()), "--json",
+                                *(["--current=" + cur] if cur else [])], text=True, capture_output=True)
             if r.returncode:
                 why = (r.stderr or "").strip().splitlines()
                 if any(NO_KEY in l for l in why):

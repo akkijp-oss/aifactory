@@ -8,7 +8,7 @@ import base64, contextlib, datetime, fcntl, hashlib, json, os, pathlib, re, shut
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # console/（lib/ の親）
 REPO = HERE.parent
-sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_workflow as wfdef
+sys.path.insert(0, str(REPO / "lib")); import aifactory_paths as paths, aifactory_attachments as attachments, aifactory_workflow as wfdef, aifactory_keys_quota as keyq
 STATIC = HERE / "static"
 JOBS = paths.JOBS                                              # テストでは CONSOLE_JOBS で差し替える
 KB = REPO / "kanban" / "bin" / "kb"
@@ -1345,10 +1345,17 @@ def ticket_action(tid, b):
         if "depends_on" in b and b["depends_on"] is not None:
             dep = b["depends_on"]
             args += ["--depends", ",".join(str(x) for x in dep) if isinstance(dep, (list, tuple)) else str(dep)]
+        # 票メタの参照（556 の 3 列）も depends_on と同じ扱い。値を渡すだけで、形の検査（URL か・番号か・
+        # 取得可否の語）と既定は kb が正本（594 / ADR-0084）
+        for key, flag in (("related_issue", "--issue"), ("related_issue_access", "--issue-access"), ("related_ticket", "--ticket")):
+            if key in b and b[key] is not None:
+                v = b[key]
+                args += [flag, ",".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v)]
         for k in ("status", "pr", "kind"):
             if b.get(k) not in (None, ""): args += [f"--{k}", b[k]]
         if b.get("run"): args += ["--run", b["run"]]
-        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run / depends_on のどれかを指定してください")
+        if len(args) == 2: raise ApiError("変える項目がありません。status / pr / note / kind / run / depends_on / "
+                                          "related_issue / related_issue_access / related_ticket のどれかを指定してください")
     elif act == "append":
         text = b.get("text")
         if not text or not str(text).strip(): raise ApiError("追記する本文がありません。text に本文を入れてください")
@@ -1459,6 +1466,11 @@ def ticket_new(b):
     dep = b.get("depends_on")
     if isinstance(dep, (list, tuple)): dep = ",".join(str(x) for x in dep)
     if dep: args += ["--depends", str(dep)]                   # 形の検査（数字か・自分自身か）は kb の parse_depends が正本
+    # 参照の 3 列（556）。起票のときから書ける。値の形と既定は kb が正本（594）
+    for key, flag in (("related_issue", "--issue"), ("related_issue_access", "--issue-access"), ("related_ticket", "--ticket")):
+        v = b.get(key)
+        if isinstance(v, (list, tuple)): v = ",".join(str(x) for x in v)
+        if v: args += [flag, str(v)]
     rc, out, err = kb(*args, stdin=b.get("body") or "")
     if rc != 0: raise ApiError((err or out).strip() or f"kb new が失敗 rc={rc}")
     tid = int(out.split()[0]) if out.split() and out.split()[0].isdigit() else None
@@ -1818,9 +1830,42 @@ def keys_view():
                      # launches = runner が実際にその鍵で claude を起動した回数（uses は take / reinject で割り当てた回数。使用量の目安は launches）
                      "launches": k.get("launches") or 0,
                      "last_launched": ts_aware(k.get("last_launched")) if k.get("last_launched") else None, "in_use": in_use(name)})
+    # 残量（利用枠）は keys.json の隣の keys-quota.db から読むだけ（書くのは timer / ジョブの probe。ADR-0087）。
+    # 鍵ごとの quota は {probed, ok, stale, error, windows: [{key: 5h|7d|7d_oi, remaining_pct, reset, start, remain_s, will_exhaust, …}], binding}。
+    # まだ観測が無い鍵は None（鍵を足した直後・timer 未登録）
+    q = keyq.view(keys_file=path)
+    for k in keys: k["quota"] = q["keys"].get(k["name"])
+    probing = next((j["id"] for j in JobStore.running() if j.get("kind") == "keys-probe"), None)
     return {"keys": keys, "keys_file": str(path), "exists": exists, "error": error,
             # 用途ごとの候補数。0 の用途を要る run は「鍵なし」で一時停止する（env ファイルの鍵には落ちない。ADR-0060）
-            "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")}}
+            "candidates": {g: sum(1 for k in keys if k["enabled"] and k["allow"][g]) for g in ("fable", "other")},
+            "quota": {"db_file": q["db_file"], "exists": q["exists"], "error": q["error"], "last_probed": q["last_probed"], "last_ok": q["last_ok"], "stale": q["stale"],
+                      "cheap_model": q["cheap_model"], "full_model": q["full_model"], "probing": probing}}
+
+
+def keys_history_view(hours=24, name=None):
+    """残量の履歴（「鍵」画面のグラフ用）。点は {name, window, remaining_pct, reset, status, at}。status が window_start の点は合成した窓の始点"""
+    hours = max(1, min(int(hours or 24), 24 * 31))
+    return keyq.history_view(keys_file=SANDBOX_KEYS, hours=hours, name=name or None)
+
+
+def keys_probe(b=None):
+    """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = Fable 許可の鍵は Fable でも叩いて 7d_oi を取る）。
+    鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す。
+
+    二重に起こさない判定は JobStore のロックの中でやる（他の start と同じ書き方。外で running() を見ると、
+    同時に押された 2 つがどちらも「実行中は無い」と読んで 2 本起きる）。JobStore を通らない systemd の timer とは
+    probe 側のファイルロックで排他するので、--wait を付けて timer の後ろに並ばせる（手動は必ず新しい値が欲しい）"""
+    b = b or {}
+    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"]) + ["--wait", "120"]
+    busy = lambda j: "残量を調べるジョブが実行中です" if j.get("kind") == "keys-probe" else None   # noqa: E731
+    try:
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
+    except Conflict:
+        j = next((j for j in JobStore.running() if j.get("kind") == "keys-probe"), None)
+        if j: return {"job": j, "already": True}
+        # 判定の直後に終わっていた: 1 回だけやり直す（それでも衝突するなら 409 のまま上げる）
+        return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}
 
 
 def keys_apply(b):
