@@ -26,15 +26,39 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4
 
 
 def multipart(parts):
-    """parts: [(欄名, ファイル名 or None, バイト列)] → (Content-Type, 本体)"""
+    """parts: [(欄名, ファイル名 or None, バイト列)] → (Content-Type, 本体)。
+
+    4 要素目に part の Content-Type を足せる（省略可）。ブラウザーは選ばれたファイルの種類を part に書く
+    （`.eml` なら message/rfc822）。受け側がそれを中身として解き直して捨てないことを見るため（#620）"""
     b = "----aifactory-test-boundary"
     out = b""
-    for name, filename, data in parts:
+    for part in parts:
+        name, filename, data = part[0], part[1], part[2]
+        part_ctype = part[3] if len(part) > 3 else None
         out += f"--{b}\r\nContent-Disposition: form-data; name=\"{name}\"".encode()
         if filename is not None: out += f"; filename=\"{filename}\"".encode("utf-8")
-        out += b"\r\n\r\n" + data + b"\r\n"
+        out += b"\r\n"
+        if part_ctype is not None: out += b"Content-Type: " + part_ctype.encode() + b"\r\n"
+        out += b"\r\n" + data + b"\r\n"
     out += f"--{b}--\r\n".encode()
     return f"multipart/form-data; boundary={b}", out
+
+
+def eml(sep=b"\r\n"):
+    """テスト用の `.eml`（中身が multipart のメール）。実在しないドメインだけを書く。
+       sep で改行を変えられる（CRLF / LF / 混在の `.eml` が現にある）"""
+    head = sep.join([b"From: okuri@example.invalid", b"To: uketori@example.invalid",
+                     b"Subject: =?utf-8?B?" + base64.b64encode("報告".encode()) + b"?=",
+                     b"MIME-Version: 1.0", b'Content-Type: multipart/mixed; boundary="inner-620"', b"", b""])
+    body = sep.join([b"--inner-620", b"Content-Type: text/plain; charset=utf-8", b"", "本文\n".encode().strip(),
+                     b"--inner-620", b"Content-Type: application/octet-stream", b"", b"\x00\x01\xff",
+                     b"--inner-620--", b""])
+    return head + body
+
+
+EML = eml()
+EML_LF = eml(b"\n")
+EML_MIXED = eml(b"\r\n").replace(b"MIME-Version: 1.0\r\n", b"MIME-Version: 1.0\n")   # 改行が混ざった .eml
 
 
 class AttachHttpTest(unittest.TestCase):
@@ -135,6 +159,17 @@ class AttachHttpTest(unittest.TestCase):
         st, d = self.http.post(f"/api/tickets/{tid}/detach", {"name": "消す.png"})
         self.assertEqual(st, 404, d)
 
+    def test_an_eml_is_attached_whole(self):
+        """#620: 画面から `.eml` を添付すると、ブラウザーが付ける message/rfc822 のせいで黙って 0 件になっていた"""
+        tid = self.new_ticket()
+        st, d = self.post_form(f"/api/tickets/{tid}/attach", [("files", "報告.eml", EML, "message/rfc822")])
+        self.assertEqual(st, 200, d)
+        self.assertEqual(d["added"], ["報告.eml"])
+        st, h, body = self.raw_get(f"/api/tickets/{tid}/attachments/{urllib.parse.quote('報告.eml')}")
+        self.assertEqual(st, 200)
+        self.assertEqual(body, EML)                                                  # バイト一致
+        self.assertTrue(h["Content-Disposition"].startswith("attachment"), h["Content-Disposition"])
+
     def test_attach_needs_the_console_header_and_multipart(self):
         tid = self.new_ticket()
         st, d = self.post_form(f"/api/tickets/{tid}/attach", [("files", "x.png", PNG)], header=False)
@@ -184,6 +219,32 @@ class ParseMultipartTest(unittest.TestCase):
     def test_not_multipart_is_refused(self):
         with self.assertRaises(self.m.ApiError):
             self.m.parse_multipart("multipart/form-data; boundary=zzz", b"not a multipart body")
+
+    def test_eml_with_message_rfc822_type_is_kept_as_one_file(self):
+        """#620: ブラウザーは `.eml` に message/rfc822 を付ける。中身が multipart のメールでも、
+           ファイル名が付いているなら 1 件のファイルとして**バイトのまま**受けること"""
+        for label, data in (("CRLF", EML), ("LF", EML_LF), ("混在", EML_MIXED)):
+            with self.subTest(label):
+                ctype, body = multipart([("files", "報告.eml", data, "message/rfc822")])
+                fields, files = self.m.parse_multipart(ctype, body)
+                self.assertEqual(fields, {})
+                self.assertEqual(files, [("報告.eml", data)])
+
+    def test_a_part_whose_type_is_multipart_is_kept_whole_too(self):
+        """`.mht`（multipart/related）など、同じ性質の他の形式にも効くこと"""
+        mht = (b"MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"mht-620\"\r\n\r\n"
+               b"--mht-620\r\nContent-Type: text/html\r\n\r\n<html></html>\r\n--mht-620--\r\n")
+        ctype, body = multipart([("files", "保存.mht", mht, "multipart/related; boundary=\"mht-620\"")])
+        fields, files = self.m.parse_multipart(ctype, body)
+        self.assertEqual(files, [("保存.mht", mht)])
+
+    def test_form_fields_are_still_fields(self):
+        """`continue` を消すだけにすると、filename の無い欄までファイルになって壊れる"""
+        ctype, body = multipart([("text", None, "本文\n".encode()), ("dry_run", None, b"1"),
+                                 ("files", "", b""), ("files", "報告.eml", EML, "message/rfc822")])
+        fields, files = self.m.parse_multipart(ctype, body)
+        self.assertEqual(fields, {"text": "本文\n", "dry_run": "1"})
+        self.assertEqual(files, [("報告.eml", EML)])
 
 
 class AttachMcpTest(unittest.TestCase):

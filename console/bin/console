@@ -42,20 +42,33 @@ def utf8(s):
 
 
 def parse_multipart(ctype, body):
-    """multipart/form-data を (欄の辞書, [(ファイル名, バイト列)]) に解く。標準ライブラリの email で読む（cgi は 3.13 で消えた）。
+    """multipart/form-data を (欄の辞書, [(ファイル名, バイト列)]) に解く。
 
-    email に **バイトのまま**渡すとヘッダーを ascii + replace で潰され、日本語のファイル名が壊れる。
-    latin-1 で 1 対 1 に文字列化してから渡し、ヘッダーは utf8() で、中身は raw-unicode-escape（get_payload(decode=True)）で戻す。
+    境界でバイト列を自分で切り、**ヘッダー部だけ**を標準ライブラリの email で読む（cgi は 3.13 で消えた）。
+    中身まで email に渡さないのは、ファイルの part に付いた種類（`.eml` の message/rfc822、`.mht` の
+    multipart/related）を email が「入れ子のメール」として解き直してしまい、添付が黙って落ちるため（#620）。
+    ファイルかどうかは **filename の有無**だけで決める。中身の種類では決めない。中身はバイトのまま渡す
+    （form-data の part に Content-Transfer-Encoding は付かない前提。RFC 7578 でも非推奨）。
+
+    ヘッダーを email へ **バイトのまま**渡すと ascii + replace で潰され、日本語のファイル名が壊れる。
+    latin-1 で 1 対 1 に文字列化してから渡し、utf8() で読み直す。
 
     ここは形を解くだけ。名前の sanitize も大きさの上限も lib/aifactory_attachments.py（core 経由）に任せる"""
-    raw = "Content-Type: " + ctype + "\r\nMIME-Version: 1.0\r\n\r\n" + body.decode("latin-1")
-    msg = email.message_from_string(raw)
-    if not msg.is_multipart(): raise ApiError("multipart/form-data として読めませんでした（境界が見つかりません）", 400)
+    boundary = email.message_from_string("Content-Type: " + ctype).get_param("boundary")
+    if not isinstance(boundary, str) or not boundary:
+        raise ApiError("multipart/form-data として読めませんでした（境界が見つかりません）", 400)
+    mark = b"--" + boundary.encode("latin-1", "replace")
+    nl = b"\r\n" if b"\r\n" + mark in body else b"\n"        # 境界の改行。RFC は CRLF だが LF だけで送る相手も受ける
+    chunks = (nl + body if body.startswith(mark) else body).split(nl + mark)
+    if len(chunks) < 2: raise ApiError("multipart/form-data として読めませんでした（境界が見つかりません）", 400)
     fields, files = {}, []
-    for part in msg.get_payload():
-        if part.is_multipart(): continue
+    for chunk in chunks[1:]:
+        if chunk.startswith(b"--"): break                      # 終端（--境界--）。後ろは epilogue
+        head, found, data = chunk.partition(nl + nl)           # 中身は次の境界の直前まで（split が手前の改行を落としている）
+        if not found: continue
+        head = head.split(nl, 1)[1] if nl in head else b""     # 境界の行の残り（空白の詰め物）を落とす
+        part = email.message_from_string(head.decode("latin-1"))
         name = utf8(part.get_param("name", header="content-disposition") or "")
-        data = part.get_payload(decode=True) or b""
         fn = part.get_filename()
         if fn is None: fields[name] = data.decode("utf-8", "replace")
         elif utf8(fn): files.append((utf8(fn), data))          # ファイルを選ばずに送ると空の part が来る。名前が無いものは数えない
