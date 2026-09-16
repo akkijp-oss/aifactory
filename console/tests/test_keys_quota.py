@@ -26,6 +26,8 @@ FABLE_HEADERS = {
     "anthropic-ratelimit-unified-overage-disabled-reason": "org_level_disabled", "anthropic-ratelimit-unified-status": "allowed",
 }
 CHEAP_HEADERS = {k: v for k, v in FABLE_HEADERS.items() if "7d_oi" not in k}
+# #559 が実測で見つけた、意味の分かっていないヘッダ（窓別ではない単一の reset と用途不明の割合）
+UNKNOWN_HEADERS = {"anthropic-ratelimit-unified-reset": "1787005000", "anthropic-ratelimit-unified-fallback-percentage": "0.5"}
 
 
 class FakeResponse:
@@ -59,6 +61,28 @@ class ProbeTest(unittest.TestCase):
     def test_cheap_model_has_no_oi_window(self):
         s = kq.probe_key("tok", "claude-haiku-4-5", request=responder(200, CHEAP_HEADERS), now=NOW)
         self.assertIsNone(s["error"]); self.assertFalse(s["covers_all"]); self.assertEqual(sorted(s["windows"]), ["5h", "7d"])
+
+    def test_unknown_unified_headers_are_kept_raw(self):
+        """意味の分からない unified-* も生のまま拾う（捨てると後で重要と分かったとき履歴が無い。#560 の残差 2）"""
+        h = {**CHEAP_HEADERS, **UNKNOWN_HEADERS, "Anthropic-RateLimit-Unified-7d_xx-Utilization": "0.12"}
+        s = kq.probe_key("tok", "m", request=responder(200, h), now=NOW)
+        self.assertEqual(s["raw"], {"anthropic-ratelimit-unified-reset": "1787005000",
+                                    "anthropic-ratelimit-unified-fallback-percentage": "0.5",
+                                    "anthropic-ratelimit-unified-7d_xx-utilization": "0.12"}, "名前は小文字化して拾う")
+        self.assertEqual(sorted(s["windows"]), ["5h", "7d"], "未知のヘッダは窓にしない（表示・判定には使わない）")
+        self.assertIsNone(s["error"])
+
+    def test_raw_ignores_other_headers_and_caps_size(self):
+        """接頭辞の外は絶対に拾わない（秘密が紛れ込む経路を作らない）。長さと本数にも上限がある"""
+        h = {**CHEAP_HEADERS, "authorization": "Bearer sk-ant-oat01-secret", "x-request-id": "req-secret", "set-cookie": "s=secret",
+             "anthropic-ratelimit-tokens-remaining": "100", "anthropic-ratelimit-unified-" + "n" * 200: "v" * 400}
+        s = kq.probe_key("tok", "m", request=responder(200, h), now=NOW)
+        self.assertNotIn("secret", json.dumps(s))
+        self.assertEqual(len(s["raw"]), 1)
+        (name, val), = s["raw"].items()
+        self.assertEqual(len(name), kq.RAW_NAME_MAX); self.assertEqual(len(val), kq.RAW_VALUE_MAX)
+        many = {**CHEAP_HEADERS, **{f"anthropic-ratelimit-unified-x{i}": str(i) for i in range(kq.RAW_MAX + 10)}}
+        self.assertEqual(len(kq.probe_key("tok", "m", request=responder(200, many), now=NOW)["raw"]), kq.RAW_MAX)
 
     def test_429_is_read_as_headers(self):
         h = {**CHEAP_HEADERS, "anthropic-ratelimit-unified-5h-utilization": "1.0", "anthropic-ratelimit-unified-5h-status": "rejected", "anthropic-ratelimit-unified-status": "rejected"}
@@ -212,6 +236,68 @@ class StoreTest(unittest.TestCase):
     def test_db_is_private(self):
         self.assertEqual(os.stat(self.st.path).st_mode & 0o777, 0o600)
 
+    def test_unknown_headers_are_stored_but_never_shown(self):
+        """未知ヘッダは控えるだけ。要約・履歴・CLI のどこにも出てこない（#560 の残差 2）"""
+        self.st.record("a", "1234", self.snap({**FABLE_HEADERS, **UNKNOWN_HEADERS}, NOW))
+        raw = self.st.raw()
+        self.assertEqual(sorted((r["header"], r["value"]) for r in raw),
+                         [("anthropic-ratelimit-unified-fallback-percentage", "0.5"), ("anthropic-ratelimit-unified-reset", "1787005000")])
+        self.assertTrue(all(r["name"] == "a" and r["probed_ts"] == NOW for r in raw))
+        for text in (json.dumps(kq.summarize(self.st.row("a"), now=NOW)), json.dumps(self.st.history(since=0))):
+            self.assertNotIn("fallback-percentage", text); self.assertNotIn("1787005000", text)
+
+    def test_known_headers_and_failed_probes_leave_no_raw(self):
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
+        self.assertEqual(self.st.raw(), [], "読み方を知っているヘッダは控えに入れない")
+        self.st.record("a", "1234", self.fail(NOW + 60, 500))
+        self.assertEqual(self.st.raw(), [], "読めなかった回は控えない")
+
+    def test_raw_is_pruned_and_forgotten_with_the_key(self):
+        self.st.record("a", "1234", self.snap({**CHEAP_HEADERS, **UNKNOWN_HEADERS}, NOW - 40 * 86400))
+        self.st.record("b", "5678", self.snap({**CHEAP_HEADERS, **UNKNOWN_HEADERS}, NOW))
+        self.assertEqual(len(self.st.raw()), 4)
+        self.st.prune(keep_days=30)
+        self.assertEqual([r["name"] for r in self.st.raw()], ["b", "b"], "古い控えは履歴と一緒に剪定される")
+        self.st.keep_only(["zzz"])
+        self.assertEqual(self.st.raw(), [], "鍵が消えれば控えも消える")
+
+    def test_fingerprint_is_stored_and_optional(self):
+        fp = kq.fingerprint("tok-secret-1111")
+        self.st.record("a", "1111", self.snap(CHEAP_HEADERS, NOW), fp=fp)
+        self.assertEqual(self.st.row("a")["fp"], fp)
+        self.st.record("a", "1111", self.snap(CHEAP_HEADERS, NOW + 300))   # fp を渡さない呼び手は据え置く
+        self.assertEqual(self.st.row("a")["fp"], fp)
+        self.assertNotIn("secret", fp); self.assertEqual(len(fp), 16)
+        self.assertNotEqual(kq.fingerprint("tok-secret-1111"), kq.fingerprint("tok-other-1111"), "末尾 4 文字が同じでも別の指紋")
+        self.assertEqual(kq.fingerprint(""), "")
+
+    def test_out_of_order_response_does_not_roll_the_value_back(self):
+        """遅れて届いた古い応答で現在値を巻き戻さない（履歴には事実として残す）"""
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW + 600))
+        old = {**CHEAP_HEADERS, "anthropic-ratelimit-unified-5h-utilization": "0.01"}
+        self.st.record("a", "1234", self.snap(old, NOW))
+        r = self.st.row("a")
+        self.assertEqual(r["w5h_util"], 0.23, "古い応答は現在値を上書きしない"); self.assertEqual(r["ok_ts"], NOW + 600)
+        self.assertEqual(r["probed_ts"], NOW + 600, "試行時刻も戻らない")
+        self.assertIn(0.01, [x["utilization"] for x in self.st.history(since=0) if x["probed_ts"] == NOW], "履歴には残る")
+        # 追いついた新しい応答はふつうに反映する
+        self.st.record("a", "1234", self.snap(old, NOW + 900))
+        self.assertEqual(self.st.row("a")["w5h_util"], 0.01)
+
+    def test_old_db_gets_the_new_column(self):
+        """#167 が作った DB（fp 列なし）を開いても壊れず、列が足されて既存行が残る（移行は追加のみ）"""
+        import sqlite3 as s3
+        p = pathlib.Path(self.dir) / "old.db"
+        c = s3.connect(str(p))
+        c.executescript(kq.SCHEMA.replace("  fp              TEXT,      -- トークンの非可逆な指紋（世代の識別。表示・API には出さない）\n", ""))
+        c.execute("INSERT INTO key_quota(name, tail4, ok_ts, w5h_util) VALUES ('a','1234',?,0.4)", (NOW,)); c.commit(); c.close()
+        self.assertNotIn("fp", [r[1] for r in s3.connect(str(p)).execute("PRAGMA table_info(key_quota)")])
+        st = kq.Store(p); self.addCleanup(st.close)
+        r = st.row("a")
+        self.assertEqual(r["w5h_util"], 0.4, "既存行は残る"); self.assertIsNone(r["fp"])
+        st.record("a", "1234", self.snap(CHEAP_HEADERS, NOW + 300), fp="deadbeefdeadbeef")
+        self.assertEqual(st.row("a")["fp"], "deadbeefdeadbeef")
+
 
 class RunProbeTest(unittest.TestCase):
     def setUp(self):
@@ -271,6 +357,70 @@ class RunProbeTest(unittest.TestCase):
         self.assertTrue(all(x["probed_ts"] >= NOW + 300 - 7 * 86400 - 1 and x["probed_ts"] != NOW for x in st.history(since=0, name="a")), "入れ替え前の実測は残らない")
         self.assertIsNone(st.row("b"), "keys.json から消えた鍵は DB からも消える")
 
+    def test_same_tail4_different_token_still_drops_the_history(self):
+        """末尾 4 文字が同じ別トークンに差し替えられても履歴を引き継がない（指紋で見分ける。#560 の残差 1）"""
+        self.write([{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_()
+        st = kq.Store(self.db); self.addCleanup(st.close)
+        self.assertEqual(st.row("a")["fp"], kq.fingerprint("tok-aaa-1111"))
+        self.assertEqual(st.row("a")["tail4"], "1111")
+        n_before = len(st.history(since=0, name="a"))
+        self.assertGreater(n_before, 0)
+        # 同じ名前・同じ末尾 4 文字・別のトークン（同名再登録）。tail4 の比較だけでは気づけない
+        self.write([{"name": "a", "token": "tok-bbb-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_(now=NOW + 300)
+        self.assertEqual(st.row("a")["fp"], kq.fingerprint("tok-bbb-1111"))
+        self.assertEqual(st.row("a")["tail4"], "1111", "末尾は同じまま")
+        self.assertTrue(all(x["probed_ts"] != NOW for x in st.history(since=0, name="a")), "入れ替え前の実測は残らない")
+
+    def test_same_token_keeps_its_history(self):
+        self.write([{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_(); self.run_(now=NOW + 300)
+        st = kq.Store(self.db); self.addCleanup(st.close)
+        self.assertEqual(sorted({x["probed_ts"] for x in st.history(since=0, name="a") if x["status"] != kq.WINDOW_START}), [NOW, NOW + 300])
+
+    def test_key_changed_during_the_probe_is_not_recorded(self):
+        """叩いている最中に鍵が入れ替わった / 無効になった / 消えた回は、前の鍵の応答なので保存しない"""
+        keys = [{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}]
+        for change, why in (([{**keys[0], "token": "tok-bbb-1111"}], "replaced-during-probe"),
+                            ([{**keys[0], "enabled": False}], "disabled-during-probe"),
+                            ([], "removed-during-probe")):
+            with self.subTest(why=why):
+                shutil.rmtree(self.dir, ignore_errors=True); self.dir.mkdir(parents=True)
+                self.write(keys)
+
+                def probe(token, model, *, base_url, timeout, now, _c=change):
+                    self.write(_c)   # 通信している間に console から鍵をいじられた
+                    return REAL_PROBE(token, model, request=responder(200, CHEAP_HEADERS), now=now)
+                r = kq.run_probe(mode="auto", env=self.env, probe=probe, now=NOW)
+                self.assertEqual(r["probed"], [])
+                self.assertEqual(r["skipped"], [{"name": "a", "why": why}])
+                st = kq.Store(self.db)
+                try:
+                    self.assertIsNone(st.row("a"), "前の鍵の残量を新しい鍵のものとして残さない")
+                    self.assertEqual(st.history(since=0), [])
+                finally: st.close()
+
+    def test_only_one_round_runs_at_a_time(self):
+        """timer / console の「いま調べる」/ 手元の CLI が重なっても二重に叩かない（#560 の残差 4）"""
+        import fcntl
+        self.write([{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_()                       # DB と .lock を作る
+        lock = kq.probe_lock_path(self.db)
+        self.assertTrue(lock.exists()); self.assertEqual(os.stat(lock).st_mode & 0o777, 0o600)
+        held = os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            self.calls.clear()
+            r = self.run_(now=NOW + 300)
+            self.assertTrue(r["locked"]); self.assertEqual(r["probed"], []); self.assertEqual(self.calls, [], "1 本も叩かない")
+            r = kq.run_probe(mode="auto", env=self.env, probe=self.probe, now=NOW + 300, wait_lock_s=1.0)
+            self.assertTrue(r["locked"], "待っても取れなければ飛ばす（失敗ではない）")
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN); os.close(held)
+        r = self.run_(now=NOW + 600)
+        self.assertFalse(r["locked"]); self.assertEqual(len(r["probed"]), 1, "解放されれば次の周はふつうに走る")
+
     def test_view_and_history_view(self):
         self.write([{"name": "f", "token": "tf", "enabled": True, "allow": {"fable": True, "other": True}}])
         v = kq.view(env=self.env, now=NOW); self.assertFalse(v["exists"]); self.assertEqual(v["keys"], {})
@@ -320,6 +470,32 @@ class RunProbeTest(unittest.TestCase):
         finally: kq.os.environ = real_env
         self.assertIn("5 時間枠", buf.getvalue()); self.assertNotIn("secret", buf.getvalue())
 
+    def test_token_and_fingerprint_never_leave_the_db(self):
+        """指紋は世代の識別だけに使う内部の値。view / 履歴 / run_probe の戻り値 / CLI には出さない"""
+        tok = "tok-secret-1111"
+        self.write([{"name": "a", "token": tok, "enabled": True, "allow": {"fable": False, "other": True}}])
+        r = self.run_()
+        fp = kq.fingerprint(tok)
+        for text in (json.dumps(r), json.dumps(kq.view(env=self.env, now=NOW)), json.dumps(kq.history_view(env=self.env, now=NOW))):
+            self.assertNotIn("secret", text); self.assertNotIn(fp, text)
+
+    def test_cli_probe_says_when_another_round_is_running(self):
+        import fcntl
+        self.write([{"name": "a", "token": "tok-secret-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
+        self.run_()
+        held = os.open(str(kq.probe_lock_path(self.db)), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        real_env, real_probe, buf = kq.os.environ, kq.probe_key, io.StringIO()
+        try:
+            kq.os.environ = {**os.environ, **self.env}; kq.probe_key = self.probe
+            self.calls.clear()
+            with contextlib.redirect_stdout(buf): rc = kq.main(["probe"])
+        finally:
+            kq.os.environ, kq.probe_key = real_env, real_probe
+            fcntl.flock(held, fcntl.LOCK_UN); os.close(held)
+        self.assertEqual(rc, 0, "重なっただけなので失敗にしない（timer が赤くならない）")
+        self.assertIn("別のプローブが実行中", buf.getvalue()); self.assertEqual(self.calls, [])
+
     def test_cli_show_never_read_does_not_print_none(self):
         """1 度も読めていない鍵で show を出すと、last_ok が None のまま人に出ていた（#616）"""
         self.write([{"name": "a", "token": "tok-secret-1111", "enabled": True, "allow": {"fable": False, "other": True}}])
@@ -360,14 +536,38 @@ class SummarizeTest(unittest.TestCase):
         s = kq.summarize(self.row(w5h_util=0.9, w5h_reset_ts=float(NOW + 18000 - 100)), now=NOW)
         self.assertFalse(s["windows"][0]["will_exhaust"])
 
-    def test_exhausted_and_window_end(self):
+    def test_high_utilization_is_not_exhausted(self):
+        """使用率がいくら高くても枯渇ではない。残り 0.5% を 0% に潰して「枯渇」と見せない（#560 の残差 3）"""
         s = kq.summarize(self.row(w5h_util=0.995), now=NOW)
-        self.assertTrue(s["windows"][0]["exhausted"]); self.assertEqual(s["windows"][0]["remaining_pct"], 0.0); self.assertEqual(s["binding"]["key"], "5h")
+        w5 = s["windows"][0]
+        self.assertFalse(w5["exhausted"], "断られていない = まだ使える"); self.assertEqual(w5["remaining_pct"], 0.5)
+        self.assertEqual(s["binding"]["key"], "5h"); self.assertEqual(s["binding"]["remaining_pct"], 0.5); self.assertFalse(s["binding"]["exhausted"])
+        # 1.0 ちょうど（使い切っているが status は allowed）も枯渇とは言わない。残量 0.0% は事実として出る
+        self.assertFalse(kq.summarize(self.row(w5h_util=1.0), now=NOW)["windows"][0]["exhausted"])
+        self.assertEqual(kq.summarize(self.row(w5h_util=1.0), now=NOW)["windows"][0]["remaining_pct"], 0.0)
+
+    def test_rejected_is_exhausted_and_keeps_its_number(self):
+        """枯渇は status == rejected だけ。そのときも残量の数値は実測のまま（reject 状態と数値を別々に扱う）"""
         s = kq.summarize(self.row(w5h_util=0.5, w5h_status="rejected"), now=NOW)
-        self.assertTrue(s["windows"][0]["exhausted"]); self.assertEqual(s["binding"]["remaining_pct"], 0.0)
+        w5 = s["windows"][0]
+        self.assertTrue(w5["exhausted"]); self.assertEqual(w5["remaining_pct"], 50.0)
+        # 残量だけで選ぶと 7d（41%）が選ばれてしまう。断られている窓を最優先にする
+        self.assertEqual(s["binding"]["key"], "5h"); self.assertTrue(s["binding"]["exhausted"]); self.assertEqual(s["binding"]["remaining_pct"], 50.0)
+        # 断られていない窓どうしは今までどおり残量の少ない順
+        self.assertEqual(kq.summarize(self.row(), now=NOW)["binding"], {"key": "7d", "remaining_pct": 41.0, "reset": kq.iso(RESET_7D), "exhausted": False})
+
+    def test_window_end_is_out_of_the_binding_choice(self):
         # reset を過ぎた窓（次の観測待ち）は逼迫の判定から外す
         s = kq.summarize(self.row(w5h_util=0.99, w5h_reset_ts=float(NOW - 10)), now=NOW)
         self.assertTrue(s["windows"][0]["at_window_end"]); self.assertEqual(s["binding"]["key"], "7d")
+        # 断られた窓でも、reset を過ぎていれば回復待ちなので選ばない
+        s = kq.summarize(self.row(w5h_util=0.5, w5h_status="rejected", w5h_reset_ts=float(NOW - 10)), now=NOW)
+        self.assertEqual(s["binding"]["key"], "7d")
+
+    def test_small_remainder_is_not_printed_as_zero(self):
+        """残り 1% 未満でも「0%」と出さない（枯渇と読み違えさせない）"""
+        self.assertEqual(kq._fmt_pct(0.5), "0.5%"); self.assertEqual(kq._fmt_pct(9.9), "9.9%")
+        self.assertEqual(kq._fmt_pct(0.0), "0.0%"); self.assertEqual(kq._fmt_pct(41.0), "41%"); self.assertEqual(kq._fmt_pct(100.0), "100%")
 
     def test_no_windows_and_error(self):
         s = kq.summarize(self.row(w5h_util=None, w7d_util=None, error="HTTP 401 authentication_error", ok_ts=None), now=NOW)

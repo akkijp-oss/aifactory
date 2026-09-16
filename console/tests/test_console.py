@@ -319,7 +319,9 @@ class KeysQuotaApiTest(unittest.TestCase):
         st, r = self.http.post("/api/keys/probe", {})
         self.assertEqual(st, 200); self.assertFalse(r["already"]); jid = r["job"]["id"]
         self.assertEqual(r["job"]["kind"], "keys-probe")
-        # 動いている間は二重に起こさない
+        # timer（JobStore を通らない）と重なったら、飛ばさずに後ろに並ぶ。手動は必ず新しい値が欲しい（#560）
+        self.assertIn("--wait", r["job"]["cmd"])
+        # 動いている間は二重に起こさない（判定は JobStore のロックの中。同時に押されても 2 本にならない）
         st, r2 = self.http.post("/api/keys/probe", {})
         self.assertEqual(st, 200)
         if r2["already"]: self.assertEqual(r2["job"]["id"], jid)
