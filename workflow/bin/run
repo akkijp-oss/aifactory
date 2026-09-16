@@ -371,9 +371,15 @@ def _artifact_rank(name):
     return 4
 
 
+def _artifact_label(name):
+    """記録とログに載せる名前（制御文字は落とす。名前を作るのは VM の agent なので、ログに改行を差し込ませない）"""
+    return "".join(c if c.isprintable() else "?" for c in name)[:255]
+
+
 def _safe_artifact_name(name):
-    """VM 側の名前をローカルの相対パスとして受け取れるか（`..`・絶対パス・空要素・長すぎを拒む）"""
-    if not name or name.startswith("/") or "\\" in name or "\x00" in name or len(name) > 255: return False
+    """VM 側の名前をローカルの相対パスとして受け取れるか（`..`・絶対パス・空要素・制御文字・長すぎを拒む）"""
+    if not name or name.startswith("/") or "\\" in name or len(name) > 255: return False
+    if any(not c.isprintable() for c in name): return False
     parts = name.split("/")
     if any(p in ("", ".", "..") for p in parts): return False
     return parts[0] == name or parts[0] in ARTIFACT_SUBDIRS
@@ -408,7 +414,7 @@ def select_artifacts(entries):
         if reason is None:
             accepted.append(name); total += size
         else:
-            skipped.append({"name": name[:255], "reason": reason, "size": size})
+            skipped.append({"name": _artifact_label(name), "reason": reason, "size": size})
     return accepted, skipped
 
 
@@ -426,10 +432,10 @@ def extract_artifacts(data, dest, accepted):
             name = m.name[2:] if m.name.startswith("./") else m.name
             if not m.isreg() or name not in want or not _safe_artifact_name(name):
                 if m.isdir(): continue
-                unsafe.append({"name": name[:255], "reason": "unsafe", "size": int(m.size)}); continue
+                unsafe.append({"name": _artifact_label(name), "reason": "unsafe", "size": int(m.size)}); continue
             out = dest / name
             if root not in out.resolve().parents or out.is_symlink() or out.parent.is_symlink():
-                unsafe.append({"name": name[:255], "reason": "unsafe", "size": int(m.size)}); continue
+                unsafe.append({"name": _artifact_label(name), "reason": "unsafe", "size": int(m.size)}); continue
             out.parent.mkdir(parents=True, exist_ok=True)
             src = tf.extractfile(m)
             body = src.read() if src else b""
@@ -830,7 +836,7 @@ class Run:
                 except tarfile.TarError as e:
                     error = error or f"展開に失敗: {e}"
         missing = [n for n in accepted if n not in written]
-        skipped += [{"name": n[:255], "reason": "missing", "size": 0} for n in missing]
+        skipped += [{"name": _artifact_label(n), "reason": "missing", "size": 0} for n in missing]
         for s in skipped[:ARTIFACT_SKIP_MAX]:
             self.log(f"artifact skipped: {s['name']} ({s['reason']}, {s['size']} bytes)")
         self.state["artifacts_received"] = not missing and not error

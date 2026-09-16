@@ -245,6 +245,11 @@ class ReleaseArtifactsTest(unittest.TestCase):
         self.assertEqual(accepted, ["report.md", "gates/test.log", "attachments/a.pdf", "z.png", "other.bin"])
         self.assertEqual(skipped, [])            # 入れ物の gates / attachments 自体は skip 扱いにしない
 
+    def test_select_rejects_control_characters_in_names(self):
+        accepted, skipped = run.select_artifacts([("f", 1, b"ok.md"), ("f", 1, "\u58ca\nれた.md".encode())])
+        self.assertEqual(accepted, ["ok.md"])
+        self.assertEqual(skipped, [{"name": "壊?れた.md", "reason": "name", "size": 1}])   # ログと記録に改行を差し込ませない
+
     def test_select_rejects_unsafe_and_undecodable_names(self):
         accepted, skipped = run.select_artifacts([("f", 1, b"../x.md"), ("f", 1, b"/etc/passwd"), ("f", 1, b"\xff.md"), ("p", 0, b"fifo")])
         self.assertEqual(accepted, [])
