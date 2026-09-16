@@ -133,6 +133,32 @@ tickets to finish first" (`blocked_by_dependency`). See `GET /api/pm` in the [co
   directly, while the PM and the console's preview (`GET /api/next`) reach it through `pm_pick_next`, the entry point that picks
   again (ADR-0078 / ADR-0079). Run `kb run <id>` by hand and the ticket runs even with prerequisites outstanding.
 
+### References (`--issue` / `--ticket`)
+
+```bash
+kb new aifactory chore "follow-up" --body - --ticket 521     # an internal aifactory ticket number
+kb set 556 --issue https://github.com/akkijp/kumitate/issues/393   # an external issue URL
+kb set 556 --issue-access readable                          # only for references a run may actually fetch
+kb set 556 --issue ''                                       # clears the URL and the flag together
+kb show 556                                                 # related_issue / related_issue_access / related_ticket
+```
+
+Records whether what a ticket points at is **readable from a run or not, as structure rather than as a string in the
+body** (ADR-0084).
+
+- `related_issue` holds **external issue URLs** (`http(s)://…`, comma separated), `related_ticket` holds **internal
+  aifactory ticket numbers** (comma separated). Writing an internal number into `--issue` is refused and points you at
+  `--ticket`; a URL in `--ticket` is refused as well.
+- `related_issue_access` is one of exactly two words, `readable` / `unreadable`, and **defaults to `unreadable`**. The
+  token injected into a sandbox gets 403 (`Resource not accessible by integration`) from the GitHub issues API, so not
+  fetching a reference nobody has confirmed is the safe side. The researcher role brief carries the same line, so **a
+  run does not fetch an issue URL even when the ticket body contains one; it works from the body and the code**.
+- Neither the numbers nor the URLs are checked for existence. A ticket cannot name itself in `--ticket`.
+- **The free text of the body is never interpreted.** Existing tickets with a URL in the body are not migrated; new
+  tickets are the ones that get structured. A `kanban.db` that predates the columns gets them added by `kb` on startup.
+- The values show up in `kb show`, changes are kept in `kb history`, and `ticket_show` / `ticket_list` over MCP and the
+  HTTP API return them. **They do not appear in the brief handed to a run yet** (the runner only carries the body).
+
 `kb set 204 --note ''` clears the note (NULL in the DB). A field you do not pass is left alone. Over MCP and the HTTP API (`console`), `note` is treated as "present as an empty string = clear it, key absent = leave it alone"; an empty string used to be ignored as "not given". `status` / `kind` / `pr` still ignore an empty string as "not given". `depends_on` is treated like `note`.
 
 ### append
