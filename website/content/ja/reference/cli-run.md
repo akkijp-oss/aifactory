@@ -42,7 +42,7 @@ workflow/bin/run <pj> <task-id> <workflow> <ticket.md> [--dry-run] [--keep] [--r
 5. `sandbox take <pj> <id>`。VM 内で base を fetch し作業ブランチを切る（`--from` のときは base ではなく `origin/<退避ブランチ>` から切り、前回の run の `work/*.md` を VM に置く）。チケットを `~/work/<id>/ticket.md` に。`--wait` があり「空きなし」で失敗したときは、`current` を `wait-vm` にして空くまで待ち、take をやり直す（ADR-0031）
 6. 工程を順に実行（下）。`end` か `human` に着くまで
 7. `human` なら `origin/sandbox/<id>-<wf>-wip` に push して成果を退避
-8. `~/work/<id>/` を `workspace/runs/…/work/` に回収。`--keep` でなければ `sandbox release`
+8. `~/work/<id>/` を列挙して上限（1 ファイル 4 MiB・合計 32 MiB・256 件）で選び、`workspace/runs/…/work/` に**同じ相対パスで**回収（直下の通常ファイルと `gates/` `attachments/` の中身）。結果は `state.json` の `artifacts_received` / `artifacts_count` / `artifacts_bytes`、落とした分は `artifacts_skipped`（`size` / `total` / `count` / `symlink` / `missing` などの理由つき）、失敗は `artifacts_error`（VM 側に `~/work/<id>/` が無い回は `no work dir`）に残る。回収に失敗しても VM は返す。`--keep` でなければ `sandbox release`（ADR-0085）
 9. `state.json` に `result` / `pr_url` / `wip_branch` / `finished` / `elapsed_s`。`human` で止まったときは `resume_step`（次にやり直す工程）も。`--from` で始めた run には `resumed_from` / `from_step` / `from_branch` が入る
 
 `--from` で始めた run の最初の依頼文には、前回の `review.md` が **1 行目が `# レビュー: FAIL` のときだけ**「前回の結果（直すこと）」として入ります。前回が PASS だった（レビューの後の工程で止まった）ときは、代わりに `state.json` の `error` の最終行 1 行が入ります（ADR-0053）。

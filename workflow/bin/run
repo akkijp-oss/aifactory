@@ -43,7 +43,7 @@ take が「鍵なし:」で止まり、runner は `failure: "nokey"` で終わ�
 artifact は VM の ~/work/<task>/ に置き、終了時に runs/<run>/work/ へ回収する。状態は runs/<run>/state.json。
 step の出力はその場で runs/<run>/agent-*.log / code-*.log に流れる（console が途中でも読める）。state.json の `current` が今の step とログ名。
 """
-import json, os, re, shlex, subprocess, sys, time, datetime, pathlib
+import io, json, os, re, shlex, subprocess, sys, tarfile, tempfile, time, datetime, pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent.parent          # workflow/
 ROOT = HERE.parent                                              # repo root
@@ -349,6 +349,106 @@ def resume_start(state, steps):
         start = last.get("step")
     start in steps or die(f"再開する工程 {start!r} が今の workflow（{' / '.join(steps)}）に無い。`--from <step>` で指定し直すこと")
     return start
+
+
+# ---- artifact の回収（チケット 557 / ADR-0085）
+# VM の ~/work/<task>/ に溜まった成果物（report.md / plan.md / research.md / 画像 / gates/*.log）を
+# runs/<run>/work/ へ運ぶ。以前は `scp -r` 1 発で、成否も上限も見ていなかった（届かなくても記録が残らず、
+# 「VM には在るのに read_file で見つからない」を後から切り分けられなかった）。いまは
+# 列挙 → 上限で選別 → tar 1 接続で取得 → 届いたか検証 → state.json に記録、の 4 段で行う。
+ARTIFACT_FILE_MAX = 4 * 1024 * 1024          # 1 ファイルの上限（console の read_file が画像を返せる上限と同じ）
+ARTIFACT_TOTAL_MAX = 32 * 1024 * 1024        # 1 run の合計
+ARTIFACT_COUNT_MAX = 256                     # 1 run の件数
+ARTIFACT_SKIP_MAX = 128                      # state.json に残すスキップ記録の件数（名前は agent が作れるので丸める）
+ARTIFACT_SUBDIRS = ("gates", "attachments")  # runner / kit が $WORK の下に作るディレクトリ。ここだけは中身も回収する
+ARTIFACT_IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+SKIP_REASONS = ("directory", "symlink", "non-regular", "size", "total", "count", "name", "missing", "unsafe")
+
+
+def _artifact_rank(name):
+    """回収の優先順。上限に当たったとき、何を先に残すか（報告書 → ゲートログ → 添付 → 画像 → その他）"""
+    top = "/" not in name
+    low = name.lower()
+    if top and low.endswith((".md", ".txt")): return 0
+    if name.startswith("gates/"): return 1
+    if name.startswith("attachments/"): return 2
+    if low.endswith(ARTIFACT_IMAGES): return 3
+    return 4
+
+
+def _artifact_label(name):
+    """記録とログに載せる名前（制御文字は落とす。名前を作るのは VM の agent なので、ログに改行を差し込ませない）"""
+    return "".join(c if c.isprintable() else "?" for c in name)[:255]
+
+
+def _safe_artifact_name(name):
+    """VM 側の名前をローカルの相対パスとして受け取れるか（`..`・絶対パス・空要素・制御文字・長すぎを拒む）"""
+    if not name or name.startswith("/") or "\\" in name or len(name) > 255: return False
+    if any(not c.isprintable() for c in name): return False
+    parts = name.split("/")
+    if any(p in ("", ".", "..") for p in parts): return False
+    return parts[0] == name or parts[0] in ARTIFACT_SUBDIRS
+
+
+def select_artifacts(entries):
+    """VM 側の列挙結果から、回収する名前と飛ばした名前（理由つき）を決める純関数。
+
+    entries は `(種別, サイズ, 相対パス)` の列（種別は find の %y。相対パスは bytes でも str でもよい）。
+    返すのは `(accepted, skipped)` で、accepted は取得する相対パスの列（優先順）、
+    skipped は `{"name", "reason", "size"}` の列。**飛ばしたものは黙って消さず必ず理由が残る**"""
+    items = []
+    for kind, size, name in entries:
+        if isinstance(name, bytes):
+            try: text = name.decode("utf-8")
+            except UnicodeDecodeError:
+                items.append((9, name.decode("utf-8", "replace"), size, "name")); continue
+        else:
+            text = name
+        if kind == "d" and text in ARTIFACT_SUBDIRS: continue      # 中身を別に列挙している入れ物そのもの
+        if kind != "f":
+            items.append((9, text, size, "directory" if kind == "d" else "symlink" if kind == "l" else "non-regular")); continue
+        if not _safe_artifact_name(text):
+            items.append((9, text, size, "name")); continue
+        items.append((_artifact_rank(text), text, size, None))
+    accepted, skipped, total = [], [], 0
+    for rank, name, size, reason in sorted(items, key=lambda i: (i[0], i[1])):
+        if reason is None:
+            if size > ARTIFACT_FILE_MAX: reason = "size"
+            elif len(accepted) >= ARTIFACT_COUNT_MAX: reason = "count"
+            elif total + size > ARTIFACT_TOTAL_MAX: reason = "total"
+        if reason is None:
+            accepted.append(name); total += size
+        else:
+            skipped.append({"name": _artifact_label(name), "reason": reason, "size": size})
+    return accepted, skipped
+
+
+def extract_artifacts(data, dest, accepted):
+    """VM から受け取った tar を `dest` の下に展開する → `(written, unsafe)`。
+
+    展開するのは accepted に挙げた名前の通常ファイルだけ。`..` や絶対パス、symlink のメンバーは書かずに
+    `unsafe` として返す（tar の中身は VM の agent が作れるので、名前を信用して展開しない）"""
+    want = set(accepted)
+    written, unsafe = {}, []
+    dest = pathlib.Path(dest)
+    root = dest.resolve()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tf:
+        for m in tf:
+            name = m.name[2:] if m.name.startswith("./") else m.name
+            if not m.isreg() or name not in want or not _safe_artifact_name(name):
+                if m.isdir(): continue
+                unsafe.append({"name": _artifact_label(name), "reason": "unsafe", "size": int(m.size)}); continue
+            out = dest / name
+            if root not in out.resolve().parents or out.is_symlink() or out.parent.is_symlink():
+                unsafe.append({"name": _artifact_label(name), "reason": "unsafe", "size": int(m.size)}); continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            src = tf.extractfile(m)
+            body = src.read() if src else b""
+            with tempfile.NamedTemporaryFile(dir=str(out.parent), delete=False) as f:
+                f.write(body); f.flush(); os.fsync(f.fileno()); tmp = f.name
+            os.replace(tmp, str(out))
+            written[name] = len(body)
+    return written, unsafe
 
 
 class Run:
@@ -692,12 +792,82 @@ class Run:
                 self.log(f"VM 空き待ち {waited // 60} 分（上限 {self.wait_s // 60} 分）: {why}")
                 time.sleep(poll)
 
+    # VM 側の列挙。`work/` が無ければ rc 3（回収の失敗と区別する。自死した run では report.md が元から無い）。
+    # 直下は 1 段だけ、ARTIFACT_SUBDIRS は中まで。名前に空白・日本語・改行が入っても壊れないよう NUL 区切りで返す
+    LIST_SH = ("cd %s || exit 3; find . -mindepth 1 -maxdepth 1 -printf '%%y\\t%%s\\t%%P\\0'; "
+               "for d in %s; do [ -d \"$d\" ] && find \"$d\" -mindepth 1 -printf '%%y\\t%%s\\t%%p\\0'; done; exit 0")
+
+    def ssh_bytes(self, cmd, stdin=b"", timeout=120):
+        """VM で 1 コマンド走らせて stdout を bytes で受ける（`sh()` は text なので tar を通せない）。
+
+        経路は **`sandbox ssh`**（`sb()` / `run_remote()` と同じ）。`ssh` を直に呼ぶと VM への入り方が
+        2 通りになり、`~/.config/sandbox/env` の `SB_JUMP`（CLI だけが読む）を迂回するうえ、
+        PATH の偽 `sandbox` で VM を模す test が本物の ssh を掴んで timeout ぶん止まる"""
+        return subprocess.run(["sandbox", "ssh", self.task, cmd],
+                              input=stdin, capture_output=True, timeout=timeout)
+
+    def artifact_error(self, why):
+        self.state["artifacts_error"] = scrub(str(why)).strip()[-500:]
+        self.state.setdefault("artifacts_received", False)
+        self.save(); self.log(f"artifact 回収に失敗: {self.state['artifacts_error']}")
+
+    def collect_artifacts(self):
+        """VM の work/ を列挙 → 上限で選別 → tar 1 接続で取得 → 届いたか検証 → state.json に記録（チケット 557）"""
+        work = shlex.quote(self.work)
+        r = self.ssh_bytes(self.LIST_SH % (work, " ".join(ARTIFACT_SUBDIRS)))
+        if r.returncode == 3:
+            self.state["artifacts_received"] = False
+            self.state["artifacts_error"] = "no work dir"
+            self.save(); self.log(f"artifact 回収: {self.work} が無い"); return
+        if r.returncode != 0:
+            self.artifact_error(f"列挙に失敗 (rc={r.returncode}): " + r.stderr.decode('utf-8', 'replace')); return
+        entries = []
+        for rec in r.stdout.split(b"\0"):
+            if not rec: continue
+            parts = rec.split(b"\t", 2)
+            if len(parts) != 3: continue
+            kind, size, name = parts
+            try: size = int(size)
+            except ValueError: size = 0
+            entries.append((kind.decode("ascii", "replace"), size, name))
+        accepted, skipped = select_artifacts(entries)
+        error = ""
+        written = {}
+        if accepted:
+            payload = b"".join(n.encode("utf-8") + b"\0" for n in accepted)
+            # scp に名前を並べない: 宛先に利用者由来の名前を書けない（scp_files_to の説明）うえ、1 件ずつでは接続が増える
+            t = self.ssh_bytes(f"cd {work} && tar -cf - --null -T -", stdin=payload, timeout=600)
+            if t.returncode != 0: error = f"取得に失敗 (rc={t.returncode}): " + t.stderr.decode("utf-8", "replace")
+            dest = self.run_dir / "work"
+            if dest.is_symlink(): raise RuntimeError(f"artifact の置き場が symlink: {dest}")
+            dest.mkdir(parents=True, exist_ok=True)
+            if t.stdout:
+                try:
+                    written, unsafe = extract_artifacts(t.stdout, dest, accepted)
+                    skipped += unsafe
+                except tarfile.TarError as e:
+                    error = error or f"展開に失敗: {e}"
+        missing = [n for n in accepted if n not in written]
+        skipped += [{"name": _artifact_label(n), "reason": "missing", "size": 0} for n in missing]
+        for s in skipped[:ARTIFACT_SKIP_MAX]:
+            self.log(f"artifact skipped: {s['name']} ({s['reason']}, {s['size']} bytes)")
+        self.state["artifacts_received"] = not missing and not error
+        self.state["artifacts_count"] = len(written)
+        self.state["artifacts_bytes"] = sum(written.values())
+        if skipped: self.state["artifacts_skipped"] = skipped[:ARTIFACT_SKIP_MAX]
+        if error: self.state["artifacts_error"] = scrub(error).strip()[-500:]
+        self.save()
+        self.log(f"artifact 回収: {len(written)} 件 / {sum(written.values())} bytes、skip {len(skipped)} 件"
+                 + (f"（失敗: {self.state['artifacts_error']}）" if error else ""))
+
     def release(self):
         if self.dry: return
-        # artifact 回収
+        # artifact 回収。**どこで失敗しても例外を外に出さない**（ここで止めると VM が返らずプールを塞ぐ）
         try:
-            sh(["scp", "-r", *self.scp_opts(), f"dev@{self.vm_ip()}:{self.work}", str(self.run_dir / "work")], check=False)
-        except Exception as e: print(f"[run] artifact 回収に失敗: {e}")
+            self.collect_artifacts()
+        except Exception as e:
+            try: self.artifact_error(f"{type(e).__name__}: {e}")
+            except Exception: print(f"[run] artifact 回収に失敗: {e}")
         if self.keep: self.log("keep: release しない"); return
         self.log("release"); sh(["sandbox", "release", self.task], check=False)
 
