@@ -148,6 +148,9 @@ kb show 556                                                 # related_issue / re
   sandbox に注入するトークンは GitHub の issues に 403（`Resource not accessible by integration`）を返すので、
   確かめていない参照は取りに行かせないのが安全側です。researcher の役割文書にも同じことが 1 行入っていて、
   **run は票に URL が書いてあっても取りに行かず、本文と実コードだけで進めます**。
+- 値は `kb run` が runner に渡し、**依頼文の「## チケット」の直後に 1〜2 行**出ます（`related_issue_access` は
+  「取りに行かない」「取りに行ってよい」の 1 語に言い換えます）。列が空の票では行が出ません。運ぶのは値だけで、
+  規則そのものは役割文書が持ちます（[run の `--issue` / `--issue-access` / `--ticket`](cli-run.md)）。
 - 番号や URL の存在は確かめません。自分自身の番号を `--ticket` に書くことはできません。
 - **本文の自由文は解釈しません。** 本文に URL が埋まっている既存票の移行もしません（新しい起票から構造化します）。
   列が無かった頃の `kanban.db` には `kb` が起動時に足します。
