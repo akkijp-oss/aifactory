@@ -686,6 +686,13 @@ class McpTest(unittest.TestCase):
         self.assertEqual(self.c.tool("ticket_show", id=tid)[1]["ticket"]["related_ticket"], "521,556")
         err, r = self.c.tool("ticket_action", id=tid, action="set", related_ticket=""); self.assertFalse(err, r)
         self.assertIn(self.c.tool("ticket_show", id=tid)[1]["ticket"]["related_ticket"], (None, ""))
+        # ただし取得可否だけを空文字列にはできない（kb の --issue-access は 2 語しか取らない。URL ごと --issue '' で消す）
+        err, msg = self.c.tool("ticket_action", id=tid, action="set", related_issue_access="")
+        self.assertTrue(err, msg); self.assertIn("issue-access", msg)
+        err, r = self.c.tool("ticket_action", id=tid, action="set", related_issue=""); self.assertFalse(err, r)
+        t = self.c.tool("ticket_show", id=tid)[1]["ticket"]
+        self.assertIn(t["related_issue"], (None, ""))
+        self.assertIn(t["related_issue_access"], (None, ""))   # URL を消すと可否も一緒に消える
         # 値の形の検査は kb が正本（内部票番号を外部 issue の欄に書けない）
         err, msg = self.c.tool("ticket_action", id=tid, action="set", related_issue="393")
         self.assertTrue(err, msg); self.assertIn("--ticket", msg)
