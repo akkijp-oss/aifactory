@@ -33,7 +33,11 @@ Long-lived tokens from `claude setup-token` expire. When one does, the step stop
 
 ### Remaining quota of the keys
 
-The *Keys* screen shows, above the table, the **remaining quota** of every key: the 5-hour window, the 7-day window (all models) and the 7-day Fable window, each with the remaining %, the time to reset and a pace-based exhaustion forecast (ADR-0087). The control plane's timer `aifactory-keys-probe.timer` sends one tiny request per key every 5 minutes and reads the usage headers of the answer (a cheap model every 5 minutes; keys allowed for Fable are also asked with Fable every 15 minutes, since the Fable window is only reported when Fable is asked). Key values never appear in the records.
+Select a key in **Remaining quota** to see its three windows on one chart: 5 hours, 7 days (all models), and 7 days (Fable). The default range covers the past seven days and the next seven days. Solid lines are observations; dashed lines are forecasts. Toggle a series with its legend button. Move over the chart or use the arrow keys to inspect values.
+
+Forecasts extend average consumption since the window started, return to 100% at reset, and assume the same reset interval and consumption continue. They are estimates. No forecast is drawn for observations older than 15 minutes, missing or elapsed resets, or windows less than 5% underway. Missing history is left blank.
+
+Every five minutes, `aifactory-keys-probe.timer` queries Fable with every registered key, including disabled keys and keys not assigned to Fable. If shared windows are missing, it also queries the cheap model. Unavailable Fable quota shows a reason and preserves the last observation instead of inventing zero usage. These small requests consume some quota; dispatch preferences stay unchanged. Only an explicit `--cheap` limits a round to shared windows. The former `AIFACTORY_KEYS_PROBE_FULL_INTERVAL_S` setting is no longer used.
 
 ```bash
 sandbox/bin/install.sh --systemd                 # register the timer (once, after ctl-update; installed with the other timers)

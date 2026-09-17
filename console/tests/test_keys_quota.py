@@ -4,12 +4,13 @@
 - 429 はヘッダ付きの成功として読み、それ以外の 4xx / 5xx は理由（error.type）だけを残す。鍵の値はどこにも出ない
 - 安いモデルの回（7d_oi 無し）が Fable の回の 7d_oi を消さない（据え置き）
 - 履歴は観測できた窓ごとに 1 行、窓の始点（reset − 窓長・残量 100%）は (鍵, 窓, reset) につき 1 行だけ合成する
-- 1 周（run_probe）: Fable 許可の鍵は前回の全窓観測から間隔が空いたときだけ Fable で叩く。無効な鍵は飛ばし、値が入れ替わった鍵は履歴を捨てる
+- 1 周（run_probe）: 有効・用途設定を問わず全鍵に毎回 Fable で問い合わせ、値が入れ替わった鍵は履歴を捨てる
 - 要約（summarize）: 残量% / いちばん逼迫している窓 / ペースからの枯渇予測 / リセットを過ぎた窓は逼迫の判定から外す
 
   python3 -m unittest discover -s console/tests -p 'test_keys_quota.py' -v
 """
 import contextlib, io, json, os, pathlib, shutil, sys, tempfile, unittest, urllib.error
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "lib"))
 import aifactory_keys_quota as kq   # noqa: E402
@@ -140,6 +141,15 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(r["w5h_util"], 0.31, "安い回の 5h は更新される")
         self.assertEqual(r["w7d_oi_util"], 0.54, "安い回は 7d_oi を消さない"); self.assertEqual(r["w7d_oi_ts"], NOW)
         self.assertEqual(r["probed_ts"], NOW + 300); self.assertEqual(r["ok_ts"], NOW + 300)
+
+    def test_partial_snapshot_keeps_each_windows_timestamp(self):
+        self.st.record("a", "1234", self.snap(FABLE_HEADERS, NOW))
+        only_5h = {k: v for k, v in CHEAP_HEADERS.items() if "5h-" in k}
+        self.st.record("a", "1234", self.snap(only_5h, NOW + 1000))
+        q = kq.summarize(self.st.row("a"), now=NOW + 1000)
+        self.assertEqual([(w["key"], w["stale"]) for w in q["windows"]], [("5h", False), ("7d", True), ("7d_oi", True)])
+        self.assertFalse(q["stale"], "全体の鮮度とは別に各枠の鮮度が分かる")
+        self.assertEqual(q["windows"][1]["remaining_pct"], 41)
 
     def test_cheap_only_never_has_oi(self):
         self.st.record("a", "1234", self.snap(CHEAP_HEADERS))
@@ -306,6 +316,7 @@ class RunProbeTest(unittest.TestCase):
         self.env = {"SANDBOX_KEYS": str(self.keys), "AIFACTORY_KEYS_PROBE_MODEL": "cheap-m", "AIFACTORY_KEYS_PROBE_FULL_MODEL": "fable-m",
                     "AIFACTORY_KEYS_PROBE_FULL_INTERVAL_S": "900"}
         self.calls = []
+        clock = patch.object(kq, "now_ts", return_value=NOW); clock.start(); self.addCleanup(clock.stop)
 
     def write(self, keys): self.keys.write_text(json.dumps({"keys": keys}), encoding="utf-8")
 
@@ -327,23 +338,23 @@ class RunProbeTest(unittest.TestCase):
         self.assertEqual(kq.keys_path({"SANDBOX_STATE": "/s/demo.state.json"}), pathlib.Path("/s/demo.keys.json"))
         self.assertEqual(kq.quota_db_path(env={"SANDBOX_KEYS_QUOTA": "/q.db", "SANDBOX_KEYS": "/k"}), pathlib.Path("/q.db"))
 
-    def test_first_round_is_full_for_fable_keys_then_cheap_until_interval(self):
+    def test_all_keys_are_probed_with_fable_every_round(self):
         self.write([{"name": "f", "token": "tf", "enabled": True, "allow": {"fable": True, "other": True}},
                     {"name": "o", "token": "to", "enabled": True, "allow": {"fable": False, "other": True}},
                     {"name": "off", "token": "tx", "enabled": False, "allow": {"fable": True, "other": True}},
                     {"name": "empty", "token": "", "enabled": True, "allow": {"fable": True, "other": True}}])
         r = self.run_()
-        self.assertEqual([(c["name"], c["model"], c["full"]) for c in r["probed"]], [("f", "fable-m", True), ("o", "cheap-m", False)])
-        self.assertEqual([(s["name"], s["why"]) for s in r["skipped"]], [("off", "disabled"), ("empty", "no-token")])
+        self.assertEqual([(c["name"], c["model"], c["full"]) for c in r["probed"]], [("f", "fable-m", True), ("o", "fable-m", True), ("off", "fable-m", True)])
+        self.assertEqual([(s["name"], s["why"]) for s in r["skipped"]], [("empty", "no-token")])
         self.assertEqual(r["db_file"], str(self.db)); self.assertTrue(self.db.exists())
         self.assertNotIn("tf", json.dumps(r)); self.assertNotIn("to", [c["name"] for c in r["probed"]])
         r = self.run_(now=NOW + 300)
-        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "cheap-m"), ("o", "cheap-m")], "間隔の内は安いモデル")
+        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "fable-m"), ("o", "fable-m"), ("off", "fable-m")], "毎回全鍵を Fable で確認")
         r = self.run_(now=NOW + 900)
-        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "fable-m"), ("o", "cheap-m")], "間隔が空いたら Fable")
+        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "fable-m"), ("o", "fable-m"), ("off", "fable-m")], "設定した旧間隔に依存しない")
         r = self.run_(mode="cheap", now=NOW + 1800); self.assertTrue(all(c["model"] == "cheap-m" for c in r["probed"]))
         r = self.run_(mode="full", now=NOW + 1900)
-        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "fable-m"), ("o", "cheap-m")], "Fable 許可の無い鍵は full でも安いモデル")
+        self.assertEqual([(c["name"], c["model"]) for c in r["probed"]], [("f", "fable-m"), ("o", "fable-m"), ("off", "fable-m")], "配車の用途フラグに依存しない")
 
     def test_replaced_token_and_removed_key_drop_their_history(self):
         self.write([{"name": "a", "token": "tok-1111", "enabled": True, "allow": {"fable": False, "other": True}},
@@ -399,10 +410,9 @@ class RunProbeTest(unittest.TestCase):
         self.assertEqual(sorted({x["probed_ts"] for x in st.history(since=0, name="a") if x["status"] != kq.WINDOW_START}), [NOW, NOW + 300])
 
     def test_key_changed_during_the_probe_is_not_recorded(self):
-        """叩いている最中に鍵が入れ替わった / 無効になった / 消えた回は、前の鍵の応答なので保存しない"""
+        """叩いている最中に鍵が入れ替わった / 消えた回は、前の鍵の応答なので保存しない"""
         keys = [{"name": "a", "token": "tok-aaa-1111", "enabled": True, "allow": {"fable": False, "other": True}}]
         for change, why in (([{**keys[0], "token": "tok-bbb-1111"}], "replaced-during-probe"),
-                            ([{**keys[0], "enabled": False}], "disabled-during-probe"),
                             ([], "removed-during-probe")):
             with self.subTest(why=why):
                 shutil.rmtree(self.dir, ignore_errors=True); self.dir.mkdir(parents=True)
@@ -419,6 +429,29 @@ class RunProbeTest(unittest.TestCase):
                     self.assertIsNone(st.row("a"), "前の鍵の残量を新しい鍵のものとして残さない")
                     self.assertEqual(st.history(since=0), [])
                 finally: st.close()
+
+    def test_disabling_during_probe_does_not_discard_observation(self):
+        key = {"name": "a", "token": "secret", "enabled": True}
+        self.write([key])
+        def probe(token, model, **kw):
+            self.write([{**key, "enabled": False}])
+            return self.probe(token, model, **kw)
+        r = kq.run_probe(env=self.env, probe=probe, now=NOW)
+        self.assertEqual(r["skipped"], [])
+        self.assertEqual(r["probed"][0]["windows"], ["5h", "7d", "7d_oi"])
+        self.assertFalse(json.loads(self.keys.read_text())["keys"][0]["enabled"])
+
+    def test_fable_refusal_falls_back_and_keeps_fable_error(self):
+        self.write([{"name": "off", "token": "secret", "enabled": False, "allow": {"fable": False}}])
+        def probe(token, model, **kw):
+            self.calls.append((token, model))
+            return REAL_PROBE(token, model, now=kw["now"], request=responder(403, {}, body=b'{"error":{"type":"permission_error"}}') if model == "fable-m" else responder(200, CHEAP_HEADERS))
+        r = kq.run_probe(env=self.env, probe=probe, now=NOW)
+        self.assertEqual(self.calls, [("secret", "fable-m"), ("secret", "cheap-m")])
+        q = kq.view(env=self.env, now=NOW)["keys"]["off"]
+        self.assertEqual(q["fable_error"], "HTTP 403 permission_error")
+        self.assertEqual([w["key"] for w in q["windows"]], ["5h", "7d"])
+        self.assertNotIn("secret", json.dumps(r))
 
     def test_only_one_round_runs_at_a_time(self):
         """timer / console の「いま調べる」/ 手元の CLI が重なっても二重に叩かない（#560 の残差 4）"""
@@ -595,6 +628,52 @@ class SummarizeTest(unittest.TestCase):
         # stale は「最後に読めた時刻」が基準。試行が新しくても成功が古ければ古い（#616）
         self.assertTrue(kq.summarize(self.row(probed_ts=NOW, ok_ts=NOW - 1000), now=NOW)["stale"])
         self.assertFalse(kq.summarize(self.row(probed_ts=NOW - 1000, ok_ts=NOW - 100), now=NOW)["stale"])
+
+
+
+class ForecastTest(unittest.TestCase):
+    def point(self, **kw):
+        return {"name": "a", "window": "5h", "ts": NOW, "reset": kq.iso(RESET_5H), "remaining_pct": 10, "status": "allowed", **kw}
+
+    def test_seven_days_exact_resets_and_exhaustion(self):
+        f = kq.forecast_window([self.point()], NOW)
+        self.assertIsNone(f["reason"])
+        pts = f["points"]
+        self.assertEqual(pts[-1]["ts"], NOW + 7 * 86400)
+        self.assertAlmostEqual(pts[1]["ts"], NOW + 10 / (90 / 8000))
+        self.assertEqual(pts[1]["remaining_pct"], 0)
+        jump = [p["remaining_pct"] for p in pts if p["ts"] == RESET_5H]
+        self.assertEqual(jump, [0, 100])
+        self.assertTrue(all(0 <= p["remaining_pct"] <= 100 for p in pts))
+        self.assertGreater(len([p for p in pts if p["remaining_pct"] == 100]), 30)
+
+    def test_refresh_does_not_change_burn_rate(self):
+        a = kq.forecast_window([self.point()], NOW)
+        b = kq.forecast_window([self.point()], NOW + 300)
+        self.assertEqual(a["burn_pct_per_hour"], b["burn_pct_per_hour"])
+
+    def test_unknown_stale_early_and_reset_are_not_flat_forecasts(self):
+        for point, reason in [(self.point(status=kq.WINDOW_START), "missing"),
+                              (self.point(ts=NOW-901), "stale"),
+                              (self.point(reset=None), "reset"),
+                              (self.point(reset=kq.iso(NOW-1)), "reset"),
+                              (self.point(reset=kq.iso(NOW+17900)), "early")]:
+            with self.subTest(reason=reason):
+                f = kq.forecast_window([point], NOW)
+                self.assertEqual(f["reason"], reason); self.assertEqual(f["points"], [])
+
+    def test_rejected_stays_empty_until_reset(self):
+        f = kq.forecast_window([self.point(status="rejected", remaining_pct=30)], NOW)
+        self.assertTrue(all(p["remaining_pct"] == 0 for p in f["points"] if p["ts"] < RESET_5H))
+
+    def test_synthetic_start_cannot_override_real_observation(self):
+        f = kq.forecast_window([self.point(), self.point(ts=NOW+1,status=kq.WINDOW_START,remaining_pct=100)], NOW)
+        self.assertEqual(f["points"][0]["remaining_pct"], 10)
+
+    def test_reset_at_end_of_range_is_full(self):
+        point = self.point(reset=kq.iso(NOW + 3600))
+        f = kq.forecast_window([point], NOW, hours=1)
+        self.assertEqual(f["points"][-1], {"ts": NOW + 3600, "remaining_pct": 100})
 
 
 if __name__ == "__main__":

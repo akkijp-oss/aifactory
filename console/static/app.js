@@ -767,8 +767,8 @@ async function viewSandbox() {
 /* ---------- 鍵（Claude の鍵プール。値は送るだけで、画面には末尾 4 文字しか出ない）
    残量（利用枠）は keys-quota.db の観測値（ADR-0087）。残量% とペースはサーバーが出し、リセットまでの時間だけ画面で数え直す（観測の間も進む） */
 const QLEN = { '5h': 5 * 3600, '7d': 7 * 86400, '7d_oi': 7 * 86400 };   /* 窓の長さ（秒）。始点 = reset − 窓長 */
-const QCOLORS = ['#0b5d5d', '#6a4fbf', '#b86e00', '#2e7d4f', '#c23b3b', '#3b6fc2'];   /* 推移の線の色（鍵の順）。状態の色ではない */
-const keysChart = { window: '5h', hours: 24 };
+const QCOLORS = { '5h': '#0369a1', '7d': '#7c3aed', '7d_oi': '#b45309' };
+const keysChart = { name: null, hours: 168, data: null, history: null, hidden: new Set(), request: 0 };
 const fmtDurL = s => { if (s == null || isNaN(s)) return ''; s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600); return h >= 24 ? tt(T.time.dayHour, { d: Math.floor(h / 24), h: h % 24 }) : fmtDur(s); };
 const qTone = p => p <= 10 ? 'alarm' : p <= 25 ? 'warn' : 'ok';   /* 残量 10% 以下は赤、25% 以下は橙。枯渇の判定ではなく警告色（ADR-0090） */
 const qPct = p => p > 0 && p < 10 ? p.toFixed(1) : String(Math.round(p));   /* 残り 10% 未満は小数 1 桁（0.5% を「0%」と見せない） */
@@ -776,11 +776,9 @@ const authErr = e => /\b(401|403)\b|authentication|permission/.test(e || '');
 function qWindow(w) {
   const remainS = w.reset ? -sec(w.reset) : null, atEnd = remainS != null && remainS <= 0;
   const pct = w.exhausted ? 0 : w.remaining_pct, tone = qTone(pct);
-  const timePct = remainS != null && !atEnd ? Math.max(0, Math.min(100, remainS / QLEN[w.key] * 100)) : null;
   const note = w.exhausted ? tt(T.keys.exhausted, { at: w.reset ? fmtT(w.reset) : '-' }) : atEnd ? T.keys.windowEnd
     : w.will_exhaust ? tt(T.keys.willExhaust, { t: fmtDurL(w.exhaust_in_s) }) : w.status === 'rejected' ? T.keys.statusRejected : w.status === 'allowed_warning' ? T.keys.statusWarn : '';
-  return `<div class="qw"><div class="l"><span>${esc(T.keys.window[w.key] || w.key)}</span><span class="tabular"><b class="pct ${tone}">${esc(tt(T.keys.remaining, { p: qPct(pct) }))}</b>${remainS != null && !atEnd ? ` <span class="help">${esc(tt(T.keys.resetIn, { t: fmtDurL(remainS) }))}</span>` : ''}</span></div>
-    <div class="meter" title="${esc(T.help.quotaBar)}"><i class="${tone}" style="width:${Math.max(pct, pct > 0 ? 2 : 0)}%"></i>${timePct != null ? `<b style="left:${timePct}%"></b>` : ''}</div>
+  return `<div class="qw"><div class="l"><span>${esc(T.keys.window[w.key] || w.key)}</span><span class="tabular"><b class="pct ${tone}">${esc(tt(T.keys.remaining, { p: qPct(pct) }))}</b>${w.stale ? ` <span class="warn">${esc(T.keys.oldValue)}</span>` : ''}${remainS != null && !atEnd ? ` <span class="help">${esc(tt(T.keys.resetIn, { t: fmtDurL(remainS) }))}</span>` : ''}</span></div>
     <div class="l help"><span>${w.start && w.reset ? esc(tt(T.keys.period, { from: fmtT(w.start), to: fmtT(w.reset) })) : ''}</span>${note ? `<span class="${w.exhausted || w.status === 'rejected' ? 'alarm' : 'warn'}">${esc(note)}</span>` : ''}</div></div>`;
 }
 function qCard(k) {
@@ -788,8 +786,8 @@ function qCard(k) {
   const headline = `<div class="l"><span class="mono"><b>${esc(k.name)}</b> <span class="help">…${esc(k.tail4)}</span>${k.enabled ? '' : ` <span class="st stopped">${esc(T.keys.disabled)}</span>`}</span><span class="help">${q && q.probed ? esc(tt(T.keys.probedAt, { t: since(q.probed) })) : ''}</span></div>`;
   if (!q) return `<div class="qcard">${headline}<div class="help top">${esc(T.keys.notProbed)}</div></div>`;
   const err = q.error ? `<div class="${authErr(q.error) ? 'err' : 'warn'} small">${esc(authErr(q.error) ? T.keys.authError : tt(T.keys.probeError, { e: q.error }))}</div>` : '';
-  const oi = k.allow.fable && !q.windows.some(w => w.key === '7d_oi') ? `<div class="help">${esc(T.keys.oiPending)}</div>` : '';
-  return `<div class="qcard">${headline}${err}${q.windows.length ? q.windows.map(qWindow).join('') : `<div class="help top">${esc(T.keys.notProbed)}</div>`}${oi}</div>`;
+  const oi = !q.windows.some(w => w.key === '7d_oi') ? `<div class="help">${esc(T.keys.oiPending)}</div>` : '';
+  return `<div class="qcard">${headline}${err}${q.stale ? `<div class="warn">${esc(T.keys.stale)}</div>` : ''}${q.fable_error ? `<div class="warn">${esc(tt(T.keys.fableError, { e: q.fable_error }))}</div>` : ''}<div class="quota-summary">${Object.keys(QLEN).map(key => { const w = q.windows.find(w => w.key === key); return `<div style="--series:${QCOLORS[key]}">${w ? qWindow(w) : `<div class="qw">${esc(T.keys.window[key])}<div class="help">${esc(T.keys.notProbedShort)}</div></div>`}</div>`; }).join('')}</div>${oi}</div>`;
 }
 /* 一覧の「残量」列: いちばん逼迫している窓だけ（詳しくは上のカード） */
 const qCell = k => { const b = k.quota && k.quota.binding; if (!b) return `<span class="help">${esc(k.quota && k.quota.error ? T.keys.unreadable : T.keys.notProbedShort)}</span>`; const p = b.exhausted ? 0 : b.remaining_pct; return `<b class="pct ${qTone(p)}">${qPct(p)}%</b><div class="help nw">${esc(T.keys.window[b.key] || b.key)}</div>`; };
@@ -798,36 +796,88 @@ function quotaPanel(d) {
   const status = q.probing ? `<a href="#/job/${esc(q.probing)}"><span class="dot pulse"></span>${esc(T.keys.probing)}</a>` : q.last_probed ? `${esc(tt(T.keys.lastProbed, { t: since(q.last_probed) }))}${q.stale ? ` <span class="alarm">${esc(T.keys.stale)}</span>` : ''}` : '';
   return `<div class="panel"><div class="hrow"><h2>${esc(T.h.quota)}<small>${status}</small></h2><button type="button" data-act="key-probe" ${q.probing ? 'disabled' : ''}>${esc(T.btn.keyProbe)}</button></div>
     ${q.error ? `<div class="err">${esc(tt(T.keys.dbError, { e: q.error }))}</div>` : ''}
-    ${!d.keys.length ? '' : !q.exists ? `<div class="help">${esc(T.empty.quota)}</div>` : `<div class="quota">${d.keys.map(qCard).join('')}</div>`}
-    <div class="help top">${esc(T.help.quota)}</div><div class="help">${esc(T.help.quotaBar)}</div><div class="help">${esc(T.help.quotaHow)}</div><div class="help">${esc(T.help.quotaTimer)}</div></div>`;
+    <div id="keys-chart">${keysChart.history ? quotaChartHtml(keysChart.history) : `<div class="help">${esc(T.label.fetching)}</div>`}</div>
+    <details class="top"><summary>${esc(T.keys.aboutQuota)}</summary><div class="help top">${esc(T.help.quota)}</div><div class="help">${esc(T.help.quotaHow)}</div><div class="help">${esc(T.help.quotaTimer)}</div></details></div>`;
 }
-/* 残量の推移（SVG。ライブラリ無し）。x = 時刻（右端が今）、y = 残量%。鍵ごとに 1 本の線。status が window_start の点は合成した窓の始点（100%） */
+/* A single time axis for all three windows; only real observations form solid lines. */
 function quotaChartHtml(h) {
-  const win = keysChart.window, hours = keysChart.hours;
-  const btn = (act, v, cur, label) => `<button type="button" class="${v === cur ? 'primary' : ''}" data-act="${act}" data-v="${esc(v)}">${esc(label)}</button>`;
-  const controls = `<div class="row filters"><span class="btns">${Object.keys(QLEN).map(k => btn('keys-window', k, win, T.keys.window[k])).join('')}</span><span class="btns">${btn('keys-hours', '24', String(hours), T.keys.hours24)}${btn('keys-hours', '168', String(hours), T.keys.days7)}</span></div>`;
-  const W = 860, H = 220, L = 42, R = 12, Tp = 10, B = 26, now = Date.now() / 1000, lo = now - hours * 3600;
-  const x = t => L + (W - L - R) * Math.max(0, Math.min(1, (t - lo) / (now - lo))), y = p => Tp + (H - Tp - B) * (1 - Math.max(0, Math.min(100, p)) / 100);
-  const byName = {};
-  for (const p of h.points || []) { if (p.window !== win || p.ts < lo) continue; (byName[p.name] = byName[p.name] || []).push(p); }
-  const names = Object.keys(byName).sort();
-  if (!names.length) return controls + `<div class="help">${esc(T.empty.quotaChart)}</div><div class="help">${esc(T.help.quotaChart)}</div>`;
-  const grid = [0, 25, 50, 75, 100].map(p => `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}" class="grid"/><text x="${L - 6}" y="${y(p) + 4}" class="tick" text-anchor="end">${p}%</text>`).join('');
-  const stepS = (hours <= 24 ? 6 : 24) * 3600, ticks = [];
-  for (let t = Math.ceil(lo / stepS) * stepS; t <= now; t += stepS) ticks.push(`<line x1="${x(t)}" x2="${x(t)}" y1="${Tp}" y2="${H - B}" class="grid"/><text x="${x(t)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(fmtT(new Date(t * 1000).toISOString()))}</text>`);
-  const lines = names.map((n, i) => { const c = QCOLORS[i % QCOLORS.length], pts = byName[n];
-    const d = pts.map((p, k) => `${k ? 'L' : 'M'}${x(p.ts).toFixed(1)},${y(p.remaining_pct).toFixed(1)}`).join(' ');
-    const dots = pts.filter(p => p.status !== 'window_start').map(p => `<circle cx="${x(p.ts).toFixed(1)}" cy="${y(p.remaining_pct).toFixed(1)}" r="2.2" fill="${c}"><title>${esc(n)} ${esc(fmtT(p.at))} ${esc(tt(T.keys.remaining, { p: Math.round(p.remaining_pct) }))}</title></circle>`).join('');
-    return `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>${dots}`; }).join('');
-  const legend = names.map((n, i) => `<span class="lg"><i style="background:${QCOLORS[i % QCOLORS.length]}"></i><span class="mono">${esc(n)}</span></span>`).join('');
-  return `${controls}<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(T.h.quotaHistory)}">${grid}${ticks.join('')}<line x1="${x(now)}" x2="${x(now)}" y1="${Tp}" y2="${H - B}" class="now"/>${lines}</svg></div><div class="legend">${legend}</div><div class="help">${esc(T.help.quotaChart)}</div>`;
+  const keys = keysChart.data ? keysChart.data.keys : [], hours = keysChart.hours;
+  if (!keys.length) return `<div class="help">${esc(T.empty.quota)}</div>`;
+  const selected = keys.find(k => k.name === keysChart.name) || keys[0]; keysChart.name = selected.name;
+  const button = (act, value, label, active) => `<button type="button" data-act="${act}" data-v="${esc(value)}" aria-pressed="${active}" class="${active ? 'primary' : ''}">${esc(label)}</button>`;
+  const controls = `<div class="quota-controls"><div class="btns quota-key-picker" role="group" aria-label="${esc(T.keys.selectKey)}">${keys.map(k => button('keys-name', k.name, k.name + (k.enabled ? '' : ` (${T.keys.disabled})`), k.name === selected.name)).join('')}</div><div class="btns">${button('keys-hours', '168', T.keys.days7, hours === 168)}${button('keys-hours', '24', T.keys.hours24, hours === 24)}</div></div>`;
+  const now = h.now || Date.now() / 1000, lo = now - hours * 3600, hi = now + hours * 3600;
+  const W = 1040, H = 300, L = 48, R = 20, Tp = 32, B = 34;
+  const x = t => L + (W - L - R) * (t - lo) / (hi - lo), y = p => Tp + (H - Tp - B) * (1 - Math.max(0, Math.min(100, p)) / 100);
+  const path = points => points.map((p, i) => `${i && !p.break ? 'L' : 'M'}${x(p.ts).toFixed(2)},${y(p.remaining_pct).toFixed(2)}`).join(' ');
+  const grid = [0, 25, 50, 75, 100].map(p => `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}" class="grid"/><text x="${L - 8}" y="${y(p) + 4}" class="tick" text-anchor="end">${p}%</text>`).join('');
+  const ticks = [-1, -.75, -.5, -.25, 0, .25, .5, .75, 1].map(f => {
+    const t = now + f * hours * 3600, d = new Date(t * 1000);
+    const label = f === 0 ? T.keys.now : hours === 24 ? `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}` : `${d.getMonth() + 1}/${d.getDate()}`;
+    return `<text x="${x(t)}" y="${H - 10}" class="tick" text-anchor="middle">${esc(label)}</text>`;
+  }).join('');
+  const notes = [], plotted = [];
+  const lines = Object.keys(QLEN).map(win => {
+    if (keysChart.hidden.has(win)) return '';
+    const points = (h.points || []).filter(p => p.name === selected.name && p.window === win && p.status !== 'window_start' && p.ts >= lo && p.ts <= now).sort((a, b) => a.ts - b.ts);
+    const history = points.map((p, i) => ({ ...p, break: i === 0 || p.reset !== points[i - 1].reset || p.ts - points[i - 1].ts > 1800 }));
+    const forecast = (h.forecasts || []).find(f => f.name === selected.name && f.window === win);
+    if (!forecast || forecast.reason) notes.push(`${T.keys.window[win]}: ${T.keys.forecastReason[forecast ? forecast.reason : 'missing']}`);
+    const future = forecast && !forecast.reason ? forecast.points.filter(p => p.ts <= hi) : [];
+    plotted.push(...points.map(p => ({ ...p, window: win, predicted: false })), ...future.map(p => ({ ...p, window: win, predicted: true })));
+    const marks = history.filter(p => p.break).map(p => `<circle cx="${x(p.ts)}" cy="${y(p.remaining_pct)}" r="2.5" fill="${QCOLORS[win]}"/>`).join('');
+    return `<path d="${path(history)}" fill="none" stroke="${QCOLORS[win]}" stroke-width="2.2"/>${marks}<path d="${path(future)}" fill="none" stroke="${QCOLORS[win]}" stroke-width="2" stroke-dasharray="6 4"/>`;
+  }).join('');
+  keysChart.plotted = plotted; keysChart.scale = { lo, hi, L, R, W, now };
+  const legend = Object.keys(QLEN).map(win => `<button type="button" class="quota-series" data-act="keys-window" data-v="${win}" aria-pressed="${!keysChart.hidden.has(win)}" ${keysChart.hidden.size === 2 && !keysChart.hidden.has(win) ? 'disabled' : ''}><i style="background:${QCOLORS[win]}"></i>${esc(T.keys.window[win])}</button>`).join('');
+  return `${controls}${qCard(selected)}<div class="quota-chart-heading"><h3>${esc(T.h.quotaHistory)}</h3><span class="help">${esc(T.keys.chartRange)}</span></div><div class="legend">${legend}<span class="help">${esc(T.keys.lineKey)}</span></div>
+    <div class="chart quota-timeline" tabindex="0" role="group" aria-label="${esc(T.keys.chartKeyboard)}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(T.h.quotaHistory)}"><rect x="${x(now)}" y="${Tp}" width="${x(hi) - x(now)}" height="${H - Tp - B}" fill="#f2f5fa"/>${grid}${ticks}<text x="${L}" y="18" class="tick">${esc(T.keys.observed)}</text><text x="${x(now) + 12}" y="18" class="tick">${esc(T.keys.predicted)}</text>${lines}<line x1="${x(now)}" x2="${x(now)}" y1="${Tp}" y2="${H - B}" class="now"/><line class="quota-cursor" x1="${x(now)}" x2="${x(now)}" y1="${Tp}" y2="${H - B}" visibility="hidden"/></svg></div>
+    <div class="quota-readout help" id="quota-readout" aria-live="polite">${esc(T.keys.chartKeyboard)}</div>
+    ${!plotted.length ? `<div class="help">${esc(T.empty.quotaChart)}</div>` : ''}<div class="help">${esc(T.help.quotaChart)}</div>${notes.length ? `<div class="help top">${notes.map(esc).join('<br>')}</div>` : ''}`;
+}
+function quotaChartBind() {
+  const chart = document.querySelector('.quota-timeline'); if (!chart) return;
+  let cursor = keysChart.scale.now;
+  chart.scrollLeft = Math.max(0, chart.scrollWidth / 2 - chart.clientWidth / 2);
+  const read = t => {
+    const {lo, hi, L, R, W, now} = keysChart.scale; cursor = Math.max(lo, Math.min(hi, t));
+    const x = L + (W - L - R) * (cursor - lo) / (hi - lo), line = chart.querySelector('.quota-cursor');
+    line.setAttribute('x1', x); line.setAttribute('x2', x); line.setAttribute('visibility', 'visible');
+    const values = Object.keys(QLEN).filter(w => !keysChart.hidden.has(w)).map(w => {
+      const predicted = cursor > now;
+      const pts = keysChart.plotted.filter(p => p.window === w && p.predicted === predicted).sort((a,b) => a.ts - b.ts);
+      let value = null;
+      if (predicted) {
+        const left = pts.filter(p => p.ts <= cursor).at(-1), right = pts.find(p => p.ts > cursor);
+        if (left && right) value = left.remaining_pct + (right.remaining_pct - left.remaining_pct) * (cursor - left.ts) / (right.ts - left.ts);
+        else if (left && left.ts === cursor) value = left.remaining_pct;
+      } else {
+        const nearest = pts.reduce((best,p) => !best || Math.abs(p.ts-cursor) < Math.abs(best.ts-cursor) ? p : best, null);
+        if (nearest && Math.abs(nearest.ts-cursor) <= 900) value = nearest.remaining_pct;
+      }
+      return `${T.keys.window[w]}: ${value == null ? T.keys.notProbedShort : qPct(value) + '%'}`;
+    });
+    $('quota-readout').textContent = `${fmtT(new Date(cursor * 1000).toISOString())} (${cursor > now ? T.keys.predicted : T.keys.observed})  ${values.join(' / ')}`;
+  };
+  chart.onpointermove = e => { const r = chart.querySelector('svg').getBoundingClientRect(), s = keysChart.scale; read(s.lo + ((e.clientX-r.left)/r.width*s.W-s.L)/(s.W-s.L-s.R)*(s.hi-s.lo)); };
+  chart.onkeydown = e => { if (!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return; e.preventDefault(); read(e.key === 'Home' ? keysChart.scale.lo : e.key === 'End' ? keysChart.scale.hi : cursor + (e.key === 'ArrowLeft' ? -1 : 1) * 3600); };
+}
+function quotaChartRender() {
+  const active = document.activeElement, act = active && active.dataset.act, value = active && active.dataset.v;
+  if ($('keys-chart') && keysChart.history) { $('keys-chart').innerHTML = quotaChartHtml(keysChart.history); quotaChartBind(); if (act) { const button = [...$('keys-chart').querySelectorAll('button')].find(b => b.dataset.act === act && b.dataset.v === value); if (button) button.focus({preventScroll:true}); } }
 }
 async function quotaChart() {
-  const el = $('keys-chart'); if (!el) return;
-  const h = await api(`keys/history?hours=${keysChart.hours}`);
-  if ($('keys-chart')) $('keys-chart').innerHTML = quotaChartHtml(h);
+  if (!$('keys-chart')) return;
+  const request = ++keysChart.request;
+  try {
+    const h = await api(`keys/history?hours=${keysChart.hours}`);
+    if (request !== keysChart.request || !$('keys-chart')) return;
+    keysChart.history = h; quotaChartRender();
+  } catch (e) { if (request === keysChart.request && $('keys-chart')) $('keys-chart').innerHTML = `<div class="err">${esc(e.message)}</div><button data-act="keys-retry">${esc(T.keys.retry)}</button>`; }
 }
+
 function keysLive(d) {
+  keysChart.data = d;
   const flag = (k, f) => `<input type="checkbox" data-act="key-flag" data-name="${esc(k.name)}" data-field="${esc(f)}" ${k.allow[f] ? 'checked' : ''} aria-label="${esc(f === 'fable' ? T.label.keyAllowFable : T.label.keyAllowOther)}">`;
   const rows = d.keys.map(k => `<tr><td class="mono">${esc(k.name)}${k.note ? `<div class="help">${esc(k.note)}</div>` : ''}</td>
       <td>${flag(k, 'fable')}</td><td>${flag(k, 'other')}</td>
@@ -841,10 +891,10 @@ function keysLive(d) {
     <div class="panel"><h2>${esc(T.h.keys)}<small>${esc(tt(T.keys.count, { n: d.keys.length }))}</small></h2>
       ${d.error ? `<div class="err">${esc(T.help.keysError)}</div>` : ''}
       <div class="help">${esc(T.help.keysHow)}</div>
-      ${d.keys.length ? `<table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.quota)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastLaunched)}</th><th class="nw">${esc(T.th.launches)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table>` : `<div class="help">${esc(T.empty.keys)}</div>`}
+      ${d.keys.length ? `<div class="keys-table" tabindex="0" role="region" aria-label="${esc(T.h.keys)}"><table><tr><th>${esc(T.th.name)}</th><th class="nw">${esc(T.th.keyFable)}</th><th class="nw">${esc(T.th.keyOther)}</th><th class="nw">${esc(T.th.keyEnabled)}</th><th class="nw">${esc(T.th.quota)}</th><th class="nw">${esc(T.th.keyTail)}</th><th class="nw">${esc(T.th.issued)}</th><th class="nw">${esc(T.th.lastLaunched)}</th><th class="nw">${esc(T.th.launches)}</th><th class="nw">${esc(T.th.keyInUse)}</th><th></th></tr>${rows}</table></div>` : `<div class="help">${esc(T.empty.keys)}</div>`}
       <div class="help top">${esc(T.help.keys)}</div><div class="help">${esc(T.help.keysSameTask)}</div><div class="help">${esc(T.help.keysFallback)}</div><div class="help">${esc(T.help.keysDisable)}</div>
       <div class="help">${esc(T.help.keysFile)} <span class="mono">${esc(d.keys_file)}</span></div></div>
-    <div class="panel"><h2>${esc(T.h.quotaHistory)}</h2><div id="keys-chart"></div></div>`;
+    `;
 }
 async function viewKeys() {
   clearInterval(timer);
@@ -1580,7 +1630,9 @@ const actions = {
     const r = await api('keys/probe', {});
     toast(esc(r.already ? T.msg.keyProbeRunning : T.msg.keyProbeStarted)); viewKeys();
   },
-  'keys-window': el => { keysChart.window = el.dataset.v; quotaChart(); },
+  'keys-window': el => { const w = el.dataset.v; if (keysChart.hidden.has(w)) keysChart.hidden.delete(w); else if (keysChart.hidden.size < 2) keysChart.hidden.add(w); quotaChartRender(); },
+  'keys-name': el => { keysChart.name = el.dataset.v; quotaChartRender(); },
+  'keys-retry': () => quotaChart(),
   'keys-hours': el => { keysChart.hours = Number(el.dataset.v); quotaChart(); },
   'job-stop': async el => {
     const ok = await ask({ title: T.dialog.stop.title, ok: T.btn.stop, danger: true, body: `<p>${esc(T.dialog.stop.body)}</p><p class="help">${esc(T.dialog.stop.after)}</p>` });

@@ -347,6 +347,35 @@ ul.help.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-dir
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 4px; font-size: 12.5px; }
 .legend .lg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 
+/* Quota: a shared time axis, with window colors kept separate from warning colors. */
+.quota-controls { display: flex; align-items: start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
+.quota-key-picker { flex-wrap: wrap; }
+.quota-summary { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; margin-top: 16px; }
+.quota-summary > div { border-top: 3px solid var(--series); padding-top: 8px; }
+.quota-summary .qw .l { display: block; }
+.quota-summary .qw .tabular { display: block; margin: 6px 0; }
+.quota-summary .pct { font-size: 24px; font-weight: 600; }
+.quota-summary .qw .help span { display: block; }
+#keys-chart .qcard { border: 0; background: transparent; padding: 8px 0 16px; }
+.quota-chart-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.quota-chart-heading h3 { margin: 12px 0; font-size: 16px; }
+.quota-series { display: inline-flex; align-items: center; gap: 6px; }
+.quota-series i { width: 16px; height: 3px; }
+.quota-series[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.quota-timeline { overflow-x: auto; touch-action: pan-y; }
+.quota-timeline svg { min-width: 680px; }
+.quota-timeline:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.quota-cursor { stroke: var(--ink); stroke-width: 1; pointer-events: none; }
+.quota-readout { min-height: 2.5em; padding: 8px 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .quota-summary { grid-template-columns: 1fr; gap: 8px; } .quota-summary .pct { font-size: 20px; } }
+
+.keys-table { overflow-x: auto; }
+.keys-table table { min-width: 1100px; }
+.quota-key-picker { display: flex; gap: 5px; }
+.quota-key-picker button { overflow-wrap: anywhere; max-width: 100%; }
+#keys-chart .qcard > .l { flex-wrap: wrap; }
+#keys-chart .qcard .mono { overflow-wrap: anywhere; }
+
 /* AI Factory Manager（#/pm。チケット 536）: 追加のみ。既存の 9 画面に効く定義は 1 つも変えない。
    「まだ分からない」は危険色を使わない——初期導入直後の console は正常にこの状態になるので、赤で「壊れている」と読ませない */
 .st.pm-unknown { background: var(--ground); color: var(--muted); border: 1px dashed var(--line); }
