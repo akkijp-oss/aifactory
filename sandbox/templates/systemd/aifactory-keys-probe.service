@@ -1,6 +1,6 @@
 # aifactory: 鍵プールの残量（利用枠）を観測して記録する（ADR-0087）。timer が 5 分ごとに起動する
 # 鍵ごとに極小の messages を 1 回送り、応答ヘッダの利用枠（5 時間枠 / 7 日枠 / Fable の 7 日枠）を keys.json の隣の keys-quota.db に書く。
-# 安いモデルで 5 分ごと、Fable 許可の鍵は 15 分ごとに Fable でも叩く（Fable の枠はそのときだけ分かる）。console の「鍵」画面と MCP keys_list が読む。
+# 有効・用途設定を問わず毎回全鍵に Fable で問い合わせ、共通枠が欠ければ安いモデルでも確認する。console / MCP が読む。
 # 鍵の値はログに出ない（名前と成否だけ）。sandbox/bin/install.sh --systemd が @@USER@@ / @@HOME@@ / @@PATH@@ / @@REPO@@ を埋めて置く。
 # ログ: journalctl -u aifactory-keys-probe
 [Unit]

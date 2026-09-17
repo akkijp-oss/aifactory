@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """lib/aifactory_keys_quota.py: 鍵プールの残量（利用枠）を観測して記録する（ADR-0087）。
 
-  python3 lib/aifactory_keys_quota.py probe [--full|--cheap] [--wait SEC] [--json]   全部の有効な鍵を 1 周プローブして記録する
+  python3 lib/aifactory_keys_quota.py probe [--full|--cheap] [--wait SEC] [--json]   登録済みの全鍵を 1 周プローブして記録する
   python3 lib/aifactory_keys_quota.py show [--json]                     いまの残量（鍵 × 窓）を出す
   python3 lib/aifactory_keys_quota.py history [--hours N] [--json]      残量の履歴（グラフ用）を出す
 
@@ -12,7 +12,7 @@
     5h     `unified-5h-*`      5 時間の枠（全モデル共通）
     7d     `unified-7d-*`      7 日の枠（全体）
     7d_oi  `unified-7d_oi-*`   7 日の枠（Fable 専用）。**model が Fable のときにしか返らない**
-  だから 2 つの周期で叩く: 安いモデル（既定 haiku）で 5 分ごとに 5h / 7d、Fable で 15 分ごとに 7d_oi も（全窓）。
+  有効・用途設定を問わず、既定では毎回 Fable で全窓を確認する。共通枠が欠けるときは安いモデルでも確認する。
   安いモデルの回に 7d_oi を None で上書きしない（据え置く）。
 - 現在値は `key_quota`、時系列は `key_quota_history` に SQLite で残す（keys.json の隣の `keys-quota.db`）。
   窓の始点は API が返さないが窓長が既知なので「始点 = reset − 窓長」で確定でき、始点は定義上 残量 100% なので
@@ -39,7 +39,6 @@ WINDOW_START = "window_start"   # 合成した「窓の始点」行の status
 
 DEFAULT_CHEAP_MODEL = "claude-haiku-4-5"     # 5h / 7d を取る（安い）
 DEFAULT_FULL_MODEL = "claude-fable-5-1"      # 7d_oi はこのモデルでしか返らない（workflow の plan 工程と同じ ID）
-DEFAULT_FULL_INTERVAL_S = 900                # Fable で叩く間隔（コスト節約のため安い回より長く）
 DEFAULT_KEEP_DAYS = 30
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 STALE_S = 900                                # 最後に「読めた」観測がこれより古ければ「古い」（timer が 5 分ごとなので 3 回分）
@@ -87,7 +86,8 @@ CREATE INDEX IF NOT EXISTS idx_kqr_ts ON key_quota_raw(probed_ts);
 """
 
 # 既存 DB への移行は「列を足す」だけに限る（削除・改名・型変更はしない。#167 の DB を壊さないため）
-MIGRATE_COLUMNS = [("key_quota", "fp", "TEXT")]
+MIGRATE_COLUMNS = [("key_quota", "fp", "TEXT"), ("key_quota", "fable_error", "TEXT"),
+                   ("key_quota", "w5h_ts", "REAL"), ("key_quota", "w7d_ts", "REAL")]
 
 
 # ---------- 置き場
@@ -273,13 +273,12 @@ class Store:
                                (tail4, fp, ts, snap["model"], snap["http_status"], snap["error"], now_ts(), name))
             if not ok: return
             if not behind:
-                self.c.execute("""UPDATE key_quota SET ok_ts=?, status=?, claim=?, overage_status=?, overage_reason=?,
-                                    w5h_util=?, w5h_reset_ts=?, w5h_status=?, w7d_util=?, w7d_reset_ts=?, w7d_status=? WHERE name=?""",
-                               (ts, snap["status"], snap["claim"], snap["overage_status"], snap["overage_reason"],
-                                *self._w(w, "5h"), *self._w(w, "7d"), name))
-                if snap["covers_all"]:
-                    self.c.execute("UPDATE key_quota SET w7d_oi_util=?, w7d_oi_reset_ts=?, w7d_oi_status=?, w7d_oi_ts=? WHERE name=?",
-                                   (*self._w(w, "7d_oi"), ts, name))
+                self.c.execute("UPDATE key_quota SET ok_ts=?, status=?, claim=?, overage_status=?, overage_reason=? WHERE name=?",
+                               (ts, snap["status"], snap["claim"], snap["overage_status"], snap["overage_reason"], name))
+                for key, col in (("5h", "w5h"), ("7d", "w7d"), ("7d_oi", "w7d_oi")):
+                    if key in w:
+                        self.c.execute(f"UPDATE key_quota SET {col}_util=?, {col}_reset_ts=?, {col}_status=?, {col}_ts=? WHERE name=?",
+                                       (*self._w(w, key), ts, name))
             for k, v in w.items():
                 self.c.execute("INSERT INTO key_quota_history(name, window_key, utilization, reset_ts, status, probed_ts) VALUES (?,?,?,?,?,?)",
                                (name, k, v["utilization"], v["reset_ts"], v["status"], ts))
@@ -382,13 +381,12 @@ def settings(env=None):
     env = os.environ if env is None else env
     g = lambda k, d: env.get(k) or d   # noqa: E731
     return {"cheap_model": g("AIFACTORY_KEYS_PROBE_MODEL", DEFAULT_CHEAP_MODEL), "full_model": g("AIFACTORY_KEYS_PROBE_FULL_MODEL", DEFAULT_FULL_MODEL),
-            "full_interval_s": int(g("AIFACTORY_KEYS_PROBE_FULL_INTERVAL_S", DEFAULT_FULL_INTERVAL_S)),
             "keep_days": int(g("AIFACTORY_KEYS_QUOTA_KEEP_DAYS", DEFAULT_KEEP_DAYS)), "base_url": g("AIFACTORY_ANTHROPIC_BASE_URL", DEFAULT_BASE_URL),
             "timeout": float(g("AIFACTORY_KEYS_PROBE_TIMEOUT_S", 20))}
 
 
 def _still_the_same_key(keys_file, name, fp):
-    """プローブの通信中に鍵が入れ替わった / 消えた / 無効にされたかを見る。理由（変わっていなければ None）を返す。
+    """プローブの通信中に鍵が入れ替わった / 消えたかを見る。理由（変わっていなければ None）を返す。
 
     通信は数秒かかる。その間に console から鍵を差し替えられると、戻ってきた応答は**前の鍵**の残量なので、
     新しい鍵の残量として保存してはいけない（その回は捨てる。次の周で forget が効いて履歴も切り替わる）"""
@@ -396,17 +394,15 @@ def _still_the_same_key(keys_file, name, fp):
     except Exception: return None   # 書き換えの途中で読めなかった: 判断できないので 1 周目の読みのまま進む（次の周で指紋が合わなければ捨てる）
     cur = next((k for k in keys if str(k["name"]) == name), None)
     if cur is None: return "removed-during-probe"
-    if cur.get("enabled") is False: return "disabled-during-probe"
     if fingerprint(str(cur.get("token") or "")) != fp: return "replaced-during-probe"
     return None
 
 
 def run_probe(keys_file=None, db_file=None, *, mode="auto", env=None, probe=None, now=None, wait_lock_s=0.0):
-    """有効な鍵を全部 1 周プローブして記録する。戻り値は名前と成否だけ（値は含まない）。
+    """有効・無効を問わず全鍵を 1 周プローブして記録する。戻り値は名前と成否だけ（値は含まない）。
 
-    mode: auto = Fable 許可の鍵は前回の全窓観測から full_interval_s 以上経っていれば Fable で（7d_oi も取る）、それ以外は安いモデルで。
-          full = Fable 許可の鍵は必ず Fable で。cheap = 全部安いモデルで。
-    Fable 許可の無い鍵は常に安いモデル（その契約に Fable の枠は無い）
+    mode: auto / full = 全鍵に Fable で問い合わせる。cheap = 明示指定時だけ安いモデル。
+    有効・用途フラグは配車設定なので観測には使わない。共通枠が欠ければ安いモデルでも問い合わせる。
 
     1 周はプロセス間のファイルロックで直列化する。取れなければ 1 本も叩かずに locked: True で返る（失敗ではない）。
     wait_lock_s を渡すとその秒数まで待つ（手動の「いま調べる」は timer の後ろに並びたいので待つ）"""
@@ -427,8 +423,8 @@ def run_probe(keys_file=None, db_file=None, *, mode="auto", env=None, probe=None
         st.keep_only([k["name"] for k in keys])
         for k in keys:
             name = str(k["name"]); tok = str(k.get("token") or ""); tail4 = tok[-4:]
-            if k.get("enabled") is False or not tok:
-                out["skipped"].append({"name": name, "why": "disabled" if k.get("enabled") is False else "no-token"}); continue
+            if not tok:
+                out["skipped"].append({"name": name, "why": "no-token"}); continue
             fp = fingerprint(tok)
             prev = st.row(name)
             # 値が入れ替わった → 別の契約かもしれないので前の履歴を引き継がない。
@@ -436,21 +432,26 @@ def run_probe(keys_file=None, db_file=None, *, mode="auto", env=None, probe=None
             prev_fp = (prev or {}).get("fp")
             if prev and (prev_fp != fp if prev_fp else (prev.get("tail4") and prev["tail4"] != tail4)):
                 st.forget(name); prev = None
-            allow = k.get("allow") if isinstance(k.get("allow"), dict) else {}
-            fable_ok = allow.get("fable") is True
-            if not fable_ok or mode == "cheap": full = False
-            elif mode == "full": full = True
-            else:
-                last_full = (prev or {}).get("w7d_oi_ts")
-                full = last_full is None or ts - float(last_full) >= s["full_interval_s"]
+            # Dispatch preferences never constrain observation. Auto observes Fable every round.
+            full = mode != "cheap"
             model = s["full_model"] if full else s["cheap_model"]
             snap = probe(tok, model, base_url=s["base_url"], timeout=s["timeout"], now=ts)
+            fable_error = (snap["error"] or "no-fable-ratelimit-headers") if full and not snap["covers_all"] else None
+            snapshots = [snap]
+            # A model-specific refusal must not hide the shared windows.
+            if full and not all(w in snap["windows"] for w in ("5h", "7d")):
+                snapshots.append(probe(tok, s["cheap_model"], base_url=s["base_url"], timeout=s["timeout"], now=ts))
             changed = _still_the_same_key(kp, name, fp)
             if changed:   # 叩いている間に鍵が変わった: この応答は前の鍵のものなので保存しない
                 out["skipped"].append({"name": name, "why": changed}); continue
-            st.record(name, tail4, snap, fp=fp)
-            out["probed"].append({"name": name, "model": model, "full": full, "ok": snap["error"] is None, "http_status": snap["http_status"],
-                                  "error": snap["error"], "windows": sorted(snap["windows"])})
+            for observed in snapshots:
+                st.record(name, tail4, observed, fp=fp)
+            if full:
+                with st.c:
+                    st.c.execute("UPDATE key_quota SET fable_error=? WHERE name=?", (fable_error, name))
+            snap = snapshots[-1]
+            out["probed"].append({"name": name, "model": model, "full": full, "ok": snap["error"] is None and fable_error is None, "http_status": snap["http_status"],
+                                  "error": snap["error"], "fable_error": fable_error, "windows": sorted({w for observed in snapshots for w in observed["windows"]})})
         out["pruned"] = st.prune(s["keep_days"])
     finally:
         st.close()
@@ -459,7 +460,7 @@ def run_probe(keys_file=None, db_file=None, *, mode="auto", env=None, probe=None
 
 
 # ---------- 要約（console / MCP / CLI が同じ数字を出すための 1 か所）
-def window_summary(util, reset_ts, status, key, now):
+def window_summary(util, reset_ts, status, key, now, observed_ts=None):
     """窓 1 つの読み方。残量% / 始点と終点 / 残り時間 / 経過に対する消費ペース（aix の WindowProgress と同じ規則）。
 
     枯渇（exhausted）は API が `rejected` と言った窓だけ。使用率がいくら高くても、断られていないなら枯渇ではない。
@@ -470,12 +471,12 @@ def window_summary(util, reset_ts, status, key, now):
     d = {"key": key, "utilization": round(util, 4), "remaining_pct": remaining_pct, "status": status, "exhausted": exhausted,
          "reset": iso(reset_ts), "start": None, "remain_s": None, "elapsed_pct": None, "at_window_end": False, "exhaust_in_s": None, "will_exhaust": False}
     if reset_ts is None: return d
-    start = reset_ts - length; remain = reset_ts - now; elapsed = now - start
+    start = reset_ts - length; remain = reset_ts - now; elapsed = (observed_ts if observed_ts is not None else now) - start
     d["start"] = iso(start); d["remain_s"] = int(remain); d["at_window_end"] = remain <= 0
     d["elapsed_pct"] = round(max(0.0, min(1.0, elapsed / length)) * 100, 1)
     # 序盤（経過 < 窓の 5%）は分母が不安定なのでペースを出さない
     if not d["at_window_end"] and not exhausted and elapsed >= length * 0.05 and util > 0:
-        exhaust_in = (1.0 - util) / (util / elapsed)
+        exhaust_in = max(0, (1.0 - util) / (util / elapsed) - (now - observed_ts if observed_ts is not None else 0))
         if exhaust_in < remain: d["exhaust_in_s"] = int(exhaust_in); d["will_exhaust"] = True
     return d
 
@@ -488,7 +489,12 @@ def summarize(row, now=None):
     for k, col in (("5h", "w5h"), ("7d", "w7d"), ("7d_oi", "w7d_oi")):
         u = row.get(col + "_util")
         if u is None: continue
-        windows.append(window_summary(float(u), row.get(col + "_reset_ts"), row.get(col + "_status"), k, now))
+        observed = row.get(col + "_ts")
+        if observed is None and k != "7d_oi": observed = row.get("ok_ts")  # legacy DB
+        summary = window_summary(float(u), row.get(col + "_reset_ts"), row.get(col + "_status"), k, now, observed)
+        summary.update(observed_at=iso(observed), stale=observed is None or now - observed > STALE_S)
+        if summary["stale"]: summary.update(will_exhaust=False, exhaust_in_s=None)
+        windows.append(summary)
     live = [w for w in windows if not w["at_window_end"]] or windows
     # いちばん逼迫している窓: 断られている窓が最優先、次に残量の少ない順（残量だけで選ぶと、
     # 使用率が低いのに rejected な窓を見落とす）
@@ -499,7 +505,7 @@ def summarize(row, now=None):
     return {"probed": iso(probed_ts), "ok": iso(ok_ts), "stale": ok_ts is None or now - float(ok_ts) > STALE_S,
             "model": row.get("model"), "http_status": row.get("http_status"), "error": row.get("error"),
             "status": row.get("status"), "claim": row.get("claim"), "overage_status": row.get("overage_status"), "overage_reason": row.get("overage_reason"),
-            "fable_probed": iso(row.get("w7d_oi_ts")), "windows": windows,
+            "fable_probed": iso(row.get("w7d_oi_ts")), "fable_error": row.get("fable_error"), "windows": windows,
             "binding": None if binding is None else {"key": binding["key"], "remaining_pct": binding["remaining_pct"], "reset": binding["reset"],
                                                      "exhausted": binding["exhausted"]}}
 
@@ -533,7 +539,8 @@ def history_view(keys_file=None, db_file=None, *, hours=24, name=None, env=None,
     env = os.environ if env is None else env
     kp = pathlib.Path(keys_file) if keys_file else keys_path(env)
     dp = pathlib.Path(db_file) if db_file else quota_db_path(kp, env)
-    out = {"hours": hours, "points": [], "exists": dp.exists()}
+    now = now if now is not None else now_ts()
+    out = {"hours": hours, "now": now, "points": [], "forecasts": [], "exists": dp.exists()}
     if not dp.exists(): return out
     st = Store(dp, read_only=True)
     try:
@@ -541,6 +548,47 @@ def history_view(keys_file=None, db_file=None, *, hours=24, name=None, env=None,
             out["points"].append({"name": r["name"], "window": r["window_key"], "remaining_pct": round((1.0 - r["utilization"]) * 100, 1),
                                   "reset": iso(r["reset_ts"]), "status": r["status"], "at": iso(r["probed_ts"]), "ts": r["probed_ts"]})
     finally: st.close()
+    groups = {}
+    for point in out["points"]:
+        groups.setdefault((point["name"], point["window"]), []).append(point)
+    out["forecasts"] = [forecast_window(points, now, hours=min(hours, 168)) for points in groups.values()]
+    return out
+
+
+def forecast_window(points, now, *, hours=168):
+    """Window-start average (as in aix), evaluated at observation time, never at page refresh time.
+
+    Only real, fresh observations can seed a forecast. Reset jumps and exhaustion are exact
+    vertices, not rounded bins. Later resets assume continuous use and the same burn rate.
+    """
+    real = sorted((p for p in points if p["status"] != WINDOW_START and p["ts"] <= now), key=lambda p: p["ts"])
+    base = points[0]
+    out = {"name": base["name"], "window": base["window"], "points": [], "reason": "missing"}
+    if not real: return out
+    last = real[-1]; length = WINDOW_SECONDS[last["window"]]
+    if now - last["ts"] > STALE_S:
+        out["reason"] = "stale"; return out
+    reset = datetime.datetime.fromisoformat(last["reset"]).timestamp() if last.get("reset") else None
+    if reset is None or reset <= now:
+        out["reason"] = "reset"; return out
+    elapsed = last["ts"] - (reset - length)
+    if elapsed < length * .05:
+        out["reason"] = "early"; return out
+    remaining = max(0, min(100, last["remaining_pct"]))
+    burn = (100 - remaining) / elapsed
+    if last["status"] == "rejected": remaining = 0
+    out.update(reason=None, burn_pct_per_hour=burn * 3600)
+    end = now + hours * 3600
+    t = last["ts"]
+    def add(ts, pct): out["points"].append({"ts": ts, "remaining_pct": round(max(0, min(100, pct)), 3)})
+    add(t, remaining)
+    while t < end:
+        stop = min(reset, end)
+        if burn and t < t + remaining / burn < stop: add(t + remaining / burn, 0)
+        add(stop, remaining - burn * (stop - t))
+        if stop == reset: add(reset, 100)
+        if stop == end: break
+        t, remaining, reset = reset, 100, reset + length
     return out
 
 
@@ -562,8 +610,8 @@ def _fmt_dur(s):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="鍵プールの残量（利用枠）を観測する。値は出さない")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("probe", help="全部の有効な鍵を 1 周叩いて記録する")
-    g = p.add_mutually_exclusive_group(); g.add_argument("--full", action="store_true", help="Fable 許可の鍵は必ず Fable で叩く（7d_oi も取る）")
+    p = sub.add_parser("probe", help="登録済みの全鍵を 1 周叩いて記録する")
+    g = p.add_mutually_exclusive_group(); g.add_argument("--full", action="store_true", help="全鍵を Fable で叩く（7d_oi も取る）")
     g.add_argument("--cheap", action="store_true", help="全部安いモデルで叩く（7d_oi は据え置き）")
     p.add_argument("--wait", type=float, default=0.0, metavar="SEC", help="別のプローブが実行中なら最大この秒数まで待つ（既定 0 = 待たずに飛ばす）")
     p.add_argument("--json", action="store_true")
@@ -576,7 +624,7 @@ def main(argv=None):
         if r["locked"]:
             print("別のプローブが実行中（timer か console）。今回は飛ばしました（--wait 秒数 で待てます）"); return 0
         for x in r["probed"]:
-            print(f"[probe] {x['name']}: {'ok' if x['ok'] else 'NG ' + str(x['error'])} model={x['model']}{' (full)' if x['full'] else ''} windows={','.join(x['windows']) or '-'}")
+            print(f"[probe] {x['name']}: {'ok' if x['ok'] else 'NG ' + str(x['error'] or x.get('fable_error'))} model={x['model']}{' (full)' if x['full'] else ''} windows={','.join(x['windows']) or '-'}")
         for x in r["skipped"]: print(f"[probe] {x['name']}: skip ({x['why']})")
         print(f"file: {r['db_file']}（{len(r['probed'])} 本を観測、{r['pruned']} 行を剪定）")
         return 0 if all(x["ok"] for x in r["probed"]) else 1

@@ -1850,14 +1850,14 @@ def keys_history_view(hours=24, name=None):
 
 
 def keys_probe(b=None):
-    """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = Fable 許可の鍵は Fable でも叩いて 7d_oi を取る）。
+    """残量をいま調べる（ジョブ）。lib/aifactory_keys_quota.py probe を起こす（既定は --full = 有効・用途設定を問わず全鍵に Fable で問い合わせる）。
     鍵の値はジョブの記録に出ない（probe は名前と成否しか印字しない）。実行中なら二重に起こさずその id を返す。
 
     二重に起こさない判定は JobStore のロックの中でやる（他の start と同じ書き方。外で running() を見ると、
     同時に押された 2 つがどちらも「実行中は無い」と読んで 2 本起きる）。JobStore を通らない systemd の timer とは
     probe 側のファイルロックで排他するので、--wait を付けて timer の後ろに並ばせる（手動は必ず新しい値が欲しい）"""
     b = b or {}
-    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + ([] if b.get("full") is False else ["--full"]) + ["--wait", "120"]
+    cmd = [sys.executable, str(REPO / "lib" / "aifactory_keys_quota.py"), "probe"] + (["--cheap"] if b.get("full") is False else ["--full"]) + ["--wait", "120"]
     busy = lambda j: "残量を調べるジョブが実行中です" if j.get("kind") == "keys-probe" else None   # noqa: E731
     try:
         return {"job": JobStore.start("keys-probe", cmd, "keys probe", conflict=busy), "already": False}

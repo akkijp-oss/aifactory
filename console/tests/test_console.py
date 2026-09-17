@@ -317,6 +317,9 @@ class KeysQuotaApiTest(unittest.TestCase):
         self.assertEqual(st, 200); self.assertEqual(h["points"], []); self.assertFalse(h["exists"])
 
     def test_probe_job_then_quota_in_view(self):
+        pool = json.loads(self.keys.read_text())
+        pool["keys"][1]["enabled"] = False
+        self.keys.write_text(json.dumps(pool))
         st, r = self.http.post("/api/keys/probe", {})
         self.assertEqual(st, 200); self.assertFalse(r["already"]); jid = r["job"]["id"]
         self.assertEqual(r["job"]["kind"], "keys-probe")
@@ -332,9 +335,9 @@ class KeysQuotaApiTest(unittest.TestCase):
         self.assertIn("[probe] fable-a: ok", log); self.assertIn("[probe] dead-a: NG HTTP 401 authentication_error", log)
         for secret in ("tok-fable-1111", "tok-opus-2222", "bad-3333"): self.assertNotIn(secret, log)
         self.assertNotIn("tok-", json.dumps(j))
-        # 偽 API には fable-a が Fable で、opus-a と dead-a は安いモデルで届く
+        # 全鍵に Fable で問い合わせる。認証失敗時は共通枠の取得も試みる
         models = {c["tail4"]: c["model"] for c in self.api.calls}
-        self.assertEqual(models, {"1111": "claude-fable-5-1", "2222": "claude-haiku-4-5", "3333": "claude-haiku-4-5"})
+        self.assertEqual(models, {"1111": "claude-fable-5-1", "2222": "claude-fable-5-1", "3333": "claude-haiku-4-5"})
         self.assertTrue(all(c["beta"] == "oauth-2025-04-20" for c in self.api.calls))
         st, v = self.http.get("/api/keys")
         q = v["quota"]; self.assertTrue(q["exists"]); self.assertFalse(q["stale"]); self.assertIsNotNone(q["last_probed"]); self.assertIsNone(q["probing"])
@@ -346,17 +349,20 @@ class KeysQuotaApiTest(unittest.TestCase):
         self.assertEqual(w5["remaining_pct"], 59.5); self.assertEqual(oi["remaining_pct"], 25.0); self.assertEqual(f["binding"]["key"], "7d_oi")
         self.assertTrue(0 < w5["remain_s"] <= 3600); self.assertTrue(OFFSET_ISO.match(w5["reset"])); self.assertTrue(OFFSET_ISO.match(w5["start"]))
         self.assertFalse(w5["exhausted"]); self.assertFalse(w5["at_window_end"]); self.assertIsNone(f["error"]); self.assertFalse(f["stale"])
-        self.assertEqual([w["key"] for w in by["opus-a"]["windows"]], ["5h", "7d"], "Fable 許可の無い鍵は 7d_oi を持たない")
+        self.assertEqual([w["key"] for w in by["opus-a"]["windows"]], ["5h", "7d", "7d_oi"], "配車の用途設定と残量観測は独立")
         d = by["dead-a"]
         self.assertEqual(d["error"], "HTTP 401 authentication_error"); self.assertEqual(d["windows"], []); self.assertIsNone(d["binding"])
         st, h = self.http.get("/api/keys/history?hours=24")
+        self.assertIn("now", h)
+        self.assertEqual(len(h["forecasts"]), 6)
+        self.assertTrue(all(f["points"] and f["reason"] is None for f in h["forecasts"]))
         real = [p for p in h["points"] if p["status"] != "window_start"]
-        self.assertEqual(sorted((p["name"], p["window"]) for p in real), [("fable-a", "5h"), ("fable-a", "7d"), ("fable-a", "7d_oi"), ("opus-a", "5h"), ("opus-a", "7d")])
+        self.assertEqual(sorted((p["name"], p["window"]) for p in real), [("fable-a", "5h"), ("fable-a", "7d"), ("fable-a", "7d_oi"), ("opus-a", "5h"), ("opus-a", "7d"), ("opus-a", "7d_oi")])
         starts = [p for p in h["points"] if p["status"] == "window_start"]
         self.assertEqual(sorted((p["name"], p["window"]) for p in starts), [("fable-a", "5h"), ("opus-a", "5h")], "24 時間の内に始まった窓の始点だけ（7 日の窓の始点は 4 日前）")
         self.assertTrue(all(p["remaining_pct"] == 100.0 for p in starts))
         _, h8 = self.http.get("/api/keys/history?hours=192")
-        self.assertEqual(len([p for p in h8["points"] if p["status"] == "window_start"]), 5, "8 日ぶんなら 7 日の窓の始点も入る")
+        self.assertEqual(len([p for p in h8["points"] if p["status"] == "window_start"]), 6, "8 日ぶんなら 7 日の窓の始点も入る")
         self.assertTrue(all(OFFSET_ISO.match(p["at"]) for p in h["points"]))
         st, h1 = self.http.get("/api/keys/history?hours=24&name=opus-a")
         self.assertTrue(h1["points"] and all(p["name"] == "opus-a" for p in h1["points"]))
